@@ -16,14 +16,17 @@
     "@acos/agents": "workspace:*",
     "@acos/core": "workspace:*",
     "@acos/shared": "workspace:*",
-    "@tesseract.js-data/eng": "^1.0.0",
-    "@tesseract.js-data/kor": "^1.0.0",
+    "@anthropic-ai/sdk": "^0.115.0",
+    "@google/genai": "^2.13.0",
     "@nestjs/common": "^11.1.28",
     "@nestjs/core": "^11.1.28",
     "@nestjs/platform-express": "^11.1.28",
     "@prisma/client": "^6.19.3",
+    "@tesseract.js-data/eng": "^1.0.0",
+    "@tesseract.js-data/kor": "^1.0.0",
     "dotenv": "^16.4.5",
     "minio": "^8.0.7",
+    "openai": "^7.0.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "tesseract.js": "^7.0.0"
@@ -46,7 +49,11 @@
   "jest": {
     "preset": "ts-jest",
     "testEnvironment": "node",
-    "roots": ["<rootDir>/src"],
-    "testMatch": ["**/*.spec.ts"]
+    "roots": [
+      "<rootDir>/src"
+    ],
+    "testMatch": [
+      "**/*.spec.ts"
+    ]
   }
 }

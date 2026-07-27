@@ -10,6 +10,7 @@ export * from "./project-memory";
 export * from "./memory";
 export * from "./knowledge";
 export * from "./ready-validation";
+export * from "./llm";
 
 import type { ContentDto, ContentStatus } from "@acos/shared";
 

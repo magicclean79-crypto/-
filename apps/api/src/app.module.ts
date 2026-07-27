@@ -6,6 +6,7 @@ import { CompanyBrainModule } from "./company-brain/company-brain.module";
 import { ContentsModule } from "./contents/contents.module";
 import { DecisionsModule } from "./decisions/decisions.module";
 import { KnowledgeModule } from "./knowledge/knowledge.module";
+import { LlmModule } from "./llm/llm.module";
 import { MemoryModule } from "./memory/memory.module";
 import { ProjectMemoriesModule } from "./project-memories/project-memories.module";
 import { OcrModule } from "./ocr/ocr.module";
@@ -36,6 +37,7 @@ import { UploadsModule } from "./uploads/uploads.module";
     KnowledgeModule,
     CompanyBrainModule,
     ReadyValidationModule,
+    LlmModule,
   ],
   controllers: [AppController],
   providers: [AppService],

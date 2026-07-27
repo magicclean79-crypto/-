@@ -487,6 +487,44 @@ export interface ReadyValidationRequest {
   productObjectVersion?: number;
 }
 
+// ── LLM Gateway (TASK-0501, Sprint 5 — AI Execution) ───
+
+export const LLM_MESSAGE_ROLES = ["system", "user", "assistant"] as const;
+
+export type LlmMessageRole = (typeof LLM_MESSAGE_ROLES)[number];
+
+export interface LlmMessageDto {
+  role: LlmMessageRole;
+  content: string;
+}
+
+export interface LlmCompleteRequest {
+  messages: LlmMessageDto[];
+  /** Provider 기본 모델을 덮어쓸 모델 ID (선택) */
+  model?: string;
+  /** 최대 출력 토큰 (선택, Provider 기본값 사용) */
+  maxTokens?: number;
+}
+
+export interface LlmUsageDto {
+  inputTokens: number | null;
+  outputTokens: number | null;
+}
+
+export interface LlmCompletionDto {
+  provider: string;
+  model: string;
+  text: string;
+  usage: LlmUsageDto;
+  createdAt: string;
+}
+
+/** 게이트웨이 상태 조회 응답 — 어떤 Provider가 선택되어 있는지 */
+export interface LlmGatewayInfoDto {
+  provider: string;
+  defaultModel: string;
+}
+
 export function formatDate(date: Date): string {
   return date.toISOString().slice(0, 10);
 }

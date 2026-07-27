@@ -209,6 +209,20 @@ SOP와 나란히 회사 지식을 축적합니다 — [docs/architecture/decisio
 
 오류: `400` 필수 필드(title/reason/decisionType/author) 누락·공백·Enum 외 유형, `404` 프로젝트/결정 없음.
 
+## LLM Gateway (TASK-0501)
+
+모든 LLM 호출의 단일 진입점입니다. Provider는 `LLM_PROVIDER` 환경변수로 교체
+(`mock` 기본 · `openai` · `anthropic` · `gemini`), API 키가 없으면 항상 mock으로
+동작합니다 — [docs/architecture/llm.md](docs/architecture/llm.md)
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `GET` | `/llm` | 선택된 Provider 확인 |
+| `POST` | `/llm/complete` | `{ messages, model?, maxTokens? }` → 완성 텍스트 + usage (200) |
+
+- 키 설정: `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY`
+  (+ `LLM_*_MODEL`로 모델 덮어쓰기, `LLM_MAX_ATTEMPTS` 재시도)
+
 ## Memory — 표준 Structured Memory (TASK-0402)
 
 Company Brain의 표준 Memory는 `scope / scopeId / key / value / description` 기반의
