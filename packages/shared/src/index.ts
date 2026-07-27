@@ -35,6 +35,44 @@ export interface UploadImagesResponse {
   images: ImageDto[];
 }
 
+export interface CreateProductRequest {
+  name?: string;
+  description?: string;
+  imageIds: string[];
+}
+
+export interface UpdateProductRequest {
+  name?: string;
+  description?: string | null;
+}
+
+export interface ProductListItemDto {
+  id: string;
+  name: string;
+  description: string | null;
+  imageCount: number;
+  thumbnailUrl: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ImageWithOcrDto extends ImageDto {
+  ocr: {
+    status: OcrStatus;
+    confidence: number | null;
+    text: string | null;
+  } | null;
+}
+
+export interface ProductDetailDto {
+  id: string;
+  name: string;
+  description: string | null;
+  images: ImageWithOcrDto[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type OcrStatus = "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED";
 
 export interface OcrResultDto {

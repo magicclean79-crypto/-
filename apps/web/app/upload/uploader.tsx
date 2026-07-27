@@ -1,11 +1,13 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   UPLOAD_ALLOWED_MIME_TYPES,
   UPLOAD_MAX_FILES,
   UPLOAD_MAX_FILE_SIZE,
   type ImageDto,
+  type ProductDetailDto,
 } from "@acos/shared";
 import { Badge } from "@acos/ui";
 
@@ -70,10 +72,48 @@ function uploadWithProgress(
 }
 
 export function Uploader() {
+  const router = useRouter();
   const [items, setItems] = useState<UploadItem[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [rejected, setRejected] = useState<string[]>([]);
+  const [productName, setProductName] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const doneImageIds = items
+    .filter((item) => item.status === "done" && item.result)
+    .map((item) => (item.result as ImageDto).id);
+
+  const createProduct = useCallback(async () => {
+    setCreating(true);
+    setCreateError(null);
+    try {
+      const response = await fetch(`${API_URL}/products`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: productName.trim() || undefined,
+          imageIds: doneImageIds,
+        }),
+      });
+      const body = (await response.json()) as ProductDetailDto & {
+        message?: string | string[];
+      };
+      if (!response.ok) {
+        const message = Array.isArray(body.message)
+          ? body.message.join(", ")
+          : body.message;
+        throw new Error(message ?? `상품 생성 실패 (HTTP ${response.status})`);
+      }
+      router.push(`/products/${body.id}`);
+    } catch (error) {
+      setCreateError(
+        error instanceof Error ? error.message : "상품 생성에 실패했습니다.",
+      );
+      setCreating(false);
+    }
+  }, [doneImageIds, productName, router]);
 
   const updateItem = useCallback(
     (id: string, patch: Partial<UploadItem>) => {
@@ -253,6 +293,40 @@ export function Uploader() {
             </li>
           ))}
         </ul>
+      )}
+
+      {doneImageIds.length > 0 && (
+        <div className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
+          <h2 className="font-semibold">
+            업로드된 사진 {doneImageIds.length}장으로 Product 생성
+          </h2>
+          <p className="mt-1 text-sm text-zinc-500">
+            이름을 비워 두면 OCR 텍스트/파일명에서 자동으로 만듭니다.
+          </p>
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+            <input
+              type="text"
+              value={productName}
+              onChange={(event) => setProductName(event.target.value)}
+              placeholder="상품 이름 (선택)"
+              maxLength={200}
+              className="flex-1 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
+            />
+            <button
+              type="button"
+              onClick={createProduct}
+              disabled={creating}
+              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
+            >
+              {creating ? "생성 중…" : "Product 생성"}
+            </button>
+          </div>
+          {createError && (
+            <p className="mt-2 text-sm text-red-600 dark:text-red-400">
+              {createError}
+            </p>
+          )}
+        </div>
       )}
     </div>
   );

@@ -111,6 +111,21 @@ pnpm dev
 - 실패 시 지수 백오프로 최대 `OCR_MAX_ATTEMPTS`(기본 3)회 재시도, 시도 횟수는 `attempts`에 저장
 - `confidence`(0.0~1.0)와 Provider 원본 응답(`raw`, jsonb)이 함께 저장됩니다
 
+## Product (TASK-0203)
+
+업로드된 사진(들)을 묶어 Product Object를 생성합니다.
+웹에서는 업로드 완료 후 "Product 생성" 버튼 → `/products` 목록 · `/products/[id]` 상세로 이어집니다.
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `POST` | `/products` | `{ name?, description?, imageIds: string[] }` — 이미지 연결, 이름 미지정 시 OCR 첫 줄→파일명→기본값 순으로 자동 생성 |
+| `GET` | `/products?take=20` | 목록 (썸네일·사진 수 포함) |
+| `GET` | `/products/:id` | 상세 (이미지 + OCR 결과 포함) |
+| `PATCH` | `/products/:id` | `{ name?, description? }` 수정 |
+| `DELETE` | `/products/:id` | 삭제 (이미지는 연결만 해제) |
+
+오류: `400` 잘못된 이름/존재하지 않는 이미지/이미 다른 상품에 연결된 이미지, `404` 상품 없음.
+
 ## Prisma
 
 - 스키마: `apps/api/prisma/schema.prisma`

@@ -11,12 +11,20 @@ export default function Home() {
         <p className="mt-2 text-zinc-600 dark:text-zinc-400">
           AI 기반 제품 콘텐츠 운영 시스템 — pnpm + Turborepo Monorepo
         </p>
-        <Link
-          href="/upload"
-          className="mt-4 inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
-        >
-          📸 상품 사진 업로드
-        </Link>
+        <div className="mt-4 flex gap-3">
+          <Link
+            href="/upload"
+            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
+          >
+            📸 상품 사진 업로드
+          </Link>
+          <Link
+            href="/products"
+            className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+          >
+            📦 상품 목록
+          </Link>
+        </div>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
