@@ -57,6 +57,7 @@ pnpm dev
 | `pnpm dev` | web + api + 패키지 watch 동시 실행 |
 | `pnpm build` | 전체 빌드 (Turborepo 캐시 적용) |
 | `pnpm lint` | 전체 린트 |
+| `pnpm test` | 전체 테스트 (Jest — unit/service/API) |
 | `pnpm docker:up` / `pnpm docker:down` | 인프라 기동 / 종료 |
 | `pnpm prisma:generate` | Prisma Client 생성 |
 | `pnpm prisma:migrate` | DB 마이그레이션 (`prisma migrate dev`) |
@@ -98,18 +99,22 @@ pnpm dev
 
 ## OCR (TASK-0202)
 
-업로드된 이미지에서 텍스트를 추출합니다. Provider는 `OCR_PROVIDER` 환경 변수로
-교체할 수 있습니다 (`tesseract` 기본 · 오프라인 동작, `stub` 테스트용).
+교체 가능한 Provider 아키텍처 위에서 이미지 텍스트를 추출합니다.
+도메인(인터페이스·상태 전이·재시도)은 `@acos/core`에 있으며, 자세한 구조와
+Google Vision/Azure 연결 방법은 [docs/architecture/ocr.md](docs/architecture/ocr.md) 참고.
+
+- Provider 선택: `OCR_PROVIDER` — `mock`(기본, 실제 OCR 미연결) | `tesseract`(로컬 엔진)
+- 상태: `PENDING → RUNNING → SUCCESS | FAILED`
+- 실행마다 결과가 이력으로 쌓입니다 (Image : OCRResult = **1:N**)
+- 실패 시 지수 백오프로 최대 `OCR_MAX_ATTEMPTS`(기본 3)회 재시도
+- `confidence`(0.0~1.0), `extractedText`, Provider 원본 응답(`rawJson`) 저장
 
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
-| `POST` | `/images/:imageId/ocr` | OCR 실행. 기존 결과가 있으면 초기화 후 재실행 |
-| `GET` | `/images/:imageId/ocr?raw=true` | 결과 조회 (`raw=true`면 원본 JSON 포함) |
+| `POST` | `/images/:imageId/ocr` | OCR 실행 — 새 실행 레코드 생성 (재실행 = 다시 호출) |
+| `GET` | `/images/:imageId/ocr?raw=true` | 최신 결과 조회 (`raw=true`면 원본 JSON 포함) |
+| `GET` | `/images/:imageId/ocr/history` | 실행 이력 (최신순) |
 | `GET` | `/ocr/results?take=20` | 최근 결과 목록 |
-
-- 상태: `PENDING → PROCESSING → COMPLETED | FAILED`
-- 실패 시 지수 백오프로 최대 `OCR_MAX_ATTEMPTS`(기본 3)회 재시도, 시도 횟수는 `attempts`에 저장
-- `confidence`(0.0~1.0)와 Provider 원본 응답(`raw`, jsonb)이 함께 저장됩니다
 
 ## Product (TASK-0203)
 

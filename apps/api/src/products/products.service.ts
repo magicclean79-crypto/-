@@ -16,10 +16,16 @@ import { PrismaService } from "../prisma/prisma.service";
 const NAME_MAX_LENGTH = 200;
 const DEFAULT_NAME = "새 상품";
 
-type ImageWithOcr = Image & { ocrResult: OcrResult | null };
+type ImageWithOcr = Image & { ocrResults: OcrResult[] };
 type ProductWithImages = Product & { images: ImageWithOcr[] };
 
+/** 이미지의 최신 OCR 실행 1건 (include에서 최신순 take 1로 조회됨) */
+function latestOcr(image: ImageWithOcr): OcrResult | null {
+  return image.ocrResults[0] ?? null;
+}
+
 function toImageDto(image: ImageWithOcr): ImageWithOcrDto {
+  const ocr = latestOcr(image);
   return {
     id: image.id,
     key: image.key,
@@ -29,11 +35,11 @@ function toImageDto(image: ImageWithOcr): ImageWithOcrDto {
     size: image.size,
     productId: image.productId,
     createdAt: image.createdAt.toISOString(),
-    ocr: image.ocrResult
+    ocr: ocr
       ? {
-          status: image.ocrResult.status,
-          confidence: image.ocrResult.confidence,
-          text: image.ocrResult.text,
+          status: ocr.status,
+          confidence: ocr.confidence,
+          extractedText: ocr.extractedText,
         }
       : null,
   };
@@ -56,7 +62,8 @@ function toDetailDto(product: ProductWithImages): ProductDetailDto {
  */
 function deriveName(images: ImageWithOcr[]): string {
   for (const image of images) {
-    const text = image.ocrResult?.status === "COMPLETED" ? image.ocrResult.text : null;
+    const ocr = latestOcr(image);
+    const text = ocr?.status === "SUCCESS" ? ocr.extractedText : null;
     const firstLine = text
       ?.split("\n")
       .map((line) => line.trim())
@@ -89,7 +96,9 @@ export class ProductsService {
     if (imageIds.length > 0) {
       images = await this.prisma.image.findMany({
         where: { id: { in: imageIds } },
-        include: { ocrResult: true },
+        include: {
+          ocrResults: { orderBy: { createdAt: "desc" }, take: 1 },
+        },
       });
       const foundIds = new Set(images.map((image) => image.id));
       const missing = imageIds.filter((id) => !foundIds.has(id));
@@ -125,7 +134,9 @@ export class ProductsService {
         where: { id: created.id },
         include: {
           images: {
-            include: { ocrResult: true },
+            include: {
+              ocrResults: { orderBy: { createdAt: "desc" }, take: 1 },
+            },
             orderBy: { createdAt: "asc" },
           },
         },
@@ -163,7 +174,9 @@ export class ProductsService {
       where: { id },
       include: {
         images: {
-          include: { ocrResult: true },
+          include: {
+            ocrResults: { orderBy: { createdAt: "desc" }, take: 1 },
+          },
           orderBy: { createdAt: "asc" },
         },
       },

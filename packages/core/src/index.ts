@@ -1,3 +1,5 @@
+export * from "./ocr";
+
 import type { ContentDto, ContentStatus } from "@acos/shared";
 
 const TRANSITIONS: Record<ContentStatus, ContentStatus[]> = {

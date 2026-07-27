@@ -3,13 +3,13 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Logger } from "@nestjs/common";
 import { createWorker, type Worker } from "tesseract.js";
-import type { OcrProvider, OcrRecognition } from "../ocr-provider.interface";
+import type { OcrProvider, OcrRecognition } from "@acos/core";
 
 /**
- * tesseract.js 기반 OCR Provider.
+ * tesseract.js 기반 OCR Provider (선택 어댑터, OCR_PROVIDER=tesseract).
  *
- * 언어 데이터는 @tesseract.js-data/* 패키지에서 로드하므로
- * 런타임 네트워크 없이 완전히 오프라인으로 동작한다.
+ * 외부 API가 아닌 로컬 WASM 엔진이며, 언어 데이터는 @tesseract.js-data/*
+ * 패키지에서 로드하므로 런타임 네트워크 없이 완전히 오프라인으로 동작한다.
  * 언어는 OCR_LANGS 환경 변수로 지정한다. (기본: eng+kor)
  */
 export class TesseractOcrProvider implements OcrProvider {
@@ -93,9 +93,9 @@ export class TesseractOcrProvider implements OcrProvider {
     return this.workerPromise;
   }
 
-  async recognize(image: Buffer): Promise<OcrRecognition> {
+  async recognize(image: Uint8Array): Promise<OcrRecognition> {
     const worker = await this.getWorker();
-    const { data } = await worker.recognize(image);
+    const { data } = await worker.recognize(Buffer.from(image));
 
     return {
       text: data.text.trim(),

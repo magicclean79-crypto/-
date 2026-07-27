@@ -20,45 +20,47 @@ model Product {
 }
 
 model Image {
-  id           String     @id @default(cuid())
-  key          String     @unique
+  id           String      @id @default(cuid())
+  key          String      @unique
   url          String
   originalName String
   mimeType     String
   size         Int
-  product      Product?   @relation(fields: [productId], references: [id], onDelete: SetNull)
+  product      Product?    @relation(fields: [productId], references: [id], onDelete: SetNull)
   productId    String?
-  ocrResult    OcrResult?
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
+  ocrResults   OcrResult[]
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
 
   @@index([productId])
   @@map("images")
 }
 
 model OcrResult {
-  id          String    @id @default(cuid())
-  image       Image     @relation(fields: [imageId], references: [id], onDelete: Cascade)
-  imageId     String    @unique
-  provider    String
-  status      OcrStatus @default(PENDING)
-  text        String?
-  confidence  Float? // 0.0 ~ 1.0
-  raw         Json? // Provider 원본 응답
-  error       String?
-  attempts    Int       @default(0)
-  completedAt DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id            String    @id @default(cuid())
+  image         Image     @relation(fields: [imageId], references: [id], onDelete: Cascade)
+  imageId       String
+  provider      String
+  status        OcrStatus @default(PENDING)
+  confidence    Float? // 0.0 ~ 1.0
+  extractedText String?
+  rawJson       Json? // Provider 원본 응답
+  error         String?
+  attempts      Int       @default(0)
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
+  @@index([imageId])
   @@index([status])
   @@map("ocr_results")
 }
 
 enum OcrStatus {
   PENDING
-  PROCESSING
-  COMPLETED
+  RUNNING
+  SUCCESS
   FAILED
 }
 

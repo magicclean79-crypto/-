@@ -57,10 +57,11 @@ export interface ProductListItemDto {
 }
 
 export interface ImageWithOcrDto extends ImageDto {
+  /** 가장 최근 OCR 실행 결과 요약 (실행 이력이 없으면 null) */
   ocr: {
     status: OcrStatus;
     confidence: number | null;
-    text: string | null;
+    extractedText: string | null;
   } | null;
 }
 
@@ -73,18 +74,26 @@ export interface ProductDetailDto {
   updatedAt: string;
 }
 
-export type OcrStatus = "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED";
+export const OCR_STATUSES = [
+  "PENDING",
+  "RUNNING",
+  "SUCCESS",
+  "FAILED",
+] as const;
+
+export type OcrStatus = (typeof OCR_STATUSES)[number];
 
 export interface OcrResultDto {
   id: string;
   imageId: string;
   provider: string;
   status: OcrStatus;
-  text: string | null;
+  extractedText: string | null;
   confidence: number | null; // 0.0 ~ 1.0
-  raw?: unknown; // Provider 원본 응답 JSON
+  rawJson?: unknown; // Provider 원본 응답 JSON
   error: string | null;
   attempts: number;
+  startedAt: string | null;
   completedAt: string | null;
   createdAt: string;
   updatedAt: string;

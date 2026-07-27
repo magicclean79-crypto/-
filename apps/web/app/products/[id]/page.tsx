@@ -73,18 +73,18 @@ export default async function ProductDetailPage({
               <div className="flex items-center gap-2">
                 <p className="truncate font-medium">{image.originalName}</p>
                 {image.ocr === null && <Badge tone="warn">OCR 미실행</Badge>}
-                {image.ocr?.status === "COMPLETED" && (
+                {image.ocr?.status === "SUCCESS" && (
                   <Badge tone="ok">
                     OCR {Math.round((image.ocr.confidence ?? 0) * 100)}%
                   </Badge>
                 )}
-                {image.ocr && image.ocr.status !== "COMPLETED" && (
+                {image.ocr && image.ocr.status !== "SUCCESS" && (
                   <Badge tone="warn">OCR {image.ocr.status}</Badge>
                 )}
               </div>
-              {image.ocr?.text ? (
+              {image.ocr?.extractedText ? (
                 <pre className="mt-2 overflow-x-auto whitespace-pre-wrap rounded-lg bg-zinc-50 p-3 text-xs text-zinc-700 dark:bg-zinc-950 dark:text-zinc-300">
-                  {image.ocr.text}
+                  {image.ocr.extractedText}
                 </pre>
               ) : (
                 <p className="mt-2 text-sm text-zinc-500">
