@@ -22,8 +22,8 @@ Execution Layer
 | 필드 | 타입 | 설명 |
 | --- | --- | --- |
 | `id` | string | cuid |
-| `scope` | string | 적용 범위 (예: `GLOBAL`, `PROJECT` — 자유 문자열, Enum 고정 여부 CTO 결정 대기) |
-| `scopeId` | string? | 범위 대상 식별자 (예: projectId). 전역 범위는 null |
+| `scope` | enum | `GLOBAL · COMPANY · PROJECT · PRODUCT` (CTO 결정으로 Enum 고정) |
+| `scopeId` | string? | PROJECT → projectId(실존 검증), PRODUCT → productId(실존 검증). GLOBAL/COMPANY → null 강제 |
 | `key` | string | 범위 내 유니크 키 — `(scope, scopeId, key)` 조합이 저장 단위 |
 | `value` | Json | **구조화 값** — 문자열·숫자·배열·객체·null 모두 저장 가능 |
 | `description` | string? | 설명 (선택) |
@@ -62,8 +62,8 @@ POST /memory
 
 ## ProjectMemory (구 Memory — 보존)
 
-TASK-0307의 프로젝트 메모형 기억은 CTO 지시("삭제하지 말고 보존")에 따라
-`ProjectMemory`로 개칭해 그대로 동작합니다.
+역할 구분 (CTO 결정): **Memory는 AI용 구조화 설정 저장소**,
+**ProjectMemory는 사람이 작성하는 메모·작업기록 저장소**로 유지합니다 (폐기 안 함).
 
 - 테이블: `memories` → `project_memories` 이름 변경 (데이터 보존 마이그레이션)
 - 도메인: `core/project-memory/` — `ProjectMemoryEngine`(remember/recall/revise/forget)

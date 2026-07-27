@@ -212,8 +212,11 @@ SOP와 나란히 회사 지식을 축적합니다 — [docs/architecture/decisio
 ## Memory — 표준 Structured Memory (TASK-0402)
 
 Company Brain의 표준 Memory는 `scope / scopeId / key / value / description` 기반의
-**구조화 저장소**입니다. 같은 `(scope, scopeId, key)`는 한 건만 존재하며 value는
-JSON(문자열·숫자·객체 등)입니다 — [docs/architecture/memory.md](docs/architecture/memory.md)
+**AI용 구조화 설정 저장소**입니다. 같은 `(scope, scopeId, key)`는 한 건만 존재하며
+value는 JSON입니다 — [docs/architecture/memory.md](docs/architecture/memory.md)
+
+- `scope`(Enum): `GLOBAL · COMPANY · PROJECT · PRODUCT` — GLOBAL/COMPANY는 scopeId
+  없이, PROJECT/PRODUCT는 실존하는 projectId/productId를 scopeId로 요구합니다.
 
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
@@ -228,6 +231,16 @@ JSON(문자열·숫자·객체 등)입니다 — [docs/architecture/memory.md](d
 기존 프로젝트 메모형 기억은 `ProjectMemory`로 개칭해 그대로 동작합니다
 (테이블 `project_memories`로 데이터 보존, API 경로 동일):
 `POST/GET /projects/:projectId/memories` · `GET/PATCH/DELETE …/memories/:memoryId`
+
+## Company Brain Query (TASK-0403)
+
+AI가 Company Brain을 한 번에 조회하는 진입점입니다. 조회 순서는
+**Memory → Knowledge → Decision → SOP** 로 고정됩니다 —
+[docs/architecture/company-brain.md](docs/architecture/company-brain.md)
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `POST` | `/company-brain/query` | `{ query, scope?, scopeId?, limit? }` → 고정 순서 4개 섹션 응답 |
 
 ## Knowledge (TASK-0401)
 

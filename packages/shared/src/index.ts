@@ -414,6 +414,48 @@ export interface UpdateKnowledgeRequest {
   category?: KnowledgeCategory | null;
 }
 
+// ── Company Brain Query (TASK-0403) ────────────────────
+
+/** 조회 순서 — CTO 지시로 고정: Memory → Knowledge → Decision → SOP */
+export const COMPANY_BRAIN_SOURCES = [
+  "MEMORY",
+  "KNOWLEDGE",
+  "DECISION",
+  "SOP",
+] as const;
+
+export type CompanyBrainSource = (typeof COMPANY_BRAIN_SOURCES)[number];
+
+export interface CompanyBrainQueryRequest {
+  /** 검색어 (필수) */
+  query: string;
+  /** Memory 필터 (선택). scope=PROJECT + scopeId면 Decision도 해당 프로젝트로 필터 */
+  scope?: MemoryScope;
+  scopeId?: string;
+  /** 소스별 최대 결과 수 (기본 20, 최대 100) */
+  limit?: number;
+}
+
+/** SOP 정의 요약 — Query 응답용 */
+export interface SopSummaryDto {
+  key: string;
+  name: string;
+  description: string;
+  steps: { key: string; name: string }[];
+}
+
+export type CompanyBrainSectionDto =
+  | { source: "MEMORY"; items: MemoryDto[] }
+  | { source: "KNOWLEDGE"; items: KnowledgeDto[] }
+  | { source: "DECISION"; items: DecisionDto[] }
+  | { source: "SOP"; items: SopSummaryDto[] };
+
+export interface CompanyBrainQueryResponse {
+  query: string;
+  /** 항상 MEMORY → KNOWLEDGE → DECISION → SOP 순서의 섹션 배열 */
+  results: CompanyBrainSectionDto[];
+}
+
 export function formatDate(date: Date): string {
   return date.toISOString().slice(0, 10);
 }

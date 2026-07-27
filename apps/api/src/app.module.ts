@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { AppController } from "./app.controller";
 import { AppService } from "./app.service";
 import { AnalysisModule } from "./analysis/analysis.module";
+import { CompanyBrainModule } from "./company-brain/company-brain.module";
 import { ContentsModule } from "./contents/contents.module";
 import { DecisionsModule } from "./decisions/decisions.module";
 import { KnowledgeModule } from "./knowledge/knowledge.module";
@@ -32,6 +33,7 @@ import { UploadsModule } from "./uploads/uploads.module";
     ProjectMemoriesModule,
     MemoryModule,
     KnowledgeModule,
+    CompanyBrainModule,
   ],
   controllers: [AppController],
   providers: [AppService],
