@@ -339,6 +339,30 @@ export interface UpdateMemoryRequest {
   source?: string | null;
 }
 
+// ── Knowledge (TASK-0401, Company Brain) ───────────────
+
+export interface KnowledgeDto {
+  id: string;
+  title: string;
+  content: string;
+  /** 지식 분류 (예: 금지어, 필수 고지, 브랜드 가이드 — 선택, 자유 문자열) */
+  category: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateKnowledgeRequest {
+  title: string;
+  content: string;
+  category?: string;
+}
+
+export interface UpdateKnowledgeRequest {
+  title?: string;
+  content?: string;
+  category?: string | null;
+}
+
 export function formatDate(date: Date): string {
   return date.toISOString().slice(0, 10);
 }

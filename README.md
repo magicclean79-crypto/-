@@ -225,6 +225,22 @@ Company Brain을 구성하며, Workflow Engine은 Memory를 **사용할 수 있�
 
 오류: `400` 필수 필드(title/content) 누락·공백, `404` 프로젝트/기억 없음.
 
+## Knowledge (TASK-0401)
+
+회사의 공식 지식(규칙·정책·가이드)을 보존합니다. 프로젝트별 경험(Memory)과 달리
+**회사 전역**이며, 이후 Company Brain Query·READY 검증의 원천이 됩니다 —
+[docs/architecture/knowledge.md](docs/architecture/knowledge.md)
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `POST` | `/knowledge` | `{ title, content, category? }` 생성 |
+| `GET` | `/knowledge` | 목록 (최신순) |
+| `GET` | `/knowledge/:knowledgeId` | 단건 |
+| `PATCH` | `/knowledge/:knowledgeId` | 부분 수정 |
+| `DELETE` | `/knowledge/:knowledgeId` | 삭제 (204) |
+
+오류: `400` 필수 필드(title/content) 누락·공백, `404` 지식 없음.
+
 ## Product (TASK-0203)
 
 업로드된 사진(들)을 묶어 Product Object를 생성합니다.
