@@ -8,13 +8,11 @@
 
 ## 미완료 (스펙 확정, 구현 대기)
 
-- (없음 — TASK-0403 완료. CTO 리뷰/승인 대기 중이며 승인 전 다음 TASK를 시작하지 않는다)
-
-## 승인 대기 — Sprint 4 잔여 (CTO 승인 전 시작 금지)
-
-- [ ] TASK-0404 — READY Validation Engine (제목만 수신, 상세 스펙 대기 — CTO_REQUEST #7 연결 예상)
+- (없음 — **Sprint 4 Backlog 전체 완료** (0401~0404). CTO 리뷰/승인 대기 중이며 승인 전 새 작업을 시작하지 않는다. Sprint 4 종료 전 새 기능 추가 금지 준수)
 
 ## 완료 — Sprint 4 (Goal: Company Brain Integration)
+
+- [x] **TASK-0404 — READY Validation Engine** (`817ead4`): CompanyBrainService로 Knowledge/Memory/Decision/SOP를 읽어 READY 전환 가능 여부 판정 — 검사 6종, PASS/WARNING/FAIL 3단계(전체=최악 값), 금지어는 Memory(GLOBAL, banned-words) 기반, POST /projects/:id/ready-validation — 해석 확인 CTO_REQUEST #15
 
 - [x] **TASK-0403 — Company Brain Query Service** (`7c2264a`): CompanyBrainService(읽기 전용, 조회 순서 Memory→Knowledge→Decision→SOP 고정), POST /company-brain/query({query, scope?, scopeId?, limit?} → 고정 순서 4개 섹션), 소스별 부분 일치 매칭 — 해석 확인 CTO_REQUEST #14
 - [x] **TASK-0402 — Structured Memory Foundation** (`ce37a80`, CTO 승인 · scope Enum+규칙 반영 `2afd089`): 표준 Memory를 scope(GLOBAL/COMPANY/PROJECT/PRODUCT Enum)/scopeId(PROJECT·PRODUCT 실존 검증)/key/value(Json)/description 구조화 저장소로 재정의, (scope,scopeId,key) 유니크, CRUD API /memory — ProjectMemory는 사람용 메모·작업기록으로 유지

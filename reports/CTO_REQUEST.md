@@ -25,28 +25,31 @@
 - 현황: TASK-0302에서 최소 규칙(제목 + OCR/Vision 요약 중 1개)으로 구현됨.
 - 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
 
-### 14. TASK-0403 "Company Brain Query Service" 해석 확인
-- 현황: 지시 사항(CompanyBrainService, 조회 순서 Memory→Knowledge→Decision→SOP,
-  POST /company-brain/query)을 다음과 같이 보수적으로 구현했다:
-  - **통합 검색형**: 검색어(query)로 4개 저장소를 지시 순서대로 조회해
-    **고정 순서 4개 섹션**으로 반환 (첫 매칭만 반환하는 fallback형 아님)
-  - 매칭: 부분 일치·대소문자 무시 — Memory(key/description),
-    Knowledge(title/content), Decision(title/description/reason),
-    SOP(코드 선언 정의의 key/name/description/단계명)
-  - 필터: scope/scopeId(Memory), scope=PROJECT면 Decision도 프로젝트 필터.
-    limit 소스별 기본 20/최대 100
-  - 읽기 전용 — 각 도메인의 저장·수명 관리는 해당 모듈에 유지
-- 질문: ① 통합 검색형 해석이 맞는지, 아니면 우선순위 fallback형
-  (Memory에서 찾으면 중단)이 의도인지 ② Memory value(Json) 내부 텍스트도
-  검색 대상에 넣을지 ③ SopRun(실행 이력)도 조회 대상에 포함할지.
-
-### 8. 잔여 TASK 상세 스펙 전달 요청 (유지)
-- 현황: Sprint 4 잔여는 **TASK-0404 READY Validation Engine**뿐이다.
-- 요청: 승인 시점에 0404의 검증 규칙 소스(Knowledge RULE/LEGAL·Memory 설정
-  연계 여부, 규칙 스키마)와 적용 시점(READY 전이 시 강제? 별도 검증 API?)
-  스펙 전달 요청 — #7(READY 조건 확장)과 통합 검토 권장.
+### 15. TASK-0404 "READY Validation Engine" 세부 해석 확인
+- 현황: 지시 사항(CompanyBrainService로 4개 소스 읽기, PASS/WARNING/FAIL,
+  POST /projects/:id/ready-validation)을 다음 검사 6종으로 구현했다:
+  ① 전이 가능(도메인, FAIL) ② 기본 필수 조건(도메인, FAIL)
+  ③ **금지어(Memory)**: `scope=GLOBAL, key=banned-words, value=문자열 배열`
+  약속 키 기반 — 발견 FAIL, 목록 미설정 WARNING
+  ④ 관련 규칙(Knowledge RULE/LEGAL 제목 검색) — 발견 시 WARNING(검토 필요)
+  ⑤ 관련 결정(Decision, 프로젝트 필터) — 정보성, 항상 PASS
+  ⑥ 표준 절차(SOP product-content 존재) — 부재 WARNING
+- 경계: **판단만** 한다 — 실제 READY 전이(PATCH …/status)에 검증 결과를
+  강제하지 않으며, 검증 결과는 저장하지 않는다.
+- 질문: ① 검사 6종·판정 규칙이 의도와 맞는지 (특히 banned-words 약속 키)
+  ② 검증 FAIL 시 READY 전이를 **차단**할지(전이 API에 통합) 현행 유지할지
+  ③ 검증 결과 이력화(DB 저장) 필요 여부.
 
 ## 결정됨
+
+### 14. TASK-0403 해석 확인 → 승인 (2026-07-27)
+- CTO 결정: ① **통합 조회 방식 유지** (fallback 아님)
+  ② Memory value(Json) 검색은 **다음 Sprint에서 확장**
+  ③ **SopRun은 Company Brain이 아님** — Query 대상 제외 확정.
+
+### 8. 잔여 TASK 상세 스펙 전달 → Sprint 4 완료로 해소 (2026-07-27)
+- 0404까지 지시 수신·구현 완료. 다음 Sprint 계획 시 TASK별 필드·범위
+  스펙을 함께 받으면 재작업을 줄일 수 있다 (요청 유지 취지만 기록).
 
 ### 13. TASK-0402 세부 해석 → 승인 + scope Enum·규칙 확정 (2026-07-27)
 - CTO 결정: ① scope Enum 4종 **GLOBAL/COMPANY/PROJECT/PRODUCT**
