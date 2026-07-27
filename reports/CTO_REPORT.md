@@ -2,8 +2,10 @@
 
 > 이 문서는 AGENTS.md의 TASK 완료 절차에 따라 모든 TASK 완료 시 갱신된다.
 > 형식(섹션 구성)은 항상 동일하게 유지한다:
-> 1. 보고 요약 → 2. 품질 게이트 → 3. 완료된 TASK → 4. 아키텍처 현황
-> → 5. 데이터 모델 → 6. API 표면 → 7. 테스트 현황 → 8. 리스크·기술 부채 → 9. 다음 단계 제안
+> 1. 보고 요약 → 2. 품질 게이트 → 3. **변경 사항** → 4. **테스트 결과**
+> → 5. **아키텍처 변경**(+현황) → 6. 데이터 모델 → 7. API 표면
+> → 8. 리스크·기술 부채 → 9. **다음 권장 사항**
+> (굵은 항목 4가지는 AGENTS.md가 요구하는 필수 포함 항목)
 
 ---
 
@@ -26,7 +28,12 @@
 | TypeScript | (빌드 포함) | ✅ 오류 0 |
 | ESLint | `pnpm lint` | ✅ 오류 0, 경고 0 |
 
-## 3. 완료된 TASK
+## 3. 변경 사항 (이번 보고 주기)
+
+- **TASK-0203 Product Object Foundation** (`de5442d`): `ProductObjectBuilder`(OCR+Vision mock 조립, @acos/core), 버전 관리되는 `ProductObject` 모델(DRAFT/READY/ARCHIVED), `/projects/:id/product-object` API 3종, JSON Schema 계약, 아키텍처 문서
+- **운영 체계** (`20c87f0`, 본 커밋): AGENTS.md TASK 완료 절차·작업 기준(TASKS.md) 명문화, reports/ 보고 체계, TASKS.md 작업 대장 생성
+
+### 누적 완료 TASK
 
 | TASK | 내용 | 커밋 |
 | --- | --- | --- |
@@ -39,7 +46,19 @@
 
 \* 0204는 아키텍트 공식 스펙 이전에 자체 정의로 선구현된 항목.
 
-## 4. 아키텍처 현황
+## 4. 테스트 결과
+
+| 위치 | 종류 | 수 | 결과 |
+| --- | --- | --- | --- |
+| `packages/core` | Unit (OCR 8 · Analysis 6 · Builder 6) | 20 | ✅ 전체 통과 |
+| `apps/api` | Service + API/supertest (OCR 8 · Analysis 9 · ProductObject 10) | 27 | ✅ 전체 통과 |
+| 라이브 검증 | 실 DB/스토리지로 업로드·OCR·분석·Product Object 조립, JSON Schema AJV | — | ✅ |
+
+## 5. 아키텍처 변경 및 현황
+
+**이번 주기 변경**: Product Object 도메인 신설(@acos/core의 순수 Builder + api 어댑터). `projectId`는 별도 Project 엔티티 부재로 기존 `Product`를 프로젝트 단위로 참조(CTO_REQUEST #1). 그 외 구조 변경 없음.
+
+**현황**:
 
 - **모노레포**: `apps/web`(Next.js 16, Tailwind 4) · `apps/api`(NestJS 11, Prisma 6) · `packages/{core,shared,agents,ui}`
 - **도메인 계층(@acos/core)** — 프레임워크 무관, Port/Adapter:
@@ -49,7 +68,7 @@
 - **Provider 선택**: 환경변수 (`OCR_PROVIDER`, `ANALYSIS_PROVIDER`) — 실제 외부 AI API 미연결
 - **문서**: `docs/architecture/{ocr,analysis,product-object}.md`, `docs/schema/product-object.schema.json`
 
-## 5. 데이터 모델
+## 6. 데이터 모델
 
 ```
 Product(프로젝트 단위) ──< Image ──< OcrResult          (1:N 이력)
@@ -61,7 +80,7 @@ Product(프로젝트 단위) ──< Image ──< OcrResult          (1:N 이�
 
 마이그레이션 5건 적용됨. 스키마-DB drift 없음(prisma migrate diff 검증).
 
-## 6. API 표면
+## 7. API 표면
 
 | 영역 | 엔드포인트 |
 | --- | --- |
@@ -74,16 +93,6 @@ Product(프로젝트 단위) ──< Image ──< OcrResult          (1:N 이�
 
 웹: `/`(대시보드) · `/upload`(드래그 앤 드롭) · `/products`(목록) · `/products/[id]`(상세)
 
-## 7. 테스트 현황
-
-| 위치 | 종류 | 수 |
-| --- | --- | --- |
-| `packages/core` | Unit (OCR 8 · Analysis 6 · Builder 6) | 20 |
-| `apps/api` | Service + API(supertest) (OCR 8 · Analysis 9 · ProductObject 10) | 27 |
-| 합계 | | **47** |
-
-라이브 검증: 업로드·OCR(tesseract 실제 추출)·분석·Product Object 조립을 실 DB/스토리지로 확인. Product Object 응답은 JSON Schema(AJV) 검증 통과.
-
 ## 8. 리스크·기술 부채
 
 1. **Project 엔티티 부재** — `projectId`가 현재 `products.id`를 참조. 분리 필요 여부는 CTO 결정 대기 (CTO_REQUEST #1)
@@ -93,7 +102,7 @@ Product(프로젝트 단위) ──< Image ──< OcrResult          (1:N 이�
 5. **웹 UI가 구 Product 흐름 기준** — Product Object/분석 실행 UI 없음
 6. 업로드 파일의 바이러스 검사·이미지 리사이징 없음
 
-## 9. 다음 단계 제안
+## 9. 다음 권장 사항
 
 1. TASK-0205(가칭): Vision Foundation — VisionProvider 교체 구조 + Product Object 연결
 2. Product Object 상태 전이 API (`DRAFT → READY`) + 검증 규칙
