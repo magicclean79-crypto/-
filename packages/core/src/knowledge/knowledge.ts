@@ -1,3 +1,6 @@
+import { KNOWLEDGE_CATEGORIES } from "@acos/shared";
+import type { KnowledgeCategory } from "@acos/shared";
+
 /**
  * Knowledge — 회사의 공식 지식 도메인. (TASK-0401, Company Brain 소속)
  *
@@ -13,8 +16,8 @@ export interface Knowledge {
   title: string;
   /** 지식 본문 */
   content: string;
-  /** 지식 분류 (선택, 자유 문자열 — Enum 고정 여부는 CTO 결정 대기) */
-  category: string | null;
+  /** 지식 분류 — Enum 고정 (CTO 결정, 선택 필드) */
+  category: KnowledgeCategory | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -22,13 +25,13 @@ export interface Knowledge {
 export interface CreateKnowledgeInput {
   title: string;
   content: string;
-  category?: string | null;
+  category?: KnowledgeCategory | null;
 }
 
 export interface UpdateKnowledgeInput {
   title?: string;
   content?: string;
-  category?: string | null;
+  category?: KnowledgeCategory | null;
 }
 
 /** Knowledge 저장소 Port — 인프라(Prisma 등)가 구현한다 */
@@ -47,18 +50,40 @@ function isBlank(value: unknown): boolean {
   return typeof value !== "string" || value.trim().length === 0;
 }
 
-/** 생성 입력 검증 — 필수 필드(title/content) 공백 불가 */
+function isValidCategory(value: unknown): boolean {
+  return (KNOWLEDGE_CATEGORIES as readonly string[]).includes(value as string);
+}
+
+const CATEGORY_ERROR = `category는 다음 중 하나여야 합니다: ${KNOWLEDGE_CATEGORIES.join(", ")}`;
+
+/** 생성 입력 검증 — 필수 필드(title/content) 공백 불가, category는 Enum 값만 허용 */
 export function validateCreateKnowledge(
   input: Partial<CreateKnowledgeInput>,
 ): string[] {
-  return REQUIRED_FIELDS.filter((field) => isBlank(input[field])).map(
+  const errors = REQUIRED_FIELDS.filter((field) => isBlank(input[field])).map(
     (field) => `${field}은(는) 비어 있을 수 없습니다.`,
   );
+  if (
+    input.category !== undefined &&
+    input.category !== null &&
+    !isValidCategory(input.category)
+  ) {
+    errors.push(CATEGORY_ERROR);
+  }
+  return errors;
 }
 
-/** 수정 입력 검증 — 지정된 필수 필드는 공백으로 바꿀 수 없다 */
+/** 수정 입력 검증 — 지정된 필수 필드는 공백 불가, category는 Enum 값만 허용 */
 export function validateUpdateKnowledge(input: UpdateKnowledgeInput): string[] {
-  return REQUIRED_FIELDS.filter(
+  const errors = REQUIRED_FIELDS.filter(
     (field) => input[field] !== undefined && isBlank(input[field]),
   ).map((field) => `${field}은(는) 비어 있을 수 없습니다.`);
+  if (
+    input.category !== undefined &&
+    input.category !== null &&
+    !isValidCategory(input.category)
+  ) {
+    errors.push(CATEGORY_ERROR);
+  }
+  return errors;
 }

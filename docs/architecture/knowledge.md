@@ -31,7 +31,7 @@ Sprint 4 Backlog의 후속 TASK가 이 저장소를 소비합니다 —
   - `Knowledge` 엔티티: `id, title, content, category?, createdAt, updatedAt`
   - `KnowledgeRepository` **Port**: create / findById / findAll / update / delete
   - 검증: `validateCreateKnowledge` / `validateUpdateKnowledge`
-    — 필수 필드(title/content) 공백 불가
+    — 필수 필드(title/content) 공백 불가, category는 Enum 값만 허용
 - **어댑터 (`apps/api/src/knowledge/`)**
   - `PrismaKnowledgeRepository`: Repository Port의 Prisma 구현
   - `KnowledgeService`: 검증 + Repository 호출 (전역 지식이라 프로젝트 확인 없음)
@@ -44,7 +44,7 @@ Sprint 4 Backlog의 후속 TASK가 이 저장소를 소비합니다 —
 | `id` | string | cuid |
 | `title` | string | 지식 제목 (필수) |
 | `content` | string | 지식 본문 (필수) |
-| `category` | string? | 분류 — 자유 문자열 (예: 금지어, 필수 고지, 브랜드 가이드). Enum 고정 여부는 CTO 결정 대기 |
+| `category` | enum? | `RULE · POLICY · GUIDE · BRAND · LEGAL · QUALITY · FAQ · OTHER` (CTO 결정으로 Enum 고정, 선택 필드) |
 | `createdAt` / `updatedAt` | DateTime | 기록/개정 시각 |
 
 ## API (`/knowledge` — 회사 전역이라 최상위 경로)

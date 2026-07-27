@@ -239,7 +239,9 @@ Company Brain을 구성하며, Workflow Engine은 Memory를 **사용할 수 있�
 | `PATCH` | `/knowledge/:knowledgeId` | 부분 수정 |
 | `DELETE` | `/knowledge/:knowledgeId` | 삭제 (204) |
 
-오류: `400` 필수 필드(title/content) 누락·공백, `404` 지식 없음.
+- `category`(Enum, 선택): `RULE · POLICY · GUIDE · BRAND · LEGAL · QUALITY · FAQ · OTHER`
+
+오류: `400` 필수 필드(title/content) 누락·공백·Enum 외 category, `404` 지식 없음.
 
 ## Product (TASK-0203)
 

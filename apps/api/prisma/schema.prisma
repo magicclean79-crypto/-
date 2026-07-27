@@ -223,15 +223,27 @@ model Memory {
 
 // 회사 공식 지식 — Company Brain 전역 (프로젝트 무관, TASK-0401)
 model Knowledge {
-  id        String   @id @default(cuid())
+  id        String             @id @default(cuid())
   title     String
   content   String
-  category  String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  category  KnowledgeCategory?
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
 
   @@index([category])
   @@map("knowledge")
+}
+
+// 지식 분류 — CTO 결정으로 Enum 고정 (TASK-0401 승인 리뷰)
+enum KnowledgeCategory {
+  RULE
+  POLICY
+  GUIDE
+  BRAND
+  LEGAL
+  QUALITY
+  FAQ
+  OTHER
 }
 
 // 결정 유형 — CTO 결정으로 Enum 고정 (TASK-0306 승인 리뷰)

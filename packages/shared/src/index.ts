@@ -341,12 +341,25 @@ export interface UpdateMemoryRequest {
 
 // ── Knowledge (TASK-0401, Company Brain) ───────────────
 
+/** 지식 분류 — CTO 결정으로 Enum 고정 */
+export const KNOWLEDGE_CATEGORIES = [
+  "RULE",
+  "POLICY",
+  "GUIDE",
+  "BRAND",
+  "LEGAL",
+  "QUALITY",
+  "FAQ",
+  "OTHER",
+] as const;
+
+export type KnowledgeCategory = (typeof KNOWLEDGE_CATEGORIES)[number];
+
 export interface KnowledgeDto {
   id: string;
   title: string;
   content: string;
-  /** 지식 분류 (예: 금지어, 필수 고지, 브랜드 가이드 — 선택, 자유 문자열) */
-  category: string | null;
+  category: KnowledgeCategory | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -354,13 +367,13 @@ export interface KnowledgeDto {
 export interface CreateKnowledgeRequest {
   title: string;
   content: string;
-  category?: string;
+  category?: KnowledgeCategory;
 }
 
 export interface UpdateKnowledgeRequest {
   title?: string;
   content?: string;
-  category?: string | null;
+  category?: KnowledgeCategory | null;
 }
 
 export function formatDate(date: Date): string {

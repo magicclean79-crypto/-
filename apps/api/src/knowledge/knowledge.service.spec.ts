@@ -26,7 +26,7 @@ describe("KnowledgeService (Service Test)", () => {
       title: `  ${validRequest.title}  `,
     });
     expect(knowledge.title).toBe(validRequest.title);
-    expect(knowledge.category).toBe("금지어");
+    expect(knowledge.category).toBe("RULE");
 
     const minimal = await service.create({
       title: "분류 없는 지식",
@@ -49,13 +49,29 @@ describe("KnowledgeService (Service Test)", () => {
     ).rejects.toThrow(BadRequestException);
   });
 
+  it("category가 Enum 값이 아니면 400 (생성/수정)", async () => {
+    const service = await createService();
+
+    await expect(
+      service.create({ ...validRequest, category: "금지어" as never }),
+    ).rejects.toThrow(BadRequestException);
+
+    const created = await service.create(validRequest);
+    await expect(
+      service.update(created.id, { category: "rule" as never }),
+    ).rejects.toThrow(BadRequestException);
+
+    const updated = await service.update(created.id, { category: "POLICY" });
+    expect(updated.category).toBe("POLICY");
+  });
+
   it("목록(최신순)·단건 조회, 없는 지식은 404", async () => {
     const service = await createService();
     const first = await service.create(validRequest);
     const second = await service.create({
       ...validRequest,
       title: "필수 고지",
-      category: "필수 고지",
+      category: "LEGAL",
     });
 
     const list = await service.list();

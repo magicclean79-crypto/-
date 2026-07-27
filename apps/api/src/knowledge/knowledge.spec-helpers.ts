@@ -57,5 +57,5 @@ export function createRepositoryMock() {
 export const validRequest = {
   title: "상세페이지 금지어",
   content: "최상급 표현(최고, 1위, 유일)은 근거 자료 없이 사용할 수 없다.",
-  category: "금지어",
-};
+  category: "RULE",
+} as const;

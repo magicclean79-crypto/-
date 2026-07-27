@@ -43,7 +43,7 @@ export class KnowledgeService {
     const knowledge = await this.repository.create({
       title: request.title.trim(),
       content: request.content.trim(),
-      category: request.category?.trim() || null,
+      category: request.category ?? null,
     });
     return toDto(knowledge);
   }
@@ -75,7 +75,7 @@ export class KnowledgeService {
         ? { content: request.content.trim() }
         : {}),
       ...(request.category !== undefined
-        ? { category: request.category?.trim() || null }
+        ? { category: request.category }
         : {}),
     });
     return toDto(knowledge);

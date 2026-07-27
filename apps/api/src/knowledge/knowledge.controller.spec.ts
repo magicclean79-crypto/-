@@ -37,12 +37,17 @@ describe("Knowledge API (API Test)", () => {
 
     expect(response.body).toMatchObject({
       title: validRequest.title,
-      category: "금지어",
+      category: "RULE",
     });
 
     await request(app.getHttpServer())
       .post("/knowledge")
       .send({ ...validRequest, content: "" })
+      .expect(400);
+
+    await request(app.getHttpServer())
+      .post("/knowledge")
+      .send({ ...validRequest, category: "금지어" })
       .expect(400);
   });
 
