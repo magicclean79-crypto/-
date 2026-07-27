@@ -1,11 +1,19 @@
 import {
+  BadRequestException,
   Inject,
   Injectable,
   Logger,
   NotFoundException,
 } from "@nestjs/common";
-import { ProductObjectBuilder } from "@acos/core";
+import {
+  canTransitionProductObject,
+  PRODUCT_OBJECT_TRANSITIONS,
+  ProductObjectBuilder,
+  validateReadyRequirements,
+} from "@acos/core";
 import type { VisionInput, VisionProvider } from "@acos/core";
+import { PRODUCT_OBJECT_STATUSES } from "@acos/shared";
+import type { ProductObjectStatus } from "@acos/shared";
 import type {
   OcrSummary,
   OcrTextSource,
@@ -180,6 +188,61 @@ export class ProductObjectService {
       );
     }
     return toDto(record);
+  }
+
+  /**
+   * 상태 전이 (TASK-0302): DRAFT ⇄ READY, DRAFT/READY → ARCHIVED.
+   * READY 전환은 필수 조건(제목 + OCR/Vision 요약)을 검증한다.
+   */
+  async updateStatus(
+    projectId: string,
+    version: number,
+    status: string,
+  ): Promise<ProductObjectDto> {
+    if (!(PRODUCT_OBJECT_STATUSES as readonly string[]).includes(status)) {
+      throw new BadRequestException(
+        `유효하지 않은 상태입니다: ${status} (허용: ${PRODUCT_OBJECT_STATUSES.join(", ")})`,
+      );
+    }
+    const target = status as ProductObjectStatus;
+
+    const record = await this.prisma.productObject.findFirst({
+      where: { projectId, version },
+    });
+    if (!record) {
+      throw new NotFoundException(
+        `Product Object v${version}이 없습니다: ${projectId}`,
+      );
+    }
+
+    if (!canTransitionProductObject(record.status, target)) {
+      const allowed = PRODUCT_OBJECT_TRANSITIONS[record.status];
+      throw new BadRequestException(
+        `${record.status} → ${target} 전이는 허용되지 않습니다.` +
+          (allowed.length > 0
+            ? ` (허용: ${allowed.join(", ")})`
+            : " (ARCHIVED는 종결 상태입니다)"),
+      );
+    }
+
+    if (target === "READY") {
+      const errors = validateReadyRequirements({
+        title: record.title,
+        ocrSummary: record.ocrSummary,
+        visionSummary: record.visionSummary,
+      });
+      if (errors.length > 0) {
+        throw new BadRequestException(
+          `READY 전환 조건을 충족하지 않습니다: ${errors.join(" ")}`,
+        );
+      }
+    }
+
+    const updated = await this.prisma.productObject.update({
+      where: { id: record.id },
+      data: { status: target },
+    });
+    return toDto(updated);
   }
 
   /** 버전 이력 (최신순) */

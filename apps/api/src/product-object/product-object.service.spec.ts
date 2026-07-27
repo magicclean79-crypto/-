@@ -1,4 +1,4 @@
-import { NotFoundException } from "@nestjs/common";
+import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { MockVisionProvider, type VisionProvider } from "@acos/core";
 import { PrismaService } from "../prisma/prisma.service";
@@ -110,5 +110,55 @@ describe("ProductObjectService (Service Test)", () => {
     await expect(service.getByProjectId("proj-1")).rejects.toThrow(
       NotFoundException,
     );
+  });
+
+  describe("상태 전이 (TASK-0302)", () => {
+    async function setup() {
+      const prisma = createPrismaMock();
+      prisma.project.findUnique.mockResolvedValue(projectWithOcr);
+      const service = await createService(prisma);
+      await service.buildAndCreate("proj-1"); // v1 DRAFT (OCR+Vision 요약 보유)
+      return service;
+    }
+
+    it("DRAFT → READY 전환 (검증 통과)", async () => {
+      const service = await setup();
+      const result = await service.updateStatus("proj-1", 1, "READY");
+      expect(result.status).toBe("READY");
+    });
+
+    it("READY → DRAFT 되돌리기, READY → ARCHIVED 종결", async () => {
+      const service = await setup();
+      await service.updateStatus("proj-1", 1, "READY");
+      expect((await service.updateStatus("proj-1", 1, "DRAFT")).status).toBe(
+        "DRAFT",
+      );
+      await service.updateStatus("proj-1", 1, "READY");
+      expect(
+        (await service.updateStatus("proj-1", 1, "ARCHIVED")).status,
+      ).toBe("ARCHIVED");
+    });
+
+    it("ARCHIVED에서는 어떤 전이도 불가 (400)", async () => {
+      const service = await setup();
+      await service.updateStatus("proj-1", 1, "ARCHIVED");
+      await expect(
+        service.updateStatus("proj-1", 1, "DRAFT"),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it("유효하지 않은 상태 값은 400", async () => {
+      const service = await setup();
+      await expect(
+        service.updateStatus("proj-1", 1, "PUBLISHED"),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it("없는 버전은 404", async () => {
+      const service = await setup();
+      await expect(
+        service.updateStatus("proj-1", 9, "READY"),
+      ).rejects.toThrow(NotFoundException);
+    });
   });
 });

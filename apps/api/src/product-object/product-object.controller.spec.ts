@@ -101,4 +101,22 @@ describe("Product Object API (API Test)", () => {
       .post("/projects/nope/product-object")
       .expect(404);
   });
+
+  it("PATCH /:version/status — DRAFT→READY 전환, 잘못된 전이는 400", async () => {
+    const ready = await request(app.getHttpServer())
+      .patch("/projects/proj-1/product-object/1/status")
+      .send({ status: "READY" })
+      .expect(200);
+    expect(ready.body.status).toBe("READY");
+
+    await request(app.getHttpServer())
+      .patch("/projects/proj-1/product-object/1/status")
+      .send({ status: "READY" }) // READY → READY 불가
+      .expect(400);
+
+    await request(app.getHttpServer())
+      .patch("/projects/proj-1/product-object/1/status")
+      .send({}) // status 누락
+      .expect(400);
+  });
 });

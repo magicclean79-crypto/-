@@ -18,7 +18,10 @@
 
 - **버전 관리**: 생성할 때마다 새 버전이 쌓인다(`projectId + version` 유니크).
   소스(사진/OCR)가 바뀌면 재조립해 새 버전을 만들고, 과거 버전은 보존된다.
-- **상태 관리**: `DRAFT`(조립 직후) → `READY`(검수 완료) → `ARCHIVED`(보관)
+- **상태 관리** (TASK-0302): `DRAFT ⇄ READY`, `DRAFT/READY → ARCHIVED`(종결).
+  READY 전환은 필수 조건 검증을 통과해야 한다 — 제목 존재 + OCR/Vision 요약 중
+  하나 이상. 규칙은 `packages/core/src/product-object/product-object.status.ts`,
+  API는 `PATCH /projects/:projectId/product-object/:version/status`.
 - **스키마 고정**: [docs/schema/product-object.schema.json](../schema/product-object.schema.json)이
   구조의 계약이다. 소비자(콘텐츠 생성기 등)는 이 스키마만 의존한다.
 - `projectId`는 최상위 루트 엔티티 **`Project`**(`projects.id`)를 참조한다

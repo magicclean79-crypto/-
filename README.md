@@ -128,6 +128,7 @@ OCR·Vision 결과를 조립한 **핵심 데이터 모델**입니다. 프로젝�
 | `POST` | `/projects/:projectId/product-object` | OCR+Vision(mock) 조립 → 새 버전 생성 |
 | `GET` | `/projects/:projectId/product-object?version=N` | 최신(또는 특정) 버전 조회 |
 | `GET` | `/projects/:projectId/product-object/history` | 버전 이력 |
+| `PATCH` | `/projects/:projectId/product-object/:version/status` | 상태 전이 (`DRAFT ⇄ READY`, `→ ARCHIVED`; READY는 검증 통과 필요) |
 
 - 상태: `DRAFT → READY → ARCHIVED` · 버전: `projectId+version` 유니크, 생성마다 증가
 - Vision: `VISION_PROVIDER`로 교체 가능한 Provider가 visionSummary 공급 (기본 mock,

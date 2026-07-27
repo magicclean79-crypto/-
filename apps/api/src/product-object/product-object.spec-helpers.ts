@@ -55,6 +55,19 @@ export function createPrismaMock() {
             .filter((row) => row.projectId === where.projectId)
             .sort((a, b) => b.version - a.version),
       ),
+      update: jest.fn(
+        async ({
+          where,
+          data,
+        }: {
+          where: { id: string };
+          data: Partial<ProductObject>;
+        }) => {
+          const row = rows.get(where.id) as ProductObject;
+          Object.assign(row, data, { updatedAt: new Date() });
+          return { ...row };
+        },
+      ),
     },
   };
   return prisma;
