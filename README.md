@@ -62,6 +62,40 @@ pnpm dev
 | `pnpm prisma:migrate` | DB 마이그레이션 (`prisma migrate dev`) |
 | `pnpm prisma:studio` | Prisma Studio 실행 |
 
+## 사진 업로드 (TASK-0201)
+
+- 업로드 화면: <http://localhost:3000/upload> — 드래그 앤 드롭, 다중 업로드, 진행률 표시
+- 저장소: MinIO 버킷 `acos` (`images/{yyyy}/{mm}/{uuid}.{ext}` 키로 저장, public-read)
+- 메타데이터: PostgreSQL `images` 테이블 (Prisma `Image` 모델)
+
+### 업로드 API
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `POST` | `/uploads/images` | `multipart/form-data`, 필드명 `files` (최대 10개, 파일당 10MB, jpeg/png/webp/gif) |
+| `GET` | `/uploads/images?take=20` | 최근 업로드 목록 |
+
+성공 응답(201):
+
+```json
+{
+  "images": [
+    {
+      "id": "cml…",
+      "key": "images/2026/07/….jpg",
+      "url": "http://localhost:9000/acos/images/2026/07/….jpg",
+      "originalName": "photo.jpg",
+      "mimeType": "image/jpeg",
+      "size": 123456,
+      "productId": null,
+      "createdAt": "2026-07-27T00:00:00.000Z"
+    }
+  ]
+}
+```
+
+오류: `400` 파일 없음/형식 불일치, `413` 10MB 초과, `503` MinIO/DB 연결 불가.
+
 ## Prisma
 
 - 스키마: `apps/api/prisma/schema.prisma`

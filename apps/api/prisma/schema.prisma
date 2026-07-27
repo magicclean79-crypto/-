@@ -12,10 +12,27 @@ model Product {
   name        String
   description String?
   contents    Content[]
+  images      Image[]
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
   @@map("products")
+}
+
+model Image {
+  id           String   @id @default(cuid())
+  key          String   @unique
+  url          String
+  originalName String
+  mimeType     String
+  size         Int
+  product      Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  productId    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([productId])
+  @@map("images")
 }
 
 model Content {

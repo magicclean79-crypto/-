@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { APP_NAME } from "@acos/shared";
 import { Card } from "@acos/ui";
 import { ApiStatus } from "./api-status";
@@ -10,6 +11,12 @@ export default function Home() {
         <p className="mt-2 text-zinc-600 dark:text-zinc-400">
           AI 기반 제품 콘텐츠 운영 시스템 — pnpm + Turborepo Monorepo
         </p>
+        <Link
+          href="/upload"
+          className="mt-4 inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
+        >
+          📸 상품 사진 업로드
+        </Link>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
