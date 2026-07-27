@@ -1,0 +1,24 @@
+{
+  "name": "ai-product-content-os",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI Product Content OS - AI 기반 제품 콘텐츠 운영 시스템",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "clean": "turbo run clean && rm -rf node_modules",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "prisma:generate": "pnpm --filter api prisma:generate",
+    "prisma:migrate": "pnpm --filter api prisma:migrate",
+    "prisma:studio": "pnpm --filter api prisma:studio"
+  },
+  "devDependencies": {
+    "turbo": "^2.10.7"
+  }
+}
