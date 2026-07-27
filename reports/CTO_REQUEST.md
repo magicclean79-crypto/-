@@ -25,17 +25,34 @@
 - 현황: TASK-0302에서 최소 규칙(제목 + OCR/Vision 요약 중 1개)으로 구현됨.
 - 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
 
-### 8. TASK-0307 스펙 전달 요청
-- 현황: 0305는 승인, 0306은 스펙 수신·구현 완료. **0307 스펙만 미수신**이며
-  CTO 지시대로 승인 전 착수하지 않는다.
-- 요청: TASK-0306 리뷰 승인 시 TASK-0307 스펙 전달.
+### 11. TASK-0307 "Memory Engine Foundation" 해석 확인
+- 현황: "Sprint Contract 스펙에 따라 구현" 지시를 받았으나 Contract 원문은
+  여전히 미수신(#8)이다. 수신된 제약 2가지(Memory는 Company Brain 소속,
+  Workflow Engine은 사용 가능하되 소유하지 않음)를 반영해 보수적으로 구현했다:
+  - **Memory 엔티티**: id/projectId/title/content/source(선택)/createdAt/updatedAt
+    — 필드 스펙이 없어 Decision Log와 같은 결로 최소 정의
+  - **MemoryEngine** (@acos/core, Company Brain): remember(기록)/recall(회상,
+    최신순)/get/revise(고쳐 쓰기)/forget(삭제), MemoryStore Port 위에서 동작
+  - **CRUD API**: /projects/:id/memories — Project 1:N
+  - **Workflow Engine과 미연결**: 소유 관계만 문서에 명시. 실행 단계에서
+    기억을 참조/기록하는 연결은 스펙 수신 시 진행
+- 하지 않은 것(스펙 없음): 검색/요약/중요도, 임베딩 유사 조회, SOP 단계 연동
+- 요청: 엔티티 필드·Engine 동작이 Sprint Contract의 정의와 일치하는지 확인.
 
-### 10. decisionType 유형 고정 여부
-- 현황: TASK-0306 스펙에 decisionType의 유형 목록이 없어 **자유 문자열**로
-  구현했다 (예: architecture, process, product).
-- 질문: 유형을 enum으로 고정할지, 고정한다면 목록은 무엇인지.
+### 8. Sprint Contract 원문 전달 요청 (유지)
+- 현황: 0305~0307 모두 "Contract 스펙에 따라" 지시였으나 Contract 본문은
+  끝내 수신되지 않아 매번 보수적 해석으로 구현했다 (0305는 리뷰에서 구조
+  수정 발생). 다음 TASK부터는 Contract 원문(또는 TASK별 필드/범위 스펙)을
+  먼저 받으면 재작업을 줄일 수 있다.
+- 요청: Sprint Contract 전문 또는 잔여 TASK 스펙 목록 전달.
 
 ## 결정됨
+
+### 10. decisionType 유형 → Enum 8종 고정 (2026-07-27)
+- CTO 결정: ARCHITECTURE / PROCESS / PRODUCT / BUSINESS / TECHNICAL /
+  QUALITY / SECURITY / OTHER.
+- 반영(`7864c91`): DB enum + 데이터 보존 마이그레이션(대문자 매칭, 미매칭
+  OTHER), 공유 타입, 도메인 검증 3중 강제.
 
 ### 9. TASK-0305 해석 확인 → 조건부 승인, 아키텍처 수정 반영 완료 (2026-07-27)
 - CTO 리뷰: SOP는 실행 엔진이 아니라 **표준 업무 절차 정의 도메인(Company

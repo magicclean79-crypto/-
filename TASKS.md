@@ -8,11 +8,7 @@
 
 ## 미완료 (스펙 확정, 구현 대기)
 
-- (없음 — TASK-0306 완료. CTO 리뷰/승인 대기 중이며 승인 전 다음 TASK를 시작하지 않는다)
-
-## 승인 대기 (CTO 승인 전 시작 금지)
-
-- [ ] TASK-0307 — (스펙 미수신)
+- (없음 — TASK-0307 완료. CTO 리뷰/승인 대기 중이며 승인 전 다음 TASK를 시작하지 않는다)
 
 ## 제안 (스펙 대기 — 구현하지 않음)
 
@@ -21,7 +17,8 @@
 
 ## 완료 — Sprint 3
 
-- [x] **TASK-0306 — Decision Log Foundation** (`a36c1b0`): Decision 엔티티(id/title/description/reason/decisionType/author/projectId/createdAt) + DecisionRepository Port(@acos/core, Company Brain), Prisma 어댑터, CRUD API /projects/:id/decisions, 검증(필수 필드 공백 불가), docs/architecture/decision.md
+- [x] **TASK-0307 — Memory Engine Foundation** (`86cef6c`): Memory 엔티티+MemoryStore Port+MemoryEngine(remember/recall/revise/forget, @acos/core Company Brain), Prisma 어댑터, CRUD API /projects/:id/memories — Workflow Engine은 사용 가능하되 소유하지 않음(미연결, CTO 지시), 해석 확인 CTO_REQUEST #11
+- [x] **TASK-0306 — Decision Log Foundation** (`a36c1b0`, CTO 승인 · Enum 반영 `7864c91`): Decision 엔티티(id/title/description/reason/decisionType/author/projectId/createdAt) + DecisionRepository Port(@acos/core, Company Brain), Prisma 어댑터, CRUD API /projects/:id/decisions, decisionType Enum 8종 고정(CTO 결정), docs/architecture/decision.md
 - [x] **TASK-0305 — SOP Engine Foundation** (`5c67d54`, CTO 조건부 승인 반영): Company Brain의 SOP 정의(SopDefinition) + Execution Layer의 WorkflowEngine(@acos/core, 순차 실행·실패 시 후속 SKIPPED·단계 간 출력 전달), 기본 SOP product-content(OCR→조립→READY 검수→상세페이지, 기존 서비스 재사용), SopRun 실행 이력(Project 1:N), POST/GET /projects/:id/sop-runs
 - [x] **TASK-0302 — Product Object 상태 전이** (`9374aae`): DRAFT⇄READY, →ARCHIVED(종결) 전이 규칙(@acos/core) + READY 필수 조건 검증(제목+OCR/Vision 요약), PATCH …/product-object/:version/status
 - [x] **TASK-0303 — 상세페이지 콘텐츠 파이프라인** (`3a7fb00`): ContentGenerator Port + MockContentGenerator(Markdown), Content 모델 Project/ProductObject 소속 재구성, READY Product Object에서만 생성, /projects/:id/contents API
