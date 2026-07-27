@@ -35,10 +35,42 @@ export interface UploadImagesResponse {
   images: ImageDto[];
 }
 
+// ── Project (최상위 루트 엔티티) ────────────────────────
+
+export interface CreateProjectRequest {
+  name: string;
+  description?: string;
+}
+
+export interface UpdateProjectRequest {
+  name?: string;
+  description?: string | null;
+}
+
+export interface ProjectDto {
+  id: string;
+  name: string;
+  description: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectListItemDto extends ProjectDto {
+  productCount: number;
+  productObjectCount: number;
+}
+
+export interface ProjectDetailDto extends ProjectDto {
+  products: ProductListItemDto[];
+  latestProductObjectVersion: number | null;
+}
+
 export interface CreateProductRequest {
   name?: string;
   description?: string;
   imageIds: string[];
+  /** 소속 프로젝트. 미지정 시 상품 이름으로 프로젝트가 자동 생성된다. */
+  projectId?: string;
 }
 
 export interface UpdateProductRequest {
@@ -48,6 +80,7 @@ export interface UpdateProductRequest {
 
 export interface ProductListItemDto {
   id: string;
+  projectId: string;
   name: string;
   description: string | null;
   imageCount: number;
@@ -67,6 +100,7 @@ export interface ImageWithOcrDto extends ImageDto {
 
 export interface ProductDetailDto {
   id: string;
+  projectId: string;
   name: string;
   description: string | null;
   images: ImageWithOcrDto[];

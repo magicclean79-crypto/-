@@ -148,6 +148,19 @@ OCR·Vision 결과를 조립한 **핵심 데이터 모델**입니다. 프로젝�
 - 상태: `PENDING → RUNNING → SUCCESS | FAILED`, Product : AnalysisResult = **1:N** 이력
 - 실패 시 지수 백오프 재시도 (`ANALYSIS_MAX_ATTEMPTS`, 기본 3)
 
+## Project (TASK-0301)
+
+최상위 루트 엔티티입니다. 여러 상품과 Product Object 버전 이력을 묶는 작업 단위이며,
+상품 생성 시 `projectId`를 지정하거나(미지정 시 자동 생성) 프로젝트를 직접 관리할 수 있습니다.
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `POST` | `/projects` | `{ name, description? }` 프로젝트 생성 |
+| `GET` | `/projects?take=20` | 목록 (상품 수·Product Object 수 포함) |
+| `GET` | `/projects/:id` | 상세 (상품 목록 + 최신 Product Object 버전) |
+| `PATCH` | `/projects/:id` | 수정 |
+| `DELETE` | `/projects/:id` | 삭제 (상품·Product Object 함께 삭제, 이미지는 연결 해제) |
+
 ## Product (TASK-0203)
 
 업로드된 사진(들)을 묶어 Product Object를 생성합니다.

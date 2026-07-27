@@ -21,9 +21,8 @@
 - **상태 관리**: `DRAFT`(조립 직후) → `READY`(검수 완료) → `ARCHIVED`(보관)
 - **스키마 고정**: [docs/schema/product-object.schema.json](../schema/product-object.schema.json)이
   구조의 계약이다. 소비자(콘텐츠 생성기 등)는 이 스키마만 의존한다.
-- 현재 구조에서 "프로젝트" 단위는 `Product`(업로드 그룹)이며,
-  `projectId`는 `products.id`를 참조한다. 별도 Project 엔티티가 도입되면
-  FK 대상만 교체하면 된다.
+- `projectId`는 최상위 루트 엔티티 **`Project`**(`projects.id`)를 참조한다
+  (TASK-0301). 조립 시 프로젝트에 속한 **모든 상품의 이미지/OCR**을 집계한다.
 
 ## 조립 파이프라인 (ProductObjectBuilder)
 

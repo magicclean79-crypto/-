@@ -17,7 +17,7 @@ describe("Product Object API (API Test)", () => {
   const prismaMock = createPrismaMock();
 
   beforeAll(async () => {
-    prismaMock.product.findUnique.mockImplementation(
+    prismaMock.project.findUnique.mockImplementation(
       async ({ where }: { where: { id: string } }) =>
         where.id === "proj-1" ? projectWithOcr : null,
     );

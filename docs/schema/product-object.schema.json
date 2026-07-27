@@ -21,7 +21,7 @@
     },
     "projectId": {
       "type": "string",
-      "description": "소속 프로젝트 ID (현재 구조에서는 products.id — 업로드 그룹 단위)"
+      "description": "소속 프로젝트 ID (projects.id — 최상위 루트 엔티티, TASK-0301)"
     },
     "version": {
       "type": "integer",

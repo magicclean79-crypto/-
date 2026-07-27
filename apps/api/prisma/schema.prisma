@@ -7,25 +7,39 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// 최상위 루트 엔티티 — 여러 상품과 Product Object 버전을 묶는 작업 단위 (TASK-0301)
+model Project {
+  id             String          @id @default(cuid())
+  name           String
+  description    String?
+  products       Product[]
+  productObjects ProductObject[]
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@map("projects")
+}
+
 model Product {
   id              String           @id @default(cuid())
+  project         Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId       String
   name            String
   description     String?
   contents        Content[]
   images          Image[]
   analysisResults AnalysisResult[]
-  productObjects  ProductObject[]
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
 
+  @@index([projectId])
   @@map("products")
 }
 
-// Product Object — OCR/Vision 결과를 조립한 정규화 데이터 모델.
-// 현재 구조에서 "프로젝트" 단위는 Product(업로드 그룹)이며 projectId가 이를 참조한다.
+// Product Object — OCR/Vision 결과를 조립한 정규화 데이터 모델. Project별 버전 관리.
 model ProductObject {
   id            String              @id @default(cuid())
-  project       Product             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project       Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
   projectId     String
   version       Int
   status        ProductObjectStatus @default(DRAFT)

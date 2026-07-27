@@ -7,7 +7,7 @@ export function createPrismaMock() {
 
   const prisma = {
     rows,
-    product: {
+    project: {
       findUnique: jest.fn(),
     },
     productObject: {
@@ -64,15 +64,33 @@ export const projectWithOcr = {
   id: "proj-1",
   name: "매직클린 걸레",
   description: null,
-  images: [
+  products: [
     {
-      id: "img-1",
-      key: "images/a.png",
-      mimeType: "image/png",
-      ocrResults: [
-        { extractedText: "Magic Clean PVC Mat\n49000 KRW", confidence: 0.94 },
+      id: "prod-1",
+      images: [
+        {
+          id: "img-1",
+          key: "images/a.png",
+          mimeType: "image/png",
+          ocrResults: [
+            {
+              extractedText: "Magic Clean PVC Mat\n49000 KRW",
+              confidence: 0.94,
+            },
+          ],
+        },
       ],
     },
-    { id: "img-2", key: "images/b.png", mimeType: "image/png", ocrResults: [] },
+    {
+      id: "prod-2",
+      images: [
+        {
+          id: "img-2",
+          key: "images/b.png",
+          mimeType: "image/png",
+          ocrResults: [],
+        },
+      ],
+    },
   ],
 };

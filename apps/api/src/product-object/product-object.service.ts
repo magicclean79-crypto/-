@@ -54,16 +54,21 @@ export class ProductObjectService {
    * 새 버전의 Product Object를 생성한다. (버전은 프로젝트별 1부터 증가)
    */
   async buildAndCreate(projectId: string): Promise<ProductObjectDto> {
-    const project = await this.prisma.product.findUnique({
+    const project = await this.prisma.project.findUnique({
       where: { id: projectId },
       include: {
-        images: {
+        products: {
           orderBy: { createdAt: "asc" },
           include: {
-            ocrResults: {
-              where: { status: "SUCCESS" },
-              orderBy: { createdAt: "desc" },
-              take: 1,
+            images: {
+              orderBy: { createdAt: "asc" },
+              include: {
+                ocrResults: {
+                  where: { status: "SUCCESS" },
+                  orderBy: { createdAt: "desc" },
+                  take: 1,
+                },
+              },
             },
           },
         },
@@ -73,7 +78,10 @@ export class ProductObjectService {
       throw new NotFoundException(`프로젝트를 찾을 수 없습니다: ${projectId}`);
     }
 
-    const ocrSources: OcrTextSource[] = project.images
+    // 프로젝트에 속한 모든 상품의 이미지/OCR을 집계한다 (TASK-0301)
+    const allImages = project.products.flatMap((product) => product.images);
+
+    const ocrSources: OcrTextSource[] = allImages
       .map((image) => {
         const ocr = image.ocrResults[0];
         return ocr?.extractedText
@@ -94,7 +102,7 @@ export class ProductObjectService {
         name: project.name,
         description: project.description,
       },
-      images: project.images.map((image) => ({
+      images: allImages.map((image) => ({
         id: image.id,
         mimeType: image.mimeType,
         getBytes: () => this.storage.getObject(image.key),
@@ -109,7 +117,7 @@ export class ProductObjectService {
     })
       .withOcrResults(ocrSources)
       .withVisionSummary(vision)
-      .withImageCount(project.images.length)
+      .withImageCount(allImages.length)
       .build();
 
     const latest = await this.prisma.productObject.findFirst({

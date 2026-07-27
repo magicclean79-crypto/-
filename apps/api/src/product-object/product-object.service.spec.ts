@@ -31,7 +31,7 @@ describe("ProductObjectService (Service Test)", () => {
 
   it("OCR + Vision(mock)을 조립해 v1 Product Object를 생성한다", async () => {
     const prisma = createPrismaMock();
-    prisma.product.findUnique.mockResolvedValue(projectWithOcr);
+    prisma.project.findUnique.mockResolvedValue(projectWithOcr);
     const service = await createService(prisma);
 
     const result = await service.buildAndCreate("proj-1");
@@ -48,7 +48,7 @@ describe("ProductObjectService (Service Test)", () => {
 
   it("재생성하면 버전이 증가한다 (1:N 이력)", async () => {
     const prisma = createPrismaMock();
-    prisma.product.findUnique.mockResolvedValue(projectWithOcr);
+    prisma.project.findUnique.mockResolvedValue(projectWithOcr);
     const service = await createService(prisma);
 
     const first = await service.buildAndCreate("proj-1");
@@ -61,7 +61,7 @@ describe("ProductObjectService (Service Test)", () => {
 
   it("최신 버전을 조회하고 ?version으로 과거 버전도 조회한다", async () => {
     const prisma = createPrismaMock();
-    prisma.product.findUnique.mockResolvedValue(projectWithOcr);
+    prisma.project.findUnique.mockResolvedValue(projectWithOcr);
     const service = await createService(prisma);
     await service.buildAndCreate("proj-1");
     await service.buildAndCreate("proj-1");
@@ -75,7 +75,7 @@ describe("ProductObjectService (Service Test)", () => {
 
   it("Vision Provider가 계속 실패해도 조립은 성공한다 (visionSummary null)", async () => {
     const prisma = createPrismaMock();
-    prisma.product.findUnique.mockResolvedValue(projectWithOcr);
+    prisma.project.findUnique.mockResolvedValue(projectWithOcr);
     const failing: VisionProvider = {
       name: "failing",
       analyze: jest.fn(async () => {
@@ -95,7 +95,7 @@ describe("ProductObjectService (Service Test)", () => {
 
   it("존재하지 않는 프로젝트는 404를 던진다", async () => {
     const prisma = createPrismaMock();
-    prisma.product.findUnique.mockResolvedValue(null);
+    prisma.project.findUnique.mockResolvedValue(null);
     const service = await createService(prisma);
 
     await expect(service.buildAndCreate("nope")).rejects.toThrow(

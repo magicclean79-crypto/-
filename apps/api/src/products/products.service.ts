@@ -48,6 +48,7 @@ function toImageDto(image: ImageWithOcr): ImageWithOcrDto {
 function toDetailDto(product: ProductWithImages): ProductDetailDto {
   return {
     id: product.id,
+    projectId: product.projectId,
     name: product.name,
     description: product.description,
     images: product.images.map(toImageDto),
@@ -117,10 +118,36 @@ export class ProductsService {
       }
     }
 
+    // 소속 프로젝트 확인 — 미지정이면 상품 이름으로 자동 생성한다 (TASK-0301)
+    if (request.projectId) {
+      const projectExists = await this.prisma.project.findUnique({
+        where: { id: request.projectId },
+        select: { id: true },
+      });
+      if (!projectExists) {
+        throw new BadRequestException(
+          `존재하지 않는 프로젝트입니다: ${request.projectId}`,
+        );
+      }
+    }
+
     const product = await this.prisma.$transaction(async (tx) => {
+      const resolvedName = name ?? deriveName(images);
+      const projectId =
+        request.projectId ??
+        (
+          await tx.project.create({
+            data: {
+              name: resolvedName,
+              description: request.description?.trim() || null,
+            },
+            select: { id: true },
+          })
+        ).id;
       const created = await tx.product.create({
         data: {
-          name: name ?? deriveName(images),
+          projectId,
+          name: resolvedName,
           description: request.description?.trim() || null,
         },
       });
@@ -160,6 +187,7 @@ export class ProductsService {
     });
     return products.map((product) => ({
       id: product.id,
+      projectId: product.projectId,
       name: product.name,
       description: product.description,
       imageCount: product._count.images,
