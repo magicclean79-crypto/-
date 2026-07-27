@@ -143,6 +143,55 @@ export interface RunAnalysisRequest {
   apply?: boolean;
 }
 
+// ── Product Object ─────────────────────────────────────
+
+export const PRODUCT_OBJECT_STATUSES = [
+  "DRAFT",
+  "READY",
+  "ARCHIVED",
+] as const;
+
+export type ProductObjectStatus = (typeof PRODUCT_OBJECT_STATUSES)[number];
+
+/** OCR 결과 요약 — Product Object에 저장되는 형태 */
+export interface OcrTextSource {
+  imageId: string;
+  text: string;
+  confidence: number | null;
+}
+
+export interface OcrSummary {
+  sources: OcrTextSource[];
+  combinedText: string;
+  averageConfidence: number | null;
+}
+
+/** Vision 분석 요약 — 실제 Vision 연동 전까지 mock으로 채워진다 */
+export interface VisionSummary {
+  source: string; // "mock" | (향후) "claude-vision" 등
+  labels: string[];
+  brand: string | null;
+  category: string | null;
+  suggestedTitle: string | null;
+  confidence: number; // 0.0 ~ 1.0
+}
+
+export interface ProductObjectDto {
+  id: string;
+  projectId: string;
+  version: number;
+  status: ProductObjectStatus;
+  title: string;
+  brand: string | null;
+  category: string | null;
+  attributes: Record<string, string>;
+  ocrSummary: OcrSummary | null;
+  visionSummary: VisionSummary | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export function formatDate(date: Date): string {
   return date.toISOString().slice(0, 10);
 }

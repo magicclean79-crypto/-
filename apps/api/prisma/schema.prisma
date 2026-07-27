@@ -14,10 +14,41 @@ model Product {
   contents        Content[]
   images          Image[]
   analysisResults AnalysisResult[]
+  productObjects  ProductObject[]
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
 
   @@map("products")
+}
+
+// Product Object — OCR/Vision 결과를 조립한 정규화 데이터 모델.
+// 현재 구조에서 "프로젝트" 단위는 Product(업로드 그룹)이며 projectId가 이를 참조한다.
+model ProductObject {
+  id            String              @id @default(cuid())
+  project       Product             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId     String
+  version       Int
+  status        ProductObjectStatus @default(DRAFT)
+  title         String
+  brand         String?
+  category      String?
+  attributes    Json?
+  ocrSummary    Json?
+  visionSummary Json?
+  metadata      Json?
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  @@unique([projectId, version])
+  @@index([projectId])
+  @@index([status])
+  @@map("product_objects")
+}
+
+enum ProductObjectStatus {
+  DRAFT
+  READY
+  ARCHIVED
 }
 
 model AnalysisResult {

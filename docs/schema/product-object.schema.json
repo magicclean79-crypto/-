@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acos.dev/schema/product-object.schema.json",
+  "title": "ProductObject",
+  "description": "AI Product Content OS의 핵심 데이터 모델. OCR/Vision 결과를 조립한 정규화된 상품 정보로, 프로젝트별로 버전 관리된다.",
+  "type": "object",
+  "required": [
+    "id",
+    "projectId",
+    "version",
+    "status",
+    "title",
+    "createdAt",
+    "updatedAt"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "고유 식별자 (cuid)"
+    },
+    "projectId": {
+      "type": "string",
+      "description": "소속 프로젝트 ID (현재 구조에서는 products.id — 업로드 그룹 단위)"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "프로젝트 내 버전 번호. 생성할 때마다 1씩 증가한다."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["DRAFT", "READY", "ARCHIVED"],
+      "description": "DRAFT: 조립 직후 · READY: 검수 완료(콘텐츠 생성 가능) · ARCHIVED: 보관"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "상품 제목. Builder 우선순위: Vision 제안 → OCR 첫 줄 → 프로젝트 이름"
+    },
+    "brand": {
+      "type": ["string", "null"],
+      "description": "브랜드 (Vision/OCR에서 추출, 없으면 null)"
+    },
+    "category": {
+      "type": ["string", "null"],
+      "description": "카테고리"
+    },
+    "attributes": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "자유형 상품 속성 (재질, 원산지, 크기 등)"
+    },
+    "ocrSummary": {
+      "type": ["object", "null"],
+      "description": "OCR 결과 요약",
+      "required": ["sources", "combinedText", "averageConfidence"],
+      "additionalProperties": false,
+      "properties": {
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["imageId", "text", "confidence"],
+            "additionalProperties": false,
+            "properties": {
+              "imageId": { "type": "string" },
+              "text": { "type": "string" },
+              "confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+            }
+          }
+        },
+        "combinedText": {
+          "type": "string",
+          "description": "이미지별 텍스트를 '---' 구분자로 결합한 전체 텍스트"
+        },
+        "averageConfidence": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "visionSummary": {
+      "type": ["object", "null"],
+      "description": "Vision 분석 요약 (실제 Vision 연동 전에는 source=\"mock\")",
+      "required": ["source", "labels", "brand", "category", "suggestedTitle", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "source": { "type": "string" },
+        "labels": { "type": "array", "items": { "type": "string" } },
+        "brand": { "type": ["string", "null"] },
+        "category": { "type": ["string", "null"] },
+        "suggestedTitle": { "type": ["string", "null"] },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "metadata": {
+      "type": ["object", "null"],
+      "description": "조립 메타데이터 (builderVersion, imageCount, ocrSourceCount, assembledAt 등)"
+    },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  }
+}

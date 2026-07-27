@@ -116,6 +116,21 @@ Google Vision/Azure 연결 방법은 [docs/architecture/ocr.md](docs/architectur
 | `GET` | `/images/:imageId/ocr/history` | 실행 이력 (최신순) |
 | `GET` | `/ocr/results?take=20` | 최근 결과 목록 |
 
+## Product Object (TASK-0203)
+
+OCR·Vision 결과를 조립한 **핵심 데이터 모델**입니다. 프로젝트(현재는 Product 단위)별로
+버전 관리되며, 향후 상세페이지 생성의 단일 진실 공급원이 됩니다.
+구조: [docs/architecture/product-object.md](docs/architecture/product-object.md) ·
+스키마: [docs/schema/product-object.schema.json](docs/schema/product-object.schema.json)
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `POST` | `/projects/:projectId/product-object` | OCR+Vision(mock) 조립 → 새 버전 생성 |
+| `GET` | `/projects/:projectId/product-object?version=N` | 최신(또는 특정) 버전 조회 |
+| `GET` | `/projects/:projectId/product-object/history` | 버전 이력 |
+
+- 상태: `DRAFT → READY → ARCHIVED` · 버전: `projectId+version` 유니크, 생성마다 증가
+
 ## AI 분석 (TASK-0204)
 
 상품 이미지 + OCR 텍스트에서 구조화된 상품 정보(이름·카테고리·키워드·설명·속성·신뢰도)를
