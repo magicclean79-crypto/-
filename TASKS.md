@@ -8,14 +8,24 @@
 
 ## 미완료 (스펙 확정, 구현 대기)
 
-- (없음 — TASK-0307 완료. CTO 리뷰/승인 대기 중이며 승인 전 다음 TASK를 시작하지 않는다)
+- (없음 — TASK-0401 완료. CTO 리뷰/승인 대기 중이며 승인 전 다음 TASK를 시작하지 않는다)
+
+## 승인 대기 — Sprint 4 잔여 (CTO 승인 전 시작 금지)
+
+- [ ] TASK-0402 — Structured Memory Foundation (제목만 수신, 상세 스펙 대기)
+- [ ] TASK-0403 — Company Brain Query Service (제목만 수신, 상세 스펙 대기)
+- [ ] TASK-0404 — READY Validation Engine (제목만 수신, 상세 스펙 대기 — CTO_REQUEST #7 연결 예상)
+
+## 완료 — Sprint 4 (Goal: Company Brain Integration)
+
+- [x] **TASK-0401 — Knowledge Foundation** (`0e028ec`): Knowledge 엔티티(title/content/category?) + KnowledgeRepository Port(@acos/core, Company Brain 4번째 축), 회사 전역(프로젝트 무관), Prisma 어댑터, CRUD API /knowledge, docs/architecture/knowledge.md — 해석 확인 CTO_REQUEST #12
 
 ## 제안 (스펙 대기 — 구현하지 않음)
 
 - [ ] 실제 Provider/Generator 연결 (OCR/Analysis/Vision/Content 중 CTO 지정 — API 키·모델 스펙 필요, CTO_REQUEST #6)
 - [ ] Content 발행 파이프라인 (DRAFT → REVIEW → PUBLISHED) 및 채널별 포맷
 
-## 완료 — Sprint 3
+## 완료 — Sprint 3 (CTO 최종 승인, 2026-07-27)
 
 - [x] **TASK-0307 — Memory Engine Foundation** (`86cef6c`): Memory 엔티티+MemoryStore Port+MemoryEngine(remember/recall/revise/forget, @acos/core Company Brain), Prisma 어댑터, CRUD API /projects/:id/memories — Workflow Engine은 사용 가능하되 소유하지 않음(미연결, CTO 지시), 해석 확인 CTO_REQUEST #11
 - [x] **TASK-0306 — Decision Log Foundation** (`a36c1b0`, CTO 승인 · Enum 반영 `7864c91`): Decision 엔티티(id/title/description/reason/decisionType/author/projectId/createdAt) + DecisionRepository Port(@acos/core, Company Brain), Prisma 어댑터, CRUD API /projects/:id/decisions, decisionType Enum 8종 고정(CTO 결정), docs/architecture/decision.md
