@@ -1,6 +1,7 @@
 export * from "./ocr";
 export * from "./analysis";
 export * from "./product-object";
+export * from "./vision";
 
 import type { ContentDto, ContentStatus } from "@acos/shared";
 

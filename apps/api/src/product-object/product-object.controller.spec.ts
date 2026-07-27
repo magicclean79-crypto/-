@@ -1,13 +1,16 @@
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
+import { MockVisionProvider } from "@acos/core";
 import request from "supertest";
 import { PrismaService } from "../prisma/prisma.service";
+import { StorageService } from "../storage/storage.service";
 import { ProductObjectController } from "./product-object.controller";
 import { ProductObjectService } from "./product-object.service";
 import {
   createPrismaMock,
   projectWithOcr,
 } from "./product-object.spec-helpers";
+import { VISION_PROVIDER } from "./vision.constants";
 
 describe("Product Object API (API Test)", () => {
   let app: INestApplication;
@@ -24,6 +27,11 @@ describe("Product Object API (API Test)", () => {
       providers: [
         ProductObjectService,
         { provide: PrismaService, useValue: prismaMock },
+        {
+          provide: StorageService,
+          useValue: { getObject: jest.fn(async () => Buffer.from("img")) },
+        },
+        { provide: VISION_PROVIDER, useValue: new MockVisionProvider() },
       ],
     }).compile();
 

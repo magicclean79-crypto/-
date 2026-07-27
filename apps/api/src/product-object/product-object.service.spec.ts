@@ -1,18 +1,29 @@
 import { NotFoundException } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
+import { MockVisionProvider, type VisionProvider } from "@acos/core";
 import { PrismaService } from "../prisma/prisma.service";
+import { StorageService } from "../storage/storage.service";
 import { ProductObjectService } from "./product-object.service";
 import {
   createPrismaMock,
   projectWithOcr,
 } from "./product-object.spec-helpers";
+import { VISION_PROVIDER } from "./vision.constants";
 
 describe("ProductObjectService (Service Test)", () => {
-  async function createService(prisma: ReturnType<typeof createPrismaMock>) {
+  async function createService(
+    prisma: ReturnType<typeof createPrismaMock>,
+    vision: VisionProvider = new MockVisionProvider(),
+  ) {
     const moduleRef = await Test.createTestingModule({
       providers: [
         ProductObjectService,
         { provide: PrismaService, useValue: prisma },
+        {
+          provide: StorageService,
+          useValue: { getObject: jest.fn(async () => Buffer.from("img")) },
+        },
+        { provide: VISION_PROVIDER, useValue: vision },
       ],
     }).compile();
     return moduleRef.get(ProductObjectService);
@@ -60,6 +71,26 @@ describe("ProductObjectService (Service Test)", () => {
     await expect(service.getByProjectId("proj-1", 9)).rejects.toThrow(
       NotFoundException,
     );
+  });
+
+  it("Vision Provider가 계속 실패해도 조립은 성공한다 (visionSummary null)", async () => {
+    const prisma = createPrismaMock();
+    prisma.product.findUnique.mockResolvedValue(projectWithOcr);
+    const failing: VisionProvider = {
+      name: "failing",
+      analyze: jest.fn(async () => {
+        throw new Error("vision 오류");
+      }),
+    };
+    const service = await createService(prisma, failing);
+
+    const result = await service.buildAndCreate("proj-1");
+
+    expect(result.status).toBe("DRAFT");
+    expect(result.visionSummary).toBeNull();
+    // Vision이 없으면 제목은 OCR 첫 줄로 폴백된다
+    expect(result.title).toBe("Magic Clean PVC Mat");
+    expect(failing.analyze).toHaveBeenCalledTimes(3); // 재시도 포함
   });
 
   it("존재하지 않는 프로젝트는 404를 던진다", async () => {

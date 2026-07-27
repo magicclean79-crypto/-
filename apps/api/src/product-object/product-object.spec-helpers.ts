@@ -67,10 +67,12 @@ export const projectWithOcr = {
   images: [
     {
       id: "img-1",
+      key: "images/a.png",
+      mimeType: "image/png",
       ocrResults: [
         { extractedText: "Magic Clean PVC Mat\n49000 KRW", confidence: 0.94 },
       ],
     },
-    { id: "img-2", ocrResults: [] },
+    { id: "img-2", key: "images/b.png", mimeType: "image/png", ocrResults: [] },
   ],
 };

@@ -130,6 +130,8 @@ OCR·Vision 결과를 조립한 **핵심 데이터 모델**입니다. 프로젝�
 | `GET` | `/projects/:projectId/product-object/history` | 버전 이력 |
 
 - 상태: `DRAFT → READY → ARCHIVED` · 버전: `projectId+version` 유니크, 생성마다 증가
+- Vision: `VISION_PROVIDER`로 교체 가능한 Provider가 visionSummary 공급 (기본 mock,
+  실패 시 null 폴백) — [docs/architecture/vision.md](docs/architecture/vision.md)
 
 ## AI 분석 (TASK-0204)
 

@@ -62,11 +62,11 @@ ProductObjectBuilder (@acos/core)          ← 순수 도메인, 프레임워크
 ## Vision 연계
 
 - 입력: `VisionSummary { source, labels, brand, category, suggestedTitle, confidence }`
-- **현재는 실제 Vision을 연결하지 않고** `createMockVisionSummary()`가 결정적
-  mock을 반환한다 (`source: "mock"`).
-- 실제 연동 시나리오: Vision Provider(예: Claude Vision — [analysis.md](analysis.md)의
-  Provider 패턴과 동일)가 이미지를 분석해 `VisionSummary`로 정규화하면,
-  `ProductObjectService`에서 mock 호출부만 교체한다. Builder와 스키마는 그대로다.
+- **`VisionProvider`(Port)로 교체 가능** — `VISION_PROVIDER` 환경 변수로 선택하며
+  기본은 `MockVisionProvider`(`source: "mock"`), 실제 Vision 모델은 미연결.
+  구조와 교체 방법: [vision.md](vision.md)
+- Vision 실패는 조립을 막지 않는다 — 재시도 후에도 실패하면 `visionSummary: null`로
+  진행하고 제목은 OCR 첫 줄 → 프로젝트 이름으로 폴백된다.
 
 ## 향후 Company Brain 연계
 
