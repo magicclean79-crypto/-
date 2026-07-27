@@ -28,11 +28,13 @@
   AI 분석 Foundation(`d49157a`)이 브랜치에 포함되어 있다.
 - 질문: 로드맵과 충돌 없으면 유지 예정. 제거/변경이 필요하면 지시 요청.
 
-### 5. Vision Foundation TASK 스펙 요청
-- 현황: Product Object의 `visionSummary`는 mock. OCR/Analysis와 동일한
-  Provider 교체 구조로 Vision TASK를 진행할 준비가 되어 있다.
-- 요청: TASK 번호와 요구사항(대상 모델, 추출 필드) 스펙 전달 요청.
+### 6. 실제 Provider 연결 시점
+- 현황: OCR/Analysis/Vision 전부 mock 기본. 실제 모델 연결 가이드는
+  docs/architecture/*.md에 준비되어 있다.
+- 요청: 어느 계층부터, 어떤 모델로 연결할지 스펙 요청 (API 키 확보 포함).
 
 ## 결정됨
 
-(아직 없음)
+### 5. Vision Foundation TASK 스펙 요청 → TASK-0205로 진행 (2026-07-27)
+- CTO "다음" 지시에 따라 제안 최상단 항목으로 진행. VisionProvider 교체 구조
+  구현 완료(`4fb0cf4`), 실제 Vision 모델은 미연결(mock 기본) — 실연결은 #6으로 이관.
