@@ -25,18 +25,21 @@
 - 현황: TASK-0302에서 최소 규칙(제목 + OCR/Vision 요약 중 1개)으로 구현됨.
 - 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
 
-### 12. TASK-0401 "Knowledge Foundation" 해석 확인
-- 현황: Sprint 4 Backlog가 제목만 수신되어 다음과 같이 보수적으로 해석했다:
-  - **Knowledge = 회사의 공식 지식(규칙·정책·가이드)** — 예: 금지어,
-    필수 고지, 브랜드 가이드. Memory(프로젝트 1:N 경험적 기억)와 구분해
-    **회사 전역**(projectId 없음)으로 정의 — 이후 0403 Query·0404 READY
-    검증이 모든 프로젝트에 적용할 수 있도록.
-  - 엔티티: id/title(필수)/content(필수)/category(선택, 자유 문자열)/시각
-  - KnowledgeRepository Port(@acos/core) + Prisma 어댑터 + CRUD `/knowledge`
-- 질문: ① 전역 스코프가 맞는지(프로젝트별 지식도 필요하면 지시 요청)
-  ② category를 Enum으로 고정할지(decisionType 전례) ③ 0402 Structured
-  Memory와의 경계 — Knowledge에 구조화 필드(예: 규칙 파라미터 Json)가
-  필요하면 0402 스펙과 함께 지시 요청.
+### 13. TASK-0402 "Structured Memory" 세부 해석 확인
+- 현황: 지시된 5개 필드(scope/scopeId/key/value/description)로 구현하며
+  다음을 보수적으로 결정했다:
+  - **scope**: 자유 문자열 (예: `GLOBAL`, `PROJECT`) — Enum 목록이 지시에
+    없어 고정하지 않음
+  - **scopeId**: 선택(null 허용) — 전역 스코프는 대상 식별자가 없으므로
+  - **value**: **Json** — "구조화 저장소" 취지에 맞게 문자열·숫자·배열·객체
+    모두 저장 가능하게
+  - **유니크 규칙**: `(scope, scopeId, key)` 조합당 1건 (중복 생성 400),
+    수정은 value/description만 허용 (식별자 불변)
+  - 기존 Memory는 **ProjectMemory**로 개칭·보존 (테이블 이름 변경으로
+    데이터 보존, API 경로 `/projects/:id/memories` 유지)
+- 질문: ① scope를 Enum으로 고정할지 (GLOBAL/PROJECT/… 목록 지시 요청)
+  ② scope=PROJECT일 때 scopeId의 실존(projects.id) 검증을 넣을지
+  ③ ProjectMemory를 장기적으로 폐기(표준 Memory로 이관)할지 유지할지.
 
 ### 11. TASK-0307 "Memory Engine Foundation" 해석 확인
 - 현황: "Sprint Contract 스펙에 따라 구현" 지시를 받았으나 Contract 원문은
@@ -53,13 +56,19 @@
 - 요청: 엔티티 필드·Engine 동작이 Sprint Contract의 정의와 일치하는지 확인.
 
 ### 8. 잔여 TASK 상세 스펙 전달 요청 (유지)
-- 현황: Sprint 3에 이어 Sprint 4 Backlog(0401~0404)도 제목만 수신되어
-  보수적 해석으로 구현 중이다 (0305는 리뷰에서 구조 수정 발생).
-- 요청: TASK-0402(Structured Memory) / 0403(Query Service) /
-  0404(READY Validation Engine)의 필드·범위 스펙을 승인 시점에 함께 전달
-  요청 — 재작업 리스크를 줄일 수 있다.
+- 현황: 0402는 필드 스펙까지 수신되어 해석 부담이 크게 줄었다 (감사).
+  0403(Query Service)/0404(READY Validation Engine)는 아직 제목만 수신.
+- 요청: 승인 시점에 0403의 조회 범위(대상 도메인·쿼리 형태·응답 형태),
+  0404의 검증 규칙 소스(Knowledge category 연계 여부)와 적용 시점
+  (READY 전이 시 강제? 별도 검증 API?) 스펙 전달 요청.
 
 ## 결정됨
+
+### 12. TASK-0401 해석 확인 → 승인 + 전역 확정 + category Enum 8종 (2026-07-27)
+- CTO 결정: Knowledge는 회사 전역(Global)만 관리. category는
+  RULE/POLICY/GUIDE/BRAND/LEGAL/QUALITY/FAQ/OTHER Enum으로 고정.
+- 반영(`d8e24d0`): DB enum + 데이터 보존 마이그레이션, 공유 타입,
+  도메인 검증 3중 강제.
 
 ### 10. decisionType 유형 → Enum 8종 고정 (2026-07-27)
 - CTO 결정: ARCHITECTURE / PROCESS / PRODUCT / BUSINESS / TECHNICAL /
