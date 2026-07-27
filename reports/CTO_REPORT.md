@@ -13,29 +13,27 @@
 
 | 항목 | 값 |
 | --- | --- |
-| 보고 기준 TASK | TASK-0301 (Project Domain Foundation) |
+| 보고 기준 TASK | Sprint 3 완료 (TASK-0302 · 0303 · 0304) |
 | 보고일 | 2026-07-27 |
-| 브랜치 / 기준 커밋 | `claude/ai-product-content-os-setup-jb5oai` / `55130af` |
-| 파이프라인 상태 | Project(루트) → 상품/업로드 → OCR → 분석 → Product Object 조립 — 전 구간 동작 |
-| 미착수 범위 | 상세페이지 생성, 실제 AI API 연동(전 계층 mock 기본) |
+| 브랜치 / 기준 커밋 | `claude/ai-product-content-os-setup-jb5oai` / `0dd85bf` |
+| 파이프라인 상태 | **엔드투엔드 완성**: 업로드 → OCR → 조립 → READY 검수 → 상세페이지 생성, 웹 UI에서 실행 가능 |
+| 미착수 범위 | 실제 AI API 연동(전 계층 mock 기본), Content 발행(REVIEW→PUBLISHED) |
 
 ## 2. 품질 게이트
 
 | 게이트 | 명령 | 결과 |
 | --- | --- | --- |
 | Build | `pnpm build` | ✅ 6/6 워크스페이스 성공 |
-| Test | `pnpm test` | ✅ 61/61 통과 (core 23 · api 38) |
+| Test | `pnpm test` | ✅ 81/81 통과 (core 29 · api 52) |
 | TypeScript | (빌드 포함) | ✅ 오류 0 |
 | ESLint | `pnpm lint` | ✅ 오류 0, 경고 0 |
 
-## 3. 변경 사항 (이번 보고 주기)
+## 3. 변경 사항 (이번 보고 주기 — Sprint 3)
 
-- **TASK-0301 Project Domain Foundation** (`55130af`) — Sprint 2 CTO 리뷰 승인 반영:
-  - **Project 최상위 루트 엔티티 도입** — 여러 상품과 Product Object 버전 이력을 묶는 작업 단위. Projects CRUD API 5종
-  - `Product.projectId` 필수화 — 생성 시 지정 가능(검증), 미지정 시 상품 이름으로 자동 생성해 **기존 업로드 웹 플로우 무파손**
-  - `ProductObject.projectId`를 products.id → **projects.id로 재지정**, 조립은 프로젝트 내 **모든 상품의 이미지/OCR 집계**로 확장
-  - **데이터 보존 마이그레이션**: 기존 상품 1건당 동일 id의 프로젝트 백필 → product_objects 값 재매핑 없이 FK만 교체 (데이터 손실 0, drift 0, 고아 0 검증)
-  - CTO_REQUEST #1 → 결정됨 처리
+- **TASK-0302 상태 전이** (`9374aae`): DRAFT⇄READY, DRAFT/READY→ARCHIVED(종결) 규칙을 @acos/core에 정의, READY 전환 필수 조건(제목 + OCR/Vision 요약) 검증, `PATCH …/product-object/:version/status`
+- **TASK-0303 상세페이지 파이프라인** (`3a7fb00`): `ContentGenerator` Port + Mock(결정적 Markdown 렌더링). Content 모델을 Project/ProductObject 소속으로 재구성(미사용 0건 테이블이라 안전). **READY 상태 Product Object에서만 생성** — 0302 검수 게이트와 연결. `POST/GET /projects/:id/contents`
+- **TASK-0304 웹 UI** (`0dd85bf`): `/projects` 목록·상세 페이지, 파이프라인 실행 버튼(조립 → READY 전환 → 상세페이지 생성), 콘텐츠 Markdown 뷰어
+- Sprint 3 백로그 근거: Sprint 2 CTO 리뷰의 다음 권장 사항 목록 (실제 Provider 연결은 API 키 필요로 보류 유지)
 
 ### 누적 완료 TASK
 
@@ -47,29 +45,33 @@
 | TASK-0203 | Product Object Foundation (Builder, 버전 관리, JSON Schema) | `de5442d` |
 | TASK-0205 | Vision Provider Foundation | `4fb0cf4` |
 | TASK-0301 | Project Domain Foundation (루트 엔티티) | `55130af` |
+| TASK-0302 | Product Object 상태 전이 + READY 검증 | `9374aae` |
+| TASK-0303 | 상세페이지 콘텐츠 파이프라인 | `3a7fb00` |
+| TASK-0304 | 웹 UI Project/파이프라인 반영 | `0dd85bf` |
 | (자체정의) | AI 분석 Foundation / Product CRUD·웹 플로우 | `d49157a` / `d842338` |
 
 ## 4. 테스트 결과
 
 | 위치 | 종류 | 수 | 결과 |
 | --- | --- | --- | --- |
-| `packages/core` | Unit — OCR 8 · Analysis 6 · Builder 6 · Vision 3 | 23 | ✅ |
-| `apps/api` | Service+API(supertest) — OCR 8 · Analysis 9 · ProductObject 11 · Projects 10 | 38 | ✅ |
-| **합계** | | **61** | **전체 통과** |
+| `packages/core` | Unit — OCR 8 · Analysis 6 · Builder 6 · Status 3 · Vision 3 · Content 3 | 29 | ✅ |
+| `apps/api` | Service+API — OCR 8 · Analysis 9 · ProductObject 17 · Projects 10 · Contents 8 | 52 | ✅ |
+| **합계** | | **81** | **전체 통과** |
 
 라이브 검증(실 PostgreSQL + S3 호환 스토리지):
-- 마이그레이션: 백필 프로젝트 2건, PO 이력 3건 보존 → 재조립 시 v4로 이어짐(이력 연속성)
-- 신규 프로젝트 생성 → projectId 지정 상품 생성, 미지정 시 자동 프로젝트, 잘못된 projectId 400
-- 회귀: health / products / analysis / ocr / 웹(홈·목록) 전부 정상
+- 상태 전이: v4 READY 전환, 중복 전이 400, ARCHIVED 종결 400, 없는 버전 404 — DB 반영 확인
+- 콘텐츠: READY v4로 상세페이지 생성(201, Markdown 본문), READY 없는 프로젝트 400, DRAFT 버전 지정 400
+- **브라우저 E2E(Playwright)**: 프로젝트 상세 화면에서 조립(v5) → READY 전환 → 상세페이지 생성 전 과정 버튼 실행, 결과 렌더링 캡처
+- 회귀: health / products / analysis / ocr / 웹 전부 정상
 
 ## 5. 아키텍처 변경 및 현황
 
-**이번 주기 변경**: 도메인 루트가 Product → **Project**로 승격. Project 1:N Product, ProductObject는 Project 소유로 이동(조립 입력이 프로젝트 전체 상품으로 확장). 임시 결정이었던 "projectId=products.id"가 정식 구조로 해소됨.
+**이번 주기 변경**: ① 상태 전이 규칙이 도메인 계층(@acos/core)에 추가되어 READY가 **검수 게이트** 역할 수행. ② Content가 4번째 Port/Adapter 계층(ContentGenerator)으로 합류 — Product Object를 단일 입력으로 소비하는 첫 다운스트림. ③ Content 모델이 Product 소속(미사용 스캐폴드)에서 Project/ProductObject 소속으로 재구성.
 
 **유지되는 핵심 결정**:
 
 1. Port/Adapter 도메인 계층(@acos/core) — Provider는 환경변수 1개로 교체(`OCR_PROVIDER`, `ANALYSIS_PROVIDER`, `VISION_PROVIDER`)
-2. 실제 AI API 미연결 원칙 — 전 계층 mock 기본, 실연동 가이드는 docs/architecture/*.md
+2. 실제 AI API 미연결 원칙 — 4개 계층(OCR/Analysis/Vision/Content) 전부 mock 기본, 실연동 가이드는 docs/architecture/*.md
 3. 이력 보존 모델 — OCR/Analysis 1:N, Product Object 명시적 버전
 4. ~~projectId = products.id~~ → **해소됨** (TASK-0301, Project 정식 도입)
 
@@ -84,9 +86,9 @@
 ```
 Project(루트) ──< Product ──< Image ──< OcrResult        (1:N 이력)
       │             │           └─ MinIO 오브젝트
-      │             ├──< AnalysisResult                  (1:N 이력, applied 플래그)
-      │             └──< Content (초기 스캐폴드, 미사용)
-      └──< ProductObject (projectId+version 유니크)       (버전 관리, DRAFT/READY/ARCHIVED)
+      │             └──< AnalysisResult                  (1:N 이력, applied 플래그)
+      ├──< ProductObject (projectId+version 유니크)       (버전 관리, DRAFT⇄READY→ARCHIVED)
+      └──< Content ──(productObjectId, SetNull)──▶ ProductObject   (상세페이지, READY에서만 생성)
 ```
 
 ## 7. API 표면
@@ -99,22 +101,22 @@ Project(루트) ──< Product ──< Image ──< OcrResult        (1:N 이�
 | OCR | `POST/GET /images/:id/ocr` · `GET /images/:id/ocr/history` · `GET /ocr/results` |
 | 상품(프로젝트) | `POST/GET /products` · `GET/PATCH/DELETE /products/:id` |
 | AI 분석 | `POST/GET /products/:id/analysis` (+`/history`, `{apply}` 옵션) |
-| Product Object | `POST/GET /projects/:id/product-object` (+`?version`, `/history`) |
+| Product Object | `POST/GET /projects/:id/product-object` (+`?version`, `/history`) · `PATCH …/:version/status` |
+| 상세페이지 | `POST/GET /projects/:id/contents` · `GET …/contents/:contentId` |
 
-웹: `/`(대시보드) · `/upload`(업로드+Product 생성) · `/products`(목록) · `/products/[id]`(상세)
+웹: `/` · `/upload` · `/products`(+상세) · **`/projects`(목록) · `/projects/[id]`(파이프라인 실행: 조립→READY→상세페이지)**
 
 ## 8. 리스크·기술 부채
 
-1. **실제 AI 모델 미연결** — OCR/Analysis/Vision 전부 mock 기본 (CTO_REQUEST #6)
-3. **인증/권한 없음** — 전 API 공개 (로컬 개발 전제)
-4. **Content 모델 미사용** — 상세페이지 TASK에서 활용 예정
-5. **웹 UI 미반영 영역** — Product Object 조립/분석 실행 UI 없음
-6. 업로드 보안(바이러스 검사)·이미지 리사이징 없음
-7. ProductObjectStatus 전이 API(DRAFT→READY) 미구현 (CTO_REQUEST #3)
+1. **실제 AI 모델 미연결** — OCR/Analysis/Vision/Content 전부 mock 기본 (CTO_REQUEST #6)
+2. **인증/권한 없음** — 전 API 공개 (로컬 개발 전제)
+3. **Content 발행 파이프라인 미구현** — DRAFT 이후 REVIEW/PUBLISHED 전이·채널 포맷 없음
+4. 업로드 보안(바이러스 검사)·이미지 리사이징 없음
+5. 웹 UI에 업로드 시 프로젝트 선택 없음(자동 생성만) — 다중 상품 프로젝트는 API로만 구성 가능
 
-## 9. 다음 권장 사항
+## 9. 다음 권장 사항 (Sprint 4 후보)
 
-1. **Product Object 상태 전이** — DRAFT→READY 검증 규칙 + API (제안 최상단)
-2. **상세페이지(Content) 생성 파이프라인** — Product Object를 단일 입력으로 사용
-3. **실제 Provider 연결** — 어느 계층(OCR/Analysis/Vision)부터, 어떤 모델로 할지 결정 요청 (CTO_REQUEST #6)
-4. **웹 UI의 Project 반영** — 프로젝트 목록/상세 화면, 업로드 플로우에 프로젝트 선택 추가
+1. **실제 Provider/Generator 연결** — 파이프라인 구조가 완성되었으므로 이제 mock을 실제 모델로 교체하는 것이 최대 가치. 어느 계층부터·어떤 모델·API 키 확보 방안 결정 요청 (CTO_REQUEST #6)
+2. **Content 발행 파이프라인** — DRAFT→REVIEW→PUBLISHED 전이 + 채널별 포맷(스마트스토어/쿠팡 등)
+3. **업로드 플로우에 프로젝트 선택** — 기존 프로젝트에 상품 추가하는 UI
+4. **인증/권한** — 운영 배포 전 필수

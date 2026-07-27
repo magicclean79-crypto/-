@@ -11,11 +11,6 @@
 - 질문: Foundation 단계 원칙("실제 OCR 연결 금지")에 따라 제거할지,
   개발용 실측 엔진으로 유지할지?
 
-### 3. ProductObjectStatus 전이 규칙
-- 현황: `DRAFT / READY / ARCHIVED` enum만 정의, 전이 API는 미구현.
-- 질문: READY 전환 조건(검수 주체, 필수 필드, Company Brain 검증 연동 시점)을
-  어떻게 정의할지? 다음 TASK 스펙에 포함 요청.
-
 ### 4. 구(자체정의) TASK 산출물 처리
 - 현황: 공식 스펙 이전에 구현된 Product CRUD + 웹 플로우(`d842338`),
   AI 분석 Foundation(`d49157a`)이 브랜치에 포함되어 있다.
@@ -26,7 +21,15 @@
   docs/architecture/*.md에 준비되어 있다.
 - 요청: 어느 계층부터, 어떤 모델로 연결할지 스펙 요청 (API 키 확보 포함).
 
+### 7. READY 전환 조건 확장 여부
+- 현황: TASK-0302에서 최소 규칙(제목 + OCR/Vision 요약 중 1개)으로 구현됨.
+- 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
+
 ## 결정됨
+
+### 3. ProductObjectStatus 전이 규칙 → TASK-0302로 구현 (2026-07-27)
+- Sprint 3 지시에 따라 DRAFT⇄READY, →ARCHIVED(종결) + READY 최소 검증으로 구현.
+  조건 확장은 #7로 이관.
 
 ### 1. Project 엔티티 분리 → 도입 결정, TASK-0301로 구현 (2026-07-27)
 - Sprint 2 CTO 리뷰 승인에 따라 Project를 최상위 루트 엔티티로 도입.

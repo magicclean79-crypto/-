@@ -8,17 +8,20 @@
 
 ## 미완료 (스펙 확정, 구현 대기)
 
-_(현재 없음 — CTO의 다음 TASK 스펙 대기 중)_
+_(현재 없음 — Sprint 3 백로그 완료, CTO의 다음 스프린트 스펙 대기 중)_
 
 ## 제안 (스펙 대기 — 구현하지 않음)
 
-CTO_REQUEST.md에서 식별된 후보들. CTO가 스펙을 확정하면 미완료 섹션으로 이동한다.
+- [ ] 실제 Provider/Generator 연결 (OCR/Analysis/Vision/Content 중 CTO 지정 — API 키·모델 스펙 필요, CTO_REQUEST #6)
+- [ ] Content 발행 파이프라인 (DRAFT → REVIEW → PUBLISHED) 및 채널별 포맷
 
-- [ ] Product Object 상태 전이 API (DRAFT → READY) + 검증 규칙 (CTO_REQUEST #3)
-- [ ] 상세페이지(Content) 생성 파이프라인 — Product Object 입력
-- [ ] 실제 Provider 연결 (OCR/Analysis/Vision 중 CTO 지정 — API 키·모델 스펙 필요)
+## 완료 — Sprint 3
 
-## 완료
+- [x] **TASK-0302 — Product Object 상태 전이** (`9374aae`): DRAFT⇄READY, →ARCHIVED(종결) 전이 규칙(@acos/core) + READY 필수 조건 검증(제목+OCR/Vision 요약), PATCH …/product-object/:version/status
+- [x] **TASK-0303 — 상세페이지 콘텐츠 파이프라인** (`3a7fb00`): ContentGenerator Port + MockContentGenerator(Markdown), Content 모델 Project/ProductObject 소속 재구성, READY Product Object에서만 생성, /projects/:id/contents API
+- [x] **TASK-0304 — 웹 UI Project 반영** (`0dd85bf`): /projects 목록·상세, 파이프라인 실행 버튼(조립→READY→상세페이지), 홈 내비게이션
+
+## 완료 — Sprint 1~2
 
 - [x] **Sprint 1 — Foundation** (`4048d62`): pnpm+Turborepo 모노레포, Next.js 16(web:3000) / NestJS 11(api:4000, /health), Docker Compose(PostgreSQL·Redis·MinIO), Prisma 초기 설정, web+api 동시 실행
 - [x] **TASK-0201 — 사진 업로드** (`12bb3ae`): 드래그 앤 드롭·다중·진행률 UI, MinIO 저장, `Image` 모델, 업로드 API, 오류 처리
