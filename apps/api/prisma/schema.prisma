@@ -15,6 +15,7 @@ model Project {
   products       Product[]
   productObjects ProductObject[]
   contents       Content[]
+  sopRuns        SopRun[]
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
 
@@ -161,4 +162,27 @@ enum ContentStatus {
   REVIEW
   PUBLISHED
   ARCHIVED
+}
+
+// SOP 실행 이력 — 표준 절차 1회 실행의 단계별 결과 (TASK-0305)
+model SopRun {
+  id          String       @id @default(cuid())
+  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId   String
+  sopKey      String
+  status      SopRunStatus @default(RUNNING)
+  steps       Json // 단계별 결과 (SopStepResultDto[])
+  startedAt   DateTime     @default(now())
+  completedAt DateTime?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([projectId])
+  @@map("sop_runs")
+}
+
+enum SopRunStatus {
+  RUNNING
+  DONE
+  FAILED
 }

@@ -8,7 +8,12 @@
 
 ## 미완료 (스펙 확정, 구현 대기)
 
-_(현재 없음 — Sprint 3 백로그 완료, CTO의 다음 스프린트 스펙 대기 중)_
+- [ ] **TASK-0305 — SOP Engine Foundation** (승인된 구현 범위): 표준 절차(SOP) 선언적 정의 + 실행 엔진(@acos/core), 기본 SOP(OCR→조립→READY→상세페이지, 기존 서비스 재사용), SopRun 실행 이력(Project 1:N), /projects/:id/sop-runs API — 해석 확인은 CTO_REQUEST #9
+
+## 승인 대기 (CTO 승인 전 시작 금지)
+
+- [ ] TASK-0306 — (스펙 미수신)
+- [ ] TASK-0307 — (스펙 미수신)
 
 ## 제안 (스펙 대기 — 구현하지 않음)
 

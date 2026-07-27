@@ -32,5 +32,6 @@ function createVisionProvider(): VisionProvider {
       useFactory: createVisionProvider,
     },
   ],
+  exports: [ProductObjectService],
 })
 export class ProductObjectModule {}

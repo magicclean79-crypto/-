@@ -39,6 +39,7 @@ function createOcrProvider(): OcrProvider {
       useFactory: createOcrProvider,
     },
   ],
+  exports: [OcrService],
 })
 export class OcrModule implements OnModuleDestroy {
   constructor(private readonly moduleRef: ModuleRef) {}

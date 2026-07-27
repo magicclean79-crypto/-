@@ -30,5 +30,6 @@ function createContentGenerator(): ContentGenerator {
       useFactory: createContentGenerator,
     },
   ],
+  exports: [ContentsService],
 })
 export class ContentsModule {}

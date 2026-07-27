@@ -3,6 +3,7 @@ export * from "./analysis";
 export * from "./product-object";
 export * from "./vision";
 export * from "./content";
+export * from "./sop";
 
 import type { ContentDto, ContentStatus } from "@acos/shared";
 

@@ -234,6 +234,42 @@ export interface ProductObjectDto {
   updatedAt: string;
 }
 
+// ── SOP (Standard Operating Procedure) ─────────────────
+
+export const SOP_STEP_STATUSES = [
+  "PENDING",
+  "RUNNING",
+  "DONE",
+  "FAILED",
+  "SKIPPED",
+] as const;
+
+export type SopStepStatus = (typeof SOP_STEP_STATUSES)[number];
+
+export type SopRunStatus = "RUNNING" | "DONE" | "FAILED";
+
+export interface SopStepResultDto {
+  key: string;
+  name: string;
+  status: SopStepStatus;
+  output: unknown;
+  error: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
+export interface SopRunDto {
+  id: string;
+  projectId: string;
+  sopKey: string;
+  status: SopRunStatus;
+  steps: SopStepResultDto[];
+  startedAt: string;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export function formatDate(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
