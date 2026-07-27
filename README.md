@@ -192,6 +192,21 @@ SOP는 회사의 표준 업무 절차를 저장하는 도메인(Company Brain)�
 - 단계 상태: `PENDING → RUNNING → DONE | FAILED` (실패 시 이후 단계 `SKIPPED`)
 - 단계 간 데이터 전달: 조립 단계의 버전이 READY 검수·상세페이지 생성에 사용됨
 
+## Decision Log (TASK-0306)
+
+프로젝트 진행 중 내린 의사결정(무엇을·왜)을 기록합니다. Company Brain의 일부로
+SOP와 나란히 회사 지식을 축적합니다 — [docs/architecture/decision.md](docs/architecture/decision.md)
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `POST` | `/projects/:projectId/decisions` | `{ title, description?, reason, decisionType, author }` 생성 |
+| `GET` | `/projects/:projectId/decisions` | 목록 (최신순) |
+| `GET` | `…/decisions/:decisionId` | 단건 |
+| `PATCH` | `…/decisions/:decisionId` | 부분 수정 |
+| `DELETE` | `…/decisions/:decisionId` | 삭제 (204) |
+
+오류: `400` 필수 필드(title/reason/decisionType/author) 누락·공백, `404` 프로젝트/결정 없음.
+
 ## Product (TASK-0203)
 
 업로드된 사진(들)을 묶어 Product Object를 생성합니다.

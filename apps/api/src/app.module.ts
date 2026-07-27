@@ -3,6 +3,7 @@ import { AppController } from "./app.controller";
 import { AppService } from "./app.service";
 import { AnalysisModule } from "./analysis/analysis.module";
 import { ContentsModule } from "./contents/contents.module";
+import { DecisionsModule } from "./decisions/decisions.module";
 import { OcrModule } from "./ocr/ocr.module";
 import { PrismaModule } from "./prisma/prisma.module";
 import { ProductObjectModule } from "./product-object/product-object.module";
@@ -24,6 +25,7 @@ import { UploadsModule } from "./uploads/uploads.module";
     ProductObjectModule,
     ContentsModule,
     SopModule,
+    DecisionsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

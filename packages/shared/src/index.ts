@@ -270,6 +270,36 @@ export interface SopRunDto {
   updatedAt: string;
 }
 
+// ── Decision Log (TASK-0306) ───────────────────────────
+
+export interface DecisionDto {
+  id: string;
+  projectId: string;
+  title: string;
+  description: string | null;
+  reason: string;
+  decisionType: string;
+  author: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateDecisionRequest {
+  title: string;
+  description?: string;
+  reason: string;
+  decisionType: string;
+  author: string;
+}
+
+export interface UpdateDecisionRequest {
+  title?: string;
+  description?: string | null;
+  reason?: string;
+  decisionType?: string;
+  author?: string;
+}
+
 export function formatDate(date: Date): string {
   return date.toISOString().slice(0, 10);
 }

@@ -16,6 +16,7 @@ model Project {
   productObjects ProductObject[]
   contents       Content[]
   sopRuns        SopRun[]
+  decisions      Decision[]
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
 
@@ -185,4 +186,21 @@ enum SopRunStatus {
   RUNNING
   DONE
   FAILED
+}
+
+// 의사결정 로그 — 프로젝트별 결정 기록 (TASK-0306)
+model Decision {
+  id           String   @id @default(cuid())
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId    String
+  title        String
+  description  String?
+  reason       String
+  decisionType String
+  author       String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([projectId])
+  @@map("decisions")
 }
