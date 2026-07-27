@@ -39,3 +39,25 @@ chore:
 - 타입 오류 0
 - Lint 오류 0
 - README 업데이트
+- CTO_REPORT 생성/갱신
+
+## TASK 완료 절차 (필수)
+
+모든 TASK 완료 시 반드시 아래 순서를 따른다.
+
+1. **Build** — `pnpm build` 성공 여부 확인
+2. **Test** — `pnpm test` 성공 여부 확인
+3. **TypeScript** — 타입 오류 0 확인 (빌드에 포함)
+4. **ESLint** — `pnpm lint` 오류 0 확인
+
+네 가지가 모두 성공한 뒤에만 다음을 수행한다.
+
+- `/reports/CTO_REPORT.md` 자동 생성 또는 갱신
+- `/reports/CTO_REQUEST.md` 자동 생성 또는 갱신
+
+규칙:
+
+- **CTO_REPORT는 프로젝트의 공식 기술 보고서이다.** 형식은 항상 동일하게
+  유지한다. (형식 정의는 CTO_REPORT.md 상단 참조)
+- CTO_REQUEST에는 아키텍트(CTO)의 결정이 필요한 질문·요청 사항을 기록한다.
+- **모든 TASK는 CTO_REPORT가 생성/갱신되어야 완료된 것으로 간주한다.**
