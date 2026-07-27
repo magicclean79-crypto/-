@@ -13,11 +13,19 @@ export interface ProductDto {
 
 export interface ContentDto {
   id: string;
+  projectId: string;
+  productObjectId: string | null;
+  productObjectVersion: number | null;
   title: string;
   body: string;
   status: ContentStatus;
-  productId: string;
   createdAt: string;
+  updatedAt: string;
+}
+
+export interface GenerateContentRequest {
+  /** 사용할 Product Object 버전. 미지정 시 최신 READY 버전 사용 */
+  productObjectVersion?: number;
 }
 
 export interface ImageDto {

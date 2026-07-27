@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { AppController } from "./app.controller";
 import { AppService } from "./app.service";
 import { AnalysisModule } from "./analysis/analysis.module";
+import { ContentsModule } from "./contents/contents.module";
 import { OcrModule } from "./ocr/ocr.module";
 import { PrismaModule } from "./prisma/prisma.module";
 import { ProductObjectModule } from "./product-object/product-object.module";
@@ -20,6 +21,7 @@ import { UploadsModule } from "./uploads/uploads.module";
     ProductsModule,
     AnalysisModule,
     ProductObjectModule,
+    ContentsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

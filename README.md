@@ -162,6 +162,17 @@ OCR·Vision 결과를 조립한 **핵심 데이터 모델**입니다. 프로젝�
 | `PATCH` | `/projects/:id` | 수정 |
 | `DELETE` | `/projects/:id` | 삭제 (상품·Product Object 함께 삭제, 이미지는 연결 해제) |
 
+## 상세페이지 콘텐츠 (TASK-0303)
+
+READY 상태의 Product Object를 단일 입력으로 상세페이지(Markdown)를 생성합니다.
+Generator는 `CONTENT_GENERATOR`로 교체 가능(기본 mock) — [docs/architecture/content.md](docs/architecture/content.md)
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `POST` | `/projects/:projectId/contents` | `{ productObjectVersion? }` — 미지정 시 최신 READY 버전 사용 |
+| `GET` | `/projects/:projectId/contents` | 목록 |
+| `GET` | `/projects/:projectId/contents/:contentId` | 단건 |
+
 ## Product (TASK-0203)
 
 업로드된 사진(들)을 묶어 Product Object를 생성합니다.

@@ -14,6 +14,7 @@ model Project {
   description    String?
   products       Product[]
   productObjects ProductObject[]
+  contents       Content[]
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
 
@@ -26,7 +27,6 @@ model Product {
   projectId       String
   name            String
   description     String?
-  contents        Content[]
   images          Image[]
   analysisResults AnalysisResult[]
   createdAt       DateTime         @default(now())
@@ -50,6 +50,7 @@ model ProductObject {
   ocrSummary    Json?
   visionSummary Json?
   metadata      Json?
+  contents      Content[]
   createdAt     DateTime            @default(now())
   updatedAt     DateTime            @updatedAt
 
@@ -138,17 +139,20 @@ enum OcrStatus {
   FAILED
 }
 
+// 상세페이지 콘텐츠 — Product Object를 단일 입력으로 생성된다 (TASK-0303)
 model Content {
-  id        String        @id @default(cuid())
-  title     String
-  body      String
-  status    ContentStatus @default(DRAFT)
-  product   Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
-  productId String
-  createdAt DateTime      @default(now())
-  updatedAt DateTime      @updatedAt
+  id              String         @id @default(cuid())
+  project         Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId       String
+  productObject   ProductObject? @relation(fields: [productObjectId], references: [id], onDelete: SetNull)
+  productObjectId String?
+  title           String
+  body            String
+  status          ContentStatus  @default(DRAFT)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
 
-  @@index([productId])
+  @@index([projectId])
   @@map("contents")
 }
 

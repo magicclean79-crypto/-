@@ -1,0 +1,1 @@
+export const CONTENT_GENERATOR = Symbol("CONTENT_GENERATOR");
