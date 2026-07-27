@@ -9,31 +9,31 @@ import {
   Post,
 } from "@nestjs/common";
 import type {
-  CreateMemoryRequest,
-  MemoryDto,
-  UpdateMemoryRequest,
+  CreateProjectMemoryRequest,
+  ProjectMemoryDto,
+  UpdateProjectMemoryRequest,
 } from "@acos/shared";
-import { MemoriesService } from "./memories.service";
+import { ProjectMemoriesService } from "./project-memories.service";
 
 @Controller("projects/:projectId/memories")
-export class MemoriesController {
-  constructor(private readonly memoriesService: MemoriesService) {}
+export class ProjectMemoriesController {
+  constructor(private readonly memoriesService: ProjectMemoriesService) {}
 
   @Post()
   async create(
     @Param("projectId") projectId: string,
-    @Body() body: CreateMemoryRequest,
-  ): Promise<MemoryDto> {
+    @Body() body: CreateProjectMemoryRequest,
+  ): Promise<ProjectMemoryDto> {
     return this.memoriesService.create(
       projectId,
-      body ?? ({} as CreateMemoryRequest),
+      body ?? ({} as CreateProjectMemoryRequest),
     );
   }
 
   @Get()
   async list(
     @Param("projectId") projectId: string,
-  ): Promise<{ memories: MemoryDto[] }> {
+  ): Promise<{ memories: ProjectMemoryDto[] }> {
     return { memories: await this.memoriesService.list(projectId) };
   }
 
@@ -41,7 +41,7 @@ export class MemoriesController {
   async getById(
     @Param("projectId") projectId: string,
     @Param("memoryId") memoryId: string,
-  ): Promise<MemoryDto> {
+  ): Promise<ProjectMemoryDto> {
     return this.memoriesService.getById(projectId, memoryId);
   }
 
@@ -49,8 +49,8 @@ export class MemoriesController {
   async update(
     @Param("projectId") projectId: string,
     @Param("memoryId") memoryId: string,
-    @Body() body: UpdateMemoryRequest,
-  ): Promise<MemoryDto> {
+    @Body() body: UpdateProjectMemoryRequest,
+  ): Promise<ProjectMemoryDto> {
     return this.memoriesService.update(projectId, memoryId, body ?? {});
   }
 

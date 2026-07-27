@@ -3,17 +3,17 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { MemoryEngine, MemoryValidationError } from "@acos/core";
-import type { Memory } from "@acos/core";
+import { ProjectMemoryEngine, ProjectMemoryValidationError } from "@acos/core";
+import type { ProjectMemory } from "@acos/core";
 import type {
-  CreateMemoryRequest,
-  MemoryDto,
-  UpdateMemoryRequest,
+  CreateProjectMemoryRequest,
+  ProjectMemoryDto,
+  UpdateProjectMemoryRequest,
 } from "@acos/shared";
 import { PrismaService } from "../prisma/prisma.service";
-import { PrismaMemoryStore } from "./prisma-memory.store";
+import { PrismaProjectMemoryStore } from "./prisma-project-memory.store";
 
-function toDto(memory: Memory): MemoryDto {
+function toDto(memory: ProjectMemory): ProjectMemoryDto {
   return {
     id: memory.id,
     projectId: memory.projectId,
@@ -26,25 +26,25 @@ function toDto(memory: Memory): MemoryDto {
 }
 
 /**
- * Memory 서비스 (TASK-0307).
- * 기억의 기록/회상/수정/삭제는 @acos/core의 MemoryEngine(Company Brain)이
+ * ProjectMemory 서비스 (TASK-0307).
+ * 기억의 기록/회상/수정/삭제는 @acos/core의 ProjectMemoryEngine(Company Brain)이
  * 담당하고, 이 서비스는 프로젝트 존재 확인과 HTTP 오류 매핑만 한다.
  */
 @Injectable()
-export class MemoriesService {
-  private readonly engine: MemoryEngine;
+export class ProjectMemoriesService {
+  private readonly engine: ProjectMemoryEngine;
 
   constructor(
     private readonly prisma: PrismaService,
-    store: PrismaMemoryStore,
+    store: PrismaProjectMemoryStore,
   ) {
-    this.engine = new MemoryEngine(store);
+    this.engine = new ProjectMemoryEngine(store);
   }
 
   async create(
     projectId: string,
-    request: CreateMemoryRequest,
-  ): Promise<MemoryDto> {
+    request: CreateProjectMemoryRequest,
+  ): Promise<ProjectMemoryDto> {
     await this.ensureProject(projectId);
     try {
       const memory = await this.engine.remember({
@@ -59,13 +59,13 @@ export class MemoriesService {
     }
   }
 
-  async list(projectId: string): Promise<MemoryDto[]> {
+  async list(projectId: string): Promise<ProjectMemoryDto[]> {
     await this.ensureProject(projectId);
     const memories = await this.engine.recall(projectId);
     return memories.map(toDto);
   }
 
-  async getById(projectId: string, memoryId: string): Promise<MemoryDto> {
+  async getById(projectId: string, memoryId: string): Promise<ProjectMemoryDto> {
     const memory = await this.findOwned(projectId, memoryId);
     return toDto(memory);
   }
@@ -73,8 +73,8 @@ export class MemoriesService {
   async update(
     projectId: string,
     memoryId: string,
-    request: UpdateMemoryRequest,
-  ): Promise<MemoryDto> {
+    request: UpdateProjectMemoryRequest,
+  ): Promise<ProjectMemoryDto> {
     await this.findOwned(projectId, memoryId);
     try {
       const memory = await this.engine.revise(memoryId, request);
@@ -90,7 +90,7 @@ export class MemoriesService {
   }
 
   private mapError(error: unknown): Error {
-    if (error instanceof MemoryValidationError) {
+    if (error instanceof ProjectMemoryValidationError) {
       return new BadRequestException(error.message);
     }
     return error instanceof Error ? error : new Error(String(error));
@@ -109,7 +109,7 @@ export class MemoriesService {
   private async findOwned(
     projectId: string,
     memoryId: string,
-  ): Promise<Memory> {
+  ): Promise<ProjectMemory> {
     const memory = await this.engine.get(memoryId);
     if (!memory || memory.projectId !== projectId) {
       throw new NotFoundException(`기억을 찾을 수 없습니다: ${memoryId}`);

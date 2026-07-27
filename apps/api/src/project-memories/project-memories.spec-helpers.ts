@@ -1,15 +1,15 @@
-import type { CreateMemoryInput, Memory, UpdateMemoryInput } from "@acos/core";
+import type { CreateProjectMemoryInput, ProjectMemory, UpdateProjectMemoryInput } from "@acos/core";
 
 /** memories 테이블을 흉내 내는 인메모리 Store 목업 (테스트 전용) */
 export function createStoreMock() {
-  const memories = new Map<string, Memory>();
+  const memories = new Map<string, ProjectMemory>();
   let sequence = 0;
 
   return {
     memories,
-    create: jest.fn(async (input: CreateMemoryInput): Promise<Memory> => {
+    create: jest.fn(async (input: CreateProjectMemoryInput): Promise<ProjectMemory> => {
       const now = new Date(2026, 6, 27, 0, 0, ++sequence);
-      const row: Memory = {
+      const row: ProjectMemory = {
         id: `mem-${sequence}`,
         projectId: input.projectId,
         title: input.title,
@@ -31,7 +31,7 @@ export function createStoreMock() {
         .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()),
     ),
     update: jest.fn(
-      async (id: string, input: UpdateMemoryInput): Promise<Memory> => {
+      async (id: string, input: UpdateProjectMemoryInput): Promise<ProjectMemory> => {
         const row = memories.get(id);
         if (!row) throw new Error(`memory not found: ${id}`);
         const updated = {
@@ -40,7 +40,7 @@ export function createStoreMock() {
           ...(input.content !== undefined ? { content: input.content } : {}),
           ...(input.source !== undefined ? { source: input.source } : {}),
           updatedAt: new Date(2026, 6, 27, 1, 0, ++sequence),
-        } as Memory;
+        } as ProjectMemory;
         memories.set(id, updated);
         return { ...updated };
       },

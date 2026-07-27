@@ -1,13 +1,13 @@
-import type { Memory, MemoryStore } from "./memory";
-import { MemoryEngine, MemoryValidationError } from "./memory-engine";
+import type { ProjectMemory, ProjectMemoryStore } from "./project-memory";
+import { ProjectMemoryEngine, ProjectMemoryValidationError } from "./project-memory-engine";
 
 function createStoreMock() {
-  const memories = new Map<string, Memory>();
+  const memories = new Map<string, ProjectMemory>();
   let sequence = 0;
-  const store: MemoryStore = {
+  const store: ProjectMemoryStore = {
     async create(input) {
       const now = new Date(2026, 6, 27, 0, 0, ++sequence);
-      const row: Memory = {
+      const row: ProjectMemory = {
         id: `mem-${sequence}`,
         projectId: input.projectId,
         title: input.title,
@@ -31,7 +31,7 @@ function createStoreMock() {
     async update(id, input) {
       const row = memories.get(id);
       if (!row) throw new Error(`memory not found: ${id}`);
-      const updated = { ...row, ...input, updatedAt: new Date() } as Memory;
+      const updated = { ...row, ...input, updatedAt: new Date() } as ProjectMemory;
       memories.set(id, updated);
       return { ...updated };
     },
@@ -42,7 +42,7 @@ function createStoreMock() {
   return store;
 }
 
-describe("MemoryEngine", () => {
+describe("ProjectMemoryEngine", () => {
   const valid = {
     projectId: "proj-1",
     title: "매트 상세페이지는 재질 표기가 필수",
@@ -51,7 +51,7 @@ describe("MemoryEngine", () => {
   };
 
   it("remember — 기억을 기록한다 (트림, source 미지정 시 null)", async () => {
-    const engine = new MemoryEngine(createStoreMock());
+    const engine = new ProjectMemoryEngine(createStoreMock());
 
     const memory = await engine.remember({
       ...valid,
@@ -64,19 +64,19 @@ describe("MemoryEngine", () => {
     expect(minimal.source).toBeNull();
   });
 
-  it("remember — 필수 필드(title/content) 공백이면 MemoryValidationError", async () => {
-    const engine = new MemoryEngine(createStoreMock());
+  it("remember — 필수 필드(title/content) 공백이면 ProjectMemoryValidationError", async () => {
+    const engine = new ProjectMemoryEngine(createStoreMock());
 
     await expect(
       engine.remember({ ...valid, title: " " }),
-    ).rejects.toBeInstanceOf(MemoryValidationError);
+    ).rejects.toBeInstanceOf(ProjectMemoryValidationError);
     await expect(
       engine.remember({ ...valid, content: "" }),
-    ).rejects.toBeInstanceOf(MemoryValidationError);
+    ).rejects.toBeInstanceOf(ProjectMemoryValidationError);
   });
 
   it("recall — 프로젝트의 기억을 최신순으로 회상한다", async () => {
-    const engine = new MemoryEngine(createStoreMock());
+    const engine = new ProjectMemoryEngine(createStoreMock());
     const first = await engine.remember(valid);
     const second = await engine.remember({ ...valid, title: "두 번째 기억" });
     await engine.remember({ ...valid, projectId: "other" });
@@ -89,7 +89,7 @@ describe("MemoryEngine", () => {
   });
 
   it("revise/forget — 지정 필드만 고쳐 쓰고, 지운 기억은 회상되지 않는다", async () => {
-    const engine = new MemoryEngine(createStoreMock());
+    const engine = new ProjectMemoryEngine(createStoreMock());
     const memory = await engine.remember(valid);
 
     const revised = await engine.revise(memory.id, { source: null });
@@ -98,7 +98,7 @@ describe("MemoryEngine", () => {
 
     await expect(
       engine.revise(memory.id, { content: " " }),
-    ).rejects.toBeInstanceOf(MemoryValidationError);
+    ).rejects.toBeInstanceOf(ProjectMemoryValidationError);
 
     await engine.forget(memory.id);
     expect(await engine.get(memory.id)).toBeNull();

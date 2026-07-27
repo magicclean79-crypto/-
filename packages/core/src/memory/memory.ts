@@ -1,64 +1,85 @@
 /**
- * Memory — 회사가 축적하는 기억 도메인. (TASK-0307, Company Brain 소속)
+ * Memory — Company Brain의 표준 구조화 저장소. (TASK-0402)
  *
- * 프로젝트 진행 중 얻은 지식 조각(기억)을 보존한다.
- * SOP(절차)·Decision Log(결정)와 나란히 Company Brain을 구성하며,
+ * 프로젝트 메모 형태였던 구 Memory(ProjectMemory로 개칭·보존)와 달리,
+ * scope/scopeId/key/value 기반의 **구조화 저장소**다. AI가 Company Brain을
+ * 실제 사용할 때 참조하는 표준 Memory이며, 값은 JSON으로 저장되어
+ * 문자열·숫자·객체 등 어떤 구조든 담을 수 있다.
  * 저장 방식은 MemoryStore Port 뒤에 숨는다 — Prisma 어댑터는 apps/api에 있다.
  * 자세한 구조: docs/architecture/memory.md
  */
 export interface Memory {
   id: string;
-  projectId: string;
-  title: string;
-  /** 기억 본문 */
-  content: string;
-  /** 기억의 출처 (예: TASK, SOP 실행, 문서 — 선택) */
-  source: string | null;
+  /** 적용 범위 (예: GLOBAL, PROJECT — Enum 고정 여부는 CTO 결정 대기) */
+  scope: string;
+  /** 범위 대상 식별자 (예: projectId). 전역 범위는 null */
+  scopeId: string | null;
+  /** 범위 내 유니크 키 */
+  key: string;
+  /** 구조화 값 — JSON 직렬화 가능한 모든 값 */
+  value: unknown;
+  description: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
 
 export interface CreateMemoryInput {
-  projectId: string;
-  title: string;
-  content: string;
-  source?: string | null;
+  scope: string;
+  scopeId?: string | null;
+  key: string;
+  value: unknown;
+  description?: string | null;
 }
 
+/** 수정은 value/description만 — scope/scopeId/key는 식별자라 불변 */
 export interface UpdateMemoryInput {
-  title?: string;
-  content?: string;
-  source?: string | null;
+  value?: unknown;
+  description?: string | null;
 }
 
-/** Memory 저장소 Port — 인프라(Prisma 등)가 구현한다 */
+/** Structured Memory 저장소 Port — 인프라(Prisma 등)가 구현한다 */
 export interface MemoryStore {
   create(input: CreateMemoryInput): Promise<Memory>;
   findById(id: string): Promise<Memory | null>;
-  /** 프로젝트의 기억 목록 (최신순) */
-  findByProjectId(projectId: string): Promise<Memory[]>;
+  /** (scope, scopeId, key) 조합으로 단건 조회 — 중복 방지에 사용 */
+  findByKey(
+    scope: string,
+    scopeId: string | null,
+    key: string,
+  ): Promise<Memory | null>;
+  /** scope/scopeId로 필터링한 목록 (최신순). 필터 미지정 시 전체 */
+  findMany(filter: { scope?: string; scopeId?: string | null }): Promise<
+    Memory[]
+  >;
   update(id: string, input: UpdateMemoryInput): Promise<Memory>;
   delete(id: string): Promise<void>;
 }
-
-const REQUIRED_FIELDS = ["title", "content"] as const;
 
 function isBlank(value: unknown): boolean {
   return typeof value !== "string" || value.trim().length === 0;
 }
 
-/** 생성 입력 검증 — 필수 필드(title/content) 공백 불가 */
+/** 생성 입력 검증 — scope/key 공백 불가, value 필수(모든 JSON 값 허용) */
 export function validateCreateMemory(
   input: Partial<CreateMemoryInput>,
 ): string[] {
-  return REQUIRED_FIELDS.filter((field) => isBlank(input[field])).map(
-    (field) => `${field}은(는) 비어 있을 수 없습니다.`,
-  );
+  const errors: string[] = [];
+  if (isBlank(input.scope)) {
+    errors.push("scope은(는) 비어 있을 수 없습니다.");
+  }
+  if (isBlank(input.key)) {
+    errors.push("key은(는) 비어 있을 수 없습니다.");
+  }
+  if (input.value === undefined) {
+    errors.push("value은(는) 필수입니다.");
+  }
+  return errors;
 }
 
-/** 수정 입력 검증 — 지정된 필수 필드는 공백으로 바꿀 수 없다 */
+/** 수정 입력 검증 — 수정할 필드가 하나는 있어야 한다 */
 export function validateUpdateMemory(input: UpdateMemoryInput): string[] {
-  return REQUIRED_FIELDS.filter(
-    (field) => input[field] !== undefined && isBlank(input[field]),
-  ).map((field) => `${field}은(는) 비어 있을 수 없습니다.`);
+  if (input.value === undefined && input.description === undefined) {
+    return ["수정할 필드(value 또는 description)를 지정해야 합니다."];
+  }
+  return [];
 }

@@ -5,7 +5,8 @@ import { AnalysisModule } from "./analysis/analysis.module";
 import { ContentsModule } from "./contents/contents.module";
 import { DecisionsModule } from "./decisions/decisions.module";
 import { KnowledgeModule } from "./knowledge/knowledge.module";
-import { MemoriesModule } from "./memories/memories.module";
+import { MemoryModule } from "./memory/memory.module";
+import { ProjectMemoriesModule } from "./project-memories/project-memories.module";
 import { OcrModule } from "./ocr/ocr.module";
 import { PrismaModule } from "./prisma/prisma.module";
 import { ProductObjectModule } from "./product-object/product-object.module";
@@ -28,7 +29,8 @@ import { UploadsModule } from "./uploads/uploads.module";
     ContentsModule,
     SopModule,
     DecisionsModule,
-    MemoriesModule,
+    ProjectMemoriesModule,
+    MemoryModule,
     KnowledgeModule,
   ],
   controllers: [AppController],

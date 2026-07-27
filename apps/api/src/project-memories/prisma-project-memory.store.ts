@@ -1,19 +1,19 @@
 import { Injectable } from "@nestjs/common";
 import type {
-  CreateMemoryInput,
-  Memory,
-  MemoryStore,
-  UpdateMemoryInput,
+  CreateProjectMemoryInput,
+  ProjectMemory,
+  ProjectMemoryStore,
+  UpdateProjectMemoryInput,
 } from "@acos/core";
 import { PrismaService } from "../prisma/prisma.service";
 
-/** @acos/core MemoryStore Port의 Prisma 어댑터 */
+/** @acos/core ProjectMemoryStore Port의 Prisma 어댑터 */
 @Injectable()
-export class PrismaMemoryStore implements MemoryStore {
+export class PrismaProjectMemoryStore implements ProjectMemoryStore {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(input: CreateMemoryInput): Promise<Memory> {
-    return this.prisma.memory.create({
+  async create(input: CreateProjectMemoryInput): Promise<ProjectMemory> {
+    return this.prisma.projectMemory.create({
       data: {
         projectId: input.projectId,
         title: input.title,
@@ -23,19 +23,19 @@ export class PrismaMemoryStore implements MemoryStore {
     });
   }
 
-  async findById(id: string): Promise<Memory | null> {
-    return this.prisma.memory.findUnique({ where: { id } });
+  async findById(id: string): Promise<ProjectMemory | null> {
+    return this.prisma.projectMemory.findUnique({ where: { id } });
   }
 
-  async findByProjectId(projectId: string): Promise<Memory[]> {
-    return this.prisma.memory.findMany({
+  async findByProjectId(projectId: string): Promise<ProjectMemory[]> {
+    return this.prisma.projectMemory.findMany({
       where: { projectId },
       orderBy: { createdAt: "desc" },
     });
   }
 
-  async update(id: string, input: UpdateMemoryInput): Promise<Memory> {
-    return this.prisma.memory.update({
+  async update(id: string, input: UpdateProjectMemoryInput): Promise<ProjectMemory> {
+    return this.prisma.projectMemory.update({
       where: { id },
       data: {
         ...(input.title !== undefined ? { title: input.title } : {}),
@@ -46,6 +46,6 @@ export class PrismaMemoryStore implements MemoryStore {
   }
 
   async delete(id: string): Promise<void> {
-    await this.prisma.memory.delete({ where: { id } });
+    await this.prisma.projectMemory.delete({ where: { id } });
   }
 }

@@ -1,27 +1,27 @@
 import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { PrismaService } from "../prisma/prisma.service";
-import { MemoriesService } from "./memories.service";
-import { PrismaMemoryStore } from "./prisma-memory.store";
+import { ProjectMemoriesService } from "./project-memories.service";
+import { PrismaProjectMemoryStore } from "./prisma-project-memory.store";
 import {
   createPrismaMock,
   createStoreMock,
   validRequest,
-} from "./memories.spec-helpers";
+} from "./project-memories.spec-helpers";
 
-describe("MemoriesService (Service Test)", () => {
+describe("ProjectMemoriesService (Service Test)", () => {
   async function createService(
     store = createStoreMock(),
     prisma = createPrismaMock(),
   ) {
     const moduleRef = await Test.createTestingModule({
       providers: [
-        MemoriesService,
+        ProjectMemoriesService,
         { provide: PrismaService, useValue: prisma },
-        { provide: PrismaMemoryStore, useValue: store },
+        { provide: PrismaProjectMemoryStore, useValue: store },
       ],
     }).compile();
-    return moduleRef.get(MemoriesService);
+    return moduleRef.get(ProjectMemoriesService);
   }
 
   it("기억을 기록한다 — 트림, source 미지정 시 null", async () => {

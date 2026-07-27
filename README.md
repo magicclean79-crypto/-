@@ -209,21 +209,25 @@ SOP와 나란히 회사 지식을 축적합니다 — [docs/architecture/decisio
 
 오류: `400` 필수 필드(title/reason/decisionType/author) 누락·공백·Enum 외 유형, `404` 프로젝트/결정 없음.
 
-## Memory (TASK-0307)
+## Memory — 표준 Structured Memory (TASK-0402)
 
-회사가 축적하는 기억(지식 조각)을 기록·회상합니다. SOP·Decision Log와 나란히
-Company Brain을 구성하며, Workflow Engine은 Memory를 **사용할 수 있지만 소유하지
-않습니다** — [docs/architecture/memory.md](docs/architecture/memory.md)
+Company Brain의 표준 Memory는 `scope / scopeId / key / value / description` 기반의
+**구조화 저장소**입니다. 같은 `(scope, scopeId, key)`는 한 건만 존재하며 value는
+JSON(문자열·숫자·객체 등)입니다 — [docs/architecture/memory.md](docs/architecture/memory.md)
 
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
-| `POST` | `/projects/:projectId/memories` | `{ title, content, source? }` 기록 |
-| `GET` | `/projects/:projectId/memories` | 회상 — 목록 (최신순) |
-| `GET` | `…/memories/:memoryId` | 단건 |
-| `PATCH` | `…/memories/:memoryId` | 부분 수정 |
-| `DELETE` | `…/memories/:memoryId` | 삭제 (204) |
+| `POST` | `/memory` | `{ scope, scopeId?, key, value, description? }` 저장 (중복 key 400) |
+| `GET` | `/memory?scope=&scopeId=` | 목록 (필터 선택, 최신순) |
+| `GET` | `/memory/:memoryId` | 단건 |
+| `PATCH` | `/memory/:memoryId` | `{ value?, description? }` 수정 — scope/key는 불변 |
+| `DELETE` | `/memory/:memoryId` | 삭제 (204) |
 
-오류: `400` 필수 필드(title/content) 누락·공백, `404` 프로젝트/기억 없음.
+### ProjectMemory (구 Memory, TASK-0307 — 보존)
+
+기존 프로젝트 메모형 기억은 `ProjectMemory`로 개칭해 그대로 동작합니다
+(테이블 `project_memories`로 데이터 보존, API 경로 동일):
+`POST/GET /projects/:projectId/memories` · `GET/PATCH/DELETE …/memories/:memoryId`
 
 ## Knowledge (TASK-0401)
 

@@ -2,25 +2,25 @@ import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import request from "supertest";
 import { PrismaService } from "../prisma/prisma.service";
-import { MemoriesController } from "./memories.controller";
-import { MemoriesService } from "./memories.service";
-import { PrismaMemoryStore } from "./prisma-memory.store";
+import { ProjectMemoriesController } from "./project-memories.controller";
+import { ProjectMemoriesService } from "./project-memories.service";
+import { PrismaProjectMemoryStore } from "./prisma-project-memory.store";
 import {
   createPrismaMock,
   createStoreMock,
   validRequest,
-} from "./memories.spec-helpers";
+} from "./project-memories.spec-helpers";
 
-describe("Memories API (API Test)", () => {
+describe("ProjectMemories API (API Test)", () => {
   let app: INestApplication;
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
-      controllers: [MemoriesController],
+      controllers: [ProjectMemoriesController],
       providers: [
-        MemoriesService,
+        ProjectMemoriesService,
         { provide: PrismaService, useValue: createPrismaMock() },
-        { provide: PrismaMemoryStore, useValue: createStoreMock() },
+        { provide: PrismaProjectMemoryStore, useValue: createStoreMock() },
       ],
     }).compile();
 

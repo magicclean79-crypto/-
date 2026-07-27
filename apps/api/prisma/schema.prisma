@@ -15,9 +15,9 @@ model Project {
   products       Product[]
   productObjects ProductObject[]
   contents       Content[]
-  sopRuns        SopRun[]
-  decisions      Decision[]
-  memories       Memory[]
+  sopRuns         SopRun[]
+  decisions       Decision[]
+  projectMemories ProjectMemory[]
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
 
@@ -206,8 +206,8 @@ model Decision {
   @@map("decisions")
 }
 
-// 기억 저장소 — Company Brain이 축적하는 지식 조각 (TASK-0307)
-model Memory {
+// 프로젝트 메모형 기억 — 구 Memory(TASK-0307)를 TASK-0402에서 개칭·보존
+model ProjectMemory {
   id        String   @id @default(cuid())
   project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   projectId String
@@ -218,6 +218,22 @@ model Memory {
   updatedAt DateTime @updatedAt
 
   @@index([projectId])
+  @@map("project_memories")
+}
+
+// 표준 Structured Memory — Company Brain의 구조화 저장소 (TASK-0402)
+model Memory {
+  id          String   @id @default(cuid())
+  scope       String
+  scopeId     String?
+  key         String
+  value       Json
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([scope, scopeId, key])
+  @@index([scope, scopeId])
   @@map("memories")
 }
 

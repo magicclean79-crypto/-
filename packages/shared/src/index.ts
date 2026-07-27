@@ -314,9 +314,9 @@ export interface UpdateDecisionRequest {
   author?: string;
 }
 
-// ── Memory (TASK-0307, Company Brain) ──────────────────
+// ── ProjectMemory (구 Memory, TASK-0307 — TASK-0402에서 개칭·보존) ──
 
-export interface MemoryDto {
+export interface ProjectMemoryDto {
   id: string;
   projectId: string;
   title: string;
@@ -327,16 +327,45 @@ export interface MemoryDto {
   updatedAt: string;
 }
 
-export interface CreateMemoryRequest {
+export interface CreateProjectMemoryRequest {
   title: string;
   content: string;
   source?: string;
 }
 
-export interface UpdateMemoryRequest {
+export interface UpdateProjectMemoryRequest {
   title?: string;
   content?: string;
   source?: string | null;
+}
+
+// ── Memory — 표준 Structured Memory (TASK-0402, Company Brain) ──
+
+export interface MemoryDto {
+  id: string;
+  /** 적용 범위 (예: GLOBAL, PROJECT — 자유 문자열, Enum 고정 여부 CTO 결정 대기) */
+  scope: string;
+  /** 범위 대상 식별자 (예: projectId). 전역 범위는 null */
+  scopeId: string | null;
+  key: string;
+  /** 구조화 값 — JSON 직렬화 가능한 모든 값 */
+  value: unknown;
+  description: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateMemoryRequest {
+  scope: string;
+  scopeId?: string;
+  key: string;
+  value: unknown;
+  description?: string;
+}
+
+export interface UpdateMemoryRequest {
+  value?: unknown;
+  description?: string | null;
 }
 
 // ── Knowledge (TASK-0401, Company Brain) ───────────────

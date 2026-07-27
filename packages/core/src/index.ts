@@ -6,6 +6,7 @@ export * from "./content";
 export * from "./sop";
 export * from "./workflow";
 export * from "./decision";
+export * from "./project-memory";
 export * from "./memory";
 export * from "./knowledge";
 
