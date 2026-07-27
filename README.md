@@ -162,6 +162,8 @@ OCR·Vision 결과를 조립한 **핵심 데이터 모델**입니다. 프로젝�
 | `PATCH` | `/projects/:id` | 수정 |
 | `DELETE` | `/projects/:id` | 삭제 (상품·Product Object 함께 삭제, 이미지는 연결 해제) |
 
+웹: `/projects`(목록) · `/projects/[id]`(파이프라인 실행 — 조립 → READY 전환 → 상세페이지 생성)
+
 ## 상세페이지 콘텐츠 (TASK-0303)
 
 READY 상태의 Product Object를 단일 입력으로 상세페이지(Markdown)를 생성합니다.

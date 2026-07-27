@@ -19,6 +19,12 @@ export default function Home() {
             📸 상품 사진 업로드
           </Link>
           <Link
+            href="/projects"
+            className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+          >
+            🗂️ 프로젝트
+          </Link>
+          <Link
             href="/products"
             className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
           >
