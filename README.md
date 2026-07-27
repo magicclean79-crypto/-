@@ -205,7 +205,9 @@ SOP와 나란히 회사 지식을 축적합니다 — [docs/architecture/decisio
 | `PATCH` | `…/decisions/:decisionId` | 부분 수정 |
 | `DELETE` | `…/decisions/:decisionId` | 삭제 (204) |
 
-오류: `400` 필수 필드(title/reason/decisionType/author) 누락·공백, `404` 프로젝트/결정 없음.
+- `decisionType`(Enum): `ARCHITECTURE · PROCESS · PRODUCT · BUSINESS · TECHNICAL · QUALITY · SECURITY · OTHER`
+
+오류: `400` 필수 필드(title/reason/decisionType/author) 누락·공백·Enum 외 유형, `404` 프로젝트/결정 없음.
 
 ## Product (TASK-0203)
 

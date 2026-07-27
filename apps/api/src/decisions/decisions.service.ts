@@ -57,7 +57,7 @@ export class DecisionsService {
       title: request.title.trim(),
       description: request.description?.trim() || null,
       reason: request.reason.trim(),
-      decisionType: request.decisionType.trim(),
+      decisionType: request.decisionType,
       author: request.author.trim(),
     });
     return toDto(decision);
@@ -95,7 +95,7 @@ export class DecisionsService {
         ? { reason: request.reason.trim() }
         : {}),
       ...(request.decisionType !== undefined
-        ? { decisionType: request.decisionType.trim() }
+        ? { decisionType: request.decisionType }
         : {}),
       ...(request.author !== undefined
         ? { author: request.author.trim() }

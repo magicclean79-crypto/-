@@ -34,7 +34,7 @@ describe("DecisionsService (Service Test)", () => {
 
     expect(decision.projectId).toBe("proj-1");
     expect(decision.title).toBe(validRequest.title);
-    expect(decision.decisionType).toBe("architecture");
+    expect(decision.decisionType).toBe("ARCHITECTURE");
     expect(decision.author).toBe("CTO");
 
     const minimal = await service.create("proj-1", {
@@ -59,6 +59,29 @@ describe("DecisionsService (Service Test)", () => {
     await expect(
       service.create("proj-1", {} as typeof validRequest),
     ).rejects.toThrow(BadRequestException);
+  });
+
+  it("decisionType이 Enum 값이 아니면 400 (생성/수정)", async () => {
+    const service = await createService();
+
+    await expect(
+      service.create("proj-1", {
+        ...validRequest,
+        decisionType: "architecture" as never, // 소문자 불가 — Enum 고정
+      }),
+    ).rejects.toThrow(BadRequestException);
+
+    const created = await service.create("proj-1", validRequest);
+    await expect(
+      service.update("proj-1", created.id, {
+        decisionType: "기타" as never,
+      }),
+    ).rejects.toThrow(BadRequestException);
+
+    const updated = await service.update("proj-1", created.id, {
+      decisionType: "QUALITY",
+    });
+    expect(updated.decisionType).toBe("QUALITY");
   });
 
   it("없는 프로젝트는 404 (생성/목록)", async () => {

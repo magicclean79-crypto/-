@@ -41,13 +41,18 @@ describe("Decisions API (API Test)", () => {
     expect(response.body).toMatchObject({
       projectId: "proj-1",
       title: validRequest.title,
-      decisionType: "architecture",
+      decisionType: "ARCHITECTURE",
       author: "CTO",
     });
 
     await request(app.getHttpServer())
       .post("/projects/proj-1/decisions")
       .send({ ...validRequest, author: "" })
+      .expect(400);
+
+    await request(app.getHttpServer())
+      .post("/projects/proj-1/decisions")
+      .send({ ...validRequest, decisionType: "architecture" })
       .expect(400);
 
     await request(app.getHttpServer())

@@ -196,11 +196,23 @@ model Decision {
   title        String
   description  String?
   reason       String
-  decisionType String
+  decisionType DecisionType
   author       String
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
   @@index([projectId])
   @@map("decisions")
+}
+
+// 결정 유형 — CTO 결정으로 Enum 고정 (TASK-0306 승인 리뷰)
+enum DecisionType {
+  ARCHITECTURE
+  PROCESS
+  PRODUCT
+  BUSINESS
+  TECHNICAL
+  QUALITY
+  SECURITY
+  OTHER
 }

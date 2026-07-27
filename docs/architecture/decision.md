@@ -17,7 +17,8 @@ Execution Layer
   - `Decision` 엔티티: `id, projectId, title, description, reason, decisionType, author, createdAt` (+`updatedAt`)
   - `DecisionRepository` **Port**: create / findById / findByProjectId / update / delete
   - 검증 규칙: `validateCreateDecision` / `validateUpdateDecision`
-    — 필수 필드(title/reason/decisionType/author) 공백 불가
+    — 필수 필드(title/reason/decisionType/author) 공백 불가,
+    decisionType은 Enum 값만 허용
 - **어댑터 (`apps/api/src/decisions/`)**
   - `PrismaDecisionRepository`: Repository Port의 Prisma 구현
   - `DecisionsService`: 프로젝트 존재 확인 + 검증 + Repository 호출
@@ -32,13 +33,14 @@ Execution Layer
 | `title` | string | 결정 제목 (필수) |
 | `description` | string? | 상세 설명 (선택) |
 | `reason` | string | 결정의 근거 (필수) |
-| `decisionType` | string | 결정 유형 — 자유 문자열 (예: architecture, process, product) |
+| `decisionType` | enum | `ARCHITECTURE · PROCESS · PRODUCT · BUSINESS · TECHNICAL · QUALITY · SECURITY · OTHER` |
 | `author` | string | 결정자 (필수) |
 | `createdAt` | DateTime | 기록 시각 |
 | `updatedAt` | DateTime | 수정 시각 (수정 이력 관찰용 — 스펙 외 저장 관례) |
 
-`decisionType`은 스펙에 유형 목록이 없어 **자유 문자열**로 두었습니다.
-유형을 enum으로 고정할지는 CTO 결정 사항입니다.
+`decisionType`은 CTO 결정(TASK-0306 승인 리뷰)에 따라 **Enum으로 고정**되었습니다.
+DB(`DecisionType` enum)·공유 타입(`DECISION_TYPES`)·도메인 검증 세 곳에서 강제되며,
+기존 자유 문자열 데이터는 마이그레이션에서 대문자 매칭 후 미매칭 값을 `OTHER`로 이관합니다.
 
 ## API (`/projects/:projectId/decisions`)
 

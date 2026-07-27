@@ -78,6 +78,6 @@ export const validRequest = {
   title: "Project를 루트 엔티티로 도입",
   description: "여러 상품/버전을 묶는 작업 단위",
   reason: "상품 단위 projectId 임시 구조의 한계 해소",
-  decisionType: "architecture",
+  decisionType: "ARCHITECTURE",
   author: "CTO",
-};
+} as const;

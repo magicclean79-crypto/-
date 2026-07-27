@@ -1,3 +1,6 @@
+import { DECISION_TYPES } from "@acos/shared";
+import type { DecisionType } from "@acos/shared";
+
 /**
  * Decision Log — 의사결정 기록 도메인. (TASK-0306, Company Brain 소속)
  *
@@ -12,8 +15,8 @@ export interface Decision {
   description: string | null;
   /** 결정의 근거 */
   reason: string;
-  /** 결정 유형 (예: architecture, process, product — 자유 문자열) */
-  decisionType: string;
+  /** 결정 유형 — Enum 고정 (CTO 결정) */
+  decisionType: DecisionType;
   author: string;
   createdAt: Date;
   updatedAt: Date;
@@ -24,7 +27,7 @@ export interface CreateDecisionInput {
   title: string;
   description?: string | null;
   reason: string;
-  decisionType: string;
+  decisionType: DecisionType;
   author: string;
 }
 
@@ -32,7 +35,7 @@ export interface UpdateDecisionInput {
   title?: string;
   description?: string | null;
   reason?: string;
-  decisionType?: string;
+  decisionType?: DecisionType;
   author?: string;
 }
 
@@ -52,18 +55,39 @@ function isBlank(value: unknown): boolean {
   return typeof value !== "string" || value.trim().length === 0;
 }
 
-/** 생성 입력 검증 — 필수 필드(title/reason/decisionType/author) 공백 불가 */
+function isValidType(value: unknown): boolean {
+  return (DECISION_TYPES as readonly string[]).includes(value as string);
+}
+
+const TYPE_ERROR = `decisionType은 다음 중 하나여야 합니다: ${DECISION_TYPES.join(", ")}`;
+
+/**
+ * 생성 입력 검증 — 필수 필드(title/reason/decisionType/author) 공백 불가,
+ * decisionType은 Enum 값만 허용.
+ */
 export function validateCreateDecision(
   input: Partial<CreateDecisionInput>,
 ): string[] {
-  return REQUIRED_FIELDS.filter((field) => isBlank(input[field])).map(
+  const errors = REQUIRED_FIELDS.filter((field) => isBlank(input[field])).map(
     (field) => `${field}은(는) 비어 있을 수 없습니다.`,
   );
+  if (!isBlank(input.decisionType) && !isValidType(input.decisionType)) {
+    errors.push(TYPE_ERROR);
+  }
+  return errors;
 }
 
-/** 수정 입력 검증 — 지정된 필수 필드는 공백으로 바꿀 수 없다 */
+/** 수정 입력 검증 — 지정된 필수 필드는 공백 불가, decisionType은 Enum 값만 허용 */
 export function validateUpdateDecision(input: UpdateDecisionInput): string[] {
-  return REQUIRED_FIELDS.filter(
+  const errors = REQUIRED_FIELDS.filter(
     (field) => input[field] !== undefined && isBlank(input[field]),
   ).map((field) => `${field}은(는) 비어 있을 수 없습니다.`);
+  if (
+    input.decisionType !== undefined &&
+    !isBlank(input.decisionType) &&
+    !isValidType(input.decisionType)
+  ) {
+    errors.push(TYPE_ERROR);
+  }
+  return errors;
 }

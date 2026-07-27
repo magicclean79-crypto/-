@@ -272,13 +272,27 @@ export interface SopRunDto {
 
 // ── Decision Log (TASK-0306) ───────────────────────────
 
+/** 결정 유형 — CTO 결정으로 Enum 고정 (자유 문자열 아님) */
+export const DECISION_TYPES = [
+  "ARCHITECTURE",
+  "PROCESS",
+  "PRODUCT",
+  "BUSINESS",
+  "TECHNICAL",
+  "QUALITY",
+  "SECURITY",
+  "OTHER",
+] as const;
+
+export type DecisionType = (typeof DECISION_TYPES)[number];
+
 export interface DecisionDto {
   id: string;
   projectId: string;
   title: string;
   description: string | null;
   reason: string;
-  decisionType: string;
+  decisionType: DecisionType;
   author: string;
   createdAt: string;
   updatedAt: string;
@@ -288,7 +302,7 @@ export interface CreateDecisionRequest {
   title: string;
   description?: string;
   reason: string;
-  decisionType: string;
+  decisionType: DecisionType;
   author: string;
 }
 
@@ -296,7 +310,7 @@ export interface UpdateDecisionRequest {
   title?: string;
   description?: string | null;
   reason?: string;
-  decisionType?: string;
+  decisionType?: DecisionType;
   author?: string;
 }
 
