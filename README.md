@@ -96,6 +96,21 @@ pnpm dev
 
 오류: `400` 파일 없음/형식 불일치, `413` 10MB 초과, `503` MinIO/DB 연결 불가.
 
+## OCR (TASK-0202)
+
+업로드된 이미지에서 텍스트를 추출합니다. Provider는 `OCR_PROVIDER` 환경 변수로
+교체할 수 있습니다 (`tesseract` 기본 · 오프라인 동작, `stub` 테스트용).
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `POST` | `/images/:imageId/ocr` | OCR 실행. 기존 결과가 있으면 초기화 후 재실행 |
+| `GET` | `/images/:imageId/ocr?raw=true` | 결과 조회 (`raw=true`면 원본 JSON 포함) |
+| `GET` | `/ocr/results?take=20` | 최근 결과 목록 |
+
+- 상태: `PENDING → PROCESSING → COMPLETED | FAILED`
+- 실패 시 지수 백오프로 최대 `OCR_MAX_ATTEMPTS`(기본 3)회 재시도, 시도 횟수는 `attempts`에 저장
+- `confidence`(0.0~1.0)와 Provider 원본 응답(`raw`, jsonb)이 함께 저장됩니다
+
 ## Prisma
 
 - 스키마: `apps/api/prisma/schema.prisma`

@@ -35,6 +35,23 @@ export interface UploadImagesResponse {
   images: ImageDto[];
 }
 
+export type OcrStatus = "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED";
+
+export interface OcrResultDto {
+  id: string;
+  imageId: string;
+  provider: string;
+  status: OcrStatus;
+  text: string | null;
+  confidence: number | null; // 0.0 ~ 1.0
+  raw?: unknown; // Provider 원본 응답 JSON
+  error: string | null;
+  attempts: number;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export const UPLOAD_MAX_FILES = 10;
 export const UPLOAD_MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 export const UPLOAD_ALLOWED_MIME_TYPES = [
