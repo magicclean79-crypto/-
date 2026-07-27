@@ -16,7 +16,6 @@ CTO_REQUEST.md에서 식별된 후보들. CTO가 스펙을 확정하면 미완�
 
 - [ ] Product Object 상태 전이 API (DRAFT → READY) + 검증 규칙 (CTO_REQUEST #3)
 - [ ] 상세페이지(Content) 생성 파이프라인 — Product Object 입력
-- [ ] Project 엔티티 분리 (CTO_REQUEST #1 결정 시)
 - [ ] 실제 Provider 연결 (OCR/Analysis/Vision 중 CTO 지정 — API 키·모델 스펙 필요)
 
 ## 완료
@@ -28,4 +27,5 @@ CTO_REQUEST.md에서 식별된 후보들. CTO가 스펙을 확정하면 미완�
 - [x] **(자체정의) Product CRUD + 웹 플로우** (`d842338`): /products CRUD, 업로드→Product 생성→목록/상세 웹 페이지 — CTO_REQUEST #4 처리 방침 대기
 - [x] **(자체정의) TASK-0204 — AI Analysis Foundation** (`d49157a`): AnalysisProvider 교체 구조, Mock 기본, apply 옵션, docs/architecture/analysis.md
 - [x] **(운영) AGENTS 협업 규칙 + CTO 보고 체계** (`81aab6f`, `20c87f0`): AGENTS.md, reports/CTO_REPORT.md·CTO_REQUEST.md
+- [x] **TASK-0301 — Project Domain Foundation** (`55130af`): Project 최상위 루트 엔티티 도입(CTO_REQUEST #1 결정 반영), Project 1:N Product, ProductObject.projectId → projects.id 재지정, 데이터 보존 백필 마이그레이션, Projects CRUD API, 조립 시 프로젝트 전체 상품 집계
 - [x] **TASK-0205 — Vision Provider Foundation** (`4fb0cf4`): VisionProvider Port + MockVisionProvider(@acos/core), VISION_PROVIDER 환경변수 선택, Product Object 조립에 주입(실패 시 null 폴백), docs/architecture/vision.md — CTO "다음" 지시로 제안 최상단 항목 승격
