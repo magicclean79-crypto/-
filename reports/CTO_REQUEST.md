@@ -25,6 +25,13 @@
 - 현황: TASK-0302에서 최소 규칙(제목 + OCR/Vision 요약 중 1개)으로 구현됨.
 - 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
 
+### 8. Sprint 3 Contract 원문 전달 요청 (긴급)
+- 현황: "Sprint Contract 기준 TASK-0302~0307 순차 구현" 지시를 받았으나
+  Contract 본문이 채팅에 포함되지 않아 TASK-0305/0306/0307의 스펙을 알 수 없다.
+- 기구현된 0302~0304가 Contract의 정의와 일치하는지도 검증이 필요하다.
+- 요청: Sprint Contract 전문(또는 0305~0307 스펙) 전달. 수신 즉시
+  TASKS.md 미완료 섹션에 등록하고 순차 구현한다.
+
 ## 결정됨
 
 ### 3. ProductObjectStatus 전이 규칙 → TASK-0302로 구현 (2026-07-27)
