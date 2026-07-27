@@ -70,10 +70,28 @@ export function createStoreMock() {
   };
 }
 
+/** project/product 존재 확인만 필요한 최소 Prisma 목업 — proj-1/prod-1만 존재 */
+export function createPrismaMock() {
+  return {
+    project: {
+      findUnique: jest.fn(async ({ where }: { where: { id: string } }) =>
+        where.id === "proj-1" || where.id === "proj-2"
+          ? { id: where.id }
+          : null,
+      ),
+    },
+    product: {
+      findUnique: jest.fn(async ({ where }: { where: { id: string } }) =>
+        where.id === "prod-1" ? { id: "prod-1" } : null,
+      ),
+    },
+  };
+}
+
 export const validRequest = {
   scope: "PROJECT",
   scopeId: "proj-1",
   key: "preferred-tone",
   value: { tone: "친근함", emoji: false },
   description: "상세페이지 문체 설정",
-};
+} as const;

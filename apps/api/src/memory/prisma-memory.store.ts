@@ -5,6 +5,7 @@ import type {
   MemoryStore,
   UpdateMemoryInput,
 } from "@acos/core";
+import type { MemoryScope } from "@acos/shared";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 
@@ -35,7 +36,7 @@ export class PrismaMemoryStore implements MemoryStore {
   }
 
   async findByKey(
-    scope: string,
+    scope: MemoryScope,
     scopeId: string | null,
     key: string,
   ): Promise<Memory | null> {
@@ -45,7 +46,7 @@ export class PrismaMemoryStore implements MemoryStore {
   }
 
   async findMany(filter: {
-    scope?: string;
+    scope?: MemoryScope;
     scopeId?: string | null;
   }): Promise<Memory[]> {
     return this.prisma.memory.findMany({

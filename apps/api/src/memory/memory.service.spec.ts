@@ -1,27 +1,33 @@
 import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
+import { PrismaService } from "../prisma/prisma.service";
 import { MemoryService } from "./memory.service";
 import { PrismaMemoryStore } from "./prisma-memory.store";
-import { createStoreMock, validRequest } from "./memory.spec-helpers";
+import {
+  createPrismaMock,
+  createStoreMock,
+  validRequest,
+} from "./memory.spec-helpers";
 
 describe("MemoryService — Structured Memory (Service Test)", () => {
-  async function createService(store = createStoreMock()) {
+  async function createService(
+    store = createStoreMock(),
+    prisma = createPrismaMock(),
+  ) {
     const moduleRef = await Test.createTestingModule({
       providers: [
         MemoryService,
+        { provide: PrismaService, useValue: prisma },
         { provide: PrismaMemoryStore, useValue: store },
       ],
     }).compile();
     return moduleRef.get(MemoryService);
   }
 
-  it("구조화 값을 저장한다 — 트림, scopeId/description 미지정 시 null", async () => {
+  it("구조화 값을 저장한다 — scopeId/description 미지정 시 null", async () => {
     const service = await createService();
 
-    const memory = await service.create({
-      ...validRequest,
-      scope: "  PROJECT  ",
-    });
+    const memory = await service.create(validRequest);
     expect(memory.scope).toBe("PROJECT");
     expect(memory.scopeId).toBe("proj-1");
     expect(memory.value).toEqual({ tone: "친근함", emoji: false });
@@ -35,11 +41,11 @@ describe("MemoryService — Structured Memory (Service Test)", () => {
     expect(globalMemory.description).toBeNull();
   });
 
-  it("검증 실패는 400 — scope/key 공백, value 누락, 수정 필드 없음", async () => {
+  it("검증 실패는 400 — Enum 외 scope, value 누락, 수정 필드 없음", async () => {
     const service = await createService();
 
     await expect(
-      service.create({ ...validRequest, scope: " " }),
+      service.create({ ...validRequest, scope: "TEAM" as never }),
     ).rejects.toThrow(BadRequestException);
     await expect(
       service.create({ scope: "GLOBAL", key: "k" } as never),
@@ -49,6 +55,39 @@ describe("MemoryService — Structured Memory (Service Test)", () => {
     await expect(service.update(created.id, {})).rejects.toThrow(
       BadRequestException,
     );
+  });
+
+  it("scope 규칙 — GLOBAL/COMPANY는 scopeId 금지, PROJECT/PRODUCT는 실존 검증", async () => {
+    const service = await createService();
+
+    await expect(
+      service.create({ scope: "GLOBAL", scopeId: "x", key: "k", value: 1 }),
+    ).rejects.toThrow(BadRequestException);
+
+    // PROJECT: 없는 프로젝트 400, 있는 프로젝트 저장
+    await expect(
+      service.create({ scope: "PROJECT", scopeId: "nope", key: "k", value: 1 }),
+    ).rejects.toThrow(BadRequestException);
+
+    // PRODUCT: 없는 상품 400, 있는 상품 저장
+    await expect(
+      service.create({ scope: "PRODUCT", scopeId: "nope", key: "k", value: 1 }),
+    ).rejects.toThrow(BadRequestException);
+    const productMemory = await service.create({
+      scope: "PRODUCT",
+      scopeId: "prod-1",
+      key: "size-chart",
+      value: { unit: "cm" },
+    });
+    expect(productMemory.scope).toBe("PRODUCT");
+
+    // COMPANY: scopeId 없이 저장
+    const companyMemory = await service.create({
+      scope: "COMPANY",
+      key: "company-name",
+      value: "매직클린",
+    });
+    expect(companyMemory.scopeId).toBeNull();
   });
 
   it("같은 (scope, scopeId, key)로 중복 생성하면 400", async () => {

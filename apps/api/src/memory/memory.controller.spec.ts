@@ -1,10 +1,15 @@
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import request from "supertest";
+import { PrismaService } from "../prisma/prisma.service";
 import { MemoryController } from "./memory.controller";
 import { MemoryService } from "./memory.service";
 import { PrismaMemoryStore } from "./prisma-memory.store";
-import { createStoreMock, validRequest } from "./memory.spec-helpers";
+import {
+  createPrismaMock,
+  createStoreMock,
+  validRequest,
+} from "./memory.spec-helpers";
 
 describe("Memory API — Structured Memory (API Test)", () => {
   let app: INestApplication;
@@ -14,6 +19,7 @@ describe("Memory API — Structured Memory (API Test)", () => {
       controllers: [MemoryController],
       providers: [
         MemoryService,
+        { provide: PrismaService, useValue: createPrismaMock() },
         { provide: PrismaMemoryStore, useValue: createStoreMock() },
       ],
     }).compile();
@@ -47,6 +53,16 @@ describe("Memory API — Structured Memory (API Test)", () => {
     await request(app.getHttpServer())
       .post("/memory")
       .send({ scope: "", key: "k", value: 1 })
+      .expect(400);
+
+    // Enum 외 scope / 없는 프로젝트 scopeId도 400
+    await request(app.getHttpServer())
+      .post("/memory")
+      .send({ scope: "TEAM", key: "k", value: 1 })
+      .expect(400);
+    await request(app.getHttpServer())
+      .post("/memory")
+      .send({ scope: "PROJECT", scopeId: "nope", key: "k", value: 1 })
       .expect(400);
   });
 

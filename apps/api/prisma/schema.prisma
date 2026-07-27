@@ -223,8 +223,8 @@ model ProjectMemory {
 
 // 표준 Structured Memory — Company Brain의 구조화 저장소 (TASK-0402)
 model Memory {
-  id          String   @id @default(cuid())
-  scope       String
+  id          String      @id @default(cuid())
+  scope       MemoryScope
   scopeId     String?
   key         String
   value       Json
@@ -235,6 +235,14 @@ model Memory {
   @@unique([scope, scopeId, key])
   @@index([scope, scopeId])
   @@map("memories")
+}
+
+// Memory 적용 범위 — CTO 결정으로 Enum 고정 (TASK-0402 승인 리뷰)
+enum MemoryScope {
+  GLOBAL
+  COMPANY
+  PROJECT
+  PRODUCT
 }
 
 // 회사 공식 지식 — Company Brain 전역 (프로젝트 무관, TASK-0401)

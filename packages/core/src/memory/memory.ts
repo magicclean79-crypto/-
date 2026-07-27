@@ -1,5 +1,9 @@
+import { MEMORY_SCOPES } from "@acos/shared";
+import type { MemoryScope } from "@acos/shared";
+
 /**
  * Memory — Company Brain의 표준 구조화 저장소. (TASK-0402)
+ * AI용 구조화 설정 저장소다 — 사람이 쓰는 메모·작업기록은 ProjectMemory가 담당한다.
  *
  * 프로젝트 메모 형태였던 구 Memory(ProjectMemory로 개칭·보존)와 달리,
  * scope/scopeId/key/value 기반의 **구조화 저장소**다. AI가 Company Brain을
@@ -10,9 +14,9 @@
  */
 export interface Memory {
   id: string;
-  /** 적용 범위 (예: GLOBAL, PROJECT — Enum 고정 여부는 CTO 결정 대기) */
-  scope: string;
-  /** 범위 대상 식별자 (예: projectId). 전역 범위는 null */
+  /** 적용 범위 — Enum 고정 (CTO 결정): GLOBAL/COMPANY/PROJECT/PRODUCT */
+  scope: MemoryScope;
+  /** 범위 대상 식별자 — PROJECT는 projectId, PRODUCT는 productId. GLOBAL/COMPANY는 null */
   scopeId: string | null;
   /** 범위 내 유니크 키 */
   key: string;
@@ -24,7 +28,7 @@ export interface Memory {
 }
 
 export interface CreateMemoryInput {
-  scope: string;
+  scope: MemoryScope;
   scopeId?: string | null;
   key: string;
   value: unknown;
@@ -43,12 +47,12 @@ export interface MemoryStore {
   findById(id: string): Promise<Memory | null>;
   /** (scope, scopeId, key) 조합으로 단건 조회 — 중복 방지에 사용 */
   findByKey(
-    scope: string,
+    scope: MemoryScope,
     scopeId: string | null,
     key: string,
   ): Promise<Memory | null>;
   /** scope/scopeId로 필터링한 목록 (최신순). 필터 미지정 시 전체 */
-  findMany(filter: { scope?: string; scopeId?: string | null }): Promise<
+  findMany(filter: { scope?: MemoryScope; scopeId?: string | null }): Promise<
     Memory[]
   >;
   update(id: string, input: UpdateMemoryInput): Promise<Memory>;
@@ -59,13 +63,30 @@ function isBlank(value: unknown): boolean {
   return typeof value !== "string" || value.trim().length === 0;
 }
 
-/** 생성 입력 검증 — scope/key 공백 불가, value 필수(모든 JSON 값 허용) */
+/** 대상 식별자(scopeId)가 필요한 범위 — 존재 검증은 인프라 계층이 수행한다 */
+export const SCOPES_REQUIRING_ID: readonly MemoryScope[] = [
+  "PROJECT",
+  "PRODUCT",
+];
+
+/**
+ * 생성 입력 검증 — scope는 Enum 값만, key 공백 불가, value 필수(모든 JSON 값 허용).
+ * scope 규칙(CTO 결정): GLOBAL/COMPANY → scopeId 없음, PROJECT/PRODUCT → scopeId 필수.
+ */
 export function validateCreateMemory(
   input: Partial<CreateMemoryInput>,
 ): string[] {
   const errors: string[] = [];
-  if (isBlank(input.scope)) {
-    errors.push("scope은(는) 비어 있을 수 없습니다.");
+  if (!(MEMORY_SCOPES as readonly string[]).includes(input.scope as string)) {
+    errors.push(
+      `scope는 다음 중 하나여야 합니다: ${MEMORY_SCOPES.join(", ")}`,
+    );
+  } else if (SCOPES_REQUIRING_ID.includes(input.scope as MemoryScope)) {
+    if (isBlank(input.scopeId)) {
+      errors.push(`scope=${input.scope}에는 scopeId가 필요합니다.`);
+    }
+  } else if (input.scopeId != null && !isBlank(input.scopeId)) {
+    errors.push(`scope=${input.scope}에는 scopeId를 지정할 수 없습니다.`);
   }
   if (isBlank(input.key)) {
     errors.push("key은(는) 비어 있을 수 없습니다.");

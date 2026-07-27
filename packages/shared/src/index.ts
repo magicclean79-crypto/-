@@ -341,11 +341,20 @@ export interface UpdateProjectMemoryRequest {
 
 // ── Memory — 표준 Structured Memory (TASK-0402, Company Brain) ──
 
+/** Memory 적용 범위 — CTO 결정으로 Enum 고정 */
+export const MEMORY_SCOPES = [
+  "GLOBAL",
+  "COMPANY",
+  "PROJECT",
+  "PRODUCT",
+] as const;
+
+export type MemoryScope = (typeof MEMORY_SCOPES)[number];
+
 export interface MemoryDto {
   id: string;
-  /** 적용 범위 (예: GLOBAL, PROJECT — 자유 문자열, Enum 고정 여부 CTO 결정 대기) */
-  scope: string;
-  /** 범위 대상 식별자 (예: projectId). 전역 범위는 null */
+  scope: MemoryScope;
+  /** 범위 대상 식별자 — PROJECT는 projectId, PRODUCT는 productId. GLOBAL/COMPANY는 null */
   scopeId: string | null;
   key: string;
   /** 구조화 값 — JSON 직렬화 가능한 모든 값 */
@@ -356,7 +365,7 @@ export interface MemoryDto {
 }
 
 export interface CreateMemoryRequest {
-  scope: string;
+  scope: MemoryScope;
   scopeId?: string;
   key: string;
   value: unknown;
