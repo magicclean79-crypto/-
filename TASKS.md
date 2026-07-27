@@ -8,9 +8,13 @@
 
 ## 미완료 (스펙 확정, 구현 대기)
 
-- (없음 — **Sprint 4 Backlog 전체 완료** (0401~0404). CTO 리뷰/승인 대기 중이며 승인 전 새 작업을 시작하지 않는다. Sprint 4 종료 전 새 기능 추가 금지 준수)
+- (없음 — TASK-0501 완료. CTO 리뷰/승인 대기 중이며 승인 전 다음 TASK를 시작하지 않는다)
 
-## 완료 — Sprint 4 (Goal: Company Brain Integration)
+## 완료 — Sprint 5 (Goal: AI Execution)
+
+- [x] **TASK-0501 — LLM Gateway Foundation** (`9a5a3e2`): LlmProvider Port + LlmGateway(검증·재시도, @acos/core) + MockLlmProvider 기본, Provider 어댑터 3종(OpenAI·Anthropic·Gemini, 공식 SDK), LLM_PROVIDER 환경변수 교체(키 미설정 시 mock 폴백), GET /llm · POST /llm/complete — 해석 확인 CTO_REQUEST #16
+
+## 완료 — Sprint 4 (Goal: Company Brain Integration — CTO 공식 종료, 2026-07-27)
 
 - [x] **TASK-0404 — READY Validation Engine** (`817ead4`): CompanyBrainService로 Knowledge/Memory/Decision/SOP를 읽어 READY 전환 가능 여부 판정 — 검사 6종, PASS/WARNING/FAIL 3단계(전체=최악 값), 금지어는 Memory(GLOBAL, banned-words) 기반, POST /projects/:id/ready-validation — 해석 확인 CTO_REQUEST #15
 

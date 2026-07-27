@@ -13,146 +13,134 @@
 
 | 항목 | 값 |
 | --- | --- |
-| 보고 기준 TASK | **TASK-0404 — READY Validation Engine** — **Sprint 4 Backlog 전체 완료** |
+| 보고 기준 TASK | **TASK-0501 — LLM Gateway Foundation** (Sprint 5 "AI Execution" 첫 TASK) |
 | 보고일 | 2026-07-27 |
-| 브랜치 / 기준 커밋 | `claude/ai-product-content-os-setup-jb5oai` / `817ead4` |
-| Sprint 4 | Goal "Company Brain Integration" — 0401 ✅ · 0402 ✅ · 0403 ✅ · **0404 ✅** |
-| 구현 중단 상태 | **완료 후 즉시 중단** — Sprint 4 종료 전 새 기능 추가 금지 준수, Sprint 리뷰 대기 |
-| 스펙 확인 필요 | 검사 6종·판정 규칙, FAIL 시 전이 차단 여부 → **CTO_REQUEST #15** |
+| 브랜치 / 기준 커밋 | `claude/ai-product-content-os-setup-jb5oai` / `9a5a3e2` |
+| Sprint 상태 | Sprint 4 **공식 종료**(0404 승인·Advisory Mode·비저장 확정) → Sprint 5 시작 |
+| 구현 중단 상태 | **TASK-0501 완료 후 즉시 중단** — CTO 승인 전 다음 TASK 미착수 |
+| 스펙 확인 필요 | 기본 모델 선택·API 노출 범위 등 → **CTO_REQUEST #16 확인 요청** |
 
 ## 2. 품질 게이트
 
 | 게이트 | 명령 | 결과 |
 | --- | --- | --- |
 | Build | `pnpm build` | ✅ 6/6 워크스페이스 성공 |
-| Test | `pnpm test` | ✅ 168/168 통과 (core 58 · api 110) — 이번 TASK +14 |
+| Test | `pnpm test` | ✅ 185/185 통과 (core 64 · api 121) — 이번 TASK +17 |
 | TypeScript | (빌드 포함) | ✅ 오류 0 |
 | ESLint | `pnpm lint` | ✅ 오류 0, 경고 0 |
 
-## 3. 변경 사항 (이번 보고 주기 — TASK-0404, `817ead4`)
+## 3. 변경 사항 (이번 보고 주기 — TASK-0501, `9a5a3e2`)
 
-- **판정 로직** (@acos/core `ready-validation/`, 프레임워크 무관):
-  `evaluateReadyValidation` — 검사 6종, 전체 판정 = 최악 값
-  (**PASS / WARNING / FAIL** — CTO 지시 3단계)
+- **LLM Port + Gateway** (@acos/core `llm/`, 프레임워크 무관):
+  - `LlmProvider` Port: `name` · `defaultModel` · `complete(messages, model?, maxTokens?)`
+  - `LlmGateway`: 요청 검증(빈 메시지·role·공백 content·maxTokens) +
+    지수 백오프 재시도(`LLM_MAX_ATTEMPTS`, 기본 3) — OcrExecutionService와 같은 결
+  - `MockLlmProvider` (**기본**): 결정적 응답·추정 usage — **실제 API 미호출**
+- **Provider 어댑터 3종** (지시 사항 — 공식 SDK 사용, `apps/api/src/llm/providers/`):
+  - **OpenAI** (`openai` SDK, 기본 모델 `gpt-4o`)
+  - **Anthropic** (`@anthropic-ai/sdk`, 기본 모델 `claude-opus-5`)
+  - **Google Gemini** (`@google/genai`, 기본 모델 `gemini-2.5-flash`)
+  - 각 어댑터는 provider별 요청 형태 차이(system 분리, role 매핑 등)를 흡수
+- **교체 가능 구조** (지시 사항): `LLM_PROVIDER` 환경변수 하나로 선택
+  (`mock` 기본) — **API 키 미설정 시 경고 후 mock 폴백**이라 테스트·CI 등
+  어떤 환경에서도 실제 호출 없이 기동. 모델은 `LLM_*_MODEL`로 덮어쓰기
+- **API**: `GET /llm`(선택된 Provider 확인) · `POST /llm/complete`(200) —
+  `LlmService`는 모듈 export되어 향후 소비 모듈의 단일 진입점
+- DB 변경 없음(호출 이력 비저장 — 스펙 없음). `.env.example` 갱신
+- 문서: docs/architecture/llm.md, README 섹션
+- 반영된 Sprint 4 결정: 검사 6종 유지·Advisory Mode·검증 결과 비저장 (코드 변경 불요, 기록 정리)
 
-| # | 검사 | 근거 소스 | 규칙 |
-| --- | --- | --- | --- |
-| 1 | 전이 가능 | 도메인(0302) | READY 전이 불가 상태 → FAIL |
-| 2 | 기본 필수 조건 | 도메인(0302) | 제목+OCR/Vision 요약 미충족 → FAIL |
-| 3 | 금지어 | **Memory** | `GLOBAL/banned-words` 배열로 제목·브랜드·카테고리·OCR 텍스트 스캔 — 발견 FAIL, 미설정 WARNING |
-| 4 | 관련 규칙 | **Knowledge** | 제목 검색된 RULE/LEGAL 지식 → WARNING(검토 필요) |
-| 5 | 관련 결정 | **Decision** | 프로젝트 결정 참고 목록 — 정보성 PASS |
-| 6 | 표준 절차 | **SOP** | product-content 정의 부재 → WARNING |
-
-- **CompanyBrainService 사용** (CTO 지시): banned-words 조회(GLOBAL) →
-  제목 검색(PROJECT 스코프 — Knowledge/Decision) → product-content 확인(SOP)
-  의 3회 query 호출로 4개 소스를 읽음. 0403 산출물의 첫 실소비처
-- **API**: `POST /projects/:id/ready-validation` (`{productObjectVersion?}` — 기본 최신 버전, 200)
-- **경계 준수**: 판단만 수행 — 실제 READY 전이(PATCH …/status)에 결과를 강제하지 않고,
-  검증 결과는 저장하지 않음 (강제·이력화 여부는 CTO_REQUEST #15). DB 변경 없음(마이그레이션 0건)
-- 반영된 0403 승인 결정: 통합 조회 유지 · value 검색 다음 Sprint · SopRun 제외 (코드 변경 불요, 문서·CTO_REQUEST 정리)
-- 문서: docs/architecture/ready-validation.md, README 섹션
-
-### Sprint 4 누적 (Goal: Company Brain Integration)
+### 누적 완료 TASK
 
 | TASK | 내용 | 커밋 |
 | --- | --- | --- |
-| TASK-0401 | Knowledge Foundation (+category Enum 8종) | `0e028ec` · `d8e24d0` |
-| TASK-0402 | Structured Memory (+scope Enum 4종·실존 검증, ProjectMemory 보존) | `ce37a80` · `2afd089` |
-| TASK-0403 | Company Brain Query Service (고정 순서 통합 조회) | `7c2264a` |
-| **TASK-0404** | **READY Validation Engine (Company Brain 기반 검수 판정)** | **`817ead4`** |
-
-(Sprint 1~3은 최종 승인 완료 — 상세 이력은 TASKS.md)
+| Sprint 1~3 | 기반 전체 — 최종 승인 완료 (상세는 TASKS.md) | — |
+| Sprint 4 | Company Brain Integration (0401~0404) — **공식 종료** | `0e028ec`~`817ead4` |
+| **TASK-0501** | **LLM Gateway Foundation (Sprint 5)** | **`9a5a3e2`** |
 
 ## 4. 테스트 결과
 
 | 위치 | 종류 | 수 | 결과 |
 | --- | --- | --- | --- |
-| `packages/core` | Unit — 기존 52 · **ReadyValidation 6** | 58 | ✅ |
-| `apps/api` | Service+API — 기존 102 · **ReadyValidation 8** | 110 | ✅ |
-| **합계** | | **168** | **전체 통과** |
+| `packages/core` | Unit — 기존 58 · **LLM(게이트웨이·mock) 6** | 64 | ✅ |
+| `apps/api` | Service+API — 기존 110 · **LLM 11** | 121 | ✅ |
+| **합계** | | **185** | **전체 통과** |
 
 신규 테스트가 검증하는 것:
-- 판정 집계(최악 값), 6개 검사 키·순서 고정
-- 금지어: 발견 FAIL(히트 단어 명시)·미설정/비배열 value WARNING·클린 PASS
-- RULE/LEGAL만 WARNING(GUIDE 제외), Decision 정보성 PASS, SOP 부재 WARNING
-- 전이 불가(ARCHIVED) FAIL, 필수 조건 미충족 FAIL
-- CompanyBrain 호출 검증(제목 검색이 PROJECT 스코프로 수행), 404/400, 버전 지정
+- MockLlmProvider: 결정성(동일 입력 → 동일 출력), 마지막 user 반영, model 덮어쓰기
+- LlmGateway: 검증 4종(빈 메시지/role/content/maxTokens) 400 매핑,
+  **지수 백오프 재시도**(2회 실패 후 성공, 지연 100→200ms 확인), 전체 실패 시 마지막 오류
+- **Provider 선택 팩토리**: 기본 mock · 키 없는 실제 Provider 3종 → mock 폴백 ·
+  키 있으면 해당 Provider 선택(호출 없이 생성만) · 알 수 없는 이름 → mock
+- API: GET /llm, POST /llm/complete 200/400
 
-라이브 검증 (실 PostgreSQL, 실데이터):
-- DRAFT v3 → **PASS** (6개 검사 전부 통과)
-- READY v6 → **FAIL** (transition — 이미 READY라 재전이 불가, 정확한 판정)
-- 금지어에 제목 단어 추가 → **FAIL** (banned-words 검출) → 원복 후 정상
-- ARCHIVED v1 → **FAIL** (transition)
-- 404(프로젝트/버전)·400(잘못된 버전), 회귀(query/sop-runs/웹) 전부 정상
+라이브 검증 (dev 서버):
+- `GET /llm` → `{provider: "mock", defaultModel: "mock-llm-1"}` (기본 mock 확인)
+- `POST /llm/complete` → mock 완성 텍스트(system 지침 반영) + usage 반환
+- model 덮어쓰기, 검증 400 3종 확인 · 실제 외부 API 호출 0건
+- 회귀: health / company-brain query / ready-validation / sop-runs / 웹 전부 정상
 
 ## 5. 아키텍처 변경 및 현황
 
-**이번 주기 변경 — Company Brain Integration 완성 (Sprint 4 Goal 달성)**:
+**이번 주기 변경 — AI Execution의 기반 계층 신설**:
 
 ```
-                 ┌─ Company Brain ─────────────────────────────┐
- READY Validation Engine (0404) ──▶ CompanyBrainService (0403) │
-   판정: PASS/WARNING/FAIL           │ Memory → Knowledge → Decision → SOP
-   (READY 검수 근거로 소비)          ├── Memory (AI 구조화 설정, 0402)
-                                     ├── Knowledge (공식 지식, 0401)
-                                     ├── Decision Log · ProjectMemory · SOP
- Execution Layer: Workflow Engine (SOP 실행)
+소비 모듈 (향후: 콘텐츠 생성·분석 — 스펙 대기)
+   └─▶ LlmService ─▶ LlmGateway (@acos/core — 검증·재시도)
+                        └─▶ LlmProvider Port
+                              ├── Mock (기본 — 실제 API 미호출)
+                              ├── OpenAI · Anthropic · Gemini (공식 SDK, 키 필요)
 ```
 
-① **AI가 Company Brain을 실제 사용하는 첫 완결 루프**: 지식을 쌓고(0401·0402) →
-조회하고(0403) → 판단에 소비한다(0404). ② 판정 로직은 core(프레임워크 무관),
-데이터 수집은 api 계층 — 기존 Port/Adapter 결 유지. ③ 검증과 전이의 분리 —
-검증은 조언(advisory), 전이 강제 여부는 CTO 결정 사항으로 보존.
+① 5번째 Port/Adapter 계층 — 기존 OCR/Analysis/Vision/Content Provider 패턴과
+동일한 결로, **모든 LLM 호출이 통과할 단일 게이트웨이**가 생김 (Sprint 5 Goal의 기반).
+② 실제 AI API 미연결 원칙 유지 — mock 기본 + 키 없으면 폴백. 실연결은 키 설정만으로 가능.
+③ 소비 계층은 의도적으로 미연결 — 기존 mock Generator들의 LLM Gateway 전환은
+다음 TASK 스펙 대기 (CTO_REQUEST #16-④).
 
-**유지되는 핵심 결정**: Port/Adapter 도메인 계층 · 실제 AI API 미연결 원칙 · 이력 보존 모델
+**유지되는 핵심 결정**: Port/Adapter 도메인 계층 · mock 기본 원칙 · 이력 보존 모델
 
-**현황**: 모노레포(web·api·core/shared/agents/ui), 파이프라인(업로드→OCR→분석→조립→**검증**→READY→상세페이지), 인프라(PostgreSQL 16·Redis 7·MinIO), 마이그레이션 15건, drift 없음
+**현황**: 모노레포(web·api·core/shared/agents/ui), 파이프라인(업로드→OCR→분석→조립→검증(Advisory)→READY→상세페이지 + SOP 실행 + Company Brain Query), 인프라(PostgreSQL 16·Redis 7·MinIO), 마이그레이션 15건, drift 없음
 
 ## 6. 데이터 모델
+
+(TASK-0501은 스키마 변경 없음 — LLM 호출 이력 비저장)
 
 ```
 Project(루트) ──< Product ──< Image ──< OcrResult
       │             └──< AnalysisResult
-      ├──< ProductObject (버전 관리, DRAFT⇄READY→ARCHIVED)
-      ├──< Content ──▶ ProductObject
-      ├──< SopRun · Decision(Enum 8종) · ProjectMemory
+      ├──< ProductObject · Content · SopRun · Decision · ProjectMemory
 
-Memory (scope Enum 4종/scopeId?/key/value Json)    Knowledge (category Enum 8종?)
+Memory (scope Enum 4종)    Knowledge (category Enum 8종)    — Company Brain
 ```
-
-(TASK-0404는 스키마 변경 없음 — 검증 결과 비저장)
 
 ## 7. API 표면
 
 | 영역 | 엔드포인트 |
 | --- | --- |
-| Health / 프로젝트 / 업로드 / OCR / 상품 / 분석 | (기존 유지 — 이전 보고 참조) |
-| Product Object | `POST/GET /projects/:id/product-object`(+`/history`) · `PATCH …/:version/status` |
-| 상세페이지 / SOP 실행 | `POST/GET /projects/:id/contents` · `POST/GET /projects/:id/sop-runs` |
-| Decision / ProjectMemory | `…/decisions` · `…/memories` (프로젝트 스코프 CRUD) |
-| Memory / Knowledge | `/memory(?scope=&scopeId=)` · `/knowledge` (CRUD) |
-| Company Brain | `POST /company-brain/query` |
-| **READY 검증** | **`POST /projects/:id/ready-validation`** → PASS/WARNING/FAIL + 검사 6종 |
+| Health / 프로젝트 / 업로드 / OCR / 상품 / 분석 | (기존 유지) |
+| Product Object / 상세페이지 / SOP 실행 | (기존 유지) |
+| Decision / ProjectMemory / Memory / Knowledge | (기존 유지 — Company Brain) |
+| Company Brain / READY 검증 | `POST /company-brain/query` · `POST /projects/:id/ready-validation` |
+| **LLM Gateway** | **`GET /llm` · `POST /llm/complete`** |
 
 웹: `/` · `/upload` · `/products`(+상세) · `/projects`(목록/파이프라인 실행)
 
 ## 8. 리스크·기술 부채
 
-1. **0404 해석 미확인** — 검사 6종 구성, banned-words 약속 키, FAIL 시 전이 차단 여부,
-   결과 이력화 (CTO_REQUEST #15)
-2. **검증 미강제** — READY 전이가 검증을 우회 가능 (의도된 보수적 경계 — #15-②)
-3. **텍스트 매칭 한계** — 금지어 부분 일치(오탐 가능), Knowledge 제목 검색 기반(누락 가능),
-   value(Json) 검색은 다음 Sprint (CTO 결정)
-4. **실제 AI 모델 미연결** — 전 계층 mock 기본 (CTO_REQUEST #6)
-5. **인증/권한 없음** — Company Brain·검증 전체 공개 API (로컬 개발 전제)
+1. **0501 해석 미확인** — 기본 모델 3종, /llm/complete 공개 범위, 이력·비용 추적 (CTO_REQUEST #16)
+2. **실제 Provider 미검증** — 어댑터 3종은 공식 SDK로 구현했으나 API 키가 없어
+   실 호출 검증은 미수행 (mock 폴백 경로는 검증 완료). 키 확보 시 스모크 테스트 권장
+3. **소비 계층 미연결** — 기존 Analysis/Vision/Content mock이 아직 LLM Gateway를
+   쓰지 않음 (전환은 스펙 대기)
+4. **인증/권한 없음** — /llm/complete 공개 API (로컬 개발 전제; 실키 설정 시 비용 리스크)
+5. 스트리밍·프롬프트 템플릿·호출 이력 미구현 (스펙 없음)
 
-## 9. 다음 권장 사항 (Sprint 5 후보)
+## 9. 다음 권장 사항 (Sprint 5 후속 후보)
 
-1. **CTO_REQUEST #15 결정** — 검사 구성 승인, FAIL 시 전이 차단 통합 여부, 결과 이력화
-2. **Memory value(Json) 검색 확장** — CTO 예고 사항 (다음 Sprint)
-3. **SOP 실행 ↔ Company Brain 연결** — Workflow Engine의 READY 단계가
-   ready-validation을 호출하도록 통합 (검수 자동화 완성)
-4. **실제 Provider/Generator 연결** — Company Brain 완성으로 실모델이 참조할
-   컨텍스트 기반 확보 — mock→실모델 교체 최적 시점 (CTO_REQUEST #6)
-5. 웹 UI: 검증 결과(PASS/WARNING/FAIL) 표시 + Company Brain 관리 화면
+1. **CTO_REQUEST #16 확인** — 기본 모델 3종, API 노출 범위, 이력·비용 추적 여부
+2. **Content Generator의 LLM Gateway 전환** — 상세페이지 생성을 실모델로 바꾸는
+   최단 경로 (READY Product Object → LLM 프롬프트 → Markdown). Company Brain
+   컨텍스트(query) 주입과 결합하면 Sprint 5 Goal "AI Execution"의 완결 루프
+3. **Analysis/Vision의 LLM/멀티모달 전환** — 같은 게이트웨이 구조로 확장
+4. **API 키 확보 및 실 Provider 스모크 테스트** — 키 설정만으로 활성화되는 상태

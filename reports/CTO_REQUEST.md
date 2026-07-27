@@ -25,22 +25,30 @@
 - 현황: TASK-0302에서 최소 규칙(제목 + OCR/Vision 요약 중 1개)으로 구현됨.
 - 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
 
-### 15. TASK-0404 "READY Validation Engine" 세부 해석 확인
-- 현황: 지시 사항(CompanyBrainService로 4개 소스 읽기, PASS/WARNING/FAIL,
-  POST /projects/:id/ready-validation)을 다음 검사 6종으로 구현했다:
-  ① 전이 가능(도메인, FAIL) ② 기본 필수 조건(도메인, FAIL)
-  ③ **금지어(Memory)**: `scope=GLOBAL, key=banned-words, value=문자열 배열`
-  약속 키 기반 — 발견 FAIL, 목록 미설정 WARNING
-  ④ 관련 규칙(Knowledge RULE/LEGAL 제목 검색) — 발견 시 WARNING(검토 필요)
-  ⑤ 관련 결정(Decision, 프로젝트 필터) — 정보성, 항상 PASS
-  ⑥ 표준 절차(SOP product-content 존재) — 부재 WARNING
-- 경계: **판단만** 한다 — 실제 READY 전이(PATCH …/status)에 검증 결과를
-  강제하지 않으며, 검증 결과는 저장하지 않는다.
-- 질문: ① 검사 6종·판정 규칙이 의도와 맞는지 (특히 banned-words 약속 키)
-  ② 검증 FAIL 시 READY 전이를 **차단**할지(전이 API에 통합) 현행 유지할지
-  ③ 검증 결과 이력화(DB 저장) 필요 여부.
+### 16. TASK-0501 "LLM Gateway Foundation" 해석 확인
+- 현황: 지시 사항(Provider: OpenAI/Anthropic/Gemini, mock 기본, 교체 가능
+  구조)을 기존 Provider 패턴(OCR/Vision/Content와 동일)으로 구현하며
+  다음을 보수적으로 결정했다:
+  - **기본 모델**: openai `gpt-4o` · anthropic `claude-opus-5` ·
+    gemini `gemini-2.5-flash` (각각 `LLM_*_MODEL` 환경변수로 덮어쓰기 가능)
+  - **키 미설정 시 mock 폴백**: LLM_PROVIDER=anthropic이라도
+    ANTHROPIC_API_KEY가 없으면 경고 후 mock — 어떤 환경에서도 기동 보장
+  - **API 노출**: `GET /llm`(Provider 확인) + `POST /llm/complete` —
+    게이트웨이 검증용 최소 표면. LlmService는 모듈 export되어 향후
+    소비 모듈(콘텐츠 생성 등)의 단일 진입점이 된다
+  - **호출 이력 비저장**: LLM 요청/응답 DB 저장 없음 (이력화 스펙 없음)
+- 하지 않은 것(스펙 없음): 기존 Analysis/Vision/Content Generator의 LLM
+  Gateway 전환, 스트리밍, 호출 이력/비용 추적, 프롬프트 템플릿 관리
+- 질문: ① 기본 모델 3종이 적절한지 ② /llm/complete 공개 유지 여부
+  (내부 전용으로 돌릴지) ③ 호출 이력·비용 추적 도입 여부
+  ④ 다음 TASK에서 기존 mock Generator들을 LLM Gateway로 전환할지.
 
 ## 결정됨
+
+### 15. TASK-0404 해석 확인 → 승인 (2026-07-27)
+- CTO 결정: ① 검사 6종 유지 ② READY Validation은 **Advisory Mode 유지** —
+  FAIL이어도 전이를 차단하지 않음 ③ 검증 결과는 저장하지 않음.
+- Sprint 4 공식 종료.
 
 ### 14. TASK-0403 해석 확인 → 승인 (2026-07-27)
 - CTO 결정: ① **통합 조회 방식 유지** (fallback 아님)
