@@ -8,7 +8,7 @@
 
 ## 미완료 (스펙 확정, 구현 대기)
 
-- [ ] **TASK-0305 — SOP Engine Foundation** (승인된 구현 범위): 표준 절차(SOP) 선언적 정의 + 실행 엔진(@acos/core), 기본 SOP(OCR→조립→READY→상세페이지, 기존 서비스 재사용), SopRun 실행 이력(Project 1:N), /projects/:id/sop-runs API — 해석 확인은 CTO_REQUEST #9
+- (없음 — TASK-0305 완료. CTO 리뷰/승인 대기 중이며 승인 전 다음 TASK를 시작하지 않는다)
 
 ## 승인 대기 (CTO 승인 전 시작 금지)
 
@@ -22,6 +22,7 @@
 
 ## 완료 — Sprint 3
 
+- [x] **TASK-0305 — SOP Engine Foundation** (`5c67d54`): SopDefinition+SopEngine(@acos/core, 순차 실행·실패 시 후속 SKIPPED·단계 간 출력 전달), 기본 SOP product-content(OCR→조립→READY 검수→상세페이지, 기존 서비스 재사용), SopRun 실행 이력(Project 1:N), POST/GET /projects/:id/sop-runs — 해석 확인 CTO_REQUEST #9
 - [x] **TASK-0302 — Product Object 상태 전이** (`9374aae`): DRAFT⇄READY, →ARCHIVED(종결) 전이 규칙(@acos/core) + READY 필수 조건 검증(제목+OCR/Vision 요약), PATCH …/product-object/:version/status
 - [x] **TASK-0303 — 상세페이지 콘텐츠 파이프라인** (`3a7fb00`): ContentGenerator Port + MockContentGenerator(Markdown), Content 모델 Project/ProductObject 소속 재구성, READY Product Object에서만 생성, /projects/:id/contents API
 - [x] **TASK-0304 — 웹 UI Project 반영** (`0dd85bf`): /projects 목록·상세, 파이프라인 실행 버튼(조립→READY→상세페이지), 홈 내비게이션

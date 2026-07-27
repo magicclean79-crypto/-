@@ -175,6 +175,22 @@ Generator는 `CONTENT_GENERATOR`로 교체 가능(기본 mock) — [docs/archite
 | `GET` | `/projects/:projectId/contents` | 목록 |
 | `GET` | `/projects/:projectId/contents/:contentId` | 단건 |
 
+## SOP 실행 (TASK-0305)
+
+표준 절차(SOP)를 선언적으로 정의하고 순차 실행하는 엔진입니다. 기본 SOP
+`product-content`는 기존 파이프라인(OCR → 조립 → READY 검수 → 상세페이지)을
+한 번의 호출로 실행하며, 실행마다 단계별 결과가 이력으로 남습니다
+(Project : SopRun = 1:N) — [docs/architecture/sop.md](docs/architecture/sop.md)
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `POST` | `/projects/:projectId/sop-runs` | 기본 SOP 실행 → 실행 이력 반환 (단계 실패 시 `status: FAILED` 이력) |
+| `GET` | `/projects/:projectId/sop-runs` | 실행 이력 목록 (최신순) |
+| `GET` | `/projects/:projectId/sop-runs/:runId` | 실행 단건 조회 |
+
+- 단계 상태: `PENDING → RUNNING → DONE | FAILED` (실패 시 이후 단계 `SKIPPED`)
+- 단계 간 데이터 전달: 조립 단계의 버전이 READY 검수·상세페이지 생성에 사용됨
+
 ## Product (TASK-0203)
 
 업로드된 사진(들)을 묶어 Product Object를 생성합니다.

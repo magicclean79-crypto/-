@@ -32,6 +32,21 @@
 - 요청: Sprint Contract 전문(또는 0305~0307 스펙) 전달. 수신 즉시
   TASKS.md 미완료 섹션에 등록하고 순차 구현한다.
 
+### 9. TASK-0305 "SOP Engine Foundation" 해석 확인
+- 현황: Sprint Contract 원문 미수신(#8) 상태에서 CTO의 단일 TASK 지시로
+  TASK-0305를 구현했다. 스펙이 제목뿐이어서 다음과 같이 보수적으로 해석했다:
+  - **SOP = 상품 콘텐츠 표준 절차의 선언적 정의 + 실행 엔진** (@acos/core,
+    프레임워크 무관. 단계 상태 PENDING→RUNNING→DONE/FAILED, 실패 시 후속
+    SKIPPED, 단계 간 출력 전달)
+  - **기본 SOP `product-content`**: OCR → 조립 → READY 검수 → 상세페이지 생성
+    — 기존 4개 서비스를 단계 실행자로 재사용, **신규 파이프라인 로직 없음**
+  - **SopRun 실행 이력** (Project 1:N, 단계별 결과 Json),
+    `POST/GET /projects/:id/sop-runs` API
+- 하지 않은 것(스펙 없음): 커스텀 SOP 등록/편집, 다중 SOP 선택, 비동기 실행
+  (큐), 단계 재시도 정책, 웹 UI 버튼.
+- 요청: 위 해석이 Sprint Contract의 TASK-0305 정의와 일치하는지 확인.
+  다르면 차이점 지시 요청 — 구조가 선언/실행 분리라 정의 교체 비용은 낮다.
+
 ## 결정됨
 
 ### 3. ProductObjectStatus 전이 규칙 → TASK-0302로 구현 (2026-07-27)
