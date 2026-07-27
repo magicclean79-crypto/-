@@ -17,6 +17,7 @@ model Project {
   contents       Content[]
   sopRuns        SopRun[]
   decisions      Decision[]
+  memories       Memory[]
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
 
@@ -203,6 +204,21 @@ model Decision {
 
   @@index([projectId])
   @@map("decisions")
+}
+
+// 기억 저장소 — Company Brain이 축적하는 지식 조각 (TASK-0307)
+model Memory {
+  id        String   @id @default(cuid())
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId String
+  title     String
+  content   String
+  source    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId])
+  @@map("memories")
 }
 
 // 결정 유형 — CTO 결정으로 Enum 고정 (TASK-0306 승인 리뷰)

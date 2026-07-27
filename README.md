@@ -209,6 +209,22 @@ SOP와 나란히 회사 지식을 축적합니다 — [docs/architecture/decisio
 
 오류: `400` 필수 필드(title/reason/decisionType/author) 누락·공백·Enum 외 유형, `404` 프로젝트/결정 없음.
 
+## Memory (TASK-0307)
+
+회사가 축적하는 기억(지식 조각)을 기록·회상합니다. SOP·Decision Log와 나란히
+Company Brain을 구성하며, Workflow Engine은 Memory를 **사용할 수 있지만 소유하지
+않습니다** — [docs/architecture/memory.md](docs/architecture/memory.md)
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `POST` | `/projects/:projectId/memories` | `{ title, content, source? }` 기록 |
+| `GET` | `/projects/:projectId/memories` | 회상 — 목록 (최신순) |
+| `GET` | `…/memories/:memoryId` | 단건 |
+| `PATCH` | `…/memories/:memoryId` | 부분 수정 |
+| `DELETE` | `…/memories/:memoryId` | 삭제 (204) |
+
+오류: `400` 필수 필드(title/content) 누락·공백, `404` 프로젝트/기억 없음.
+
 ## Product (TASK-0203)
 
 업로드된 사진(들)을 묶어 Product Object를 생성합니다.

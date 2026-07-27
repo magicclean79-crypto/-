@@ -314,6 +314,31 @@ export interface UpdateDecisionRequest {
   author?: string;
 }
 
+// ── Memory (TASK-0307, Company Brain) ──────────────────
+
+export interface MemoryDto {
+  id: string;
+  projectId: string;
+  title: string;
+  content: string;
+  /** 기억의 출처 (예: TASK, SOP 실행, 문서 — 선택) */
+  source: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateMemoryRequest {
+  title: string;
+  content: string;
+  source?: string;
+}
+
+export interface UpdateMemoryRequest {
+  title?: string;
+  content?: string;
+  source?: string | null;
+}
+
 export function formatDate(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
