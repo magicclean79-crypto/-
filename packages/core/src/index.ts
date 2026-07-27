@@ -1,4 +1,5 @@
 export * from "./ocr";
+export * from "./analysis";
 
 import type { ContentDto, ContentStatus } from "@acos/shared";
 

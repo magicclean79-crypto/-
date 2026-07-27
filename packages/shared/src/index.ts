@@ -108,6 +108,41 @@ export const UPLOAD_ALLOWED_MIME_TYPES = [
   "image/gif",
 ] as const;
 
+/** AI 분석 실행 상태 — OCR과 동일한 전이 규칙을 사용한다 */
+export type AnalysisStatus = OcrStatus;
+
+/** AI 분석이 산출하는 구조화된 상품 정보 */
+export interface ProductAnalysis {
+  name: string;
+  category: string;
+  keywords: string[];
+  description: string;
+  attributes: Record<string, string>;
+  confidence: number; // 0.0 ~ 1.0
+}
+
+export interface AnalysisResultDto {
+  id: string;
+  productId: string;
+  provider: string;
+  status: AnalysisStatus;
+  result: ProductAnalysis | null;
+  rawJson?: unknown;
+  error: string | null;
+  attempts: number;
+  /** 결과가 상품(name/description)에 반영되었는지 */
+  applied: boolean;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RunAnalysisRequest {
+  /** true면 SUCCESS 시 결과를 상품 name/description에 반영한다 (기본 false) */
+  apply?: boolean;
+}
+
 export function formatDate(date: Date): string {
   return date.toISOString().slice(0, 10);
 }

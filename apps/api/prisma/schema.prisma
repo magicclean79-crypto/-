@@ -8,15 +8,44 @@ datasource db {
 }
 
 model Product {
-  id          String    @id @default(cuid())
-  name        String
-  description String?
-  contents    Content[]
-  images      Image[]
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id              String           @id @default(cuid())
+  name            String
+  description     String?
+  contents        Content[]
+  images          Image[]
+  analysisResults AnalysisResult[]
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
 
   @@map("products")
+}
+
+model AnalysisResult {
+  id          String         @id @default(cuid())
+  product     Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productId   String
+  provider    String
+  status      AnalysisStatus @default(PENDING)
+  result      Json? // 구조화된 ProductAnalysis
+  rawJson     Json? // Provider 원본 응답
+  error       String?
+  attempts    Int            @default(0)
+  applied     Boolean        @default(false)
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([productId])
+  @@index([status])
+  @@map("analysis_results")
+}
+
+enum AnalysisStatus {
+  PENDING
+  RUNNING
+  SUCCESS
+  FAILED
 }
 
 model Image {

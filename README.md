@@ -116,6 +116,21 @@ Google Vision/Azure 연결 방법은 [docs/architecture/ocr.md](docs/architectur
 | `GET` | `/images/:imageId/ocr/history` | 실행 이력 (최신순) |
 | `GET` | `/ocr/results?take=20` | 최근 결과 목록 |
 
+## AI 분석 (TASK-0204)
+
+상품 이미지 + OCR 텍스트에서 구조화된 상품 정보(이름·카테고리·키워드·설명·속성·신뢰도)를
+추출합니다. Provider 교체 아키텍처는 [docs/architecture/analysis.md](docs/architecture/analysis.md) 참고
+(`ANALYSIS_PROVIDER=mock` 기본, 실제 AI 미연결 — Claude/OpenAI 연결 가이드 포함).
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `POST` | `/products/:productId/analysis` | 분석 실행. body `{ "apply": true }`면 결과를 상품 name/description에 반영 |
+| `GET` | `/products/:productId/analysis?raw=true` | 최신 결과 조회 |
+| `GET` | `/products/:productId/analysis/history` | 실행 이력 (최신순) |
+
+- 상태: `PENDING → RUNNING → SUCCESS | FAILED`, Product : AnalysisResult = **1:N** 이력
+- 실패 시 지수 백오프 재시도 (`ANALYSIS_MAX_ATTEMPTS`, 기본 3)
+
 ## Product (TASK-0203)
 
 업로드된 사진(들)을 묶어 Product Object를 생성합니다.
