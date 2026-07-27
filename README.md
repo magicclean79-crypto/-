@@ -242,6 +242,19 @@ AI가 Company Brain을 한 번에 조회하는 진입점입니다. 조회 순서
 | --- | --- | --- |
 | `POST` | `/company-brain/query` | `{ query, scope?, scopeId?, limit? }` → 고정 순서 4개 섹션 응답 |
 
+## READY Validation (TASK-0404)
+
+CompanyBrainService로 Knowledge/Memory/Decision/SOP를 읽어 READY 전환 가능
+여부를 **PASS / WARNING / FAIL** 3단계로 판정합니다 (전체 판정 = 최악 값) —
+[docs/architecture/ready-validation.md](docs/architecture/ready-validation.md)
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `POST` | `/projects/:projectId/ready-validation` | `{ productObjectVersion? }` → 판정 + 6개 검사 상세 |
+
+- 금지어 검사: Memory `{ scope: "GLOBAL", key: "banned-words", value: [...] }` 기반
+- 검증은 판단만 — 실제 전이는 기존 `PATCH …/product-object/:version/status` 사용
+
 ## Knowledge (TASK-0401)
 
 회사의 공식 지식(규칙·정책·가이드)을 보존합니다. 프로젝트별 경험(Memory)과 달리

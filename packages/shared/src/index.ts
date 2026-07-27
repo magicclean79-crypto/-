@@ -456,6 +456,37 @@ export interface CompanyBrainQueryResponse {
   results: CompanyBrainSectionDto[];
 }
 
+// ── READY Validation (TASK-0404) ───────────────────────
+
+/** 검증 판정 3단계 — CTO 지시. 전체 판정은 개별 검사 중 최악 값 */
+export const READY_VALIDATION_STATUSES = ["PASS", "WARNING", "FAIL"] as const;
+
+export type ReadyValidationStatus = (typeof READY_VALIDATION_STATUSES)[number];
+
+export interface ReadyValidationCheckDto {
+  /** 검사 식별자 (예: banned-words) */
+  key: string;
+  name: string;
+  status: ReadyValidationStatus;
+  /** 판정 근거 메시지 */
+  messages: string[];
+}
+
+export interface ReadyValidationResultDto {
+  projectId: string;
+  productObjectId: string;
+  productObjectVersion: number;
+  /** 전체 판정 — 개별 검사 중 최악 값 (FAIL > WARNING > PASS) */
+  status: ReadyValidationStatus;
+  checks: ReadyValidationCheckDto[];
+  validatedAt: string;
+}
+
+export interface ReadyValidationRequest {
+  /** 검증할 Product Object 버전. 미지정 시 최신 버전 사용 */
+  productObjectVersion?: number;
+}
+
 export function formatDate(date: Date): string {
   return date.toISOString().slice(0, 10);
 }

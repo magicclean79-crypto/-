@@ -9,6 +9,7 @@ export * from "./decision";
 export * from "./project-memory";
 export * from "./memory";
 export * from "./knowledge";
+export * from "./ready-validation";
 
 import type { ContentDto, ContentStatus } from "@acos/shared";
 

@@ -6,5 +6,6 @@ import { CompanyBrainService } from "./company-brain.service";
 @Module({
   controllers: [CompanyBrainController],
   providers: [CompanyBrainService],
+  exports: [CompanyBrainService],
 })
 export class CompanyBrainModule {}
