@@ -25,44 +25,41 @@
 - 현황: TASK-0302에서 최소 규칙(제목 + OCR/Vision 요약 중 1개)으로 구현됨.
 - 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
 
-### 13. TASK-0402 "Structured Memory" 세부 해석 확인
-- 현황: 지시된 5개 필드(scope/scopeId/key/value/description)로 구현하며
-  다음을 보수적으로 결정했다:
-  - **scope**: 자유 문자열 (예: `GLOBAL`, `PROJECT`) — Enum 목록이 지시에
-    없어 고정하지 않음
-  - **scopeId**: 선택(null 허용) — 전역 스코프는 대상 식별자가 없으므로
-  - **value**: **Json** — "구조화 저장소" 취지에 맞게 문자열·숫자·배열·객체
-    모두 저장 가능하게
-  - **유니크 규칙**: `(scope, scopeId, key)` 조합당 1건 (중복 생성 400),
-    수정은 value/description만 허용 (식별자 불변)
-  - 기존 Memory는 **ProjectMemory**로 개칭·보존 (테이블 이름 변경으로
-    데이터 보존, API 경로 `/projects/:id/memories` 유지)
-- 질문: ① scope를 Enum으로 고정할지 (GLOBAL/PROJECT/… 목록 지시 요청)
-  ② scope=PROJECT일 때 scopeId의 실존(projects.id) 검증을 넣을지
-  ③ ProjectMemory를 장기적으로 폐기(표준 Memory로 이관)할지 유지할지.
-
-### 11. TASK-0307 "Memory Engine Foundation" 해석 확인
-- 현황: "Sprint Contract 스펙에 따라 구현" 지시를 받았으나 Contract 원문은
-  여전히 미수신(#8)이다. 수신된 제약 2가지(Memory는 Company Brain 소속,
-  Workflow Engine은 사용 가능하되 소유하지 않음)를 반영해 보수적으로 구현했다:
-  - **Memory 엔티티**: id/projectId/title/content/source(선택)/createdAt/updatedAt
-    — 필드 스펙이 없어 Decision Log와 같은 결로 최소 정의
-  - **MemoryEngine** (@acos/core, Company Brain): remember(기록)/recall(회상,
-    최신순)/get/revise(고쳐 쓰기)/forget(삭제), MemoryStore Port 위에서 동작
-  - **CRUD API**: /projects/:id/memories — Project 1:N
-  - **Workflow Engine과 미연결**: 소유 관계만 문서에 명시. 실행 단계에서
-    기억을 참조/기록하는 연결은 스펙 수신 시 진행
-- 하지 않은 것(스펙 없음): 검색/요약/중요도, 임베딩 유사 조회, SOP 단계 연동
-- 요청: 엔티티 필드·Engine 동작이 Sprint Contract의 정의와 일치하는지 확인.
+### 14. TASK-0403 "Company Brain Query Service" 해석 확인
+- 현황: 지시 사항(CompanyBrainService, 조회 순서 Memory→Knowledge→Decision→SOP,
+  POST /company-brain/query)을 다음과 같이 보수적으로 구현했다:
+  - **통합 검색형**: 검색어(query)로 4개 저장소를 지시 순서대로 조회해
+    **고정 순서 4개 섹션**으로 반환 (첫 매칭만 반환하는 fallback형 아님)
+  - 매칭: 부분 일치·대소문자 무시 — Memory(key/description),
+    Knowledge(title/content), Decision(title/description/reason),
+    SOP(코드 선언 정의의 key/name/description/단계명)
+  - 필터: scope/scopeId(Memory), scope=PROJECT면 Decision도 프로젝트 필터.
+    limit 소스별 기본 20/최대 100
+  - 읽기 전용 — 각 도메인의 저장·수명 관리는 해당 모듈에 유지
+- 질문: ① 통합 검색형 해석이 맞는지, 아니면 우선순위 fallback형
+  (Memory에서 찾으면 중단)이 의도인지 ② Memory value(Json) 내부 텍스트도
+  검색 대상에 넣을지 ③ SopRun(실행 이력)도 조회 대상에 포함할지.
 
 ### 8. 잔여 TASK 상세 스펙 전달 요청 (유지)
-- 현황: 0402는 필드 스펙까지 수신되어 해석 부담이 크게 줄었다 (감사).
-  0403(Query Service)/0404(READY Validation Engine)는 아직 제목만 수신.
-- 요청: 승인 시점에 0403의 조회 범위(대상 도메인·쿼리 형태·응답 형태),
-  0404의 검증 규칙 소스(Knowledge category 연계 여부)와 적용 시점
-  (READY 전이 시 강제? 별도 검증 API?) 스펙 전달 요청.
+- 현황: Sprint 4 잔여는 **TASK-0404 READY Validation Engine**뿐이다.
+- 요청: 승인 시점에 0404의 검증 규칙 소스(Knowledge RULE/LEGAL·Memory 설정
+  연계 여부, 규칙 스키마)와 적용 시점(READY 전이 시 강제? 별도 검증 API?)
+  스펙 전달 요청 — #7(READY 조건 확장)과 통합 검토 권장.
 
 ## 결정됨
+
+### 13. TASK-0402 세부 해석 → 승인 + scope Enum·규칙 확정 (2026-07-27)
+- CTO 결정: ① scope Enum 4종 **GLOBAL/COMPANY/PROJECT/PRODUCT**
+  ② 규칙 — GLOBAL→scopeId=NULL, PROJECT→Project 실존 검증, PRODUCT→Product
+  실존 검증 ③ value는 Json 유지 ④ ProjectMemory는 폐기하지 않고
+  **사람용 메모·작업기록 저장소**로 유지 (Memory = AI용 구조화 설정 저장소).
+- 반영(`2afd089`): DB enum + 데이터 보존 마이그레이션, 도메인 검증, 실존
+  검증 400. **COMPANY는 GLOBAL과 동일하게 scopeId=NULL로 해석**
+  (별도 Company 엔티티가 없으므로 — 다르면 지시 요청).
+
+### 11. TASK-0307 해석 확인 → 승인 후 TASK-0402에서 재정의로 해소 (2026-07-27)
+- 메모형 Memory는 ProjectMemory(사람용 메모·작업기록)로 보존, 표준 Memory는
+  구조화 저장소로 재정의 (#13 결정에 포함).
 
 ### 12. TASK-0401 해석 확인 → 승인 + 전역 확정 + category Enum 8종 (2026-07-27)
 - CTO 결정: Knowledge는 회사 전역(Global)만 관리. category는

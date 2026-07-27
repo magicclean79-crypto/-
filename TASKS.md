@@ -8,16 +8,16 @@
 
 ## 미완료 (스펙 확정, 구현 대기)
 
-- (없음 — TASK-0402 완료. CTO 리뷰/승인 대기 중이며 승인 전 다음 TASK를 시작하지 않는다)
+- (없음 — TASK-0403 완료. CTO 리뷰/승인 대기 중이며 승인 전 다음 TASK를 시작하지 않는다)
 
 ## 승인 대기 — Sprint 4 잔여 (CTO 승인 전 시작 금지)
 
-- [ ] TASK-0403 — Company Brain Query Service (제목만 수신, 상세 스펙 대기)
 - [ ] TASK-0404 — READY Validation Engine (제목만 수신, 상세 스펙 대기 — CTO_REQUEST #7 연결 예상)
 
 ## 완료 — Sprint 4 (Goal: Company Brain Integration)
 
-- [x] **TASK-0402 — Structured Memory Foundation** (`ce37a80`): 표준 Memory를 scope/scopeId/key/value/description 구조화 저장소로 재정의(@acos/core), (scope,scopeId,key) 유니크, CRUD API /memory — 기존 메모형 Memory는 ProjectMemory로 개칭·보존(테이블 이름 변경, API 경로 유지), 해석 확인 CTO_REQUEST #13
+- [x] **TASK-0403 — Company Brain Query Service** (`7c2264a`): CompanyBrainService(읽기 전용, 조회 순서 Memory→Knowledge→Decision→SOP 고정), POST /company-brain/query({query, scope?, scopeId?, limit?} → 고정 순서 4개 섹션), 소스별 부분 일치 매칭 — 해석 확인 CTO_REQUEST #14
+- [x] **TASK-0402 — Structured Memory Foundation** (`ce37a80`, CTO 승인 · scope Enum+규칙 반영 `2afd089`): 표준 Memory를 scope(GLOBAL/COMPANY/PROJECT/PRODUCT Enum)/scopeId(PROJECT·PRODUCT 실존 검증)/key/value(Json)/description 구조화 저장소로 재정의, (scope,scopeId,key) 유니크, CRUD API /memory — ProjectMemory는 사람용 메모·작업기록으로 유지
 - [x] **TASK-0401 — Knowledge Foundation** (`0e028ec`, CTO 승인 · category Enum 반영 `d8e24d0`): Knowledge 엔티티(title/content/category?) + KnowledgeRepository Port(@acos/core, Company Brain 4번째 축), 회사 전역 확정, category Enum 8종(RULE/POLICY/GUIDE/BRAND/LEGAL/QUALITY/FAQ/OTHER), CRUD API /knowledge
 
 ## 제안 (스펙 대기 — 구현하지 않음)
