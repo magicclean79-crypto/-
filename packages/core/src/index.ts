@@ -4,6 +4,7 @@ export * from "./product-object";
 export * from "./vision";
 export * from "./content";
 export * from "./sop";
+export * from "./workflow";
 
 import type { ContentDto, ContentStatus } from "@acos/shared";
 

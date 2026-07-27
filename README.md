@@ -177,7 +177,8 @@ Generator는 `CONTENT_GENERATOR`로 교체 가능(기본 mock) — [docs/archite
 
 ## SOP 실행 (TASK-0305)
 
-표준 절차(SOP)를 선언적으로 정의하고 순차 실행하는 엔진입니다. 기본 SOP
+SOP는 회사의 표준 업무 절차를 저장하는 도메인(Company Brain)이고,
+실행은 Execution Layer의 **Workflow Engine**이 담당합니다. 기본 SOP
 `product-content`는 기존 파이프라인(OCR → 조립 → READY 검수 → 상세페이지)을
 한 번의 호출로 실행하며, 실행마다 단계별 결과가 이력으로 남습니다
 (Project : SopRun = 1:N) — [docs/architecture/sop.md](docs/architecture/sop.md)

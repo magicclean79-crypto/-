@@ -1,5 +1,7 @@
-import { PRODUCT_CONTENT_SOP, SopEngine } from "./index";
-import type { SopDefinition, SopStepExecutor } from "./index";
+import { PRODUCT_CONTENT_SOP } from "../sop";
+import type { SopDefinition } from "../sop";
+import { WorkflowEngine } from "./workflow-engine";
+import type { WorkflowStepExecutor } from "./workflow-engine";
 
 const TWO_STEP_SOP: SopDefinition = {
   key: "test-sop",
@@ -11,10 +13,10 @@ const TWO_STEP_SOP: SopDefinition = {
   ],
 };
 
-describe("SopEngine", () => {
+describe("WorkflowEngine", () => {
   it("모든 단계를 순서대로 실행하고 DONE으로 완료한다", async () => {
     const order: string[] = [];
-    const engine = new SopEngine(TWO_STEP_SOP, {
+    const engine = new WorkflowEngine(TWO_STEP_SOP, {
       first: async () => {
         order.push("first");
         return { value: 1 };
@@ -39,7 +41,7 @@ describe("SopEngine", () => {
 
   it("앞 단계의 출력을 다음 단계 컨텍스트로 전달한다", async () => {
     let received: unknown;
-    const engine = new SopEngine(TWO_STEP_SOP, {
+    const engine = new WorkflowEngine(TWO_STEP_SOP, {
       first: async ({ projectId }) => ({ projectId, version: 3 }),
       second: async ({ outputs }) => {
         received = outputs.first;
@@ -54,7 +56,7 @@ describe("SopEngine", () => {
 
   it("단계 실패 시 해당 단계 FAILED, 이후 단계 SKIPPED, 실행은 FAILED가 된다", async () => {
     const second = jest.fn();
-    const engine = new SopEngine(TWO_STEP_SOP, {
+    const engine = new WorkflowEngine(TWO_STEP_SOP, {
       first: async () => {
         throw new Error("boom");
       },
@@ -73,7 +75,7 @@ describe("SopEngine", () => {
 
   it("실행자가 누락된 단계가 있으면 생성 시점에 오류를 던진다", () => {
     expect(
-      () => new SopEngine(TWO_STEP_SOP, { first: async () => null }),
+      () => new WorkflowEngine(TWO_STEP_SOP, { first: async () => null }),
     ).toThrow(/second/);
   });
 
@@ -85,8 +87,8 @@ describe("SopEngine", () => {
         { key: "first", name: "b" },
       ],
     };
-    const noop: SopStepExecutor = async () => null;
-    expect(() => new SopEngine(dup, { first: noop })).toThrow(/중복/);
+    const noop: WorkflowStepExecutor = async () => null;
+    expect(() => new WorkflowEngine(dup, { first: noop })).toThrow(/중복/);
   });
 
   it("기본 SOP(product-content)는 4단계(ocr→assemble→ready→content)를 선언한다", () => {

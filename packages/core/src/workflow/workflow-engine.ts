@@ -1,8 +1,8 @@
 import type { SopRunStatus, SopStepStatus } from "@acos/shared";
-import type { SopDefinition } from "./sop-definition";
+import type { SopDefinition } from "../sop/sop-definition";
 
 /** 단계 실행자에게 전달되는 컨텍스트 */
-export interface SopStepContext {
+export interface WorkflowStepContext {
   projectId: string;
   /** 앞서 완료된 단계들의 출력 (단계 key → output) — 단계 간 데이터 전달 통로 */
   outputs: Record<string, unknown>;
@@ -13,9 +13,11 @@ export interface SopStepContext {
  * 반환값은 해당 단계의 output으로 기록되고 이후 단계에 전달된다.
  * 예외를 던지면 단계가 FAILED 처리되고 이후 단계는 SKIPPED 된다.
  */
-export type SopStepExecutor = (context: SopStepContext) => Promise<unknown>;
+export type WorkflowStepExecutor = (
+  context: WorkflowStepContext,
+) => Promise<unknown>;
 
-export interface SopStepResult {
+export interface WorkflowStepResult {
   key: string;
   name: string;
   status: SopStepStatus;
@@ -25,27 +27,30 @@ export interface SopStepResult {
   completedAt: Date | null;
 }
 
-export interface SopRunResult {
+export interface WorkflowRunResult {
   sopKey: string;
   /** 전 단계 DONE이면 DONE, 하나라도 FAILED면 FAILED */
   status: Exclude<SopRunStatus, "RUNNING">;
-  steps: SopStepResult[];
+  steps: WorkflowStepResult[];
   startedAt: Date;
   completedAt: Date;
 }
 
 /**
- * SOP 실행 엔진. (TASK-0305)
+ * Workflow Engine — SOP 실행 계층. (TASK-0305, CTO 리뷰 반영)
+ *
+ * SOP(Company Brain의 표준 업무 절차 정의)는 도메인이고,
+ * 이 엔진은 그 정의를 받아 실행하는 Execution Layer다.
  *
  * 선언된 단계를 순서대로 실행한다:
  * - 각 단계: PENDING → RUNNING → DONE | FAILED
  * - 한 단계가 FAILED면 이후 단계는 실행하지 않고 SKIPPED 처리
  * - 단계 출력은 outputs[key]로 누적되어 이후 단계에 전달된다
  */
-export class SopEngine {
+export class WorkflowEngine {
   constructor(
     private readonly definition: SopDefinition,
-    private readonly executors: Record<string, SopStepExecutor>,
+    private readonly executors: Record<string, WorkflowStepExecutor>,
   ) {
     if (definition.steps.length === 0) {
       throw new Error(`SOP "${definition.key}"에 단계가 없습니다.`);
@@ -66,10 +71,10 @@ export class SopEngine {
     }
   }
 
-  async run(projectId: string): Promise<SopRunResult> {
+  async run(projectId: string): Promise<WorkflowRunResult> {
     const startedAt = new Date();
     const outputs: Record<string, unknown> = {};
-    const steps: SopStepResult[] = this.definition.steps.map((step) => ({
+    const steps: WorkflowStepResult[] = this.definition.steps.map((step) => ({
       key: step.key,
       name: step.name,
       status: "PENDING",

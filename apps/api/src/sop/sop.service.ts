@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
-import { PRODUCT_CONTENT_SOP, SopEngine } from "@acos/core";
-import type { SopStepResult } from "@acos/core";
+import { PRODUCT_CONTENT_SOP, WorkflowEngine } from "@acos/core";
+import type { WorkflowStepResult } from "@acos/core";
 import type { SopRunDto, SopStepResultDto } from "@acos/shared";
 import type { Prisma, SopRun } from "@prisma/client";
 import { ContentsService } from "../contents/contents.service";
@@ -8,7 +8,7 @@ import { OcrService } from "../ocr/ocr.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { ProductObjectService } from "../product-object/product-object.service";
 
-function stepToDto(step: SopStepResult): SopStepResultDto {
+function stepToDto(step: WorkflowStepResult): SopStepResultDto {
   return {
     key: step.key,
     name: step.name,
@@ -37,8 +37,9 @@ function toDto(record: SopRun): SopRunDto {
 /**
  * SOP 실행 서비스 (TASK-0305).
  *
- * @acos/core의 SopEngine에 기본 SOP(product-content)와
- * 기존 서비스(OCR/Product Object/Contents)를 단계 실행자로 연결한다 —
+ * Company Brain의 SOP 정의(product-content)를 Execution Layer의
+ * WorkflowEngine(@acos/core)에 넘겨 실행한다. 단계 실행자는
+ * 기존 서비스(OCR/Product Object/Contents)를 재사용한다 —
  * 새 파이프라인 로직 없이 기존 기능을 표준 절차로 묶기만 한다.
  * 실행 결과는 SopRun으로 이력 보존된다 (Project : SopRun = 1:N).
  */
@@ -71,7 +72,7 @@ export class SopService {
       product.images.map((image) => image.id),
     );
 
-    const engine = new SopEngine(PRODUCT_CONTENT_SOP, {
+    const engine = new WorkflowEngine(PRODUCT_CONTENT_SOP, {
       // 1) 프로젝트 전체 이미지 OCR 실행 (이력 1:N 누적).
       //    개별 이미지의 OCR 실패는 FAILED 결과로 기록될 뿐 절차를 멈추지 않는다.
       ocr: async () => {
