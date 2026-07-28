@@ -1075,3 +1075,87 @@ export interface PromptTemplateInfoDto {
 export function formatDate(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
+
+// ── Provider Administration Console (TASK-1201, Sprint 12) ──
+
+/** 설정 값의 출처 — override(콘솔) / env(환경변수) / default(기본값) */
+export type SettingSourceDto = "override" | "env" | "default";
+
+/** 해석된 설정 1건 — 지금 적용 중인 값과 해제 시 되돌아갈 값 */
+export interface ResolvedSettingDto {
+  key: string;
+  value: string | null;
+  source: SettingSourceDto;
+  /** 오버라이드를 지웠을 때 되돌아갈 값 */
+  fallback: string | null;
+  env: string | null;
+}
+
+/** Provider Enable/Disable 항목 */
+export interface AdminProviderDto {
+  name: string;
+  title: string;
+  connection: LlmProviderConnectionDto;
+  defaultModel: string;
+  models: string[];
+  /** API 키가 설정되어 있는지 (값은 노출하지 않음) */
+  keyConfigured: boolean;
+  /** 콘솔에서 켜져 있는지 */
+  enabled: boolean;
+  /** 실제로 라우팅 후보인지 (키 + 활성 모두 충족) */
+  available: boolean;
+  setting: ResolvedSettingDto;
+}
+
+/** Model Management 항목 */
+export interface AdminModelDto {
+  feature: string;
+  setting: ResolvedSettingDto;
+  /** 라우팅이 실제로 고른 모델 (null이면 Provider 기본) */
+  effective: string | null;
+}
+
+/** Experiment Management 항목 */
+export interface AdminExperimentSettingDto {
+  feature: string;
+  setting: ResolvedSettingDto;
+}
+
+/** 콘솔 전체 현황 */
+export interface AdminConsoleDto {
+  providers: AdminProviderDto[];
+  models: AdminModelDto[];
+  budget: {
+    daily: ResolvedSettingDto;
+    monthly: ResolvedSettingDto;
+    alertRatio: ResolvedSettingDto;
+    /** 현재 지출·경고 상태 */
+    status: LlmBudgetDto;
+  };
+  experiments: AdminExperimentSettingDto[];
+  checkedAt: string;
+}
+
+/** 설정 변경 요청 — value가 null이면 오버라이드 해제(환경변수로 복귀) */
+export interface AdminSettingUpdateRequest {
+  value: string | null;
+  note?: string | null;
+}
+
+export interface AdminSettingUpdatedDto {
+  key: string;
+  value: string | null;
+  updatedAt: string;
+}
+
+/** 콘솔 조작 감사 이력 1건 */
+export interface AdminAuditEntryDto {
+  id: string;
+  actor: string | null;
+  action: "SETTING_UPDATED" | "SETTING_CLEARED";
+  key: string;
+  before: string | null;
+  after: string | null;
+  note: string | null;
+  createdAt: string;
+}

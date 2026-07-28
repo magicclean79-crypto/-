@@ -1,4 +1,10 @@
-import { HttpException, HttpStatus, Injectable, Logger } from "@nestjs/common";
+import {
+  HttpException,
+  HttpStatus,
+  Injectable,
+  Logger,
+  Optional,
+} from "@nestjs/common";
 import {
   DEFAULT_BUDGET_ALERT_RATIO,
   evaluateBudgetWindow,
@@ -7,6 +13,7 @@ import {
   utcMonthStart,
 } from "@acos/core";
 import type { LlmBudgetDto } from "@acos/shared";
+import { AdminSettingsService } from "../admin/admin-settings.service";
 import { PrismaService } from "../prisma/prisma.service";
 
 /**
@@ -25,7 +32,15 @@ export class LlmBudgetService {
   private readonly logger = new Logger(LlmBudgetService.name);
   private lastLoggedState: string | null = null;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly settings?: AdminSettingsService,
+  ) {}
+
+  /** 콘솔 오버라이드 조회 (TASK-1201 Budget Management) */
+  private override(key: string): string | null {
+    return this.settings?.get(key) ?? null;
+  }
 
   private config(): {
     daily: number | null;
@@ -36,10 +51,17 @@ export class LlmBudgetService {
       const parsed = Number(value);
       return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
     };
-    const ratio = Number(process.env.LLM_BUDGET_ALERT_RATIO);
+    // 콘솔 오버라이드가 환경변수보다 우선한다 (TASK-1201)
+    const ratio = Number(
+      this.override("budget.alertRatio") ?? process.env.LLM_BUDGET_ALERT_RATIO,
+    );
     return {
-      daily: parse(process.env.LLM_DAILY_BUDGET_USD),
-      monthly: parse(process.env.LLM_MONTHLY_BUDGET_USD),
+      daily: parse(
+        this.override("budget.daily") ?? process.env.LLM_DAILY_BUDGET_USD,
+      ),
+      monthly: parse(
+        this.override("budget.monthly") ?? process.env.LLM_MONTHLY_BUDGET_USD,
+      ),
       alertRatio:
         Number.isFinite(ratio) && ratio > 0 && ratio <= 1
           ? ratio

@@ -391,6 +391,10 @@ model ExperimentState {
   promotedVariant String?
   actor           String? // 마지막 조작자 (이메일)
   note            String?
+  // 관측 기간 기준 (TASK-1201, CTO 결정 1102-③): 실험 정의 서명이 바뀔 때만
+  // 초기화한다 — START/STOP은 기간을 이어간다.
+  signature          String?
+  signatureChangedAt DateTime?
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
 
@@ -454,4 +458,35 @@ model ExperimentAssignmentEvent {
 
   @@index([feature, createdAt])
   @@map("experiment_assignment_events")
+}
+
+// ── Provider Administration Console (TASK-1201, Sprint 12) ──
+
+// 운영 중 변경 가능한 설정 오버라이드.
+// 원칙은 그대로 **Code-first(환경변수)** 이고, 이 표는 그 위에 얹는
+// **운영 오버라이드**다: 값이 있으면 우선하고, 지우면 환경변수로 되돌아간다.
+// (행이 없으면 기존 동작 그대로 — 콘솔을 쓰지 않는 환경은 영향이 없다)
+model AdminSetting {
+  key       String   @id // provider.<name>.enabled | model.<feature> | budget.daily | experiment.<feature>
+  value     String
+  updatedBy String?
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  @@map("admin_settings")
+}
+
+// 콘솔 조작 감사 — 누가 무엇을 어떤 값에서 어떤 값으로 바꿨는지
+model AdminAuditLog {
+  id        String   @id @default(cuid())
+  actor     String?
+  action    String // SETTING_UPDATED | SETTING_CLEARED
+  key       String
+  before    String?
+  after     String?
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("admin_audit_log")
 }

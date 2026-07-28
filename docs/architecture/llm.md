@@ -252,8 +252,9 @@ Execution은 실제 수행 결과다. 변형이 실패하거나 불건강해지�
 **근거는 배정이 아니라 실행(Execution)** 이다 (CTO 결정 1003-④). 지연은
 호출 수로 **가중 평균**한다(그룹 평균을 단순 평균하면 왜곡된다).
 
-**관측 기간**은 마지막 `START` 전이 시각(없으면 상태 생성 시점) 이후다 —
-실험 시작 전 이력이 비교에 섞이지 않게 한다.
+**관측 기간**은 **정의 서명이 마지막으로 바뀐 시각** 이후다 (CTO 결정 1102-③) —
+START/STOP은 기간을 이어간다. 잠시 멈췄다 재개했다고 그동안 모은 근거를
+버릴 이유가 없고, 변형 구성이 바뀌면 이전 이력은 비교 대상이 아니기 때문이다.
 
 ### Success Rate / Latency / Cost Comparison
 
@@ -265,7 +266,7 @@ Execution은 실제 수행 결과다. 변형이 실패하거나 불건강해지�
 
 | 순서 | 판단 |
 | --- | --- |
-| 0 | **모든 변형이 최소 표본(기본 30회)** 을 채워야 한다 — 아니면 추천하지 않는다 |
+| 0 | **모든 변형이 최소 표본(기본 30회, `LLM_EXPERIMENT_MIN_SAMPLES`)** 을 채워야 한다 — 아니면 추천하지 않는다 |
 | 1 | 성공률 1·2위 차이의 신뢰도가 **95% 이상**이면 1위가 승자 (`success-rate`, 확정) |
 | 2 | 성공률이 통계적으로 구분되지 않으면 **호출당 비용**이 싼 쪽 (`cost`, 참고) |
 | 3 | 비용도 같으면 **평균 지연**이 짧은 쪽 (`latency`, 참고) |
@@ -363,3 +364,47 @@ POST /llm/complete
   [execution.md](execution.md). 요청/응답 본문은 저장하지 않는다.
 - **소비 계층 연결 완료**: Content Generation(0502)·Analysis(0504)·
   Vision(0505)·구 Generator 경로(0506)가 전부 LLM Gateway를 사용한다.
+
+
+## Provider Administration Console (TASK-1201, Sprint 12)
+
+라우팅·예산·실험을 **운영 중에** 조정하는 ADMIN 콘솔이다. 설정 원칙은 그대로
+**Code-first(환경변수)** 이고, 콘솔은 그 위에 얹는 **오버라이드**다:
+
+```
+유효값 = 오버라이드(DB) ?? 환경변수 ?? 기본값
+```
+
+오버라이드가 하나도 없으면 **기존 동작과 완전히 같다**. 값을 해제하면
+환경변수로 되돌아가고, 화면은 각 값의 **출처(콘솔/환경변수/기본값)** 와
+"해제하면 무엇으로 돌아가는지"를 함께 보여준다.
+
+| 영역 | 설정 키 | 동작 |
+| --- | --- | --- |
+| **Provider Enable/Disable** | `provider.<name>.enabled` | 끄면 라우팅·실험·Failover 후보에서 빠진다. **마지막 하나는 끌 수 없다**(호출 전멸 방지) |
+| **Model Management** | `model.<feature>` | feature별 모델 지정 — `LLM_MODEL_*`보다 우선 |
+| **Budget Management** | `budget.daily` · `budget.monthly` · `budget.alertRatio` | 일/월 예산과 경고 임계 — `LLM_*_BUDGET_USD`보다 우선 |
+| **Experiment Management** | `experiment.<feature>` | 실험 정의(`이름\|종류\|변형=가중치,…`) — `LLM_EXPERIMENT_*`보다 우선 |
+| **Audit Log** | — | 모든 변경을 누가·무엇을·어떤 값에서 어떤 값으로 기록 |
+
+**검증은 저장 시점에** 한다 — 잘못된 값이 들어가면 다음 호출부터 라우팅이
+깨지므로, 알 수 없는 Provider·음수 예산·해석 불가한 실험 정의·지원하지 않는
+키는 400으로 막는다.
+
+**읽기 성능**: 설정은 LLM 호출마다 참조되므로 DB 왕복을 넣지 않는다. 기동 시
+전부 인메모리로 적재하고, 쓰기 때 즉시 갱신하며, TTL(`ADMIN_SETTINGS_TTL_MS`,
+기본 10초)이 지나면 **백그라운드로** 다시 읽는다. 다중 인스턴스에서는 다른
+인스턴스의 변경이 최대 TTL만큼 늦게 보인다.
+
+**권한**: 전부 **ADMIN 전용**이다. 전역 WriteProtectionGuard는 쓰기만 막으므로
+**조회에도 AuthGuard를 건다** — 콘솔의 GET은 예산·모델 구성과 감사 이력
+(수행자 이메일)을 노출하기 때문에 일반 조회 API의 비보호 정책을 그대로 둘 수
+없다 (`/llm/health`와 같은 이유).
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `GET` | `/admin/console` | Provider·모델·예산·실험 현황 + 각 값의 출처 |
+| `PUT` | `/admin/settings/:key` | 설정 변경 (`{value: null}`이면 해제 = 환경변수 복귀) |
+| `GET` | `/admin/audit` | 변경 이력 (최신순) |
+
+웹: **`/admin/console`** (신설 — 홈 내비 "⚙️ Provider 관리 콘솔")

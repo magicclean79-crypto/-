@@ -33,6 +33,11 @@ import { createLlmProvider, createLlmProviderMap } from "./provider.factory";
       useFactory: createLlmProviderMap,
     },
   ],
-  exports: [LlmService, ExperimentLifecycleService, ExperimentAnalyticsService],
+  exports: [
+    LlmService,
+    LlmBudgetService,
+    ExperimentLifecycleService,
+    ExperimentAnalyticsService,
+  ],
 })
 export class LlmModule {}

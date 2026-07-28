@@ -21,7 +21,12 @@ import {
   validateLlmRequest,
   withTimeout,
 } from "@acos/core";
-import { resolveLifecycle, variantKey } from "@acos/core";
+import {
+  enabledProviders,
+  providerEnabledKey,
+  resolveLifecycle,
+  variantKey,
+} from "@acos/core";
 import type {
   ExecutionStore,
   Experiment,
@@ -39,6 +44,7 @@ import type {
   LlmHealthDto,
   LlmRoutingDto,
 } from "@acos/shared";
+import { AdminSettingsService } from "../admin/admin-settings.service";
 import { EXECUTION_STORE } from "../execution/execution.constants";
 import { allExperiments, featureExperiment } from "./experiment-config";
 import { ExperimentLifecycleService } from "./experiment-lifecycle.service";
@@ -108,6 +114,7 @@ export class LlmService {
     @Inject(LLM_PROVIDER_MAP)
     providerMap?: Map<string, LlmProvider>,
     @Optional() private readonly lifecycleService?: ExperimentLifecycleService,
+    @Optional() private readonly settings?: AdminSettingsService,
   ) {
     const createGateway = (target: LlmProvider): LlmGateway =>
       new LlmGateway(target, {
@@ -133,27 +140,45 @@ export class LlmService {
       : null;
   }
 
+  /** 콘솔 오버라이드 조회 (TASK-1201) — 미주입이면 환경변수만 사용 */
+  private setting = (key: string): string | null =>
+    this.settings?.get(key) ?? null;
+
+  /**
+   * 실제로 쓸 수 있는 Provider (TASK-1201 Provider Enable/Disable).
+   * 콘솔에서 끈 Provider는 라우팅·실험·Failover 후보에서 빠진다.
+   * 전부 꺼지면 무시한다 — 호출이 전멸하는 것보다 낫다.
+   */
+  private availableProviders(): string[] {
+    return enabledProviders({
+      available: [...this.gateways.keys()],
+      isDisabled: (provider) =>
+        this.setting(providerEnabledKey(provider)) === "false",
+    });
+  }
+
   /** 라우팅 해석 (TASK-1001) — 호출 시점마다 환경을 읽는다 (Dynamic) */
   private resolve(feature?: string): RoutingResolution {
     return resolveRoute({
       feature,
       defaultProvider: this.gateway.providerName,
       rules: routingRules(),
-      modelOverrides: routingModelOverrides(),
-      availableProviders: [...this.gateways.keys()],
+      modelOverrides: routingModelOverrides(this.setting),
+      availableProviders: this.availableProviders(),
     });
   }
 
   /** feature별 Provider 라우팅 현황 (GET /llm/routing) */
   routing(): LlmRoutingDto {
+    const available = this.availableProviders();
     return {
       defaultProvider: this.gateway.providerName,
-      availableProviders: [...this.gateways.keys()],
+      availableProviders: available,
       routes: buildRoutingTable({
         defaultProvider: this.gateway.providerName,
         rules: routingRules(),
-        modelOverrides: routingModelOverrides(),
-        availableProviders: [...this.gateways.keys()],
+        modelOverrides: routingModelOverrides(this.setting),
+        availableProviders: available,
       }).map((route) => ({
         ...route,
         env: LLM_FEATURE_PROVIDER_ENV[route.feature] ?? "",
@@ -218,7 +243,7 @@ export class LlmService {
     // 라우팅으로 처리한다 (실험 설정이 호출을 실패시키지 않는다).
     const experiment = options.provider
       ? null
-      : featureExperiment(options.feature);
+      : featureExperiment(options.feature, this.setting);
     const chosen = experiment
       ? await this.chooseVariant(experiment, options.projectId)
       : null;
@@ -243,7 +268,7 @@ export class LlmService {
         : buildFailoverChain({
             primary,
             priority: failoverPriority(),
-            available: [...this.gateways.keys()],
+            available: this.availableProviders(),
             isHealthy: (provider) => this.healthTracker.isHealthy(provider),
           });
     const timeoutMs = providerTimeoutMs();
@@ -357,7 +382,7 @@ export class LlmService {
     experiment: Experiment,
     projectId?: string,
   ): Promise<ExperimentVariant | null> {
-    const available = [...this.gateways.keys()];
+    const available = this.availableProviders();
 
     if (this.lifecycleService) {
       let resolved;
@@ -454,9 +479,9 @@ export class LlmService {
    * 설정 비율대로 트래픽이 나뉘고 있는지 대시보드에서 바로 확인한다.
    */
   async experiments(): Promise<LlmExperimentsDto> {
-    const available = [...this.gateways.keys()];
+    const available = this.availableProviders();
     const experiments = await Promise.all(
-      allExperiments().map(async (experiment) => {
+      allExperiments(this.setting).map(async (experiment) => {
         const view = describeExperiment(experiment, available);
         const counts = view.variants.map(
           (variant) =>

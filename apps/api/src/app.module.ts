@@ -2,6 +2,8 @@ import { Module } from "@nestjs/common";
 import { AppController } from "./app.controller";
 import { AppService } from "./app.service";
 import { AnalysisModule } from "./analysis/analysis.module";
+import { AdminSettingsModule } from "./admin/admin-settings.module";
+import { AdminModule } from "./admin/admin.module";
 import { AuthModule } from "./auth/auth.module";
 import { CompanyBrainModule } from "./company-brain/company-brain.module";
 import { ContentsModule } from "./contents/contents.module";
@@ -44,6 +46,8 @@ import { UploadsModule } from "./uploads/uploads.module";
     PromptModule,
     ExecutionModule,
     AuthModule,
+    AdminSettingsModule,
+    AdminModule,
   ],
   controllers: [AppController],
   providers: [AppService],

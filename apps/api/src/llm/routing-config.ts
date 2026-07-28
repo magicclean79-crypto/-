@@ -1,5 +1,6 @@
 import {
   LLM_FEATURE_MODEL_ENV,
+  modelKey,
   LLM_FEATURE_PROVIDER_ENV,
   parseRoutingRule,
   ROUTABLE_FEATURES,
@@ -27,11 +28,18 @@ export function routingRules(): Record<string, RoutingRule | null> {
   return rules;
 }
 
-/** feature → 모델 오버라이드 (미설정은 null) */
-export function routingModelOverrides(): Record<string, string | null> {
+/**
+ * feature → 모델 오버라이드 (미설정은 null).
+ * `settings`가 주어지면 **콘솔 오버라이드가 환경변수보다 우선**한다
+ * (TASK-1201 Model Management — 없으면 기존 동작 그대로).
+ */
+export function routingModelOverrides(
+  settings?: (key: string) => string | null,
+): Record<string, string | null> {
   const overrides: Record<string, string | null> = {};
   for (const [feature, env] of Object.entries(LLM_FEATURE_MODEL_ENV)) {
-    overrides[feature] = process.env[env] ?? null;
+    overrides[feature] =
+      settings?.(modelKey(feature)) ?? process.env[env] ?? null;
   }
   return overrides;
 }

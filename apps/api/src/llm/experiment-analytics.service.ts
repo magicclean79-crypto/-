@@ -1,9 +1,13 @@
 import { Injectable } from "@nestjs/common";
 import { analyzeExperiment, describeExperiment } from "@acos/core";
-import type { VariantSample } from "@acos/core";
+import type { Experiment, VariantSample } from "@acos/core";
 import type { ExperimentAnalyticsDto } from "@acos/shared";
+import { AdminSettingsService } from "../admin/admin-settings.service";
 import { PrismaService } from "../prisma/prisma.service";
-import { featureExperiment } from "./experiment-config";
+import {
+  featureExperiment,
+  minSamplesForRecommendation,
+} from "./experiment-config";
 import { ExperimentLifecycleService } from "./experiment-lifecycle.service";
 import { LlmService } from "./llm.service";
 
@@ -23,29 +27,25 @@ export class ExperimentAnalyticsService {
     private readonly prisma: PrismaService,
     private readonly lifecycle: ExperimentLifecycleService,
     private readonly llm: LlmService,
+    private readonly settings: AdminSettingsService,
   ) {}
 
-  /** 관측 시작 시각 — 마지막 START 전이 > 상태 생성 시점 > 전체 기간 */
-  private async observationStart(feature: string): Promise<Date | null> {
-    const state = await this.prisma.experimentState.findUnique({
-      where: { feature },
-      select: { id: true, createdAt: true },
-    });
-    if (!state) {
-      return null;
-    }
-    const lastStart = await this.prisma.experimentEvent.findFirst({
-      where: { stateId: state.id, action: "START" },
-      orderBy: { createdAt: "desc" },
-      select: { createdAt: true },
-    });
-    return lastStart?.createdAt ?? state.createdAt;
+  /**
+   * 관측 시작 시각 (CTO 결정 1102-③).
+   * **정의 서명이 바뀔 때만 초기화**하고 START/STOP은 기간을 이어간다.
+   * 서명 기록이 없으면 상태 생성 시점(없으면 전체 기간).
+   */
+  private async observationStart(
+    feature: string,
+    experiment: Experiment | null,
+  ): Promise<Date | null> {
+    return this.lifecycle.syncSignature(feature, experiment);
   }
 
   async analyze(feature: string): Promise<ExperimentAnalyticsDto> {
-    const experiment = featureExperiment(feature);
+    const experiment = featureExperiment(feature, this.settings.get.bind(this.settings));
     const available = this.llm.routing().availableProviders;
-    const since = await this.observationStart(feature);
+    const since = await this.observationStart(feature, experiment);
 
     // 변형별 실행 집계 — provider+model 단위 (변형 키와 같은 축)
     const rows = await this.prisma.execution.groupBy({
@@ -105,7 +105,11 @@ export class ExperimentAnalyticsService {
     const weightShares = Object.fromEntries(
       view.variants.map((variant) => [variant.key, variant.weightShare]),
     );
-    const result = analyzeExperiment({ samples, weightShares });
+    const result = analyzeExperiment({
+      samples,
+      weightShares,
+      minSamples: minSamplesForRecommendation(),
+    });
     const state = await this.lifecycle.lifecycle(feature);
 
     return {

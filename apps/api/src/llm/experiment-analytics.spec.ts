@@ -4,6 +4,7 @@ import request from "supertest";
 import { AuthService } from "../auth/auth.service";
 import { WriteProtectionGuard } from "../auth/write-protection.guard";
 import { APP_GUARD } from "@nestjs/core";
+import { AdminSettingsService } from "../admin/admin-settings.service";
 import { ExperimentAnalyticsService } from "./experiment-analytics.service";
 import { ExperimentLifecycleService } from "./experiment-lifecycle.service";
 import { LlmController } from "./llm.controller";
@@ -86,11 +87,17 @@ describe("Experiment Analytics API (TASK-1102)", () => {
           provide: ExperimentLifecycleService,
           useValue: {
             lifecycle: async () => LIFECYCLE_STATE,
+            syncSignature: async () => new Date(0),
             assignments: async () => [],
             distribution: async () => [],
             reassignments: async () => [],
             transition: async () => LIFECYCLE_STATE,
           },
+        },
+        {
+          // 설정 오버라이드 스텁 (TASK-1201) — 콘솔 미사용 = 환경변수 그대로
+          provide: AdminSettingsService,
+          useValue: { get: () => null, all: () => ({}) },
         },
         ExperimentAnalyticsService,
         {

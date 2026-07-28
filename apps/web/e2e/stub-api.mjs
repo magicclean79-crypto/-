@@ -8,6 +8,9 @@ let mode = "data";
 let lastUrls = [];
 // 실험 운영 상태 스텁 (TASK-1101) — 전이 후 응답에 반영된다
 let stubLifecycle = null;
+// 관리 콘솔 스텁 상태 (TASK-1201)
+let stubSettings = {};
+let stubAdminAudit = [];
 
 const stats = (totals, groups) => ({
   range: { from: null, to: null },
@@ -181,7 +184,7 @@ const server = http.createServer((req, res) => {
   // credentials 포함 요청(TASK-0804)은 와일드카드 불가 — origin 반사
   res.setHeader("access-control-allow-origin", req.headers.origin ?? "*");
   res.setHeader("access-control-allow-credentials", "true");
-  res.setHeader("access-control-allow-methods", "GET,POST,PATCH,OPTIONS");
+  res.setHeader("access-control-allow-methods", "GET,POST,PATCH,PUT,DELETE,OPTIONS");
   res.setHeader("access-control-allow-headers", "content-type, authorization");
   if (req.method === "OPTIONS") {
     res.statusCode = 204;
@@ -196,6 +199,8 @@ const server = http.createServer((req, res) => {
       mode = JSON.parse(body).mode;
       lastUrls = [];
       stubLifecycle = null;
+      stubSettings = {};
+      stubAdminAudit = [];
       resetPublishing();
       resetUsers();
       res.end(JSON.stringify({ mode }));
@@ -567,6 +572,90 @@ const server = http.createServer((req, res) => {
                 { feature: "product-analysis", provider: "mock", model: null, source: "default", reason: null, env: "LLM_ROUTE_ANALYSIS" },
                 { feature: "vision-analysis", provider: "mock", model: null, source: "default", reason: null, env: "LLM_ROUTE_VISION" },
               ],
+        checkedAt: new Date().toISOString(),
+      }),
+    );
+    return;
+  }
+  // ── Provider Administration Console (TASK-1201) ── ADMIN 전용
+  if (url.pathname === "/admin/console" || url.pathname === "/admin/audit" ||
+      url.pathname.startsWith("/admin/settings/")) {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    if (req.method === "PUT" && url.pathname.startsWith("/admin/settings/")) {
+      const key = decodeURIComponent(url.pathname.slice("/admin/settings/".length));
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        const { value } = body ? JSON.parse(body) : { value: null };
+        // 검증 스텁 — 실제 API와 같은 메시지로 400을 재현한다
+        if (key === "budget.daily" && value !== null && Number(value) <= 0) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ message: "예산 값은 0보다 큰 숫자여야 합니다." }));
+          return;
+        }
+        const before = stubSettings[key] ?? null;
+        if (value === null) delete stubSettings[key];
+        else stubSettings[key] = value;
+        stubAdminAudit.unshift({
+          id: `s-${stubAdminAudit.length + 1}`,
+          actor: "admin@acos.local",
+          action: value === null ? "SETTING_CLEARED" : "SETTING_UPDATED",
+          key,
+          before,
+          after: value,
+          note: null,
+          createdAt: new Date().toISOString(),
+        });
+        res.end(JSON.stringify({ key, value, updatedAt: new Date().toISOString() }));
+      });
+      return;
+    }
+    if (url.pathname === "/admin/audit") {
+      res.end(JSON.stringify(stubAdminAudit));
+      return;
+    }
+    const setting = (key, envName, envValue, defaultValue = null) => {
+      const override = stubSettings[key] ?? null;
+      if (override !== null) {
+        return { key, value: override, source: "override", fallback: envValue ?? defaultValue, env: envName };
+      }
+      if (envValue !== null && envValue !== undefined) {
+        return { key, value: envValue, source: "env", fallback: defaultValue, env: envName };
+      }
+      return { key, value: defaultValue, source: "default", fallback: null, env: envName };
+    };
+    res.end(
+      JSON.stringify({
+        providers: [
+          { name: "mock", title: "Mock", connection: "mock", defaultModel: "mock-llm-1", models: ["mock-llm-1"], keyConfigured: true, enabled: stubSettings["provider.mock.enabled"] !== "false", available: true, setting: setting("provider.mock.enabled", null, null, "true") },
+          { name: "openai", title: "OpenAI", connection: "official", defaultModel: "gpt-4o", models: ["gpt-4o", "gpt-4o-mini"], keyConfigured: true, enabled: stubSettings["provider.openai.enabled"] !== "false", available: stubSettings["provider.openai.enabled"] !== "false", setting: setting("provider.openai.enabled", "OPENAI_API_KEY", null, "true") },
+          { name: "anthropic", title: "Anthropic", connection: "official", defaultModel: "claude-opus-5", models: ["claude-opus-5"], keyConfigured: false, enabled: true, available: false, setting: setting("provider.anthropic.enabled", "ANTHROPIC_API_KEY", null, "true") },
+        ],
+        models: [
+          { feature: "content-generation", setting: setting("model.content-generation", "LLM_MODEL_CONTENT", null), effective: null },
+          { feature: "product-analysis", setting: setting("model.product-analysis", "LLM_MODEL_ANALYSIS", "gpt-4o-mini"), effective: stubSettings["model.product-analysis"] ?? "gpt-4o-mini" },
+          { feature: "vision-analysis", setting: setting("model.vision-analysis", "LLM_MODEL_VISION", null), effective: null },
+        ],
+        budget: {
+          daily: setting("budget.daily", "LLM_DAILY_BUDGET_USD", "10"),
+          monthly: setting("budget.monthly", "LLM_MONTHLY_BUDGET_USD", null),
+          alertRatio: setting("budget.alertRatio", "LLM_BUDGET_ALERT_RATIO", null, "0.8"),
+          status: {
+            daily: { budget: Number(stubSettings["budget.daily"] ?? 10), spend: 8.52, ratio: 0.852, status: "alert" },
+            monthly: { budget: null, spend: 42.1, ratio: null, status: "off" },
+            alertRatio: 0.8,
+            checkedAt: new Date().toISOString(),
+          },
+        },
+        experiments: [
+          { feature: "content-generation", setting: setting("experiment.content-generation", "LLM_EXPERIMENT_CONTENT", null) },
+          { feature: "product-analysis", setting: setting("experiment.product-analysis", "LLM_EXPERIMENT_ANALYSIS", "openai=90,anthropic=10") },
+          { feature: "vision-analysis", setting: setting("experiment.vision-analysis", "LLM_EXPERIMENT_VISION", null) },
+        ],
         checkedAt: new Date().toISOString(),
       }),
     );

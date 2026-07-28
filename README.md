@@ -338,7 +338,16 @@ API 키가 없으면 항상 mock으로 동작합니다 —
   비교** · **승자 추천**(성공률 → 비용 → 지연 순, 표본이 모자라면 추천 보류) ·
   **Confidence Score**(양측 2-비율 z검정) · `GET /llm/experiments/:feature/
   analytics` + 웹 `/experiments` Analytics Dashboard.
-  승격은 운영자 수동 절차이며 추천은 근거를 제공할 뿐입니다
+  승격은 운영자 수동 절차이며 추천은 근거를 제공할 뿐입니다.
+  최소 표본은 `LLM_EXPERIMENT_MIN_SAMPLES`(기본 30)로 조정하고, 관측 기간은
+  **실험 정의가 바뀔 때만** 초기화합니다(START/STOP은 기간 유지)
+- **Provider 관리 콘솔 (TASK-1201)**: Provider Enable/Disable · 모델 · 예산 ·
+  실험을 **운영 중에** 조정하는 ADMIN 콘솔(웹 **`/admin/console`**).
+  설정 원칙은 그대로 Code-first이고 콘솔은 그 위의 **오버라이드**입니다 —
+  `유효값 = 오버라이드 ?? 환경변수 ?? 기본값`이며, 해제하면 환경변수로
+  되돌아가고 화면에 각 값의 출처가 표시됩니다. 잘못된 값은 저장 시점에 400으로
+  막고(마지막 Provider는 끌 수 없음), 모든 변경은 감사 이력으로 남습니다.
+  `GET /admin/console` · `PUT /admin/settings/:key` · `GET /admin/audit`
 
 ## Execution Domain (TASK-0601, Sprint 6)
 

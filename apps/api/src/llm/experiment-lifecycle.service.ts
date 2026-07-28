@@ -156,6 +156,40 @@ export class ExperimentLifecycleService {
   }
 
   /**
+   * 관측 기간 기준 갱신 (CTO 결정 1102-③).
+   * **정의 서명이 바뀔 때만** 초기화하고 START/STOP은 기간을 이어간다 —
+   * 잠시 멈췄다 재개했다고 그동안 모은 근거를 버릴 이유가 없다.
+   * 서명이 그대로면 아무것도 쓰지 않는다.
+   */
+  async syncSignature(
+    feature: string,
+    experiment: Experiment | null,
+  ): Promise<Date | null> {
+    const signature = experiment ? experimentSignature(experiment) : null;
+    const state = await this.prisma.experimentState.findUnique({
+      where: { feature },
+      select: { id: true, signature: true, signatureChangedAt: true, createdAt: true },
+    });
+    if (!state) {
+      return null;
+    }
+    if (state.signature === signature) {
+      return state.signatureChangedAt ?? state.createdAt;
+    }
+    const changedAt = new Date();
+    await this.prisma.experimentState.update({
+      where: { id: state.id },
+      data: { signature, signatureChangedAt: changedAt },
+    });
+    if (state.signature !== null) {
+      this.logger.log(
+        `실험 정의 변경 감지 (${feature}): "${state.signature}" → "${signature}" — 관측 기간을 초기화합니다.`,
+      );
+    }
+    return changedAt;
+  }
+
+  /**
    * 상태 전이 (Start / Stop / Promote / Rollback).
    * Rollback은 **직전 전이의 이전 상태**로 되돌린다 (이력이 없으면 RUNNING).
    */
