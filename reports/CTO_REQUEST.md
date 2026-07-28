@@ -5,25 +5,25 @@
 
 ## 결정 대기
 
-### 26. TASK-0605 "Execution Timeline" 세부 해석 확인
-- 현황: 지시 사항(hour/day/week 단위, 6개 지표, feature/provider/model 필터)을
-  다음과 같이 구현했다:
-  - **`GET /executions/timeline?interval=hour|day|week`** (기본 day) —
-    Dashboard(0602)와 동일한 `ExecutionStats` 계약(호출 수·성공/실패율 0~1·
-    Latency 가중 평균+최대·Token·Cost)을 시간 버킷으로 제공
-  - **버킷 기준**: DB `date_trunc`, **UTC** — week는 ISO 주(월요일 시작).
-    버킷은 시간 오름차순이며 **데이터가 있는 버킷만 포함**(빈 버킷 0 채움
-    없음 — UI에서 채움 처리 가정)
-  - **필터**: feature/provider/model 정확 일치 + from/to 기간.
-    잘못된 interval/날짜/역전 기간 400
-  - 집계: (버킷, status) 단위 $queryRaw(전 값 파라미터 바인딩·interval
-    화이트리스트) → core 병합 로직 재사용. 집계 결과 비저장
-- 하지 않은 것(스펙 없음): 빈 버킷 0 채움, 기간/버킷 수 상한, KST 등
-  타임존 옵션, 집계 캐싱
-- 질문: ① 빈 버킷 미포함(UI 채움)·UTC 버킷·ISO 주 기준이 의도에 부합하는지
-  ② hour 장기간 조회의 기간 상한 필요 여부 ③ Sprint 6 예고분(Execution·
-  Dashboard API·시계열·OpenAI 연결·이미지 가드)이 모두 완료된 상태 —
-  Sprint 종료 여부와 다음 TASK 지정 요청.
+### 27. TASK-0701 "Execution Dashboard Web UI" 세부 해석 확인
+- 현황: 지시 사항(Stats/Timeline API로 KPI·Timeline Chart·Provider/Feature/
+  Model 통계 화면)을 `/executions` 페이지로 구현했다:
+  - **KPI 카드 4종**: 호출 수(성공/실패) · 성공률/실패율(**API 0~1 → UI %
+    변환**, 0602 승인 ② 준수) · 토큰(입력/출력) · 비용/지연(평균·최대)
+  - **Timeline Chart**: hour/day/week 전환(쿼리 파라미터) · 성공/실패 스택
+    막대 · UTC 축 · **빈 버킷 UI 보간**(0605 승인 ② 준수) · hover 상세
+  - **테이블 3종**: Feature/Provider/Model — 호출·성공률·실패·토큰·비용·지연
+  - 구현: 서버 컴포넌트 + **CSS 막대(외부 차트 라이브러리 무의존)**,
+    API 미연결 안내, 홈 내비게이션 추가
+  - Playwright 브라우저 검증 + 전체 스크린샷 (openai 실패 이력이 차트·
+    테이블에 정확히 표시됨)
+- 하지 않은 것(스펙 없음): Timeline의 feature/provider/model 필터 UI 노출,
+  hour 기간 제한(다음 Sprint 예고), 자동 새로고침/실시간 갱신, 웹 자동화
+  테스트 인프라(web 워크스페이스는 기존부터 미구축 — 브라우저 수동 검증)
+- 질문: ① CSS 스택 막대 방식(라이브러리 무의존)이 적절한지, 차트
+  라이브러리 도입 필요 여부 ② 필터 UI(feature/provider/model)를 화면에
+  노출할지 ③ 웹 자동화 테스트(Playwright CI) 도입 여부 ④ 다음 TASK 지정
+  요청.
 
 ### 2. tesseract Provider 유지 여부
 - 현황: OCR 기본 Provider는 mock이며, 로컬 오프라인 엔진(tesseract.js)이
@@ -46,6 +46,14 @@
 - 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
 
 ## 결정됨
+
+### 26. TASK-0605 해석 확인 → 승인 + Timeline 표준 확정 + Sprint 6 종료 (2026-07-28)
+- CTO 결정: ① **UTC · ISO Week · hour/day/week 구조를 공식 표준으로 유지**
+  ② **빈 버킷은 API가 생성하지 않음 — UI에서 보간** ③ **hour 조회 기간
+  제한은 다음 Sprint 추가** ④ **Sprint 6 공식 종료** ⑤ Sprint 7 시작 —
+  TASK-0701(Execution Dashboard Web UI) 지시됨.
+- 반영(`eb202c6`): 대시보드 화면 구현 — % 변환·빈 버킷 보간을 UI에서 수행
+  (#27 참고).
 
 ### 25. TASK-0604 해석 확인 → 승인 + 정책 확정 (2026-07-28)
 - CTO 결정: ① **Image Guard 기본 정책 유지** — 원본 20MB · 최대 변 1024px ·

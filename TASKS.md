@@ -8,11 +8,15 @@
 
 ## 미완료 (스펙 확정, 구현 대기)
 
-- (없음 — TASK-0605 완료. CTO 리뷰/승인 대기 중이며 승인 전 다음 TASK를 시작하지 않는다)
+- (없음 — TASK-0701 완료. CTO 리뷰/승인 대기 중이며 승인 전 다음 TASK를 시작하지 않는다)
 
-## 완료 — Sprint 6
+## 완료 — Sprint 7
 
-- [x] **TASK-0605 — Execution Timeline** (`7dbb42c`): GET /executions/timeline?interval=hour|day|week — 호출 수·성공/실패율·토큰·비용·지연을 시간 버킷(UTC date_trunc, 오름차순, 데이터 있는 버킷만)으로 제공, feature/provider/model 정확 일치 + from/to 필터, DB (버킷,status) $queryRaw 집계(전 값 바인딩·interval 화이트리스트) → core buildExecutionTimeline 병합, 잘못된 interval/날짜 400 — 해석 확인 CTO_REQUEST #26
+- [x] **TASK-0701 — Execution Dashboard Web UI** (`eb202c6`): /executions 운영 대시보드 — Stats/Timeline API 소비, KPI 카드 4종(성공률은 UI에서 % 표시), Timeline Chart(hour/day/week 전환·성공/실패 스택 막대·UTC 축·빈 버킷 UI 보간), Feature/Provider/Model 통계 테이블, 서버 컴포넌트+CSS 차트(외부 라이브러리 없음), API 미연결 안내 — 브라우저(Playwright) 검증, 해석 확인 CTO_REQUEST #27
+
+## 완료 — Sprint 6 (CTO 공식 종료, 2026-07-28)
+
+- [x] **TASK-0605 — Execution Timeline** (`7dbb42c`, CTO 승인 — UTC·ISO Week·hour/day/week 공식 표준, 빈 버킷은 UI 보간, hour 기간 제한은 다음 Sprint 확정): GET /executions/timeline?interval=hour|day|week — 호출 수·성공/실패율·토큰·비용·지연을 시간 버킷(UTC date_trunc, 오름차순, 데이터 있는 버킷만)으로 제공, feature/provider/model 정확 일치 + from/to 필터, DB (버킷,status) $queryRaw 집계(전 값 바인딩·interval 화이트리스트) → core buildExecutionTimeline 병합, 잘못된 interval/날짜 400 — 해석 확인 CTO_REQUEST #26
 - [x] **TASK-0604 — Image Guard & Preprocessing** (`6c00dfb`, CTO 승인 — 기본 정책(20MB/1024px/5MB/JPEG q82)·위반 스킵 후 계속·업로드 원본 무변경(호출 시점 전처리) 확정): Vision Provider 호출 전 이미지 검증(MIME 허용 목록·원본 20MB·빈 파일)·리사이즈(최대 변 1024px, 비율 유지·확대 없음)·최적화(JPEG q82, 투명 PNG 유지)·EXIF 제거(Orientation은 픽셀 반영 후 삭제)·출력 5MB 제한 — core Port(ImageGuardPolicy/ImagePreprocessor) + sharp 어댑터(apps/api), 위반 이미지는 스킵(분석 계속, raw.skippedImages 기록)·인프라 오류는 null 폴백 유지, VISION_IMAGE_* 환경변수 조정 — 해석 확인 CTO_REQUEST #25
 - [x] **TASK-0603 — Provider Integration (OpenAI)** (`34d1426`, CTO 승인 — 가격표 Code-first·접두사 매칭·cost null 유지, json_object 공식 구현, Health(실 ping+Execution 기록) 유지, 실키 검증은 운영/스테이징 확정): OpenAI Provider 공식 연결 — API Key(OPENAI_API_KEY, 없으면 mock 폴백), Health Check(GET /llm/health, 실호출 기반·Execution dev 기록), responseFormat→response_format json_object 매핑, Multimodal(image_url, 클라이언트 주입 단위 검증), Execution Cost(gpt-4o/$2.5·$10, gpt-4o-mini 단가 등록 + 스냅샷 모델 최장 접두사 매칭) — 실키 호출은 샌드박스 egress 제한으로 미검증(무효 키 배선 검증 완료), 해석 확인 CTO_REQUEST #24
 - [x] **TASK-0602 — Execution Dashboard** (`162f165`, CTO 승인 — 지표 구성 유지·비율 0~1 API 반환(%는 UI)·from/to 공식 채택·화면은 다음 Sprint·일별 시계열은 Sprint 6 후반 확정): GET /executions/stats?from=&to= — 호출 수·성공률·실패율·토큰·비용(USD)·지연(가중 평균·최대)을 전체(totals) + feature/provider/model별로 집계, DB (차원,status) groupBy → @acos/core 순수 병합 로직(buildExecutionStats, DB 없이 단위 테스트), 기간 필터·날짜 검증 400, DB 변경 없음 — 해석 확인 CTO_REQUEST #23
