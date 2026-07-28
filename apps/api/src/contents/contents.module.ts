@@ -1,5 +1,8 @@
 import { Logger, Module } from "@nestjs/common";
 import { MockContentGenerator, type ContentGenerator } from "@acos/core";
+import { CompanyBrainModule } from "../company-brain/company-brain.module";
+import { LlmModule } from "../llm/llm.module";
+import { ContentGenerationService } from "./content-generation.service";
 import { CONTENT_GENERATOR } from "./contents.constants";
 import { ContentsController } from "./contents.controller";
 import { ContentsService } from "./contents.service";
@@ -22,14 +25,16 @@ function createContentGenerator(): ContentGenerator {
 }
 
 @Module({
+  imports: [CompanyBrainModule, LlmModule],
   controllers: [ContentsController],
   providers: [
     ContentsService,
+    ContentGenerationService,
     {
       provide: CONTENT_GENERATOR,
       useFactory: createContentGenerator,
     },
   ],
-  exports: [ContentsService],
+  exports: [ContentsService, ContentGenerationService],
 })
 export class ContentsModule {}

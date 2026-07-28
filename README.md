@@ -164,14 +164,19 @@ OCR·Vision 결과를 조립한 **핵심 데이터 모델**입니다. 프로젝�
 
 웹: `/projects`(목록) · `/projects/[id]`(파이프라인 실행 — 조립 → READY 전환 → 상세페이지 생성)
 
-## 상세페이지 콘텐츠 (TASK-0303)
+## 상세페이지 콘텐츠 (TASK-0303 · TASK-0502)
 
 READY 상태의 Product Object를 단일 입력으로 상세페이지(Markdown)를 생성합니다.
-Generator는 `CONTENT_GENERATOR`로 교체 가능(기본 mock) — [docs/architecture/content.md](docs/architecture/content.md)
+
+- **엔진 경로 (TASK-0502)**: READY Product Object + **Company Brain**(지식·결정·설정·금지어) +
+  **LLM Gateway**로 생성 — [docs/architecture/content-generation.md](docs/architecture/content-generation.md)
+- 구 mock Generator 경로 (TASK-0303): `CONTENT_GENERATOR` 교체 구조 —
+  [docs/architecture/content.md](docs/architecture/content.md)
 
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
-| `POST` | `/projects/:projectId/contents` | `{ productObjectVersion? }` — 미지정 시 최신 READY 버전 사용 |
+| `POST` | `/projects/:projectId/contents/generate` | **Content Generation Engine** — `{ productObjectVersion? }`, 미지정 시 최신 READY |
+| `POST` | `/projects/:projectId/contents` | 구 mock Generator 경로 (기존 기능 보존) |
 | `GET` | `/projects/:projectId/contents` | 목록 |
 | `GET` | `/projects/:projectId/contents/:contentId` | 단건 |
 

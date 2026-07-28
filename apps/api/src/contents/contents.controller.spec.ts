@@ -3,6 +3,7 @@ import { Test } from "@nestjs/testing";
 import { MockContentGenerator } from "@acos/core";
 import request from "supertest";
 import { PrismaService } from "../prisma/prisma.service";
+import { ContentGenerationService } from "./content-generation.service";
 import { CONTENT_GENERATOR } from "./contents.constants";
 import { ContentsController } from "./contents.controller";
 import { ContentsService } from "./contents.service";
@@ -24,6 +25,10 @@ describe("Contents API (API Test)", () => {
         ContentsService,
         { provide: PrismaService, useValue: prismaMock },
         { provide: CONTENT_GENERATOR, useValue: new MockContentGenerator() },
+        {
+          provide: ContentGenerationService,
+          useValue: { generate: jest.fn() },
+        },
       ],
     }).compile();
 
@@ -78,5 +83,32 @@ describe("Contents API (API Test)", () => {
       .post("/projects/nope/contents")
       .send({})
       .expect(404);
+  });
+
+  it("POST /projects/:id/contents/generate — Content Generation Engine으로 라우팅 (TASK-0502)", async () => {
+    const engine = app.get(ContentGenerationService) as unknown as {
+      generate: jest.Mock;
+    };
+    engine.generate.mockResolvedValue({
+      id: "content-gen-1",
+      projectId: "proj-1",
+      productObjectId: "po-1",
+      productObjectVersion: 2,
+      title: "생성된 상세페이지",
+      body: "# 생성된 상세페이지",
+      status: "DRAFT",
+      createdAt: "",
+      updatedAt: "",
+    });
+
+    const response = await request(app.getHttpServer())
+      .post("/projects/proj-1/contents/generate")
+      .send({ productObjectVersion: 2 })
+      .expect(201);
+
+    expect(response.body.title).toBe("생성된 상세페이지");
+    expect(engine.generate).toHaveBeenCalledWith("proj-1", {
+      productObjectVersion: 2,
+    });
   });
 });

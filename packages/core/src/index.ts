@@ -11,6 +11,7 @@ export * from "./memory";
 export * from "./knowledge";
 export * from "./ready-validation";
 export * from "./llm";
+export * from "./content-generation";
 
 import type { ContentDto, ContentStatus } from "@acos/shared";
 
