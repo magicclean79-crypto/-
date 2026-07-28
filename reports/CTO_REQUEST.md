@@ -5,26 +5,30 @@
 
 ## 결정 대기
 
-### 21. TASK-0506 "Legacy Generator Integration" 세부 해석 확인
-- 현황: 지시 사항(Deprecated Generator 제거 금지, Wrapper로 공식 엔진 호출,
-  API 계약 유지·내부만 통합)을 다음과 같이 구현했다:
-  - **`EngineContentGenerator`(Wrapper, apps/api)** — 구 `ContentGenerator`
-    Port를 구현하고 내부에서 공식 엔진의 생성 코어를 호출. 구 경로의 흐름
-    (READY 검증 → generate → 저장)·요청/응답/오류 계약은 변경 없음
-  - **생성 코어 공용화**: `ContentGenerationService.generateMarkdown()`
-    (저장 없는 Company Brain+렌더링+LLM 호출) 분리 — 공식 경로와 Wrapper가
-    공용. 같은 PO에 대해 두 경로의 본문이 동일함을 테스트·라이브로 검증
-  - **SOP 상세페이지 단계도 자동 통합** — ContentsService를 쓰는 SOP
-    product-content가 공식 엔진을 경유하게 됨 (라이브 4단계 DONE 확인)
-  - **CONTENT_GENERATOR 환경 변수 제거** — LLM_PROVIDER 하나로 일원화
-    (0504·0505 승인 원칙 적용). 구 `MockContentGenerator`는 지시대로
-    @deprecated 보존(어디에도 연결되지 않음, core 테스트 유지)
-  - TASK-0505 승인 결정 ① 반영: `VISION_MAX_IMAGES` 환경 변수화 (기본 5)
-- 하지 않은 것(스펙 없음): 구 라우트/Port/mock 구현의 최종 제거,
-  웹 UI 변경(웹은 이미 공식 경로 사용)
-- 질문: ① Wrapper를 apps/api에 둔 구조·CONTENT_GENERATOR env 제거가 의도에
-  부합하는지 ② 구 경로(라우트·Port·mock)의 최종 제거 시점 ③ Sprint 5 예고
-  백로그가 모두 완료된 상태 — Sprint 종료 여부와 다음 TASK 지정 요청.
+### 22. TASK-0601 "Execution Domain" 세부 해석 확인
+- 현황: 지시 사항(모든 LLM 호출이 Execution 생성 — Provider/Model/Token/
+  Cost/Latency/Status 기록)을 다음과 같이 구현했다:
+  - **기록 지점 단일화**: 모든 LLM 호출의 유일한 통로인
+    `LlmService.complete(request, { feature })`에서 ExecutionTracker
+    (@acos/core)로 기록 — Content(`content-generation`, 공식·구 Wrapper·SOP
+    포함) / Analysis(`product-analysis`) / Vision(`vision-analysis`) /
+    개발용 API(`dev`)의 4종 feature 태그
+  - **기록 규칙**: 호출 1건 = 레코드 1건 (LlmGateway 내부 재시도는 1건으로
+    집계). 성공 시 실제 응답의 provider/model/usage, 실패 시 폴백
+    provider/model + 오류. 검증 오류(400)는 호출 시도가 아니므로 비기록.
+    **기록 실패는 호출을 실패시키지 않음**(가용성 우선). 요청/응답 본문은
+    저장하지 않음(관측 지표만)
+  - **비용(Cost)**: 코드 선언 가격표(USD/1M 토큰) 기준 예상 비용 —
+    mock은 0, **가격표에 없는 모델은 null 기록** (공식 단가 스펙 없이
+    임의 단가를 기록하지 않기 위함)
+  - **조회**: `GET /executions?feature=&limit=` (읽기 전용) — 집계/대시보드는
+    미구현(스펙 없음)
+- 하지 않은 것(스펙 없음): 실모델 단가 등록, 재시도 attempts 세분 기록,
+  기간별 비용 집계 API, 프로젝트/상품 연관(FK — Execution은 독립 테이블)
+- 질문: ① feature 4종·검증 오류 비기록·본문 비저장이 의도에 부합하는지
+  ② **실모델 공식 단가 스펙**(모델별 USD/1M input·output) 확정 요청 —
+  등록 즉시 실모델 cost 기록 활성화 ③ Execution을 프로젝트/기능 엔티티와
+  연관(FK)할 필요 여부 ④ 다음 TASK 지정 요청.
 
 ### 2. tesseract Provider 유지 여부
 - 현황: OCR 기본 Provider는 mock이며, 로컬 오프라인 엔진(tesseract.js)이
@@ -47,6 +51,15 @@
 - 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
 
 ## 결정됨
+
+### 21. TASK-0506 해석 확인 → 승인 + Sprint 5 공식 종료 (2026-07-28)
+- CTO 결정: ① **EngineContentGenerator의 apps/api Wrapper 구조 유지**
+  ② **CONTENT_GENERATOR 환경변수 제거 상태 유지** — LLM_PROVIDER 하나만 사용
+  ③ **Deprecated Generator는 Sprint 6 이후 제거 검토 대상** — 현재는 Wrapper만
+  유지 ④ **Sprint 5 공식 종료** ⑤ Sprint 6 시작 — TASK-0601(Execution
+  Domain) 지시됨.
+- 반영(`fcbf6ce`): TASKS.md에 Sprint 5 종료 기록, Execution Domain 구현
+  (#22 참고).
 
 ### 20. TASK-0505 해석 확인 → 승인 + 상한 환경변수화 지시 (2026-07-28)
 - CTO 결정: ① **최대 이미지 수 제한 유지 + 환경변수로 관리 가능하게 개선**

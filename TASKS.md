@@ -8,11 +8,15 @@
 
 ## 미완료 (스펙 확정, 구현 대기)
 
-- (없음 — TASK-0506 완료. CTO 리뷰/승인 대기 중이며 승인 전 다음 TASK를 시작하지 않는다)
+- (없음 — TASK-0601 완료. CTO 리뷰/승인 대기 중이며 승인 전 다음 TASK를 시작하지 않는다)
 
-## 완료 — Sprint 5 (Goal: AI Execution)
+## 완료 — Sprint 6
 
-- [x] **TASK-0506 — Legacy Generator Integration** (`574523a`): Deprecated 구 Generator 경로(POST /projects/:id/contents)를 제거하지 않고 EngineContentGenerator(Wrapper)를 통해 공식 Content Generation Engine 호출로 통합 — API 계약 유지, generateMarkdown() 생성 코어 공용화(두 경로 본문 동일 검증), CONTENT_GENERATOR 환경 변수 제거(MockContentGenerator는 @deprecated 보존), 0505 승인 결정 반영(VISION_MAX_IMAGES 환경 변수화) — 해석 확인 CTO_REQUEST #21
+- [x] **TASK-0601 — Execution Domain** (`fcbf6ce`): 모든 LLM 호출(Content·Analysis·Vision·개발용)을 호출 1건당 Execution 1건으로 기록 — Execution 모델(feature/provider/model/token/cost USD/latencyMs/status/error) + 마이그레이션, ExecutionTracker(@acos/core, 기록 실패는 호출 미실패), 기록 지점은 LlmService.complete 단일화(feature 태깅), 비용은 코드 선언 가격표(mock 0, 미등록 모델 null), GET /executions 조회 API — 해석 확인 CTO_REQUEST #22
+
+## 완료 — Sprint 5 (Goal: AI Execution — CTO 공식 종료, 2026-07-28)
+
+- [x] **TASK-0506 — Legacy Generator Integration** (`574523a`, CTO 승인 — Wrapper 구조 유지·CONTENT_GENERATOR 제거 유지·Deprecated Generator는 Sprint 6 이후 제거 검토 확정): Deprecated 구 Generator 경로(POST /projects/:id/contents)를 제거하지 않고 EngineContentGenerator(Wrapper)를 통해 공식 Content Generation Engine 호출로 통합 — API 계약 유지, generateMarkdown() 생성 코어 공용화(두 경로 본문 동일 검증), CONTENT_GENERATOR 환경 변수 제거(MockContentGenerator는 @deprecated 보존), 0505 승인 결정 반영(VISION_MAX_IMAGES 환경 변수화) — 해석 확인 CTO_REQUEST #21
 - [x] **TASK-0505 — Vision Multimodal Integration** (`d63a975`, CTO 승인 — 이미지 상한 유지+환경변수화·Mock Echo 공식 적용·VISION_PROVIDER 제거 유지·용량 제한은 실연결 전 구현 확정): 구 MockVisionProvider를 LLM 기반 멀티모달 공식 엔진(LlmVisionProvider)으로 교체 — Image Bytes(base64, 최대 5장) + Prompt Engine("vision-analysis" 템플릿) + LLM Gateway(images 멀티모달 확장 + 어댑터 3종 이미지 매핑) + Company Brain 사용, 응답 엄격 파싱(실패 시 재시도→null 폴백 유지), VisionSummary 모델·저장 위치 변경 없음, VISION_PROVIDER 환경 변수 제거(LLM_PROVIDER로 일원화) — 해석 확인 CTO_REQUEST #20
 - [x] **TASK-0504 — Analysis Engine Integration** (`74e9fbb`, CTO 승인 — Mock JSON Echo 공식 전략·responseFormat 유지·ANALYSIS_PROVIDER 제거 유지 확정): 구 MockAnalysisProvider를 LLM 기반 공식 엔진(LlmAnalysisProvider)으로 교체 — Prompt Engine("product-analysis" 템플릿, 규칙 기반 초안 JSON 포함) + LLM Gateway(responseFormat "json") + Company Brain(상품 이름 기준 PROJECT 스코프) 사용, 응답 엄격 파싱(실패 시 재시도→FAILED), AnalysisResult 모델·API·1:N 이력 변경 없음, ANALYSIS_PROVIDER 환경 변수 제거(LLM_PROVIDER로 일원화) — 해석 확인 CTO_REQUEST #19
 - [x] **TASK-0503 — Prompt Engine** (`9f44b87`): PromptTemplate+PromptEngine(@acos/core, 선언적 템플릿 레지스트리·결정적 렌더링), 상세페이지 프롬프트를 content-generation 템플릿으로 분리, 모든 AI 기능 공용 설계(등록→render→LLM Gateway), GET /prompt/templates — 0502 승인 결정 반영(웹 버튼 엔진 전환, 구 경로 Deprecated), 해석 확인 CTO_REQUEST #18
