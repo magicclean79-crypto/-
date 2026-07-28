@@ -5,27 +5,31 @@
 
 ## 결정 대기
 
-### 31. TASK-0801 "Authentication & Authorization Foundation" 세부 해석 확인
-- 현황: 지시 5요소를 다음과 같이 구현했다:
-  - **User Entity**: email 유니크·역할 3종(ADMIN/EDITOR/VIEWER), 관리자
-    부트스트랩(사용자 0명 시 AUTH_ADMIN_* 로 생성), 사용자 생성 API는
-    ADMIN 전용
-  - **Session**: DB 저장형 256비트 Bearer 토큰(기본 7일) — 로그아웃·만료 시
-    즉시 무효화(JWT 미사용). 비밀번호는 Node scrypt(외부 의존성 없음)
-  - **RBAC**: AuthGuard + @RequireRole — 역할 계층 비교(ADMIN>EDITOR>VIEWER)
-  - **Actor Audit**: 발행 전이가 EDITOR 이상 인증 필수가 되고 수행자
-    이메일이 감사 이력 actor에 기록됨(기존 이력 null 보존) — 0704 승인 ①의
-    "인증 도입 이후 추가" 이행
-  - **Login UI**: /login(localStorage 토큰·오류 표시·로그아웃) +
-    Playwright 3종(공식 게이트 준수)
-  - **적용 범위(해석)**: Foundation 단계로 **발행 전이·사용자 관리에만
-    강제** — 기존 파이프라인/조회 API는 무변경(SOP·스모크·기존 테스트 호환)
-- 하지 않은 것(스펙 없음): 인증 전면 강제(쓰기 API 전체), 사용자 관리 UI,
-  비밀번호 변경/재설정, httpOnly 쿠키 세션(도메인 구성 필요), 토큰 갱신
-- 질문: ① 적용 범위(발행 전이·사용자 관리 우선)가 의도에 부합하는지 —
-  **전면 강제 범위/시점** 지정 요청 ② 역할 3종·역할별 권한(전이 EDITOR+,
-  사용자 관리 ADMIN)이 적절한지 ③ localStorage 토큰 보관(개발 단계) 유지
-  여부 — httpOnly 쿠키 전환 시점 ④ 다음 TASK 지정 요청.
+### 32. TASK-0802 "User Management UI & Full Write Protection" 세부 해석 확인
+- 현황: 지시 항목(User List · User Create · Role Change · User Disable ·
+  모든 Write API 인증 · Role Guard 확장 · Audit 확장 · Playwright)을 다음과
+  같이 구현했다:
+  - **전면 쓰기 보호**: 전역 `WriteProtectionGuard`(APP_GUARD) — 모든
+    POST/PATCH/PUT/DELETE에 Bearer 인증 강제, 기본 요구 역할 **EDITOR**,
+    `@RequireRole`로 개별 지정(사용자 관리 ADMIN · 로그아웃 VIEWER)
+  - **@Public 예외 3종**(읽기 성격의 POST): 로그인 · Company Brain
+    조회(`POST /company-brain/query`) · READY 검증(판정만, 저장 없음)
+  - **조회 GET**: 0801 승인 ① 원칙에 따라 비보호 유지
+  - **사용자 관리(ADMIN)**: `GET /auth/users` 목록 ·
+    `PATCH /auth/users/:id` 역할 변경/비활성화 — **자기 자신 변경 불가
+    400**(마지막 관리자 강등/자기 비활성 방지), **비활성화 시 기존 세션
+    전부 즉시 폐기** + 로그인·토큰 검증 거부(활성화로 복구 가능)
+  - **Audit 확장**: `user_audit_log` — USER_CREATED/ROLE_CHANGED/
+    USER_DISABLED/USER_ENABLED (actor·대상·상세), `GET /auth/audit`(ADMIN)
+  - **Web UI**: `/admin/users` — 목록·생성 폼·역할 select·비활성화 토글·
+    감사 로그 + Playwright 3종. 웹의 모든 쓰기 호출(파이프라인·업로더)에
+    토큰 첨부, 스모크 스크립트에 로그인 단계 추가(9단계 리허설 PASS)
+- 하지 않은 것(스펙 없음): 비밀번호 변경/재설정(사용자 셀프 서비스),
+  운영 httpOnly 쿠키 전환(배포 도메인 확정 필요), 조회 GET 보호,
+  `/llm/health` 보호(GET이지만 실 Provider 호출 발생)
+- 질문: ① @Public 예외 3종·기본 EDITOR 정책이 의도에 부합하는지
+  ② `/llm/health`(GET이지만 실호출·Execution 기록 발생)를 비보호로 유지할지
+  ③ 비밀번호 변경/재설정 도입 여부·시점 ④ 다음 TASK 지정 요청.
 
 ### 2. tesseract Provider 유지 여부
 - 현황: OCR 기본 Provider는 mock이며, 로컬 오프라인 엔진(tesseract.js)이
@@ -48,6 +52,16 @@
 - 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
 
 ## 결정됨
+
+### 31. TASK-0801 해석 확인 → 승인 + 인증 정책 확정 (2026-07-28)
+- CTO 결정: ① **인증 적용 범위 현재 구조 유지** — Foundation 단계는 발행
+  전이·사용자 관리만 강제, 조회 API·생성 파이프라인은 유지 (→ 전면 확대는
+  TASK-0802로 지시됨) ② **역할 ADMIN/EDITOR/VIEWER 3종 공식 표준**
+  ③ **토큰: 개발은 localStorage 유지, 운영 전환 시 httpOnly Cookie ·
+  Secure Cookie · SameSite 적용** ④ TASK-0802(User Management UI & Full
+  Write Protection) 지시됨.
+- 반영(`3383e12`): 전면 쓰기 보호 + 사용자 관리 구현 (#32 참고). 운영 쿠키
+  전환은 배포 도메인 확정 시 구현 항목으로 백로그 유지.
 
 ### 30. TASK-0704 해석 확인 → 승인 + Audit 표준 확정 + Sprint 7 종료 (2026-07-28)
 - CTO 결정: ① **Audit History는 From/To/Timestamp만 기록하는 현 구조를

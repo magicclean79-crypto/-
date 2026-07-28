@@ -13,136 +13,136 @@
 
 | 항목 | 값 |
 | --- | --- |
-| 보고 기준 TASK | **TASK-0801 — Authentication & Authorization Foundation** (Sprint 8 첫 TASK) |
+| 보고 기준 TASK | **TASK-0802 — User Management UI & Full Write Protection** |
 | 보고일 | 2026-07-28 |
-| 브랜치 / 기준 커밋 | `claude/ai-product-content-os-setup-jb5oai` / `400b4ae` |
-| 핵심 성과 | 지시 5요소(User Entity·Session·RBAC·Actor Audit·Login UI) 전부 구현 — **감사 이력에 수행자 기록 시작** |
-| 구현 중단 상태 | **TASK-0801 완료 후 즉시 중단** — CTO 승인 전 다음 TASK 미착수 |
-| 스펙 확인 필요 | **인증 전면 강제 범위**·역할 정책 등 → **CTO_REQUEST #31 확인 요청** |
+| 브랜치 / 기준 커밋 | `claude/ai-product-content-os-setup-jb5oai` / `3383e12` |
+| 핵심 성과 | **모든 쓰기 API 인증 강제**(전역 가드) + 사용자 관리(목록·생성·역할 변경·비활성화) UI/API + 감사 확장 |
+| 구현 중단 상태 | **TASK-0802 완료 후 즉시 중단** — CTO 승인 전 다음 TASK 미착수 |
+| 스펙 확인 필요 | @Public 예외 3종·기본 역할 정책 등 → **CTO_REQUEST #32 확인 요청** |
 
 ## 2. 품질 게이트
 
 | 게이트 | 명령 | 결과 |
 | --- | --- | --- |
 | Build | `pnpm build` | ✅ 6/6 워크스페이스 성공 |
-| Test | `pnpm test` | ✅ **310** — core 130(+4) · api 171(+5) · **web e2e 9(+3)** — 전체 통과 |
+| Test | `pnpm test` | ✅ **320** — core 130 · api 178(+7) · **web e2e 12(+3)** — 전체 통과 |
 | TypeScript | (빌드 포함) | ✅ 오류 0 |
 | ESLint | `pnpm lint` | ✅ 오류 0, 경고 0 |
 
 ## 3. 변경 사항 (이번 보고 주기)
 
-### Sprint 7 종료 반영
+### TASK-0802 — User Management UI & Full Write Protection (`3383e12`)
 
-- CTO 결정: TASK-0704 승인 (Audit from/to/timestamp 공식 표준 — **Actor는
-  인증 도입 이후 추가** → 본 TASK에서 이행, Publishing UI 위치 확정),
-  **Sprint 7 공식 종료** — TASKS.md 기록
+지시된 7개 항목 전부 이행:
 
-### TASK-0801 — Authentication & Authorization Foundation (`400b4ae`)
-
-1. **User Entity**: `users` 테이블 — email 유니크·이름·scrypt 해시·역할
-   (ADMIN/EDITOR/VIEWER). **관리자 부트스트랩**: 최초 기동 시 사용자 0명이면
-   관리자 1명 자동 생성(`AUTH_ADMIN_EMAIL/PASSWORD`, 기본값은 로컬 전용).
-   사용자 생성 API `POST /auth/users`(ADMIN 전용, 중복 409·짧은 비밀번호 400)
-2. **Session**: `auth_sessions` — **DB 저장형** 256비트 토큰(기본 7일),
-   `Authorization: Bearer`. 로그인/로그아웃/me, 로그아웃·만료 시 즉시 무효화
-   (JWT 미사용 — 서버 폐기 가능성 우선). 비밀번호는 Node 내장 **scrypt**
-   (salt 개별·상수 시간 비교 — 외부 의존성 없음, core 순수 로직)
-3. **RBAC**: `AuthGuard` + `@RequireRole` — **역할 계층 비교**(ADMIN >
-   EDITOR > VIEWER, core `roleAtLeast`). 미인증 401 · 권한 부족 403.
-   적용: 발행 전이 **EDITOR 이상**, 사용자 생성 **ADMIN**
-4. **Actor Audit**: `content_status_history.actor` 컬럼 추가 — 발행 전이가
-   인증 필수가 되면서 **수행자 이메일이 감사 이력에 기록**됨 (기존 이력은
-   null 유지 — 데이터 보존)
-5. **Login UI**: `/login` — 로그인 폼(오류 표시)·로그인 상태·로그아웃.
-   토큰은 localStorage, 발행 전이 호출에 Bearer 첨부, 401 시 로그인 링크
-   안내. 홈 내비게이션 추가
-6. **Playwright** (공식 게이트 준수): auth e2e 3종(로그인 성공/실패·미로그인
-   전이 안내) + 발행 e2e 토큰 주입 갱신 — 웹 게이트 총 9종
-
-- **적용 범위(해석)**: Foundation 단계로 **발행 전이·사용자 관리에만 강제**
-  — 기존 파이프라인(업로드~생성)과 조회 API는 무변경(테스트·SOP·스모크
-  호환). 전면 강제 로드맵은 #31로 질의
-- 마이그레이션 1건(신규 2테이블+actor 컬럼, 기존 데이터 무영향), drift 없음
+1. **모든 Write API 인증**: 전역 `WriteProtectionGuard`(APP_GUARD) —
+   모든 POST/PATCH/PUT/DELETE에 Bearer 인증 강제. 조회 GET은 비보호 유지
+   (0801 승인 ① 원칙). **읽기 성격의 POST 3종만 @Public 예외**: 로그인 ·
+   Company Brain 조회 · READY 검증(판정만, 저장 없음)
+2. **Role Guard 확장**: 기본 요구 역할 **EDITOR**(모든 쓰기), `@RequireRole`
+   로 개별 지정 — 사용자 관리 **ADMIN**, 로그아웃 **VIEWER**(모든 역할).
+   역할 계층 비교는 core 함수 재사용
+3. **User List**: `GET /auth/users` (ADMIN)
+4. **User Create**: 기존 API에 감사 기록 연계 (actor)
+5. **Role Change**: `PATCH /auth/users/:id { role }` — 변경 전후 기록
+6. **User Disable**: `PATCH /auth/users/:id { disabled }` — 비활성화 시
+   로그인 거부("비활성화된 계정") + **기존 세션 전부 즉시 폐기** + 토큰 검증
+   거부. **자기 자신 변경 불가**(400 — 마지막 관리자 강등/자기 비활성 방지)
+7. **Audit 확장**: `user_audit_log` 테이블 — USER_CREATED / ROLE_CHANGED /
+   USER_DISABLED / USER_ENABLED (actor·대상·상세), `GET /auth/audit`(ADMIN)
+8. **UI + Playwright** (지시 사항): `/admin/users` — 목록 테이블·생성 폼·
+   역할 select·비활성화 토글·감사 로그. 미로그인/권한 부족 안내.
+   **Playwright 3종** 추가(미로그인 안내 · 전체 관리 흐름 · 자기 자신 보호)
+- **연쇄 반영**: 웹의 모든 쓰기 호출(파이프라인 버튼·업로더 XHR/fetch)에
+  토큰 첨부, 스모크 스크립트에 로그인 단계 추가(9단계 — 리허설 9/9 PASS)
+- 마이그레이션 1건(User.disabled + user_audit_log — 데이터 보존), drift 없음
 
 ### 누적 완료 TASK
 
 | Sprint | TASK | 상태 |
 | --- | --- | --- |
-| Sprint 8 | **TASK-0801 — Auth Foundation** | **완료 (`400b4ae`) — 승인 대기** |
-| Sprint 1~7 | Foundation ~ Publishing/관측/웹 게이트 | 전체 승인 · 공식 종료 |
+| Sprint 8 | 0801 Auth Foundation | 승인 (범위·역할·토큰 정책 확정) |
+| Sprint 8 | **TASK-0802 — User Mgmt & Full Write Protection** | **완료 (`3383e12`) — 승인 대기** |
+| Sprint 1~7 | Foundation ~ Publishing/관측 | 전체 승인 · 공식 종료 |
 
 ## 4. 테스트 결과
 
 | 위치 | 종류 | 수 | 결과 |
 | --- | --- | --- | --- |
-| `packages/core` | Unit — 기존 126 · **인증 4** (해시 왕복/거부·토큰·역할 계층) | 130 | ✅ |
-| `apps/api` | Service+API — 기존 166 · **Auth 5** (로그인·me·로그아웃·RBAC·사용자 생성) + 전이 401/403/actor 검증 강화 | 171 | ✅ |
-| `apps/web` | Playwright e2e — 기존 6 · **인증 3** | 9 | ✅ |
-| **합계** | | **310** | **전체 통과** |
+| `packages/core` | Unit | 130 | ✅ (변경 없음) |
+| `apps/api` | Service+API — 기존 171 · **전역 가드 6 + 사용자 관리 1(통합 시나리오)** | 178 | ✅ |
+| `apps/web` | Playwright e2e — 기존 9 · **사용자 관리 3** | 12 | ✅ |
+| **합계** | | **320** | **전체 통과** |
 
-라이브 검증 (실 PostgreSQL + 실스택 브라우저):
-- 부트스트랩 관리자 로그인 → 토큰 발급·`/auth/me` 확인
-- 무토큰 전이 401 → 관리자 토큰 전이 200 → **감사 이력에
-  `actor: admin@acos.local` 기록 확인**
-- ADMIN이 VIEWER 생성 → VIEWER 전이 시도 **403** ("EDITOR 이상 필요") ·
-  VIEWER의 사용자 생성 **403** · 로그아웃 후 me **401** (세션 즉시 무효화)
-- 브라우저: `/login` 로그인 → 홈 리다이렉트·토큰 저장 → 실제 프로젝트
-  화면에서 인증 전이 정상 (스크린샷 첨부)
+신규 테스트가 검증하는 것:
+- 전역 가드: GET 통과·@Public 통과·무토큰 401·VIEWER 403·EDITOR/ADMIN 통과·
+  @RequireRole(ADMIN/VIEWER) 오버라이드
+- 사용자 관리: 목록(EDITOR 403)·역할 변경·비활성화(세션 즉시 무효+재로그인
+  401)·자기 자신 400·감사 로그 최신순(actor 포함)
+- 웹 e2e: 미로그인 안내, 목록→생성→역할 변경→비활성화→감사 로그 전 흐름,
+  자기 자신 보호 오류
+
+라이브 검증 (실 PostgreSQL + 실스택):
+- **무토큰 쓰기 401**: POST /products · /contents/generate · /llm/complete
+- **@Public/조회 유지 200**: company-brain/query · ready-validation · GET들
+- 관리자 로그인 후 쓰기 201 · 역할 변경(VIEWER→EDITOR) · 비활성화 →
+  "비활성화된 계정" 로그인 거부 · 감사 로그 기록 확인
+- **스모크 리허설 9/9 PASS** (로그인 단계 포함) · 브라우저에서 /admin/users
+  전체 흐름 확인 (스크린샷 첨부)
 
 ## 5. 아키텍처 변경 및 현황
 
-**이번 주기 변경 — 인증 계층 신설 (점진 적용)**:
+**이번 주기 변경 — 쓰기 전면 보호 + 사용자 수명주기 관리**:
 
 ```
-/login (토큰 발급·localStorage)          보호 적용 (이번 TASK):
-  └─ Authorization: Bearer ─▶ AuthGuard ──┬─ PATCH …/contents/:id/status (EDITOR+)
-       (DB 세션 검증 → request.user)      │    └─ actor → 감사 이력
-       @RequireRole: 계층 비교            └─ POST /auth/users (ADMIN)
-비보호(현행 유지): 조회·파이프라인 API — 전면 강제 범위는 CTO 결정 대기
+모든 쓰기 요청 ─▶ WriteProtectionGuard (전역)
+                    ├─ GET/@Public → 통과 (조회 비보호 원칙)
+                    ├─ 무토큰 401 · 역할 미달 403 (기본 EDITOR)
+                    └─ @RequireRole: ADMIN(사용자 관리) · VIEWER(로그아웃)
+/admin/users (ADMIN UI) ─▶ 목록·생성·역할·비활성화 ─▶ user_audit_log (감사)
+                                    └─ 비활성화 = 로그인 거부 + 세션 즉시 폐기
 ```
 
-① 인증 로직도 기존 원칙대로 분해 — 순수 로직(해시·토큰·계층)은 core,
-저장·가드는 api, 화면은 web. ② 세션은 DB 저장형 — 유출 시 서버에서 즉시
-폐기 가능. ③ Actor Audit로 0704 감사 이력이 완전해짐(누가·언제·무엇을).
+① 보호가 **기본값**이 됨 — 새 쓰기 엔드포인트는 자동으로 EDITOR+ 보호,
+예외는 명시적 @Public. ② 감사 2축 완성: 콘텐츠 전이(actor) + 사용자 관리
+(4종 액션). ③ 세션 즉시 폐기로 비활성화가 실시간 효력.
 
-**유지되는 핵심 결정**: Port/Adapter 계층 · mock 기본 원칙 · 이력 보존 모델 · Playwright 공식 게이트 · 발행 전이 표준
+**유지되는 핵심 결정**: Port/Adapter 계층 · mock 기본 원칙 · 이력 보존 모델 · Playwright 공식 게이트 · 역할 3종 표준 · 조회 비보호
 
-**현황**: 모노레포(web·api·core/shared/agents/ui), **마이그레이션 19건**(+1), drift 없음
+**현황**: 모노레포(web·api·core/shared/agents/ui), **마이그레이션 20건**(+1), drift 없음
 
 ## 6. 데이터 모델
 
 ```
-User (신설): id · email(유니크) · name · passwordHash(scrypt) · role(enum 3종)
-AuthSession (신설): token(유니크 256bit) · userId(FK Cascade) · expiresAt
-ContentStatusHistory: + actor String?  (수행자 이메일 — 기존 이력 null 보존)
+User: + disabled Boolean @default(false)  (비활성화 — 로그인/세션 무효)
+UserAuditLog (신설): actor · action(4종) · targetEmail · detail · createdAt
 ```
 
 ## 7. API 표면
 
 | 영역 | 엔드포인트 |
 | --- | --- |
-| 기존 전체 | (유지 — 이전 보고 참조) |
-| **인증** | `POST /auth/login`(공개) · `POST /auth/logout` · `GET /auth/me`(인증) · `POST /auth/users`(**ADMIN**) |
-| 콘텐츠 | `PATCH …/contents/:id/status` — **EDITOR 이상 + actor 기록** (그 외 무변경) |
+| 인증/사용자 | 기존 4종 + **`GET /auth/users` · `PATCH /auth/users/:id` · `GET /auth/audit`** (ADMIN) |
+| **전체 쓰기** | POST/PATCH/PUT/DELETE 전부 **EDITOR 이상** (예외: login·company-brain/query·ready-validation) |
+| 조회 GET | 변경 없음 (비보호) |
 
-웹: **`/login`** (신설) · `/projects/[id]` 발행 UI가 토큰 첨부·401 안내
+웹: **`/admin/users`** (신설) · 업로드/파이프라인/발행 호출에 토큰 첨부
 
 ## 8. 리스크·기술 부채
 
-1. **0801 해석 미확인** — 적용 범위(발행 전이·사용자 관리만)·역할 3종·
-   localStorage 토큰 보관 방식 (CTO_REQUEST #31)
-2. **전면 강제 미적용** — 조회·파이프라인 API는 여전히 공개 (로드맵 질의) —
-   전면 강제 시 SOP/스모크/웹 서버 컴포넌트 인증 전파 작업 필요
-3. **기본 관리자 비밀번호** — 로컬 전용 기본값 존재 (운영 배포 시
-   AUTH_ADMIN_* 필수 — 문서 명시)
-4. **토큰 보관 = localStorage** — XSS 노출면 존재 (httpOnly 쿠키 전환은
-   웹/API 도메인 구성 확정 후 검토 항목)
+1. **0802 해석 미확인** — @Public 예외 3종·기본 EDITOR 정책·/llm/health(GET
+   이지만 실호출) 비보호 (CTO_REQUEST #32)
+2. **비밀번호 변경/재설정 부재** — 사용자 스스로 변경 불가 (ADMIN 재생성만)
+3. **조회 GET 비공개 데이터** — 조회 비보호 원칙상 데이터 노출면 존재
+   (사내망 전제 — 외부 공개 시 조회 보호 확대 필요)
+4. **운영 쿠키 전환** — CTO 결정(httpOnly/Secure/SameSite)은 배포 도메인
+   확정 시 구현 항목
 5. **실키 스모크(운영/스테이징)·Anthropic/Gemini 연결** — 대기
 
 ## 9. 다음 권장 사항 (Sprint 8 후속 후보)
 
-1. **CTO_REQUEST #31 확인** — TASK-0801 해석 확인 및 다음 지시
-2. **인증 전면 강제 로드맵** — 쓰기 API 전체 보호 + 역할 정책표 확정
-3. **사용자 관리 UI** — ADMIN용 사용자 목록/생성 화면 (Playwright 포함)
-4. **httpOnly 쿠키 세션** — 배포 도메인 확정 시 토큰 보관 강화
-5. **실키 스모크(운영/스테이징)** — 인증 포함 재검증
+1. **CTO_REQUEST #32 확인** — TASK-0802 해석 확인 및 다음 지시
+2. **비밀번호 변경/재설정** — 사용자 셀프 서비스 (감사 연계)
+3. **운영 쿠키 세션 전환** — httpOnly/Secure/SameSite (CTO 확정 사항의 구현)
+4. **실키 스모크(운영/스테이징)** — 인증 포함 최종 검증
+5. **Anthropic/Gemini 공식 연결** — OpenAI 5항목 패턴 재적용

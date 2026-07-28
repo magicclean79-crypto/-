@@ -8,11 +8,12 @@
 
 ## 미완료 (스펙 확정, 구현 대기)
 
-- (없음 — TASK-0801 완료. CTO 리뷰/승인 대기 중이며 승인 전 다음 TASK를 시작하지 않는다)
+- (없음 — TASK-0802 완료. CTO 리뷰/승인 대기 중이며 승인 전 다음 TASK를 시작하지 않는다)
 
 ## 완료 — Sprint 8
 
-- [x] **TASK-0801 — Authentication & Authorization Foundation** (`400b4ae`): User Entity(역할 3종)+DB 세션(Bearer 256비트, 7일)+scrypt 해시(@acos/core)+RBAC(AuthGuard/@RequireRole 계층 비교 — 발행 전이 EDITOR+, 사용자 생성 ADMIN)+Actor Audit(content_status_history.actor에 수행자 이메일)+Login UI(/login, localStorage 토큰, Playwright 3종) — 관리자 부트스트랩(AUTH_ADMIN_*), 적용 범위는 발행 전이·사용자 관리(전면 강제는 CTO 결정 대기), 해석 확인 CTO_REQUEST #31
+- [x] **TASK-0802 — User Management UI & Full Write Protection** (`3383e12`): 전면 쓰기 보호(WriteProtectionGuard APP_GUARD — 모든 POST/PATCH/PUT/DELETE 인증, 기본 EDITOR+, 읽기 성격 POST는 @Public, 조회 GET 비보호 유지) + 사용자 관리(목록/생성/역할 변경/비활성화 — 자기 자신 불가, 비활성화 시 세션 즉시 폐기) + Audit 확장(user_audit_log 4종 액션) + /admin/users UI(Playwright 3종, 웹 e2e 12종) + 웹 쓰기 호출 토큰 첨부·스모크 로그인 단계 — 해석 확인 CTO_REQUEST #32
+- [x] **TASK-0801 — Authentication & Authorization Foundation** (`400b4ae`, CTO 승인 — Foundation 적용 범위(발행 전이·사용자 관리) 확정→0802에서 전면 확대 지시, 역할 3종 공식 표준, 토큰은 개발 localStorage·운영 httpOnly/Secure/SameSite 쿠키 전환 확정): User Entity(역할 3종)+DB 세션(Bearer 256비트, 7일)+scrypt 해시(@acos/core)+RBAC(AuthGuard/@RequireRole 계층 비교 — 발행 전이 EDITOR+, 사용자 생성 ADMIN)+Actor Audit(content_status_history.actor에 수행자 이메일)+Login UI(/login, localStorage 토큰, Playwright 3종) — 관리자 부트스트랩(AUTH_ADMIN_*), 적용 범위는 발행 전이·사용자 관리(전면 강제는 CTO 결정 대기), 해석 확인 CTO_REQUEST #31
 
 ## 완료 — Sprint 7 (CTO 공식 종료, 2026-07-28)
 
