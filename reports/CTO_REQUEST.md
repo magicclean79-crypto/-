@@ -5,37 +5,37 @@
 
 ## 결정 대기
 
-### 37. TASK-0903 "Anthropic & Gemini Provider Integration" 세부 해석 확인
-- 현황: 지시 5항목(Anthropic · Gemini · Provider Factory · Unified
-  Execution · Provider Comparison Dashboard)을 다음과 같이 구현했다:
-  - **Anthropic 공식 연결**: `responseFormat "json"` → **JSON 전용 system
-    지시 강화**로 매핑. Claude 4.6+ 모델은 assistant prefill이 400이므로
-    prefill 방식을 쓰지 않고, 지시 + 엄격 파싱(기존 재시도)이 공식 매핑.
-    멀티모달 image block, 잘림 방어(stop_reason=max_tokens)
-  - **Gemini 공식 연결**: `responseMimeType: "application/json"`(공식 JSON
-    모드) 매핑, inlineData 멀티모달, 응답 `modelVersion`(스냅샷) 기록으로
-    접두사 매칭 비용, 잘림 방어(finishReason=MAX_TOKENS)
-    — 잘림 정책은 **0901-② 확정 그대로 3사 통일**(JSON FAILED·텍스트 부분 허용)
-  - **Provider Factory**: Registry 기반 테이블 드리븐(`provider.factory.ts`)
-    — 키 환경변수 단일 정의·미설정 시 mock 폴백. 새 Provider 추가는
-    **Registry·어댑터 테이블·가격표 3곳**
-  - **Unified Execution**: claude-opus-5($5/$25)·claude-sonnet-5($3/$15)·
-    claude-haiku-4-5($1/$5)·gemini-2.5-flash($0.3/$2.5) 단가 등록 —
-    전 Provider 동일 스키마·비용 산정, **Registry 전 모델의 가격표 등록을
-    테스트가 보증**
-  - **Provider 비교 대시보드**: `/providers` — 호출·성공률·평균 지연·토큰·
-    비용·**비용/호출**을 Provider별 비교
-  - 라이브: Anthropic은 무효 키로 **실 api.anthropic.com까지 도달해 401**
-    (배선 확인), Gemini는 키 없음 → mock 폴백 로그 확인
-- 하지 않은 것(스펙 없음): Cross-Provider Routing(0902 승인 ②대로 이번
-  연결 이후가 시점), Provider Failover(장애 시 자동 전환), Anthropic
-  스키마 강제(tool/structured output API — 현재는 지시+파싱 재시도),
-  실키 응답 검증(운영/스테이징 스모크 — 0901 승인 ③)
-- 질문: ① Anthropic JSON을 **지시 강화 방식**으로 매핑한 판단이 적절한지
-  (prefill은 400이라 불가 — 스키마 강제가 필요하면 별도 TASK 필요)
-  ② 가격표 등록 모델 범위(사별 대표 모델만) 유지 여부 ③ **Cross-Provider
-  Routing / Provider Failover 도입 여부·순서** ④ 다음 TASK 지정 요청
-  (Sprint 9 종료 여부 포함).
+### 38. TASK-1001 "Cross-Provider Routing Engine" 세부 해석 확인
+- 현황: 지시 4항목(Feature별 Provider Mapping · Dynamic Routing ·
+  Routing Dashboard · Routing Metrics)을 다음과 같이 구현했다
+  (**Provider Failover는 지시대로 범위 제외**):
+  - **Feature별 매핑**: `LLM_ROUTE_CONTENT`/`LLM_ROUTE_ANALYSIS`/
+    `LLM_ROUTE_VISION` = `provider` 또는 `provider:model`.
+    라우팅 단위는 **기존 feature 3종**(dev는 항상 기본 Provider)
+  - **Dynamic**: 호출 시점마다 환경 해석 — 재기동 없이 다음 호출부터 반영
+  - **폴백**: 매핑된 Provider를 쓸 수 없으면(키 미설정) 기본 Provider로
+    내려가고 경고 로그 + 대시보드에 `fallback`·사유 표시.
+    **설정 해석 시점 폴백**이며 호출 실패 시 전환은 하지 않음
+  - **우선순위**: 호출자 `model` > 규칙의 `:model` > `LLM_MODEL_*`
+    (**같은 Provider일 때만** — 타 Provider 모델명 오적용 방지) >
+    Provider 기본 모델
+  - **Dashboard**: `GET /llm/routing` + 웹 `/routing`(결정 근거 배지 3종·
+    폴백 사유·환경변수명) · **Metrics**: `/executions/stats`의 `byRoute`
+    (`feature→provider`별 호출·성공률·지연·토큰·비용)
+  - 라이브: 분석→anthropic 실제 호출·Execution 기록, vision→gemini(키 없음)
+    폴백 확인
+- 하지 않은 것: Provider Failover(범위 제외), 라우팅 A/B·비율 분배,
+  라우팅 설정의 ADMIN 화면 관리(현재 환경변수 Code-first)
+- **발견된 정합 이슈**: `AnalysisRun.provider`(분석 이력)는 기동 시점의
+  기본 Provider 이름(`llm:mock`)으로 고정돼, 라우팅으로 실제 호출된
+  Provider와 다를 수 있습니다. **Execution에는 실제 경로가 정확히 기록**
+  되어 운영 관측에는 영향이 없으나, 이력 필드 의미 변경은 CTO 결정
+  사항이라 임의 변경하지 않았습니다.
+- 질문: ① 라우팅 단위를 **feature 3종**으로 유지할지 (프로젝트/사용자별
+  라우팅은 별도 스펙 필요) ② 폴백 정책 — 현재처럼 **기본 Provider로 조용히
+  내려가기**가 맞는지, 아니면 명시적 실패(400)가 맞는지 ③ 분석/Vision
+  이력의 `provider` 필드를 **실제 라우팅 Provider로 반영**할지 (이력 의미
+  변경) ④ 다음 TASK 지정 요청 (Provider Failover 도입 여부 포함).
 
 ### 2. tesseract Provider 유지 여부
 - 현황: OCR 기본 Provider는 mock이며, 로컬 오프라인 엔진(tesseract.js)이
@@ -58,6 +58,15 @@
 - 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
 
 ## 결정됨
+
+### 37. TASK-0903 해석 확인 → 승인 + JSON 방식·가격표 확정 + Sprint 9 종료 (2026-07-28)
+- CTO 결정: ① **Anthropic JSON은 System Prompt + JSON Parsing + Retry
+  방식을 공식 표준으로 확정** — Structured Output API는 추후 별도 Sprint
+  에서 검토 ② **가격표는 공식 운영 모델만 등록** — Preview 모델은 제외
+  ③ **Sprint 9 공식 종료** ④ Sprint 10 시작 — TASK-1001(Cross-Provider
+  Routing Engine) 지시됨 (Provider Failover는 범위 제외).
+- 반영(`03dca0f`): ①② 현행 구현과 일치 — 변경 없이 확정. Cross-Provider
+  Routing Engine 구현 (#38 참고).
 
 ### 36. TASK-0902 해석 확인 → 승인 + 예산 표준·라우팅 범위 확정 (2026-07-28)
 - CTO 결정: ① **예산 정책 공식 표준 확정** — 80% = Alert, 100% 초과 = 429
