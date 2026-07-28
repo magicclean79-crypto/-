@@ -175,8 +175,8 @@ READY 상태의 Product Object를 단일 입력으로 상세페이지(Markdown)�
 
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
-| `POST` | `/projects/:projectId/contents/generate` | **Content Generation Engine** — `{ productObjectVersion? }`, 미지정 시 최신 READY |
-| `POST` | `/projects/:projectId/contents` | 구 mock Generator 경로 (기존 기능 보존) |
+| `POST` | `/projects/:projectId/contents/generate` | **공식 생성 엔진** (CTO 결정) — `{ productObjectVersion? }`, 미지정 시 최신 READY. 웹 버튼도 이 경로 사용 |
+| `POST` | `/projects/:projectId/contents` | ⚠️ Deprecated — 구 mock Generator 경로 (다음 Sprint에 엔진 호출로 통합 예정) |
 | `GET` | `/projects/:projectId/contents` | 목록 |
 | `GET` | `/projects/:projectId/contents/:contentId` | 단건 |
 
@@ -213,6 +213,16 @@ SOP와 나란히 회사 지식을 축적합니다 — [docs/architecture/decisio
 - `decisionType`(Enum): `ARCHITECTURE · PROCESS · PRODUCT · BUSINESS · TECHNICAL · QUALITY · SECURITY · OTHER`
 
 오류: `400` 필수 필드(title/reason/decisionType/author) 누락·공백·Enum 외 유형, `404` 프로젝트/결정 없음.
+
+## Prompt Engine (TASK-0503)
+
+프롬프트 생성의 단일 엔진입니다. 모든 AI 기능은 `@acos/core`의 PromptTemplate을
+등록하고 `PromptEngine.render(key, context)`로만 프롬프트를 만듭니다 —
+[docs/architecture/prompt.md](docs/architecture/prompt.md)
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `GET` | `/prompt/templates` | 등록된 템플릿 목록 (현재: `content-generation`) |
 
 ## LLM Gateway (TASK-0501)
 

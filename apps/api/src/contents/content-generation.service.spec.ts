@@ -1,9 +1,11 @@
 import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
+import { createDefaultPromptEngine } from "@acos/core";
 import type { LlmCompleteRequest } from "@acos/shared";
 import { CompanyBrainService } from "../company-brain/company-brain.service";
 import { LlmService } from "../llm/llm.service";
 import { PrismaService } from "../prisma/prisma.service";
+import { PROMPT_ENGINE } from "../prompt/prompt.constants";
 import { ContentGenerationService } from "./content-generation.service";
 import {
   createPrismaMock,
@@ -84,6 +86,7 @@ describe("ContentGenerationService (Service Test)", () => {
         { provide: PrismaService, useValue: prisma },
         { provide: CompanyBrainService, useValue: companyBrain },
         { provide: LlmService, useValue: llm },
+        { provide: PROMPT_ENGINE, useValue: createDefaultPromptEngine() },
       ],
     }).compile();
     return {

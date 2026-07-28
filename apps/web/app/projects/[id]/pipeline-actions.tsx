@@ -89,7 +89,7 @@ export function PipelineActions({
         <button
           type="button"
           disabled={busy !== null}
-          onClick={() => run("content", `/projects/${projectId}/contents`, "POST", {})}
+          onClick={() => run("content", `/projects/${projectId}/contents/generate`, "POST", {})}
           className={`${buttonClass} bg-violet-600 text-white hover:bg-violet-700`}
         >
           {busy === "content" ? "생성 중…" : "📄 상세페이지 생성"}

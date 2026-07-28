@@ -10,7 +10,10 @@ export class ContentsController {
     private readonly contentGenerationService: ContentGenerationService,
   ) {}
 
-  /** 상세페이지 생성 (TASK-0303 mock Generator 경로 — 기존 기능 보존) */
+  /**
+   * @deprecated 구 mock Generator 경로 — 공식 엔진은 POST …/contents/generate.
+   * 다음 Sprint에서 내부적으로 새 엔진을 호출하도록 통합 예정 (CTO 결정).
+   */
   @Post()
   async generate(
     @Param("projectId") projectId: string,

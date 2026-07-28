@@ -12,6 +12,7 @@ export * from "./knowledge";
 export * from "./ready-validation";
 export * from "./llm";
 export * from "./content-generation";
+export * from "./prompt";
 
 import type { ContentDto, ContentStatus } from "@acos/shared";
 

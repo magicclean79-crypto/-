@@ -525,6 +525,14 @@ export interface LlmGatewayInfoDto {
   defaultModel: string;
 }
 
+// ── Prompt Engine (TASK-0503) ──────────────────────────
+
+export interface PromptTemplateInfoDto {
+  key: string;
+  name: string;
+  description: string;
+}
+
 export function formatDate(date: Date): string {
   return date.toISOString().slice(0, 10);
 }

@@ -3,8 +3,9 @@ import type { OcrSummary, VisionSummary } from "@acos/shared";
 /**
  * 상세페이지 콘텐츠 생성기 추상화 (Port). (TASK-0303)
  *
- * Product Object를 단일 입력으로 받아 상세페이지 콘텐츠를 생성한다.
- * Claude, OpenAI 등 실제 모델은 이 인터페이스를 구현해 교체한다.
+ * @deprecated CTO 결정(TASK-0502 승인): 공식 생성 엔진은 Content Generation
+ * Engine(READY PO + Company Brain + LLM Gateway)이다. 이 Port 경로는
+ * 다음 Sprint에서 내부적으로 새 엔진을 호출하도록 통합될 예정.
  * 자세한 구조: docs/architecture/content.md
  */
 export interface ContentGenerator {

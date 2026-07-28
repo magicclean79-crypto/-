@@ -1,13 +1,11 @@
 import {
   BadRequestException,
+  Inject,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import {
-  buildContentGenerationMessages,
-  extractMarkdownTitle,
-} from "@acos/core";
-import type { ContentGenerationContext } from "@acos/core";
+import { extractMarkdownTitle } from "@acos/core";
+import type { ContentGenerationContext, PromptEngine } from "@acos/core";
 import type {
   ContentDto,
   DecisionDto,
@@ -22,6 +20,7 @@ import type { Content, ProductObject } from "@prisma/client";
 import { CompanyBrainService } from "../company-brain/company-brain.service";
 import { LlmService } from "../llm/llm.service";
 import { PrismaService } from "../prisma/prisma.service";
+import { PROMPT_ENGINE } from "../prompt/prompt.constants";
 
 function sectionItems<T>(
   response: CompanyBrainQueryResponse,
@@ -56,7 +55,8 @@ function toDto(record: ContentWithVersion): ContentDto {
  * ① READY Product Object (검증 규칙은 TASK-0303과 동일)
  * ② Company Brain (CompanyBrainService — 지식/결정/설정/금지어 컨텍스트)
  * ③ LLM Gateway (LlmService — Provider 교체 구조, 기본 mock)
- * 생성된 Markdown은 Content로 저장된다.
+ * 프롬프트는 Prompt Engine(TASK-0503)의 "content-generation" 템플릿으로
+ * 렌더링하고, 생성된 Markdown은 Content로 저장된다.
  */
 @Injectable()
 export class ContentGenerationService {
@@ -64,6 +64,7 @@ export class ContentGenerationService {
     private readonly prisma: PrismaService,
     private readonly companyBrain: CompanyBrainService,
     private readonly llm: LlmService,
+    @Inject(PROMPT_ENGINE) private readonly promptEngine: PromptEngine,
   ) {}
 
   async generate(
@@ -107,7 +108,7 @@ export class ContentGenerationService {
       companyBrain,
     };
     const completion = await this.llm.complete({
-      messages: buildContentGenerationMessages(context),
+      messages: this.promptEngine.render("content-generation", context),
     });
 
     // 생성 결과를 Content에 저장
