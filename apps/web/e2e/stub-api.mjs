@@ -11,8 +11,26 @@ const stats = (totals, groups) => ({
   range: { from: null, to: null },
   totals,
   byFeature: groups,
+  // Provider 비교 (TASK-0903) — 다중 Provider 비교 렌더링 검증용
   byProvider: groups.length
-    ? [{ key: "mock", stats: totals }]
+    ? [
+        { key: "mock", stats: totals },
+        {
+          key: "anthropic",
+          stats: {
+            count: 4,
+            successCount: 3,
+            failedCount: 1,
+            successRate: 0.75,
+            failureRate: 0.25,
+            inputTokens: 4000,
+            outputTokens: 1600,
+            cost: 0.06,
+            avgLatencyMs: 850.4,
+            maxLatencyMs: 1200,
+          },
+        },
+      ]
     : [],
   byModel: groups.length
     ? [{ key: "mock-llm-1", stats: totals }]
@@ -464,8 +482,8 @@ const server = http.createServer((req, res) => {
         providers: [
           { name: "mock", title: "Mock", connection: "mock", keyConfigured: true, selected: true, defaultModel: "mock-llm-1", models: ["mock-llm-1"], note: "개발 기본 — 실제 API 미호출, 비용 0" },
           { name: "openai", title: "OpenAI", connection: "official", keyConfigured: mode === "data", selected: false, defaultModel: "gpt-4o", models: ["gpt-4o", "gpt-4o-mini"], note: "공식 연결" },
-          { name: "anthropic", title: "Anthropic", connection: "adapter-ready", keyConfigured: false, selected: false, defaultModel: "claude-opus-5", models: ["claude-opus-5"], note: "공식 연결 대기" },
-          { name: "gemini", title: "Google Gemini", connection: "adapter-ready", keyConfigured: false, selected: false, defaultModel: "gemini-2.5-flash", models: ["gemini-2.5-flash"], note: "공식 연결 대기" },
+          { name: "anthropic", title: "Anthropic", connection: "official", keyConfigured: false, selected: false, defaultModel: "claude-opus-5", models: ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"], note: "공식 연결 (TASK-0903)" },
+          { name: "gemini", title: "Google Gemini", connection: "official", keyConfigured: false, selected: false, defaultModel: "gemini-2.5-flash", models: ["gemini-2.5-flash"], note: "공식 연결 (TASK-0903)" },
         ],
       }),
     );

@@ -49,20 +49,20 @@ export const LLM_PROVIDER_REGISTRY: LlmProviderInfo[] = [
   {
     name: "anthropic",
     title: "Anthropic",
-    connection: "adapter-ready",
+    connection: "official",
     keyEnv: "ANTHROPIC_API_KEY",
     defaultModel: "claude-opus-5",
-    models: ["claude-opus-5"],
-    note: "어댑터 구현됨 — 구조화 출력 매핑·가격표는 공식 연결 시",
+    models: ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"],
+    note: "공식 연결 (TASK-0903) — JSON 지시 강화·멀티모달·비용 산정·잘림 방어",
   },
   {
     name: "gemini",
     title: "Google Gemini",
-    connection: "adapter-ready",
+    connection: "official",
     keyEnv: "GEMINI_API_KEY",
     defaultModel: "gemini-2.5-flash",
     models: ["gemini-2.5-flash"],
-    note: "어댑터 구현됨 — 구조화 출력 매핑·가격표는 공식 연결 시",
+    note: "공식 연결 (TASK-0903) — responseMimeType JSON·멀티모달·비용 산정·잘림 방어",
   },
 ];
 

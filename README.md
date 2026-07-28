@@ -271,8 +271,9 @@ SOP와 나란히 회사 지식을 축적합니다 — [docs/architecture/decisio
 ## LLM Gateway (TASK-0501)
 
 모든 LLM 호출의 단일 진입점입니다. Provider는 `LLM_PROVIDER` 환경변수로 교체
-(`mock` 기본 · `openai` · `anthropic` · `gemini`), API 키가 없으면 항상 mock으로
-동작합니다 — [docs/architecture/llm.md](docs/architecture/llm.md)
+(`mock` 기본 · `openai` · `anthropic` · `gemini` — **3사 전부 공식 연결**),
+API 키가 없으면 항상 mock으로 동작합니다 —
+[docs/architecture/llm.md](docs/architecture/llm.md)
 
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
@@ -292,6 +293,12 @@ SOP와 나란히 회사 지식을 축적합니다 — [docs/architecture/decisio
   `GET /llm/budget`. **Multi-Provider Foundation**: Provider Registry
   (`GET /llm/providers`) · Model Routing `LLM_MODEL_CONTENT/ANALYSIS/VISION` ·
   웹 **`/providers`** 대시보드
+- **Anthropic·Gemini 공식 연결 (TASK-0903)**: Registry 기반 **Provider
+  Factory**(`provider.factory.ts` — 새 Provider는 Registry·어댑터·가격표
+  3곳만 갱신) · 구조화 출력(Anthropic JSON 지시 강화 · Gemini
+  `responseMimeType`) · 3사 통일 잘림 방어 · **Unified Execution**(동일
+  스키마·전 Provider 비용 산정) · 웹 `/providers` **Provider 비교**
+  (성공률·지연·비용·비용/호출)
 
 ## Execution Domain (TASK-0601, Sprint 6)
 

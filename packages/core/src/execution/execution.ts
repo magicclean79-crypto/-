@@ -58,6 +58,12 @@ export const DEFAULT_LLM_PRICING: Record<
   // OpenAI (TASK-0603) — 공식 공개 단가 (USD / 1M tokens)
   "gpt-4o": { inputPerMillion: 2.5, outputPerMillion: 10 },
   "gpt-4o-mini": { inputPerMillion: 0.15, outputPerMillion: 0.6 },
+  // Anthropic (TASK-0903) — 공식 공개 단가 (USD / 1M tokens)
+  "claude-opus-5": { inputPerMillion: 5, outputPerMillion: 25 },
+  "claude-sonnet-5": { inputPerMillion: 3, outputPerMillion: 15 },
+  "claude-haiku-4-5": { inputPerMillion: 1, outputPerMillion: 5 },
+  // Google Gemini (TASK-0903) — 공식 공개 단가 (USD / 1M tokens)
+  "gemini-2.5-flash": { inputPerMillion: 0.3, outputPerMillion: 2.5 },
 };
 
 /**

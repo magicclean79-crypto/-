@@ -9,7 +9,7 @@ import type {
 } from "@acos/core";
 import { LLM_PROVIDER } from "./llm.constants";
 import { LlmService } from "./llm.service";
-import { createLlmProvider } from "./llm.module";
+import { createLlmProvider } from "./provider.factory";
 
 class InMemoryExecutionStore implements ExecutionStore {
   entries: NewExecution[] = [];

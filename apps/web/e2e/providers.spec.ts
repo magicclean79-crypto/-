@@ -16,12 +16,13 @@ test.describe("Provider Dashboard (TASK-0902)", () => {
     await setMode("data");
     await page.goto("/providers");
 
-    // Registry 4행 + 연결 배지 + 선택 표시
+    // Registry 4행 + 연결 배지 + 선택 표시 (TASK-0903: 3사 전부 공식 연결)
     await expect(page.getByTestId("provider-row")).toHaveCount(4);
     const table = page.getByTestId("providers-table");
     await expect(table).toContainText("OpenAI");
+    await expect(table).toContainText("Anthropic");
+    await expect(table).toContainText("Google Gemini");
     await expect(table).toContainText("공식 연결");
-    await expect(table).toContainText("어댑터 준비");
     await expect(table).toContainText("선택됨"); // mock 선택 상태
 
     // 선택 Provider + 라우팅
@@ -36,8 +37,15 @@ test.describe("Provider Dashboard (TASK-0902)", () => {
     await expect(page.getByTestId("budget-daily")).toContainText("$8.5200");
     await expect(page.getByTestId("budget-monthly")).toContainText("정상");
 
-    // Provider별 호출 통계 (stats stub의 mock 그룹)
-    await expect(page.getByTestId("provider-stats")).toContainText("mock");
+    // Provider 비교 (TASK-0903) — 다중 Provider 행 + 성공률/지연/비용 지표
+    const compare = page.getByTestId("provider-stats");
+    await expect(page.getByTestId("provider-compare-row")).toHaveCount(2);
+    await expect(compare).toContainText("mock");
+    await expect(compare).toContainText("anthropic");
+    await expect(compare).toContainText("75.0%"); // anthropic 성공률
+    await expect(compare).toContainText("850ms"); // 평균 지연
+    await expect(compare).toContainText("$0.0600"); // 비용
+    await expect(compare).toContainText("$0.0150"); // 비용/호출
   });
 
   test("예산 미설정이면 '미설정 (무제한)'으로 표시된다", async ({ page }) => {

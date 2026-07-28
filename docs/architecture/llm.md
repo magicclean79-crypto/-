@@ -27,8 +27,15 @@ Google Gemini)는 환경변수 하나로 교체되며, **기본은 mock** — AP
 | `LLM_ANALYSIS_MAX_TOKENS` | 기본 2048 | product-analysis 출력 상한 (TASK-0901) |
 | `LLM_VISION_MAX_TOKENS` | 기본 2048 | vision-analysis 출력 상한 (TASK-0901) |
 
-새 Provider 추가: `@acos/core`의 `LlmProvider`를 구현하고
-`apps/api/src/llm/llm.module.ts`의 팩토리에 case 하나를 추가하면 됩니다.
+**Provider Factory (TASK-0903)**: Provider 선택은
+`apps/api/src/llm/provider.factory.ts`가 담당한다 — Registry
+(`LLM_PROVIDER_REGISTRY`, core) 기반 **테이블 드리븐** 생성으로, 키
+환경변수는 Registry가 단일 정의하고 키가 없으면 경고 후 mock으로 대체한다.
+
+새 Provider 추가는 **3곳**만 갱신하면 된다:
+① Registry에 선언(core) ② `LlmProvider` 어댑터 구현 + Factory 테이블 1줄
+③ 가격표(`DEFAULT_LLM_PRICING`)에 단가 등록 —
+Registry의 모든 모델이 가격표에 있는지는 테스트가 보증한다.
 
 ## OpenAI Production (TASK-0901, Sprint 9)
 
@@ -54,9 +61,9 @@ Google Gemini)는 환경변수 하나로 교체되며, **기본은 mock** — AP
 | --- | --- | --- |
 | **Daily/Monthly Budget** | Execution cost(USD) 합계를 UTC 일/월 예산과 비교. **초과 시 새 LLM 호출을 429로 차단**(호출 전 검사 — Execution 미기록). 미설정 = 무제한(검사 오버헤드 없음) | `LLM_DAILY_BUDGET_USD` / `LLM_MONTHLY_BUDGET_USD` (미설정) |
 | **Cost Alert** | 예산의 80% 도달 시 경고 상태 — 상태 전이 시 서버 로그 + `/providers` 대시보드 배지 | `LLM_BUDGET_ALERT_RATIO` (0.8) |
-| **Provider Registry** | Code-first 중앙 정의(`LLM_PROVIDER_REGISTRY`, core) — 연결 상태(official/adapter-ready/mock)·키 설정 여부·기본 모델. `GET /llm/providers` (키 값 비노출) | — |
+| **Provider Registry** | Code-first 중앙 정의(`LLM_PROVIDER_REGISTRY`, core) — 연결 상태(official/adapter-ready/mock)·키 설정 여부·기본 모델. `GET /llm/providers` (키 값 비노출). **TASK-0903: openai·anthropic·gemini 3사 전부 `official`** | — |
 | **Model Routing** | feature별 모델 지정 — 미지정 시 Provider 기본, 호출자 명시가 최우선. 현 단계는 선택된 Provider 안의 모델 선택 (cross-provider 라우팅은 다음 단계) | `LLM_MODEL_CONTENT` / `LLM_MODEL_ANALYSIS` / `LLM_MODEL_VISION` |
-| **Provider Dashboard** | 웹 `/providers` — Registry·라우팅·예산 카드(진행 바/배지)·Provider별 호출 통계. Playwright 3종 | — |
+| **Provider Dashboard** | 웹 `/providers` — Registry·라우팅·예산 카드(진행 바/배지)·**Provider 비교**(호출·성공률·평균 지연·토큰·비용·비용/호출, TASK-0903). Playwright 3종 | — |
 
 검사 지점은 LlmService 단일 관문(Execution 기록과 동일 지점) —
 예산 로직은 core 순수 함수(`evaluateBudgetWindow`), 합산·차단은
@@ -77,18 +84,28 @@ Google Gemini)는 환경변수 하나로 교체되며, **기본은 mock** — AP
     `responseFormat: "json"`이면 프롬프트의 마지막 ```json 블록(템플릿이 넣은
     초안)을 그대로 반환 — 구조화 파이프라인의 오프라인 검증용 (TASK-0504).
     첨부 이미지는 해석하지 않고 개수만 raw.imageCount에 기록 (TASK-0505)
-- **어댑터 (`apps/api/src/llm/providers/`)** — 공식 SDK 사용
-  - Anthropic: system은 별도 파라미터, 응답은 content 블록에서 text 추출
-  - **OpenAI (TASK-0603 공식 연결)**: chat.completions —
+- **어댑터 (`apps/api/src/llm/providers/`)** — 공식 SDK 사용, **3사 전부 공식 연결**
+  - **OpenAI (TASK-0603 · Production 0901)**: chat.completions —
     `responseFormat "json"` → `response_format { type: "json_object" }` 매핑
-    (프롬프트 지침과 이중 강제), 멀티모달 image_url, gpt-4o 계열 단가가
-    가격표에 등록되어 Execution Cost 활성화. 테스트용 클라이언트 주입 지원
-  - Gemini: systemInstruction/contents 분리, assistant → model role 매핑
+    (프롬프트 지침과 이중 강제), 멀티모달 image_url, gpt-4o 계열 단가 등록
+  - **Anthropic (TASK-0903 공식 연결)**: messages — system은 별도 파라미터,
+    `responseFormat "json"` → **JSON 전용 system 지시 강화**로 매핑
+    (Claude 4.6+는 assistant prefill이 400이므로 prefill 미사용 — 지시 +
+    엄격 파싱·재시도가 공식 매핑), 멀티모달 `image` content block(base64),
+    claude-opus-5/sonnet-5/haiku-4.5 단가 등록
+  - **Gemini (TASK-0903 공식 연결)**: generateContent —
+    systemInstruction/contents 분리, assistant → model role 매핑,
+    `responseFormat "json"` → **`responseMimeType: "application/json"`**
+    (Gemini 공식 JSON 모드), 멀티모달 `inlineData` part, 응답
+    `modelVersion`(스냅샷) 기록으로 접두사 매칭 비용, gemini-2.5-flash 단가 등록
   - **이미지 매핑 (TASK-0505)**: `images`는 마지막 user 메시지에 Provider별
-    형식으로 첨부된다 — Anthropic `image` content block(base64) · OpenAI
-    `image_url`(data URL) · Gemini `inlineData` part
-  - Anthropic/Gemini의 `responseFormat` 구조화 출력 옵션 매핑은 해당 Provider
-    공식 연결 시 적용한다 (CTO 결정, TASK-0504 승인 — OpenAI는 0603에서 완료)
+    형식으로 첨부된다 (위 3종)
+  - **잘림 방어 (TASK-0901 정책 · 0903 3사 통일)**: 응답이 출력 한도에서
+    잘렸고(`finish_reason=length` / `stop_reason=max_tokens` /
+    `finishReason=MAX_TOKENS`) responseFormat이 json이면 **명확한 오류로 실패**
+    → Execution FAILED. 텍스트 출력은 부분 결과 허용
+  - **테스트용 클라이언트 주입**: 3사 어댑터 모두 지원 — 실 응답 형태를
+    재현한 통합 검증(`multi-provider-production.spec.ts` 등)
 
 ## Health Check (TASK-0603)
 

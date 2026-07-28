@@ -262,45 +262,66 @@ export default function ProvidersPage() {
 
       {stats && stats.byProvider.length > 0 ? (
         <section className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
-          <h2 className="text-sm font-semibold">Provider별 호출 통계 (전체 기간)</h2>
-          <table
-            className="mt-3 w-full text-left text-sm"
-            data-testid="provider-stats"
-          >
-            <thead className="text-xs text-zinc-500">
-              <tr>
-                <th className="py-1 pr-3 font-medium">Provider</th>
-                <th className="py-1 pr-3 font-medium">호출</th>
-                <th className="py-1 pr-3 font-medium">성공</th>
-                <th className="py-1 pr-3 font-medium">토큰 (입력/출력)</th>
-                <th className="py-1 pr-3 font-medium">비용</th>
-              </tr>
-            </thead>
-            <tbody>
-              {stats.byProvider.map((group) => (
-                <tr
-                  key={group.key}
-                  className="border-t border-zinc-100 dark:border-zinc-800"
-                >
-                  <td className="py-1.5 pr-3 font-mono text-xs">{group.key}</td>
-                  <td className="py-1.5 pr-3 tabular-nums">
-                    {group.stats.count}
-                  </td>
-                  <td className="py-1.5 pr-3 tabular-nums">
-                    {group.stats.successCount}
-                  </td>
-                  <td className="py-1.5 pr-3 tabular-nums">
-                    {group.stats.inputTokens}/{group.stats.outputTokens}
-                  </td>
-                  <td className="py-1.5 pr-3 tabular-nums">
-                    {group.stats.cost === null
-                      ? "미산정"
-                      : `$${Number(group.stats.cost).toFixed(4)}`}
-                  </td>
+          <h2 className="text-sm font-semibold">
+            Provider 비교 (전체 기간 — 성공률·지연·비용)
+          </h2>
+          <div className="mt-3 overflow-x-auto">
+            <table
+              className="w-full text-left text-sm"
+              data-testid="provider-stats"
+            >
+              <thead className="text-xs text-zinc-500">
+                <tr>
+                  <th className="py-1 pr-3 font-medium">Provider</th>
+                  <th className="py-1 pr-3 font-medium">호출</th>
+                  <th className="py-1 pr-3 font-medium">성공률</th>
+                  <th className="py-1 pr-3 font-medium">평균 지연</th>
+                  <th className="py-1 pr-3 font-medium">토큰 (입력/출력)</th>
+                  <th className="py-1 pr-3 font-medium">비용</th>
+                  <th className="py-1 pr-3 font-medium">비용/호출</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {stats.byProvider.map((group) => (
+                  <tr
+                    key={group.key}
+                    data-testid="provider-compare-row"
+                    className="border-t border-zinc-100 dark:border-zinc-800"
+                  >
+                    <td className="py-1.5 pr-3 font-mono text-xs">
+                      {group.key}
+                    </td>
+                    <td className="py-1.5 pr-3 tabular-nums">
+                      {group.stats.count}
+                    </td>
+                    <td className="py-1.5 pr-3 tabular-nums">
+                      {group.stats.successRate === null
+                        ? "—"
+                        : `${(group.stats.successRate * 100).toFixed(1)}%`}
+                    </td>
+                    <td className="py-1.5 pr-3 tabular-nums">
+                      {group.stats.avgLatencyMs === null
+                        ? "—"
+                        : `${Math.round(group.stats.avgLatencyMs)}ms`}
+                    </td>
+                    <td className="py-1.5 pr-3 tabular-nums">
+                      {group.stats.inputTokens}/{group.stats.outputTokens}
+                    </td>
+                    <td className="py-1.5 pr-3 tabular-nums">
+                      {group.stats.cost === null
+                        ? "미산정"
+                        : `$${Number(group.stats.cost).toFixed(4)}`}
+                    </td>
+                    <td className="py-1.5 pr-3 tabular-nums">
+                      {group.stats.cost === null || group.stats.count === 0
+                        ? "—"
+                        : `$${(Number(group.stats.cost) / group.stats.count).toFixed(4)}`}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </section>
       ) : null}
     </main>
