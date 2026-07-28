@@ -168,19 +168,20 @@ LLM Gateway + Company Brain**을 사용하는 `LlmAnalysisProvider`입니다 —
 
 웹: `/projects`(목록) · `/projects/[id]`(파이프라인 실행 — 조립 → READY 전환 → 상세페이지 생성)
 
-## 상세페이지 콘텐츠 (TASK-0303 · TASK-0502)
+## 상세페이지 콘텐츠 (TASK-0303 · TASK-0502 · TASK-0506 통합)
 
 READY 상태의 Product Object를 단일 입력으로 상세페이지(Markdown)를 생성합니다.
 
 - **엔진 경로 (TASK-0502)**: READY Product Object + **Company Brain**(지식·결정·설정·금지어) +
   **LLM Gateway**로 생성 — [docs/architecture/content-generation.md](docs/architecture/content-generation.md)
-- 구 mock Generator 경로 (TASK-0303): `CONTENT_GENERATOR` 교체 구조 —
+- 구 경로 (TASK-0303): **TASK-0506에서 내부가 공식 엔진으로 통합** — 계약은 유지되고
+  Wrapper(EngineContentGenerator)가 같은 생성 코어를 호출, 두 경로의 본문 동일 —
   [docs/architecture/content.md](docs/architecture/content.md)
 
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
 | `POST` | `/projects/:projectId/contents/generate` | **공식 생성 엔진** (CTO 결정) — `{ productObjectVersion? }`, 미지정 시 최신 READY. 웹 버튼도 이 경로 사용 |
-| `POST` | `/projects/:projectId/contents` | ⚠️ Deprecated — 구 mock Generator 경로 (다음 Sprint에 엔진 호출로 통합 예정) |
+| `POST` | `/projects/:projectId/contents` | ⚠️ Deprecated — 구 경로, 내부는 공식 엔진 호출 (TASK-0506 통합 완료) |
 | `GET` | `/projects/:projectId/contents` | 목록 |
 | `GET` | `/projects/:projectId/contents/:contentId` | 단건 |
 

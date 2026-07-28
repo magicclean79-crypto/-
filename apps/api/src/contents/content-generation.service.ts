@@ -48,6 +48,27 @@ function toDto(record: ContentWithVersion): ContentDto {
   };
 }
 
+/** 저장 없이 Markdown만 생성할 때의 입력 — Product Object 스냅샷 기반 */
+export interface MarkdownGenerationInput {
+  project: { id: string; name: string; description: string | null };
+  productObject: {
+    version: number;
+    title: string;
+    brand: string | null;
+    category: string | null;
+    attributes: Record<string, string>;
+    ocrText: string | null;
+    visionLabels: string[];
+  };
+}
+
+export interface MarkdownGenerationResult {
+  title: string;
+  /** 상세페이지 본문 (Markdown) */
+  body: string;
+  llm: { provider: string; model: string };
+}
+
 /**
  * Content Generation Engine (TASK-0502, Sprint 5 — AI Execution).
  *
@@ -57,6 +78,9 @@ function toDto(record: ContentWithVersion): ContentDto {
  * ③ LLM Gateway (LlmService — Provider 교체 구조, 기본 mock)
  * 프롬프트는 Prompt Engine(TASK-0503)의 "content-generation" 템플릿으로
  * 렌더링하고, 생성된 Markdown은 Content로 저장된다.
+ *
+ * generateMarkdown()은 저장 없는 생성 코어로, 구 Generator 경로의
+ * EngineContentGenerator(Wrapper, TASK-0506)도 이 메서드로 통합된다.
  */
 @Injectable()
 export class ContentGenerationService {
@@ -84,17 +108,15 @@ export class ContentGenerationService {
       request.productObjectVersion,
     );
 
-    // ② Company Brain 컨텍스트 (제목 검색 + 금지어)
-    const companyBrain = await this.readCompanyBrain(
-      projectId,
-      productObject.title,
-    );
-
-    // ③ LLM Gateway 호출 — 프롬프트 조립은 @acos/core
+    // ②③ Company Brain + Prompt Engine + LLM Gateway (저장 없는 생성 코어)
     const ocrSummary = productObject.ocrSummary as OcrSummary | null;
     const visionSummary = productObject.visionSummary as VisionSummary | null;
-    const context: ContentGenerationContext = {
-      project: { name: project.name, description: project.description },
+    const result = await this.generateMarkdown({
+      project: {
+        id: projectId,
+        name: project.name,
+        description: project.description,
+      },
       productObject: {
         version: productObject.version,
         title: productObject.title,
@@ -105,10 +127,6 @@ export class ContentGenerationService {
         ocrText: ocrSummary?.combinedText ?? null,
         visionLabels: visionSummary?.labels ?? [],
       },
-      companyBrain,
-    };
-    const completion = await this.llm.complete({
-      messages: this.promptEngine.render("content-generation", context),
     });
 
     // 생성 결과를 Content에 저장
@@ -116,15 +134,47 @@ export class ContentGenerationService {
       data: {
         projectId,
         productObjectId: productObject.id,
-        title: extractMarkdownTitle(
-          completion.text,
-          `${productObject.title} 상세페이지`,
-        ),
-        body: completion.text,
+        title: result.title,
+        body: result.body,
       },
       include: { productObject: { select: { version: true } } },
     });
     return toDto(record);
+  }
+
+  /**
+   * 저장 없는 생성 코어 — Company Brain 조회 + "content-generation" 템플릿
+   * 렌더링 + LLM Gateway 호출. generate()와 구 Generator Wrapper
+   * (EngineContentGenerator, TASK-0506)가 공용으로 사용한다.
+   */
+  async generateMarkdown(
+    input: MarkdownGenerationInput,
+  ): Promise<MarkdownGenerationResult> {
+    const companyBrain = await this.readCompanyBrain(
+      input.project.id,
+      input.productObject.title,
+    );
+
+    const context: ContentGenerationContext = {
+      project: {
+        name: input.project.name,
+        description: input.project.description,
+      },
+      productObject: input.productObject,
+      companyBrain,
+    };
+    const completion = await this.llm.complete({
+      messages: this.promptEngine.render("content-generation", context),
+    });
+
+    return {
+      title: extractMarkdownTitle(
+        completion.text,
+        `${input.productObject.title} 상세페이지`,
+      ),
+      body: completion.text,
+      llm: { provider: completion.provider, model: completion.model },
+    };
   }
 
   /** Company Brain 읽기 — 제목 검색(PROJECT 스코프) + 금지어(GLOBAL) */

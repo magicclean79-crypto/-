@@ -5,10 +5,11 @@ import type {
 } from "../content-generator";
 
 /**
- * Mock Content Generator. (CONTENT_GENERATOR=mock, 기본값)
+ * Mock Content Generator.
  *
- * 실제 생성 모델을 연결하기 전까지 사용하며, Product Object의 필드를
- * 결정적인 Markdown 상세페이지로 렌더링한다.
+ * @deprecated TASK-0506: 구 Generator 경로는 EngineContentGenerator(Wrapper,
+ * apps/api)를 통해 공식 Content Generation Engine을 호출한다 — 이 구현은
+ * CTO 지시로 보존되지만 더 이상 어디에도 연결되지 않는다.
  */
 export class MockContentGenerator implements ContentGenerator {
   readonly name = "mock";

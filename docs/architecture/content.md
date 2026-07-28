@@ -1,51 +1,59 @@
-# Content(상세페이지) 아키텍처
+# Content(상세페이지) 구 Generator 경로 아키텍처
 
-**Product Object를 단일 입력**으로 상세페이지 콘텐츠를 생성하는 파이프라인이다
-(TASK-0303). OCR/Analysis/Vision과 동일한 Port/Adapter 패턴을 사용하며,
-**실제 생성 모델은 연결되어 있지 않다** — 기본 Generator는
-`MockContentGenerator`(결정적 Markdown 렌더링)다.
+**Product Object를 단일 입력**으로 상세페이지 콘텐츠를 생성하는 구 파이프라인이다
+(TASK-0303). **공식 생성 엔진은 Content Generation Engine**
+([content-generation.md](content-generation.md))이며, **TASK-0506에서 이 구
+경로의 내부 구현이 공식 엔진으로 통합되었다** — API 계약은 그대로 유지되고,
+`ContentGenerator` Port 뒤에서 `EngineContentGenerator`(Wrapper)가 공식 엔진의
+생성 코어(`ContentGenerationService.generateMarkdown`)를 호출한다.
 
 ## 구성 요소
 
 | 계층 | 구성 요소 | 위치 |
 | --- | --- | --- |
-| Domain (Port) | `ContentGenerator`, `ContentGenerationInput/Result` | `packages/core/src/content/content-generator.ts` |
-| Adapter | `MockContentGenerator`(기본) | `packages/core/src/content/providers/mock.generator.ts` |
+| Domain (Port) | `ContentGenerator`, `ContentGenerationInput/Result` (⚠️ @deprecated — 유지) | `packages/core/src/content/content-generator.ts` |
+| Adapter (Wrapper) | **`EngineContentGenerator`** — 공식 엔진 호출 (TASK-0506) | `apps/api/src/contents/engine-content.generator.ts` |
+| Adapter (구 mock) | `MockContentGenerator` (⚠️ @deprecated — CTO 지시로 보존, 미연결) | `packages/core/src/content/providers/mock.generator.ts` |
 | API | `ContentsController`, `ContentsService` | `apps/api/src/contents/` |
 
-## 흐름
+## 흐름 (TASK-0506 이후)
 
 ```
-POST /projects/:projectId/contents   { productObjectVersion? }
+POST /projects/:projectId/contents   { productObjectVersion? }   ← ⚠️ Deprecated (계약은 유지)
         │
         ▼
-ContentsService
+ContentsService                                  ← 구 흐름 그대로
   1. Product Object 선택
        버전 지정 → 해당 버전 (READY 아니면 400)
        미지정   → 최신 READY 버전 (없으면 400)   ← 상태 전이(TASK-0302)와 연결
   2. ContentGenerator.generate(project + productObject)
+        └─▶ EngineContentGenerator (Wrapper)     ← 내부 구현만 교체 (TASK-0506)
+              └─▶ ContentGenerationService.generateMarkdown()
+                    = Company Brain + Prompt Engine("content-generation") + LLM Gateway
   3. contents에 저장 (status=DRAFT, productObjectId 연결)
 ```
 
+- **구 경로와 공식 경로(POST …/contents/generate)는 같은 Product Object에 대해
+  같은 본문을 생성한다** — 생성 코어가 하나이기 때문 (통합 테스트로 검증).
+- `CONTENT_GENERATOR` 환경 변수는 제거되었다 — 모델 선택은 LLM Gateway의
+  `LLM_PROVIDER` 하나로 관리된다 (기본 mock).
 - 콘텐츠는 **READY로 검수된 Product Object**에서만 생성된다.
 - `Content.productObjectId`로 어떤 버전에서 생성됐는지 추적된다(원본 삭제 시 SetNull).
 - Content 자체의 상태(`DRAFT → REVIEW → PUBLISHED | ARCHIVED`)는 기존
   `ContentStatus`를 사용하며 발행 파이프라인은 후속 TASK다.
 
-## Generator 교체 방법
+## 생성 로직 변경 방법
 
-`CONTENT_GENERATOR` 환경 변수로 선택한다 (`apps/api/src/contents/contents.module.ts`).
-
-1. `@acos/core`의 `ContentGenerator`를 구현한다 — Product Object 필드를 받아
-   `{ title, body(Markdown), raw }`를 반환하면 된다.
-2. `createContentGenerator()`에 case를 추가한다.
-3. `.env`의 `CONTENT_GENERATOR`를 새 이름으로 바꾼다.
-
-실제 모델 연결 예시는 [analysis.md](analysis.md)의 Claude structured outputs
-패턴과 동일하다 — 입력이 이미지가 아니라 Product Object JSON이라는 점만 다르다.
+이 경로에는 더 이상 독자적인 생성 로직이 없다 — 프롬프트는
+`content-generation` 템플릿([prompt.md](prompt.md)), 모델은
+`LLM_PROVIDER`([llm.md](llm.md))에서 관리한다. 신규 코드는 공식 경로
+(`POST …/contents/generate`)를 사용해야 하며, 구 경로는 하위 호환용이다.
 
 ## 테스트
 
-- Unit: `packages/core/src/content/content.spec.ts` — Markdown 렌더링, 선택 필드 생략
-- Service: `apps/api/src/contents/contents.service.spec.ts` — READY 규칙, 버전 지정, 404
-- API: `apps/api/src/contents/contents.controller.spec.ts` — supertest HTTP 계약
+- Unit: `packages/core/src/content/content.spec.ts` — 보존된 MockContentGenerator의
+  렌더링 (참고용 유지)
+- Service: `apps/api/src/contents/contents.service.spec.ts` — READY 규칙, 버전
+  지정, 404, **구 경로 = 공식 경로 본문 동일성(통합 검증)**
+- API: `apps/api/src/contents/contents.controller.spec.ts` — 구 계약 유지 +
+  **Wrapper가 공식 엔진(generateMarkdown)을 호출하는지 검증**

@@ -1,27 +1,53 @@
 import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
-import { MockContentGenerator } from "@acos/core";
+import { createDefaultPromptEngine, MockLlmProvider } from "@acos/core";
+import { CompanyBrainService } from "../company-brain/company-brain.service";
+import { LlmService } from "../llm/llm.service";
 import { PrismaService } from "../prisma/prisma.service";
+import { ContentGenerationService } from "./content-generation.service";
 import { CONTENT_GENERATOR } from "./contents.constants";
 import { ContentsService } from "./contents.service";
 import {
   createPrismaMock,
   readyProductObject,
 } from "./contents.spec-helpers";
+import { EngineContentGenerator } from "./engine-content.generator";
+
+/** 공식 엔진을 mock LLM + 빈 Company Brain으로 구성 — 운영 기본 구성과 동일한 경로 */
+function createEngine(
+  prisma: ReturnType<typeof createPrismaMock>,
+): ContentGenerationService {
+  const companyBrain = {
+    query: jest.fn(async () => ({ query: "", results: [] })),
+  } as unknown as CompanyBrainService;
+  return new ContentGenerationService(
+    prisma as unknown as PrismaService,
+    companyBrain,
+    new LlmService(new MockLlmProvider()),
+    createDefaultPromptEngine(),
+  );
+}
 
 describe("ContentsService (Service Test)", () => {
-  async function createService(prisma: ReturnType<typeof createPrismaMock>) {
+  async function createService(
+    prisma: ReturnType<typeof createPrismaMock>,
+    engine: ContentGenerationService = createEngine(prisma),
+  ) {
     const moduleRef = await Test.createTestingModule({
       providers: [
         ContentsService,
         { provide: PrismaService, useValue: prisma },
-        { provide: CONTENT_GENERATOR, useValue: new MockContentGenerator() },
+        {
+          // TASK-0506: 구 Generator 경로는 Wrapper를 통해 공식 엔진 호출
+          provide: CONTENT_GENERATOR,
+          useValue: new EngineContentGenerator(engine),
+        },
       ],
     }).compile();
     return moduleRef.get(ContentsService);
   }
 
-  it("최신 READY Product Object로 상세페이지를 생성한다", async () => {
+  it("최신 READY Product Object로 상세페이지를 생성한다 (내부는 공식 엔진)", async () => {
     const prisma = createPrismaMock();
     prisma.productObjects.push({ ...readyProductObject });
     const service = await createService(prisma);
@@ -30,9 +56,22 @@ describe("ContentsService (Service Test)", () => {
 
     expect(content.status).toBe("DRAFT");
     expect(content.productObjectVersion).toBe(2);
+    // mock LLM 응답에는 Markdown 제목이 없어 fallback 제목이 쓰인다
     expect(content.title).toBe("Magic Clean PVC Mat 상세페이지");
-    expect(content.body).toContain("# Magic Clean PVC Mat");
-    expect(content.body).toContain("| 재질 | PVC |");
+    expect(content.body).toContain("[mock-llm]");
+  });
+
+  it("구 경로와 공식 경로(engine)는 같은 PO에 대해 같은 본문을 생성한다 (통합 검증)", async () => {
+    const prisma = createPrismaMock();
+    prisma.productObjects.push({ ...readyProductObject });
+    const engine = createEngine(prisma);
+    const service = await createService(prisma, engine);
+
+    const legacy = await service.generate("proj-1", {});
+    const official = await engine.generate("proj-1", {});
+
+    expect(legacy.body).toBe(official.body);
+    expect(legacy.title).toBe(official.title);
   });
 
   it("READY Product Object가 없으면 400을 던진다", async () => {

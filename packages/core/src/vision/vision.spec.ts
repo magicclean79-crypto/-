@@ -113,6 +113,29 @@ describe("LlmVisionProvider", () => {
     expect(images[VISION_MAX_IMAGES].getBytes).not.toHaveBeenCalled();
   });
 
+  it("maxImages 옵션으로 상한을 조정할 수 있다 (환경변수 주입 지점)", async () => {
+    const llm = new MockLlmProvider();
+    const provider = new LlmVisionProvider({
+      promptEngine: createDefaultPromptEngine(),
+      llmProviderName: llm.name,
+      complete: async (request) => {
+        const result = await llm.complete(request);
+        return { provider: result.provider, model: result.model, text: result.text };
+      },
+      loadCompanyBrain: emptyCompanyBrain,
+      maxImages: 1,
+    });
+
+    const images = Array.from({ length: 3 }, (_, i) => ({
+      id: `img-${i}`,
+      mimeType: "image/png",
+      getBytes: async () => new Uint8Array([i]),
+    }));
+    const { raw } = await provider.analyze({ ...input, images });
+
+    expect(raw).toMatchObject({ imageCount: 1, omittedImageCount: 2 });
+  });
+
   it("Company Brain 컨텍스트를 로드해 raw에 반영한다", async () => {
     const loader = jest.fn(async () => ({
       knowledge: [

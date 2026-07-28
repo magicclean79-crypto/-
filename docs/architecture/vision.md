@@ -38,8 +38,8 @@ ProductObjectService
   1. VisionInput 구성 — 프로젝트 정보 + 이미지(lazy 바이트 로더) + OCR 텍스트
   2. LlmVisionProvider.analyze()          ← 공식 엔진 (TASK-0505)
        2-a. Company Brain 조회 — 프로젝트 이름 질의, PROJECT 스코프
-       2-b. 이미지 바이트 로드 → base64 (최대 VISION_MAX_IMAGES=5장,
-            초과분은 raw.omittedImageCount로 기록)
+       2-b. 이미지 바이트 로드 → base64 (상한: VISION_MAX_IMAGES 환경 변수,
+            기본 5장 — CTO 결정(0505 승인 ①), 초과분은 raw.omittedImageCount로 기록)
        2-c. PromptEngine.render("vision-analysis", context)
             → 규칙 기반 초안 JSON을 포함한 system+user 메시지
        2-d. LLM Gateway complete({ messages, images, responseFormat: "json" })

@@ -24,7 +24,7 @@ POST /projects/:id/contents/generate
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
 | `POST` | `/projects/:projectId/contents/generate` | **엔진 경로 (TASK-0502)** — `{ productObjectVersion? }`, 미지정 시 최신 READY |
-| `POST` | `/projects/:projectId/contents` | 구 mock Generator 경로 (TASK-0303 — 기존 기능 보존, 일원화 여부 CTO 결정 대기) |
+| `POST` | `/projects/:projectId/contents` | ⚠️ Deprecated 구 경로 — **TASK-0506에서 내부가 공식 엔진으로 통합됨** (계약 유지, Wrapper가 `generateMarkdown()` 호출 → 두 경로의 본문 동일, [content.md](content.md)) |
 | `GET` | `/projects/:projectId/contents`(+`/:contentId`) | 목록/단건 — 두 경로의 생성물이 같은 Content로 저장됨 |
 
 오류: `404` 프로젝트/버전 없음, `400` READY 아님·READY 없음·잘못된 버전.
@@ -47,3 +47,6 @@ POST /projects/:id/contents/generate
 - **READY만 입력**: 검수를 통과한 Product Object만 생성 입력이 된다
 - **호출 이력·비용 비저장**: CTO 결정 — 별도 Execution 도메인으로 분리 예정
 - Content 모델 변경 없음 — 생성 경로와 무관하게 같은 Content 테이블에 저장
+- **생성 코어는 하나**: `ContentGenerationService.generateMarkdown()`(저장 없는
+  Company Brain+렌더링+LLM 호출)을 `generate()`(공식 경로)와
+  `EngineContentGenerator`(구 경로 Wrapper, TASK-0506)가 공용으로 사용한다

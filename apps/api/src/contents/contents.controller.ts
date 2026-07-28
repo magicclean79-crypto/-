@@ -11,8 +11,9 @@ export class ContentsController {
   ) {}
 
   /**
-   * @deprecated 구 mock Generator 경로 — 공식 엔진은 POST …/contents/generate.
-   * 다음 Sprint에서 내부적으로 새 엔진을 호출하도록 통합 예정 (CTO 결정).
+   * @deprecated 구 Generator 경로 — 공식 엔진은 POST …/contents/generate.
+   * TASK-0506에서 내부 구현이 공식 엔진으로 통합됨 (API 계약은 유지,
+   * Wrapper가 공식 엔진 호출) — 신규 코드는 공식 경로를 사용할 것.
    */
   @Post()
   async generate(

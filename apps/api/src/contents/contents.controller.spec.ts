@@ -1,6 +1,5 @@
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
-import { MockContentGenerator } from "@acos/core";
 import request from "supertest";
 import { PrismaService } from "../prisma/prisma.service";
 import { ContentGenerationService } from "./content-generation.service";
@@ -11,10 +10,20 @@ import {
   createPrismaMock,
   readyProductObject,
 } from "./contents.spec-helpers";
+import { EngineContentGenerator } from "./engine-content.generator";
 
 describe("Contents API (API Test)", () => {
   let app: INestApplication;
   const prismaMock = createPrismaMock();
+  // TASK-0506: 구 경로가 공식 엔진(generateMarkdown)을 호출하는지 검증하는 목업
+  const engineMock = {
+    generate: jest.fn(),
+    generateMarkdown: jest.fn(async () => ({
+      title: "엔진 생성 상세페이지",
+      body: "# 엔진 생성 상세페이지\n\n공식 엔진 본문",
+      llm: { provider: "mock", model: "mock-llm-1" },
+    })),
+  };
 
   beforeAll(async () => {
     prismaMock.productObjects.push({ ...readyProductObject });
@@ -24,10 +33,15 @@ describe("Contents API (API Test)", () => {
       providers: [
         ContentsService,
         { provide: PrismaService, useValue: prismaMock },
-        { provide: CONTENT_GENERATOR, useValue: new MockContentGenerator() },
+        {
+          provide: CONTENT_GENERATOR,
+          useValue: new EngineContentGenerator(
+            engineMock as unknown as ContentGenerationService,
+          ),
+        },
         {
           provide: ContentGenerationService,
-          useValue: { generate: jest.fn() },
+          useValue: engineMock,
         },
       ],
     }).compile();
@@ -40,7 +54,7 @@ describe("Contents API (API Test)", () => {
     await app.close();
   });
 
-  it("POST /projects/:id/contents — 상세페이지를 생성한다", async () => {
+  it("POST /projects/:id/contents — 구 계약 유지, 내부는 공식 엔진 호출 (TASK-0506)", async () => {
     const response = await request(app.getHttpServer())
       .post("/projects/proj-1/contents")
       .send({})
@@ -50,8 +64,19 @@ describe("Contents API (API Test)", () => {
       projectId: "proj-1",
       productObjectVersion: 2,
       status: "DRAFT",
+      title: "엔진 생성 상세페이지",
     });
-    expect(response.body.body).toContain("# Magic Clean PVC Mat");
+    expect(response.body.body).toContain("# 엔진 생성 상세페이지");
+    expect(engineMock.generateMarkdown).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project: expect.objectContaining({ id: "proj-1" }),
+        productObject: expect.objectContaining({
+          title: "Magic Clean PVC Mat",
+          version: 2,
+          ocrText: "Magic Clean PVC Mat",
+        }),
+      }),
+    );
   });
 
   it("GET /projects/:id/contents — 목록", async () => {

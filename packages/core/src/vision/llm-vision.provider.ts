@@ -11,7 +11,11 @@ import type {
   VisionRecognition,
 } from "./vision-provider";
 
-/** 한 번의 Vision 분석에 첨부하는 최대 이미지 수 (토큰·용량 보호) */
+/**
+ * 한 번의 Vision 분석에 첨부하는 최대 이미지 수 기본값 (토큰·용량 보호).
+ * CTO 결정(TASK-0505 승인 ①): 제한은 유지하되 환경변수로 조정 가능 —
+ * apps/api는 VISION_MAX_IMAGES 환경 변수를 maxImages 옵션으로 주입한다.
+ */
 export const VISION_MAX_IMAGES = 5;
 
 /** LLM Gateway 호출 함수 (Port) — apps/api에서는 LlmService가 어댑터가 된다 */
@@ -32,6 +36,8 @@ export interface LlmVisionProviderOptions {
   loadCompanyBrain: VisionCompanyBrainSource;
   /** 뒤에 있는 LLM Provider 이름 (예: "mock", "anthropic") — source 식별용 */
   llmProviderName: string;
+  /** 첨부 이미지 수 상한 (기본 VISION_MAX_IMAGES=5, 최소 1) */
+  maxImages?: number;
 }
 
 /**
@@ -49,15 +55,20 @@ export interface LlmVisionProviderOptions {
  */
 export class LlmVisionProvider implements VisionProvider {
   readonly name: string;
+  private readonly maxImages: number;
 
   constructor(private readonly options: LlmVisionProviderOptions) {
     this.name = `llm:${options.llmProviderName}`;
+    this.maxImages = Math.max(
+      1,
+      Math.floor(options.maxImages ?? VISION_MAX_IMAGES),
+    );
   }
 
   async analyze(input: VisionInput): Promise<VisionRecognition> {
     const companyBrain = await this.options.loadCompanyBrain(input);
 
-    const attachedImages = input.images.slice(0, VISION_MAX_IMAGES);
+    const attachedImages = input.images.slice(0, this.maxImages);
     const images: LlmImageDto[] = await Promise.all(
       attachedImages.map(async (image) => ({
         mimeType: image.mimeType,

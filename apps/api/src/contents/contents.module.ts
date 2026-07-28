@@ -1,5 +1,4 @@
-import { Logger, Module } from "@nestjs/common";
-import { MockContentGenerator, type ContentGenerator } from "@acos/core";
+import { Module } from "@nestjs/common";
 import { CompanyBrainModule } from "../company-brain/company-brain.module";
 import { LlmModule } from "../llm/llm.module";
 import { PromptModule } from "../prompt/prompt.module";
@@ -7,24 +6,15 @@ import { ContentGenerationService } from "./content-generation.service";
 import { CONTENT_GENERATOR } from "./contents.constants";
 import { ContentsController } from "./contents.controller";
 import { ContentsService } from "./contents.service";
+import { EngineContentGenerator } from "./engine-content.generator";
 
 /**
- * CONTENT_GENERATOR 환경 변수로 Generator를 선택한다. (기본: mock)
- * 새 모델은 @acos/core의 ContentGenerator를 구현한 뒤 case를 추가한다.
+ * 구 Generator 경로는 EngineContentGenerator(Wrapper)를 통해 공식
+ * Content Generation Engine을 호출한다. (TASK-0506 — CTO 결정)
+ * CONTENT_GENERATOR 환경 변수 선택은 제거되었다 — 모델 선택은 LLM Gateway의
+ * LLM_PROVIDER 하나로 관리된다. (구 MockContentGenerator는 @acos/core에
+ * @deprecated 상태로 보존되어 있으나 더 이상 연결되지 않는다.)
  */
-function createContentGenerator(): ContentGenerator {
-  const name = (process.env.CONTENT_GENERATOR ?? "mock").toLowerCase();
-  switch (name) {
-    case "mock":
-      return new MockContentGenerator();
-    default:
-      new Logger("ContentsModule").warn(
-        `알 수 없는 CONTENT_GENERATOR "${name}" — mock으로 대체합니다.`,
-      );
-      return new MockContentGenerator();
-  }
-}
-
 @Module({
   imports: [CompanyBrainModule, LlmModule, PromptModule],
   controllers: [ContentsController],
@@ -33,7 +23,9 @@ function createContentGenerator(): ContentGenerator {
     ContentGenerationService,
     {
       provide: CONTENT_GENERATOR,
-      useFactory: createContentGenerator,
+      useFactory: (engine: ContentGenerationService) =>
+        new EngineContentGenerator(engine),
+      inject: [ContentGenerationService],
     },
   ],
   exports: [ContentsService, ContentGenerationService],

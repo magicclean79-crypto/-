@@ -41,13 +41,14 @@ export class ContentsService {
   ) {}
 
   /**
-   * 상세페이지 생성 (TASK-0303 — mock Generator 경로).
+   * 상세페이지 생성 (TASK-0303 경로).
    * READY 상태의 Product Object에서만 생성한다 —
    * 버전 미지정 시 최신 READY 버전을 사용한다.
    *
-   * @deprecated CTO 결정(TASK-0502 승인): 공식 생성 엔진은
-   * ContentGenerationService(Content Generation Engine)다. 이 경로는
-   * 다음 Sprint에서 내부적으로 새 엔진을 호출하도록 통합될 예정.
+   * @deprecated CTO 결정(TASK-0502 승인·TASK-0506 통합 완료): 공식 생성
+   * 엔진은 ContentGenerationService다. 이 경로는 유지되지만 내부적으로
+   * EngineContentGenerator(Wrapper)를 통해 공식 엔진을 호출한다 —
+   * 신규 코드는 POST …/contents/generate(공식 경로)를 사용할 것.
    */
   async generate(
     projectId: string,

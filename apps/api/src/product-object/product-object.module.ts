@@ -34,6 +34,8 @@ import { createVisionCompanyBrainSource } from "./vision-company-brain";
         new LlmVisionProvider({
           promptEngine,
           llmProviderName: llm.info().provider,
+          // CTO 결정(TASK-0505 승인 ①): 이미지 상한은 환경변수로 조정 가능
+          maxImages: Number(process.env.VISION_MAX_IMAGES ?? 5) || 5,
           complete: async ({ messages, images, responseFormat }) => {
             const completion = await llm.complete({
               messages,
