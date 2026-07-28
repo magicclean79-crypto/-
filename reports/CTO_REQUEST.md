@@ -5,36 +5,33 @@
 
 ## 결정 대기
 
-### 34. TASK-0804 "Login Protection & Security Hardening" 세부 해석 확인
-- 현황: 지시 6항목(Rate Limit · Account Lockout · Password Complexity ·
-  Failed Login Audit · Cookie 전용 운영 모드 · Session Timeout) +
-  Playwright를 다음과 같이 구현했다:
-  - **Rate Limit**: 이메일 키 슬라이딩 윈도우 → 초과 시 **429**.
-    기본 **30회/60초** (`AUTH_LOGIN_MAX_ATTEMPTS`/`AUTH_LOGIN_WINDOW_SEC`).
-    인메모리 1차 방어 — 단일 인스턴스 전제(다중 인스턴스는 공유 저장소
-    필요, 부채 기록)
-  - **Account Lockout**: 연속 실패 **5회 → 15분 DB 잠금**
-    (`AUTH_LOCKOUT_THRESHOLD`/`AUTH_LOCKOUT_MINUTES`, users.lockedUntil) —
-    잠금 중 올바른 비밀번호도 거부, 시간 경과 자동 해제 + **ADMIN 비밀번호
-    재설정 시 즉시 해제**, 성공 로그인 시 카운터 초기화
-  - **Password Complexity**: **최소 8자 + 영문 1자 + 숫자 1자** — core
-    단일 정의(Code-first), 생성·변경·재설정 공통
-  - **Failed Login Audit**: LOGIN_FAILED(사유·n/임계) · ACCOUNT_LOCKED —
-    실존 계정만 기록(스팸 방지), 감사 액션 8종. /admin/users 잠김 배지
-  - **Cookie 전용 운영 모드**: `AUTH_COOKIE_ONLY`(운영/스테이징 기본
-    켜짐) — 로그인 응답 본문 토큰 제외, httpOnly 쿠키만 사용(0803 승인 ①
-    이행). 웹 인증 호출 전부 credentials include — 개발 Bearer/운영 쿠키
-    양쪽 모드 동작
-  - **Session Timeout**: `AUTH_SESSION_TTL_HOURS`(기본 168=7일) — 세션
-    만료·쿠키 Max-Age 통일
-- 하지 않은 것(스펙 없음): ADMIN "잠금 해제" 전용 버튼(재설정으로 해제
-  가능), Rate Limit 공유 저장소(Redis 등 — 다중 인스턴스 확장 시),
-  유휴(idle) 타임아웃(현재는 절대 TTL만), IP 키 Rate Limit(프록시 뒤
-  신뢰 가능한 IP 확보 후)
-- 질문: ① 기본값 확정 — Rate Limit 30회/60초 · 잠금 5회/15분 · 복잡도
-  8자+영문+숫자가 적절한지 ② Rate Limit 인메모리(단일 인스턴스) 전제
-  유지 여부 — 공유 저장소 도입 시점 ③ 유휴 타임아웃·잠금 해제 전용
-  UI 필요 여부 ④ 다음 TASK 지정 요청 (Sprint 8 종료 여부 포함).
+### 35. TASK-0901 "Real Provider Integration — OpenAI Production" 세부 해석 확인
+- 현황: 지시 6영역(Content Generation · Product Analysis · Vision
+  Analysis · Execution Log · Dashboard · Production Smoke)을 다음과 같이
+  실 OpenAI 연결 수준으로 완성했다:
+  - **구조 확인**: 3개 엔진은 LLM Gateway 단일 진입점 경유 —
+    `LLM_PROVIDER=openai` + `OPENAI_API_KEY`만으로 전 기능 전환(0504~0603
+    설계 효과). Execution/Dashboard도 Provider 무관 동작
+  - **운영 출력 상한**: LlmService 단일 관문에서 feature 기본값 주입 —
+    content 4096 · analysis 2048 · vision 2048 (`LLM_*_MAX_TOKENS` 조정,
+    어댑터 기본 1024는 상세페이지 잘림 위험)
+  - **JSON 잘림 방어**: finish_reason=length + json → 명확한 오류로 실패
+    (Execution FAILED 기록). 텍스트는 부분 결과 허용
+  - **통합 검증**: 주입 클라이언트로 실 응답 형태(스냅샷 모델명·usage·
+    finish_reason) 재현 — 3개 엔진 전 경로 4종 테스트(요청 매핑
+    json_object/image_url/상한 → 엄격 파싱 → 접두사 매칭 비용 산정)
+  - **Production Smoke 10단계**: 쿠키 전용 운영 모드 로그인(Set-Cookie
+    자동 인식) + 운영 판정(byProvider/byFeature 커버리지 + 실키 cost>0).
+    mock 리허설·쿠키 전용 리허설 각 10/10 PASS
+  - **운영 런북**: 환경 세트(Provider·상한·인증/쿠키·스모크 계정·egress)
+    표준화 — docs/operations/real-provider-smoke.md
+- 하지 않은 것: **실키 네트워크 호출**(개발 샌드박스 egress 차단 — 0603
+  승인 ④대로 운영/스테이징 스모크로 수행, 준비 완료), 비용 상한/알림,
+  feature별 모델 라우팅, Anthropic/Gemini 연결
+- 질문: ① 출력 상한 기본값(4096/2048/2048)과 잘림 정책(JSON 실패·텍스트
+  부분 허용)이 적절한지 ② **운영/스테이징 실키 스모크의 실행 주체·시점**
+  지정 요청 (스크립트·런북·자동 판정 구비 완료) ③ 비용 거버넌스(일/월
+  예산 상한·알림) 도입 여부 ④ 다음 TASK 지정 요청.
 
 ### 2. tesseract Provider 유지 여부
 - 현황: OCR 기본 Provider는 mock이며, 로컬 오프라인 엔진(tesseract.js)이
@@ -57,6 +54,17 @@
 - 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
 
 ## 결정됨
+
+### 34. TASK-0804 해석 확인 → 승인 + 보안 표준 확정 + Sprint 8 종료 (2026-07-28)
+- CTO 결정: ① **기본 로그인 보안 정책 공식 표준 확정** — Rate Limit
+  30회/60초 · Lockout 5회 실패→15분 · Password 최소 8자+영문+숫자
+  (환경변수 기반 조정 구조 유지) ② **Rate Limit 인메모리 유지** — 다중
+  인스턴스 운영 시 Redis 기반 확장 ③ **별도 Unlock 버튼 미구현** —
+  ADMIN Password Reset이 잠금 해제 절차 ④ **Idle Timeout 미구현** —
+  Absolute Session TTL만 유지 ⑤ **Sprint 8 공식 종료** ⑥ Sprint 9 시작 —
+  TASK-0901(Real Provider Integration — OpenAI Production) 지시됨.
+- 반영(`8d095e3`): 전 항목 현행 구현과 일치 — 변경 없이 확정. OpenAI
+  Production 구현 (#35 참고).
 
 ### 33. TASK-0803 해석 확인 → 승인 + 쿠키/재설정 정책 확정 (2026-07-28)
 - CTO 결정: ① **개발 환경은 본문 토큰 + httpOnly 쿠키 병행 발급 유지,
