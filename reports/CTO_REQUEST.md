@@ -25,23 +25,34 @@
 - 현황: TASK-0302에서 최소 규칙(제목 + OCR/Vision 요약 중 1개)으로 구현됨.
 - 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
 
-### 17. TASK-0502 "Content Generation Engine" 세부 해석 확인
-- 현황: 지시 3요소(READY PO·Company Brain·LLM Gateway)를 모두 사용해
-  구현하며 다음을 보수적으로 결정했다:
-  - **엔드포인트 분리**: 새 `POST /projects/:id/contents/generate`(엔진) —
-    기존 `POST /contents`(TASK-0303 mock Generator)는 기존 기능 보호
-    원칙에 따라 **유지**했다
-  - **Company Brain 반영**: 금지어(Memory GLOBAL banned-words)는 system
-    지침으로 강제, 제목 검색(PROJECT 스코프) 결과(Knowledge/Decision/
-    Memory)는 컨텍스트 섹션으로 주입
-  - **제목**: 생성 Markdown의 첫 `# 헤딩`, 없으면 "<상품명> 상세페이지"
-  - **저장**: Content 모델 그대로 (provider/model 메타 비저장 —
-    호출 이력은 Execution 도메인 분리 결정과 일치)
-- 질문: ① 구 mock Generator 경로를 엔진으로 **일원화**(치환)할지 유지할지
-  ② 웹 UI의 "상세페이지 생성" 버튼을 엔진 경로로 전환할지
-  ③ 프롬프트에 넣는 Company Brain 검색 기준(현재 상품 제목)이 적절한지.
+### 18. TASK-0503 "Prompt Engine" 세부 해석 확인
+- 현황: 지시 사항(프롬프트 로직을 Content Generation에서 분리, 독립 엔진,
+  모든 AI 기능 공용 설계)을 다음과 같이 구현했다:
+  - **선언적 템플릿 구조**: `PromptTemplate`(key/name/description/build) +
+    `PromptEngine`(레지스트리·렌더러, 중복/미등록 key 검증) — @acos/core,
+    렌더링은 결정적(같은 컨텍스트 → 같은 메시지, LLM 없이 테스트 가능)
+  - **공용 설계 규칙**: 새 AI 기능은 ①core에 템플릿 선언 ②기본 엔진 등록
+    ③서비스에서 `PROMPT_ENGINE.render(key, context)` — 서비스 안에서
+    프롬프트 문자열 직접 조립 금지 (docs/architecture/prompt.md에 명문화)
+  - 상세페이지 프롬프트를 `content-generation` 템플릿으로 이관 —
+    ContentGenerationService는 엔진 render만 사용 (출력은 기존과 동일)
+  - `GET /prompt/templates` — 등록 템플릿 조회 (개발용)
+- 하지 않은 것(스펙 없음): 템플릿 버전 관리, DB 저장(런타임 편집),
+  프리뷰/render API 노출, 다국어 템플릿
+- 질문: ① 템플릿을 코드 선언으로 유지할지 DB 관리(런타임 편집)로 갈지
+  ② 템플릿 버전 관리 필요 여부 ③ 다음 확장 대상(Analysis/Vision 템플릿화
+  또는 mock Generator 통합) 지정 요청.
 
 ## 결정됨
+
+### 17. TASK-0502 해석 확인 → 승인 + 공식 엔진 확정 (2026-07-27)
+- CTO 결정: ① Content Generation Engine이 **공식 생성 엔진**
+  ② 구 Mock Generator는 **Deprecated** — 다음 Sprint에서 내부적으로
+  새 엔진을 호출하도록 통합 ③ **웹 상세페이지 생성 버튼은 새 엔진 사용**
+  ④ Company Brain 검색은 상품 제목 기준 유지 — 향후 브랜드/카테고리/
+  OCR/Vision으로 확장.
+- 반영(`9f44b87`): 웹 버튼 `/contents/generate` 전환(브라우저 클릭 검증),
+  구 경로·Port에 @deprecated 표시 및 문서 갱신.
 
 ### 16. TASK-0501 해석 확인 → 승인 (2026-07-27)
 - CTO 결정: ① 기본 모델은 **환경변수로만 관리** ② `/llm/complete`는
