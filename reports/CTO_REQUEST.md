@@ -5,24 +5,30 @@
 
 ## 결정 대기
 
-### 23. TASK-0602 "Execution Dashboard" 세부 해석 확인
-- 현황: 지시 사항(호출 수·성공률·실패율·Latency·Token·Cost를 Provider/
-  Feature/Model 통계로 제공하는 Dashboard API)을 다음과 같이 구현했다:
-  - **`GET /executions/stats?from=&to=`** — 전체(totals) + byFeature +
-    byProvider + byModel (호출 수 내림차순)
-  - 그룹별 지표: 호출 수 · 성공/실패 카운트와 **비율(0~1, 표본 없으면
-    null)** · 토큰 합계(input/output) · **비용 USD 합계**(가격 산정된 호출이
-    없으면 null — #22 결정 유지) · **지연: 호출 수 가중 평균 + 최대치**
-  - **기간 필터 from/to**(ISO, 미지정 시 전체 기간) — 잘못된 날짜·역전
-    기간 400 (지시에 없는 항목이나 운영 조회에 필요해 추가)
-  - 집계 구조: DB (차원, status) groupBy 4쿼리(병렬) → @acos/core 순수
-    병합 로직 — 통계 규칙이 DB 없이 단위 테스트됨. 집계 결과는 저장하지
-    않음(조회 시 계산)
-- 하지 않은 것(스펙 없음): 웹 Dashboard 화면, 일별 시계열(추이), 백분위
-  지연(p95 — 원시 지연값 보관 구조 필요), 집계 결과 캐싱/저장
-- 질문: ① 지표 구성(비율 0~1 표기·가중 평균+최대 지연)·기간 필터 추가가
-  의도에 부합하는지 ② 웹 Dashboard 화면 필요 여부 ③ 일별 시계열(추이)
-  확장 여부 ④ 다음 TASK 지정 요청.
+### 24. TASK-0603 "Provider Integration (OpenAI)" 세부 해석 확인
+- 현황: 지시된 5개 항목을 다음과 같이 활성화했다:
+  - **API Key**: `LLM_PROVIDER=openai` + `OPENAI_API_KEY` (키 없으면 mock
+    폴백 유지) — 기본 모델 gpt-4o(`LLM_OPENAI_MODEL`로 변경)
+  - **Health Check**: `GET /llm/health` — 실제 최소 완성 호출("ping",
+    maxTokens 16) 기반. 실패 시 예외 대신 error 상태 반환, 점검 호출도
+    Execution(feature "dev")으로 기록
+  - **responseFormat**: "json" → `response_format { type: "json_object" }`
+    매핑 (프롬프트 지침과 이중 강제)
+  - **Multimodal**: image_url(data URL) 매핑 — 테스트용 클라이언트 주입으로
+    요청 계약 단위 검증
+  - **Execution Cost**: 가격표에 gpt-4o($2.5/$10)·gpt-4o-mini($0.15/$0.6,
+    USD/1M) 공식 공개 단가 등록. 버전 스냅샷 모델(gpt-4o-2024-…)은 최장
+    접두사 일치로 매칭
+- **환경 제약 보고**: 이 개발 샌드박스는 네트워크 egress 허용 목록에
+  `api.openai.com`이 없어(403) **유효 키 실호출 검증이 불가**하다.
+  무효 키 구성으로 배선 전체(Provider 선택→실호출 시도→health error→
+  FAILED Execution 기록)는 라이브 실증 완료.
+- 하지 않은 것(스펙 없음): Anthropic/Gemini 연결(다음 지시 대기), 이미지
+  용량 가드(0505 승인 ④ — 실연결 전 구현 항목, 별도 TASK 필요), 스트리밍
+- 질문: ① 등록한 gpt-4o 계열 단가·json_object 매핑·health 설계가 의도에
+  부합하는지 ② **실키 스모크 테스트 수행 방법** — egress 허용 환경 제공
+  또는 API 키 + 허용 목록 설정 요청 ③ 이미지 용량 가드를 다음 TASK로
+  지정할지(CTO 결정상 실연결 전 구현 항목) ④ 다음 TASK 지정 요청.
 
 ### 2. tesseract Provider 유지 여부
 - 현황: OCR 기본 Provider는 mock이며, 로컬 오프라인 엔진(tesseract.js)이
@@ -45,6 +51,13 @@
 - 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
 
 ## 결정됨
+
+### 23. TASK-0602 해석 확인 → 승인 + Dashboard 로드맵 확정 (2026-07-28)
+- CTO 결정: ① **지표 구성 현행 유지** ② **성공률/실패율은 API에서 0~1 값
+  반환, %는 UI에서 표시** ③ **from/to 기간 필터 공식 API 채택**
+  ④ **Dashboard 화면은 다음 Sprint 구현** ⑤ **일별 시계열은 Sprint 6 후반
+  추가** ⑥ TASK-0603(Provider Integration — OpenAI 우선) 지시됨.
+- 반영: 현행 구현과 일치 — 변경 없이 확정. 화면·시계열은 백로그 기록.
 
 ### 22. TASK-0601 해석 확인 → 승인 + 6항 결정 확정 (2026-07-28)
 - CTO 결정: ① **feature 4종 유지**(content-generation/product-analysis/

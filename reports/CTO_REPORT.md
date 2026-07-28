@@ -13,132 +13,139 @@
 
 | 항목 | 값 |
 | --- | --- |
-| 보고 기준 TASK | **TASK-0602 — Execution Dashboard** |
+| 보고 기준 TASK | **TASK-0603 — Provider Integration (OpenAI)** |
 | 보고일 | 2026-07-28 |
-| 브랜치 / 기준 커밋 | `claude/ai-product-content-os-setup-jb5oai` / `162f165` |
-| 핵심 성과 | **운영 지표 집계 완성** — 호출 수·성공/실패율·토큰·비용·지연을 전체 + Feature/Provider/Model별로 제공하는 Dashboard API |
-| 구현 중단 상태 | **TASK-0602 완료 후 즉시 중단** — CTO 승인 전 다음 TASK 미착수 |
-| 스펙 확인 필요 | 지표 구성·기간 필터 등 → **CTO_REQUEST #23 확인 요청** |
+| 브랜치 / 기준 커밋 | `claude/ai-product-content-os-setup-jb5oai` / `34d1426` |
+| 핵심 성과 | OpenAI Provider **공식 연결** — 지시된 5개 항목(API Key·Health Check·responseFormat·Multimodal·Execution Cost) 전부 활성화 |
+| 구현 중단 상태 | **TASK-0603 완료 후 즉시 중단** — CTO 승인 전 다음 TASK 미착수 |
+| 스펙 확인 필요 | **실키 호출 미검증(환경 제약)** 등 → **CTO_REQUEST #24 확인 요청** |
 
 ## 2. 품질 게이트
 
 | 게이트 | 명령 | 결과 |
 | --- | --- | --- |
 | Build | `pnpm build` | ✅ 6/6 워크스페이스 성공 |
-| Test | `pnpm test` | ✅ 253/253 통과 (core 113 · api 140) — 이번 주기 +7 |
+| Test | `pnpm test` | ✅ 261/261 통과 (core 115 · api 146) — 이번 주기 +8 |
 | TypeScript | (빌드 포함) | ✅ 오류 0 |
 | ESLint | `pnpm lint` | ✅ 오류 0, 경고 0 |
 
 ## 3. 변경 사항 (이번 보고 주기)
 
-### TASK-0601 승인 결정 반영
+### TASK-0602 승인 결정 반영
 
-- CTO 결정 6항(feature 4종 유지 · 400 비기록 · 본문 비저장 · 가격표
-  Code-first + 미등록 모델 cost null · FK 없는 독립 도메인) 전부 **현행
-  구현과 일치** — 변경 없이 확정 사항으로 기록 (CTO_REQUEST #22 → 결정됨)
+- 지표 구성·비율 0~1 API 반환(%는 UI)·from/to 공식 채택 — 현행 확정 (변경 없음)
+- Dashboard 화면(다음 Sprint)·일별 시계열(Sprint 6 후반) — 백로그 기록
 
-### TASK-0602 — Execution Dashboard (`162f165`)
+### TASK-0603 — Provider Integration: OpenAI (`34d1426`)
 
-- **Dashboard API**: `GET /executions/stats?from=&to=` — 지시된 지표 전부 제공:
-  - **호출 수** `count` · **성공률/실패율** `successRate`/`failureRate`
-    (0~1, 표본 없으면 null) · **Token** `inputTokens`/`outputTokens` 합계 ·
-    **Cost** USD 합계(가격 산정된 호출이 없으면 null — 0601 원칙 유지) ·
-    **Latency** `avgLatencyMs`(호출 수 가중 평균) + `maxLatencyMs`
-  - 집계 축: **전체(totals) + byFeature + byProvider + byModel** (호출 수
-    내림차순 정렬)
-- **집계 구조**: DB에서 (차원, status) 단위 `groupBy` 1회씩(총 4쿼리, 병렬) →
-  @acos/core의 순수 병합 로직 `buildExecutionStats`/`buildExecutionTotals` —
-  성공/실패 병합·비율·가중 평균 규칙이 DB 없이 단위 테스트됨
-- **기간 필터**: `from`/`to`(ISO, 미지정 시 전체 기간) — 잘못된 날짜·역전
-  기간은 400
-- 기록 규칙·Execution 모델은 변경 없음 (DB 변경 없음, 조회 전용 추가)
-- 문서: execution.md에 Dashboard 섹션 추가, README 갱신
+지시된 5개 활성화 항목:
+
+1. **API Key**: `LLM_PROVIDER=openai` + `OPENAI_API_KEY` 조합으로 활성화
+   (키 없으면 mock 폴백 — 기존 안전 원칙 유지), .env.example 가이드 갱신
+2. **Health Check**: `GET /llm/health` 신설 — **실제 최소 완성 호출**("ping",
+   maxTokens 16)로 키·네트워크·모델 접근을 확인. 실패 시 예외 대신
+   `{ status: "error", error }` 반환. 점검 호출도 Execution(feature "dev")으로
+   기록되어 실패 이력이 대시보드에 남음
+3. **responseFormat**: OpenAI 어댑터가 `"json"`을
+   `response_format { type: "json_object" }`로 매핑 — 프롬프트 지침과 이중
+   강제 (CTO 결정 0504 승인 ②의 "실연결 시 매핑" 적용)
+4. **Multimodal**: `image_url`(data URL) 매핑 유지 + **테스트용 클라이언트
+   주입** 구조 추가로 요청 파라미터 계약(모델·토큰·이미지·구조화 출력)을
+   단위 테스트로 고정
+5. **Execution Cost**: 가격표(Code-first 중앙 정의)에 OpenAI 공식 공개 단가
+   등록 — `gpt-4o` $2.5/$10, `gpt-4o-mini` $0.15/$0.6 (USD/1M). 응답 모델이
+   버전 스냅샷(`gpt-4o-2024-08-06`)이어도 **최장 접두사 일치**로 단가 매칭
+   (`gpt-4o-mini-…`가 `gpt-4o`로 오매칭되지 않도록 더 긴 key 우선)
+
+- Anthropic/Gemini는 이번 TASK 범위 아님 — responseFormat 매핑은 해당
+  Provider 연결 시 (CTO 지시: "우선 OpenAI")
+- DB 변경 없음. 문서: llm.md(Health Check·OpenAI 연결)/execution.md(단가)/
+  README/.env.example 갱신
 
 ### 누적 완료 TASK
 
 | Sprint | TASK | 상태 |
 | --- | --- | --- |
-| Sprint 6 | TASK-0601 — Execution Domain | 승인 (6항 결정 확정) |
-| Sprint 6 | **TASK-0602 — Execution Dashboard** | **완료 (`162f165`) — 승인 대기** |
-| Sprint 5 | 0501~0506 (AI Execution) | 전체 승인 · 공식 종료 |
-| Sprint 1~4 | Foundation ~ Company Brain Integration | 전체 승인 · 공식 종료 |
+| Sprint 6 | 0601 Execution Domain · 0602 Dashboard | 승인 |
+| Sprint 6 | **TASK-0603 — Provider Integration (OpenAI)** | **완료 (`34d1426`) — 승인 대기** |
+| Sprint 1~5 | Foundation ~ AI Execution | 전체 승인 · 공식 종료 |
 
 ## 4. 테스트 결과
 
 | 위치 | 종류 | 수 | 결과 |
 | --- | --- | --- | --- |
-| `packages/core` | Unit — 기존 109 · **집계 병합 4** | 113 | ✅ |
-| `apps/api` | Service+API — 기존 137 · **stats API 3** | 140 | ✅ |
-| **합계** | | **253** | **전체 통과** |
+| `packages/core` | Unit — 기존 113 · **단가 2** (gpt-4o 계산·접두사 매칭) | 115 | ✅ |
+| `apps/api` | Service+API — 기존 140 · **OpenAI 어댑터 4 + Health 2** | 146 | ✅ |
+| **합계** | | **261** | **전체 통과** |
 
 신규 테스트가 검증하는 것:
-- 병합 로직: (key, status) 행 → 성공/실패 카운트·비율(0.75/0.25), 호출 수
-  가중 평균 지연((10×3+50×1)/4=20), cost 미상 그룹 null, 빈 표본 처리,
-  호출 수 내림차순 정렬
-- stats API: totals+3축 응답 형태, cost Decimal→숫자 직렬화, 기간 필터가
-  DB where로 전달, 잘못된 날짜·역전 기간 400
+- OpenAI 어댑터(가짜 클라이언트 주입): 응답→LlmResult 매핑(스냅샷 모델·usage),
+  json 시에만 response_format 전달, 이미지 image_url 첨부 순서, 모델/maxTokens
+- Health: mock ok + Execution(dev) 기록, 실패 Provider면 error 상태 +
+  FAILED Execution (예외 미발생)
+- 단가: gpt-4o 1M/1M → $12.5, 스냅샷 접두사 매칭(gpt-4o-mini 우선순위 포함)
 
-라이브 검증 (실 PostgreSQL — 0601에서 기록된 실데이터):
-- `GET /executions/stats` → totals(5건, successRate 1, 토큰 합계, cost 0) +
-  byFeature 4종(content-generation 2 · vision-analysis · dev ·
-  product-analysis) + byProvider(mock) + byModel(mock-llm-1)
-- **실시간 반영**: `/llm/complete` 호출 직후 totals 6건·dev 2건으로 증가 확인
-- 기간 필터 정상, 잘못된 날짜 400
+라이브 검증:
+- mock 구성: `GET /llm/health` → ok (latency 포함), Execution dev SUCCESS 기록
+- **openai 구성(무효 테스트 키)**: `GET /llm` → openai/gpt-4o 선택 확인,
+  `/llm/health` → **실제 API 호출 시도** 후 error 반환, Execution에
+  `dev | openai gpt-4o | FAILED` 기록 — 배선 전체가 실호출까지 도달함을 실증
+- ⚠️ **실키 검증 불가**: 이 개발 샌드박스의 네트워크 egress 허용 목록에
+  `api.openai.com`이 없어(403 Host not in allowlist) 유효 키가 있어도 호출이
+  차단됨 — 환경 설정 또는 다른 환경에서의 스모크 테스트 필요 (#24)
 
 ## 5. 아키텍처 변경 및 현황
 
-**이번 주기 변경 — 관측 계층의 읽기 완성 (기록 0601 → 집계 0602)**:
+**이번 주기 변경 — 첫 실제 Provider 공식 연결**:
 
 ```
-LLM 호출 전부 ─▶ Execution 기록 (0601)
-                   ├─ GET /executions        : 원시 이력 (건별)
-                   └─ GET /executions/stats  : 운영 지표 (호출/성공률/토큰/비용/지연
-                                               × 전체/Feature/Provider/Model)  ← 신설
+LLM_PROVIDER=openai + OPENAI_API_KEY
+   └─▶ OpenAiLlmProvider: json_object 구조화 출력 + image_url 멀티모달
+         ├─ GET /llm/health : 실호출 상태 점검 (실패도 Execution 기록)
+         └─ Execution Cost  : gpt-4o 계열 단가 자동 산정 (접두사 매칭)
 ```
 
-① 집계는 **조회 전용 계층** — 기록 규칙·모델을 건드리지 않고 위에 얹음.
-② 병합 규칙은 core 순수 함수로 분리 — DB 집계(groupBy)와 통계 규칙(비율·
-가중 평균·cost null)이 각자 테스트됨. ③ 실모델 전환 시 이 API가 곧
-비용/성능 모니터링 창구가 된다 (가격표 등록만 남음).
+① mock 기본 원칙은 그대로 — 키를 설정한 환경에서만 실호출. ② 관측 루프
+완성: 연결(0603) → 기록(0601) → 집계(0602)가 한 흐름 — 실키 투입 즉시
+비용/성능 지표가 대시보드에 나타난다. ③ 어댑터 테스트 패턴 수립(클라이언트
+주입) — Anthropic/Gemini 연결 시 동일 패턴 적용 예정.
 
-**유지되는 핵심 결정**: Port/Adapter 계층 · mock 기본 원칙 · 이력 보존 모델 · Advisory 검증 · Execution 6항 결정(#22)
+**유지되는 핵심 결정**: Port/Adapter 계층 · mock 기본 원칙 · 이력 보존 모델 · Advisory 검증 · Execution 6항 결정
 
 **현황**: 모노레포(web·api·core/shared/agents/ui), 마이그레이션 16건(변경 없음), drift 없음
 
 ## 6. 데이터 모델
 
-(TASK-0602는 스키마 변경 없음 — executions 테이블 재사용, 조회 전용)
-
-```
-Execution — LLM 호출 관측 (독립 테이블, FK 없음 — CTO 결정)
-  └─ 집계: (feature|provider|model, status) groupBy → 통계 병합 (저장하지 않음)
-```
+(TASK-0603은 스키마 변경 없음 — 가격표는 코드 선언, Health는 기존 Execution으로 기록)
 
 ## 7. API 표면
 
 | 영역 | 엔드포인트 |
 | --- | --- |
 | 기존 전체 | (유지 — 이전 보고 참조) |
-| Execution | `GET /executions?feature=&limit=` (이력) · **`GET /executions/stats?from=&to=`** (Dashboard 집계) |
+| LLM Gateway | `GET /llm` · **`GET /llm/health`** (신설) · `POST /llm/complete` |
+| Execution | `GET /executions` · `GET /executions/stats` — 변경 없음 (openai 호출도 자동 집계) |
 
-웹: 변경 없음 (Dashboard 화면은 스펙 없음 — API만 제공)
+웹: 변경 없음
 
 ## 8. 리스크·기술 부채
 
-1. **0602 해석 미확인** — 지표 구성(가중 평균 지연·최대치)·기간 필터·화면
-   부재 (CTO_REQUEST #23)
-2. **실모델 단가 미확정** — cost가 mock 0 외에는 null (단가 스펙 확정 시
-   가격표 1곳 추가로 활성화 — #22에서 요청 유지)
-3. **웹 Dashboard 화면 부재** — API만 제공 (화면은 스펙 없음)
-4. **시계열 미제공** — 기간 전체의 합계·평균만 제공, 일별 추이는 후속
-5. **실모델 연결 준비 항목** — 이미지 용량 가드·구조화 출력 매핑·스모크
-   테스트 — 이전 보고와 동일
+1. **실키 스모크 테스트 미수행** — 개발 환경 egress 제한(`api.openai.com`
+   차단)으로 유효 키 검증 불가. 무효 키로 배선(실호출 도달·오류 기록)은
+   실증 완료 (CTO_REQUEST #24)
+2. **이미지 용량 가드 미구현** — CTO 결정(0505 승인 ④): 실제 Provider 연결
+   전 구현 — **다음 TASK 후보로 이행 필요** (Vision을 openai로 실행하기 전)
+3. **단가 변동 추적** — 가격표는 코드 선언(승인 ④ 유지) — OpenAI 단가 변경
+   시 수동 갱신 필요
+4. **Anthropic/Gemini responseFormat 미매핑** — 해당 Provider 연결 TASK에서
+5. **Dashboard 화면·일별 시계열** — CTO 일정대로 대기 (다음 Sprint / Sprint 6 후반)
 
 ## 9. 다음 권장 사항 (Sprint 6 후속 후보)
 
-1. **CTO_REQUEST #23 확인** — TASK-0602 해석 확인 및 다음 지시
-2. **웹 Dashboard 화면** — /executions 페이지 (stats API 소비, 표+지표 카드)
-3. **일별 시계열 집계** — 추이 그래프용 (기간 × 일 단위 groupBy)
-4. **실모델 단가 등록** — #22 요청 유지 (등록 즉시 비용 지표 활성화)
-5. **실모델 연결 준비 TASK** — 이미지 용량 가드 + 구조화 출력 매핑 + 스모크
-   테스트 묶음 (API 키 스펙 필요, CTO_REQUEST #6)
+1. **CTO_REQUEST #24 확인** — TASK-0603 해석 확인 및 다음 지시
+2. **실키 스모크 테스트** — 운영/스테이징 환경(egress 허용)에서 유효 키로
+   health→생성→분석→Vision 1회씩 + /executions/stats 비용 확인
+3. **이미지 용량 가드·리사이즈** — CTO 결정상 실제 Provider 연결 전 구현
+   항목 — openai로 Vision을 돌리기 전에 필요
+4. **일별 시계열 집계** — CTO 예고(Sprint 6 후반)
+5. **Anthropic/Gemini 공식 연결** — OpenAI와 동일 5항목 패턴 재적용

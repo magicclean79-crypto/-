@@ -8,11 +8,12 @@
 
 ## 미완료 (스펙 확정, 구현 대기)
 
-- (없음 — TASK-0602 완료. CTO 리뷰/승인 대기 중이며 승인 전 다음 TASK를 시작하지 않는다)
+- (없음 — TASK-0603 완료. CTO 리뷰/승인 대기 중이며 승인 전 다음 TASK를 시작하지 않는다)
 
 ## 완료 — Sprint 6
 
-- [x] **TASK-0602 — Execution Dashboard** (`162f165`): GET /executions/stats?from=&to= — 호출 수·성공률·실패율·토큰·비용(USD)·지연(가중 평균·최대)을 전체(totals) + feature/provider/model별로 집계, DB (차원,status) groupBy → @acos/core 순수 병합 로직(buildExecutionStats, DB 없이 단위 테스트), 기간 필터·날짜 검증 400, DB 변경 없음 — 해석 확인 CTO_REQUEST #23
+- [x] **TASK-0603 — Provider Integration (OpenAI)** (`34d1426`): OpenAI Provider 공식 연결 — API Key(OPENAI_API_KEY, 없으면 mock 폴백), Health Check(GET /llm/health, 실호출 기반·Execution dev 기록), responseFormat→response_format json_object 매핑, Multimodal(image_url, 클라이언트 주입 단위 검증), Execution Cost(gpt-4o/$2.5·$10, gpt-4o-mini 단가 등록 + 스냅샷 모델 최장 접두사 매칭) — 실키 호출은 샌드박스 egress 제한으로 미검증(무효 키 배선 검증 완료), 해석 확인 CTO_REQUEST #24
+- [x] **TASK-0602 — Execution Dashboard** (`162f165`, CTO 승인 — 지표 구성 유지·비율 0~1 API 반환(%는 UI)·from/to 공식 채택·화면은 다음 Sprint·일별 시계열은 Sprint 6 후반 확정): GET /executions/stats?from=&to= — 호출 수·성공률·실패율·토큰·비용(USD)·지연(가중 평균·최대)을 전체(totals) + feature/provider/model별로 집계, DB (차원,status) groupBy → @acos/core 순수 병합 로직(buildExecutionStats, DB 없이 단위 테스트), 기간 필터·날짜 검증 400, DB 변경 없음 — 해석 확인 CTO_REQUEST #23
 - [x] **TASK-0601 — Execution Domain** (`fcbf6ce`, CTO 승인 — feature 4종·400 비기록·본문 비저장·가격표 Code-first·미등록 모델 cost null·FK 없는 독립 도메인 확정): 모든 LLM 호출(Content·Analysis·Vision·개발용)을 호출 1건당 Execution 1건으로 기록 — Execution 모델(feature/provider/model/token/cost USD/latencyMs/status/error) + 마이그레이션, ExecutionTracker(@acos/core, 기록 실패는 호출 미실패), 기록 지점은 LlmService.complete 단일화(feature 태깅), 비용은 코드 선언 가격표(mock 0, 미등록 모델 null), GET /executions 조회 API — 해석 확인 CTO_REQUEST #22
 
 ## 완료 — Sprint 5 (Goal: AI Execution — CTO 공식 종료, 2026-07-28)
