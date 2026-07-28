@@ -16,9 +16,10 @@ const PRODUCTION_ENV: Record<string, string> = {
   AUTH_ADMIN_EMAIL: "admin@acos.example.com",
   AUTH_ADMIN_PASSWORD: "a-long-enough-password",
   LLM_PROVIDER: "openai",
-  OPENAI_API_KEY: "sk-live",
+  OPENAI_API_KEY: "sk-proj-abcdefghijklmnop1234",
   LLM_DAILY_BUDGET_USD: "50",
-  LLM_FAILOVER_PRIORITY: "openai,anthropic",
+  // 참조하는 Provider의 키는 운영 필수(CTO 결정 1202-②) — openai만 참조한다
+  LLM_FAILOVER_PRIORITY: "openai",
 };
 
 describe("Environment Validation (TASK-1202)", () => {
@@ -144,6 +145,60 @@ describe("Environment Validation (TASK-1202)", () => {
 
     it("선언된 모든 항목을 빠짐없이 돌려준다", () => {
       expect(describeEnvironment({})).toHaveLength(ENV_SPECS.length);
+    });
+  });
+
+  describe("Provider 키 조건부 필수 (CTO 결정 1202-②)", () => {
+    it("쓰지 않는 Provider의 키는 운영에서도 필수가 아니다", () => {
+      const result = validateEnvironment(PRODUCTION_ENV);
+      expect(result.ok).toBe(true);
+      // anthropic·gemini는 어디서도 참조하지 않으므로 키가 없어도 된다
+      expect(result.errors.map((issue) => issue.name)).not.toContain(
+        "ANTHROPIC_API_KEY",
+      );
+    });
+
+    it("참조하는 Provider의 키가 없으면 운영에서 error", () => {
+      const result = validateEnvironment({
+        ...PRODUCTION_ENV,
+        LLM_ROUTE_ANALYSIS: "anthropic:claude-sonnet-5",
+        LLM_FAILOVER_PRIORITY: "openai,gemini",
+      });
+      expect(result.ok).toBe(false);
+      expect(result.errors.map((issue) => issue.name).sort()).toEqual([
+        "ANTHROPIC_API_KEY",
+        "GEMINI_API_KEY",
+      ]);
+    });
+
+    it("키 형식이 틀리면 환경과 무관하게 error", () => {
+      const result = validateEnvironment({
+        NODE_ENV: "development",
+        OPENAI_API_KEY: "sk-xxxxxxxxxxxxxxxxxxxx", // 플레이스홀더
+        ANTHROPIC_API_KEY: "sk-proj-wrong-prefix-1234", // 접두사 불일치
+      });
+      expect(result.errors.map((issue) => issue.name).sort()).toEqual([
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+      ]);
+      expect(
+        result.errors.find((issue) => issue.name === "OPENAI_API_KEY")?.message,
+      ).toContain("플레이스홀더");
+    });
+
+    it("설정 현황에도 조건부 필수가 반영된다", () => {
+      const views = describeEnvironment({
+        ...PRODUCTION_ENV,
+        LLM_ROUTE_VISION: "gemini",
+      });
+      expect(
+        views.find((view) => view.name === "GEMINI_API_KEY")
+          ?.requiredInProduction,
+      ).toBe(true);
+      expect(
+        views.find((view) => view.name === "ANTHROPIC_API_KEY")
+          ?.requiredInProduction,
+      ).toBe(false);
     });
   });
 

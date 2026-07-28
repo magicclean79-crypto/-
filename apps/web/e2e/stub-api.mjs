@@ -652,6 +652,150 @@ const server = http.createServer((req, res) => {
     );
     return;
   }
+  // ── Real Provider 운영 점검 (TASK-1301) ── ADMIN 전용
+  if (
+    url.pathname === "/llm/providers/validate" ||
+    url.pathname === "/llm/cost-verification" ||
+    url.pathname === "/llm/monitoring"
+  ) {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    const healthy = mode === "data";
+
+    if (url.pathname === "/llm/providers/validate") {
+      const live = url.searchParams.get("live") === "1";
+      res.end(
+        JSON.stringify({
+          ok: healthy,
+          production: !healthy,
+          liveChecked: live,
+          providers: [
+            {
+              provider: "openai",
+              title: "OpenAI",
+              keyEnv: "OPENAI_API_KEY",
+              format: healthy ? "ok" : "placeholder",
+              message: healthy
+                ? "형식은 정상입니다 — 유효한 키인지는 Live Check로만 확인할 수 있습니다."
+                : "플레이스홀더 값으로 보입니다 — 실제 키로 교체하세요.",
+              hint: "sk-pro…",
+              length: 51,
+              required: true,
+              instantiated: healthy,
+              defaultModel: "gpt-4o",
+              live: live
+                ? {
+                    provider: "openai",
+                    model: "gpt-4o",
+                    status: healthy ? "ok" : "error",
+                    latencyMs: 412,
+                    error: healthy ? null : "401 Incorrect API key provided",
+                    checkedAt: new Date().toISOString(),
+                  }
+                : null,
+            },
+            {
+              provider: "anthropic",
+              title: "Anthropic Claude",
+              keyEnv: "ANTHROPIC_API_KEY",
+              format: "missing",
+              message: "ANTHROPIC_API_KEY가 설정되지 않았습니다.",
+              hint: null,
+              length: null,
+              required: false,
+              instantiated: false,
+              defaultModel: "claude-sonnet-5",
+              live: null,
+            },
+          ],
+          blockers: healthy
+            ? []
+            : ["openai: 플레이스홀더 값으로 보입니다 — 실제 키로 교체하세요."],
+          checkedAt: new Date().toISOString(),
+        }),
+      );
+      return;
+    }
+
+    if (url.pathname === "/llm/cost-verification") {
+      res.end(
+        JSON.stringify({
+          ok: healthy,
+          hours: Number(url.searchParams.get("hours")) || 24,
+          checked: healthy ? 42 : 12,
+          unpricedCalls: healthy ? 0 : 12,
+          recordedTotal: healthy ? 0.184213 : 0,
+          expectedTotal: healthy ? 0.184213 : 0,
+          issues: healthy
+            ? []
+            : [
+                {
+                  kind: "unpriced",
+                  provider: "openai",
+                  model: "gpt-5-preview",
+                  count: 12,
+                  message:
+                    "가격표에 없는 모델입니다 — 비용이 집계되지 않아 **예산 상한이 적용되지 않습니다**.",
+                  sampleIds: ["exec-1", "exec-2", "exec-3"],
+                },
+              ],
+          pricing: [
+            { model: "gpt-4o", inputPerMillion: 2.5, outputPerMillion: 10 },
+            { model: "claude-sonnet-5", inputPerMillion: 3, outputPerMillion: 15 },
+          ],
+          checkedAt: new Date().toISOString(),
+        }),
+      );
+      return;
+    }
+
+    res.end(
+      JSON.stringify({
+        status: healthy ? "healthy" : "degraded",
+        windowMinutes: Number(url.searchParams.get("minutes")) || 60,
+        minSamples: 5,
+        totals: {
+          calls: healthy ? 40 : 10,
+          successCount: healthy ? 40 : 7,
+          failedCount: healthy ? 0 : 3,
+          successRate: healthy ? 1 : 0.7,
+          cost: healthy ? 0.184213 : null,
+          unpricedCalls: healthy ? 0 : 7,
+        },
+        providers: [
+          {
+            provider: "openai",
+            calls: healthy ? 40 : 10,
+            successCount: healthy ? 40 : 7,
+            failedCount: healthy ? 0 : 3,
+            successRate: healthy ? 1 : 0.7,
+            latency: { p50: 820, p95: 1900, p99: 2400, max: 2400 },
+            cost: healthy ? 0.184213 : null,
+            costPerCall: healthy ? 0.004605 : null,
+            unpricedCalls: healthy ? 0 : 7,
+            models: ["gpt-4o"],
+            lastCallAt: new Date().toISOString(),
+            status: healthy ? "healthy" : "degraded",
+          },
+        ],
+        alerts: healthy
+          ? []
+          : [
+              {
+                level: "warning",
+                provider: "openai",
+                message:
+                  "성공률 70% (7/10) — 기준 95% 미만입니다. Failover 우선순위를 점검하세요.",
+              },
+            ],
+        checkedAt: new Date().toISOString(),
+      }),
+    );
+    return;
+  }
   // ── Provider Administration Console (TASK-1201) ── ADMIN 전용
   if (url.pathname === "/admin/console" || url.pathname === "/admin/audit" ||
       url.pathname.startsWith("/admin/settings/")) {

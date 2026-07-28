@@ -1249,3 +1249,115 @@ export interface LivenessDto {
   uptimeSeconds: number;
   nodeEnv: string;
 }
+
+// ── Real AI Provider Production Integration (TASK-1301, Sprint 13) ──
+
+/** API Key 형식 판정 — 형식만 본다 (유효성은 Live Check로 확인) */
+export type ApiKeyFormatStatusDto = "ok" | "missing" | "invalid" | "placeholder";
+
+/** Provider 1개의 연결 준비 상태 (GET /llm/providers/validate) */
+export interface ProviderValidationDto {
+  provider: string;
+  title: string;
+  /** 키 환경변수 이름 (mock 등 키가 없으면 null) */
+  keyEnv: string | null;
+  /** 형식 판정 */
+  format: ApiKeyFormatStatusDto;
+  /** 사람이 읽는 설명 */
+  message: string;
+  /** 키 앞부분 힌트 (값은 절대 노출하지 않는다) */
+  hint: string | null;
+  /** 키 길이 (미설정이면 null) */
+  length: number | null;
+  /** 설정상 이 Provider를 참조하는가 → 운영에서 키가 필수 (CTO 결정 1202-②) */
+  required: boolean;
+  /** 실제 어댑터가 만들어졌는가 (키가 있어야 생성된다) */
+  instantiated: boolean;
+  defaultModel: string;
+  /** Live Check 결과 — 요청하지 않았으면 null */
+  live: LlmHealthDto | null;
+}
+
+export interface ProviderValidationReportDto {
+  /** 운영에서 막히는 문제가 없으면 true */
+  ok: boolean;
+  production: boolean;
+  /** Live Check를 수행했는가 (실제 API 호출·과금 발생) */
+  liveChecked: boolean;
+  providers: ProviderValidationDto[];
+  /** 조치가 필요한 항목 요약 */
+  blockers: string[];
+  checkedAt: string;
+}
+
+/** 비용 검증 문제 1건 */
+export interface CostIssueDto {
+  kind: "unpriced" | "mismatch" | "missing-usage";
+  provider: string;
+  model: string;
+  count: number;
+  message: string;
+  sampleIds: string[];
+  recordedTotal?: number;
+  expectedTotal?: number;
+}
+
+/** 기록된 비용 검증 (GET /llm/cost-verification) */
+export interface CostVerificationDto {
+  ok: boolean;
+  /** 검사 구간 (시간) */
+  hours: number;
+  checked: number;
+  unpricedCalls: number;
+  recordedTotal: number;
+  expectedTotal: number;
+  issues: CostIssueDto[];
+  /** 가격표에 등록된 모델 단가 (USD / 1M tokens) */
+  pricing: {
+    model: string;
+    inputPerMillion: number;
+    outputPerMillion: number;
+  }[];
+  checkedAt: string;
+}
+
+export type MonitorStatusDto = "healthy" | "degraded" | "down" | "unknown";
+
+export interface ProviderMonitorRowDto {
+  provider: string;
+  calls: number;
+  successCount: number;
+  failedCount: number;
+  successRate: number | null;
+  latency: { p50: number; p95: number; p99: number; max: number } | null;
+  cost: number | null;
+  costPerCall: number | null;
+  unpricedCalls: number;
+  models: string[];
+  lastCallAt: string | null;
+  status: MonitorStatusDto;
+}
+
+export interface MonitorAlertDto {
+  level: "warning" | "critical";
+  provider: string;
+  message: string;
+}
+
+/** 운영 모니터링 (GET /llm/monitoring) */
+export interface ProductionMonitorDto {
+  status: MonitorStatusDto;
+  windowMinutes: number;
+  minSamples: number;
+  totals: {
+    calls: number;
+    successCount: number;
+    failedCount: number;
+    successRate: number | null;
+    cost: number | null;
+    unpricedCalls: number;
+  };
+  providers: ProviderMonitorRowDto[];
+  alerts: MonitorAlertDto[];
+  checkedAt: string;
+}

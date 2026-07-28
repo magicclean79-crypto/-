@@ -7,6 +7,7 @@ import { LlmBudgetService } from "./llm-budget.service";
 import { LLM_PROVIDER, LLM_PROVIDER_MAP } from "./llm.constants";
 import { LlmController } from "./llm.controller";
 import { LlmService } from "./llm.service";
+import { ProviderProductionService } from "./provider-production.service";
 import { createLlmProvider, createLlmProviderMap } from "./provider.factory";
 
 /**
@@ -23,6 +24,7 @@ import { createLlmProvider, createLlmProviderMap } from "./provider.factory";
     LlmBudgetService,
     ExperimentLifecycleService,
     ExperimentAnalyticsService,
+    ProviderProductionService,
     {
       provide: LLM_PROVIDER,
       useFactory: createLlmProvider,
@@ -38,6 +40,7 @@ import { createLlmProvider, createLlmProviderMap } from "./provider.factory";
     LlmBudgetService,
     ExperimentLifecycleService,
     ExperimentAnalyticsService,
+    ProviderProductionService,
   ],
 })
 export class LlmModule {}

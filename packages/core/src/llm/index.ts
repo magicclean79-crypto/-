@@ -6,4 +6,7 @@ export * from "./routing";
 export * from "./experiment";
 export * from "./experiment-lifecycle";
 export * from "./experiment-analytics";
+export * from "./api-key";
+export * from "./cost-verification";
+export * from "./production-monitor";
 export * from "./providers/mock.provider";

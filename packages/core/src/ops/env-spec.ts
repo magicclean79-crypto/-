@@ -1,3 +1,5 @@
+import { providerKeyRequired, validateApiKeyFormat } from "../llm/api-key";
+
 /**
  * Environment Validation. (TASK-1202, Sprint 12)
  *
@@ -27,6 +29,11 @@ export interface EnvSpec {
   description: string;
   /** 운영에서 반드시 있어야 하는가 */
   requiredInProduction?: boolean;
+  /**
+   * 조건부 운영 필수 (CTO 결정 1202-②) — 설정에 따라 필수 여부가 갈릴 때.
+   * 예: Provider API 키는 **그 Provider를 실제로 쓸 때만** 필수다.
+   */
+  requiredWhen?: (env: Record<string, string | undefined>) => boolean;
   /** 값 형식 검사 — 문제가 있으면 사유를 돌려준다 */
   validate?: (value: string) => string | null;
   /** 미설정 시의 기본 동작 설명 */
@@ -179,23 +186,46 @@ export const ENV_SPECS: EnvSpec[] = [
         ? "운영 환경인데 LLM_PROVIDER가 mock입니다 — 실제 Provider를 지정하세요."
         : null,
   },
+  // Provider 키는 **그 Provider를 실제로 쓸 때만** 운영 필수다 (CTO 결정 1202-②).
+  // 라우팅·Failover·실험 어디서든 참조하면 키가 없을 때 그 경로가 실패한다.
   {
     name: "OPENAI_API_KEY",
     category: "llm",
-    description: "OpenAI API 키 (openai 사용 시)",
+    description: "OpenAI API 키 (openai를 사용하는 설정이면 필수)",
     secret: true,
+    requiredWhen: (env) => providerKeyRequired("openai", env),
+    validate: (value) => {
+      const result = validateApiKeyFormat("openai", value);
+      return result.status === "ok" || result.status === "missing"
+        ? null
+        : `API 키 형식 문제 — ${result.message}`;
+    },
   },
   {
     name: "ANTHROPIC_API_KEY",
     category: "llm",
-    description: "Anthropic API 키 (anthropic 사용 시)",
+    description: "Anthropic API 키 (anthropic을 사용하는 설정이면 필수)",
     secret: true,
+    requiredWhen: (env) => providerKeyRequired("anthropic", env),
+    validate: (value) => {
+      const result = validateApiKeyFormat("anthropic", value);
+      return result.status === "ok" || result.status === "missing"
+        ? null
+        : `API 키 형식 문제 — ${result.message}`;
+    },
   },
   {
     name: "GEMINI_API_KEY",
     category: "llm",
-    description: "Google Gemini API 키 (gemini 사용 시)",
+    description: "Google Gemini API 키 (gemini를 사용하는 설정이면 필수)",
     secret: true,
+    requiredWhen: (env) => providerKeyRequired("gemini", env),
+    validate: (value) => {
+      const result = validateApiKeyFormat("gemini", value);
+      return result.status === "ok" || result.status === "missing"
+        ? null
+        : `API 키 형식 문제 — ${result.message}`;
+    },
   },
   {
     name: "LLM_DAILY_BUDGET_USD",
@@ -289,8 +319,11 @@ export function validateEnvironment(
       category: spec.category,
     });
 
+    const required =
+      (spec.requiredInProduction ?? false) || (spec.requiredWhen?.(env) ?? false);
+
     if (!isSet(value)) {
-      if (production && spec.requiredInProduction) {
+      if (production && required) {
         errors.push(
           issue(
             "error",
@@ -357,7 +390,8 @@ export function describeEnvironment(
       name: spec.name,
       category: spec.category,
       description: spec.description,
-      requiredInProduction: spec.requiredInProduction ?? false,
+      requiredInProduction:
+        (spec.requiredInProduction ?? false) || (spec.requiredWhen?.(env) ?? false),
       configured,
       value: configured && !spec.secret ? value : null,
       secret: spec.secret ?? false,

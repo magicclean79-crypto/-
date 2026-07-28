@@ -10,6 +10,7 @@ import { LlmBudgetService } from "./llm-budget.service";
 import { LLM_PROVIDER } from "./llm.constants";
 import { LlmController } from "./llm.controller";
 import { LlmService } from "./llm.service";
+import { ProviderProductionService } from "./provider-production.service";
 
 describe("LLM API (API Test)", () => {
   let app: INestApplication;
@@ -89,17 +90,60 @@ describe("LLM API (API Test)", () => {
             }),
           },
         },
+        {
+          // 운영 점검 스텁 (TASK-1301) — 계산은 core/전용 spec에서 검증
+          provide: ProviderProductionService,
+          useValue: {
+            validateProviders: async ({ live }: { live?: boolean } = {}) => ({
+              ok: true,
+              production: false,
+              liveChecked: Boolean(live),
+              providers: [],
+              blockers: [],
+              checkedAt: new Date().toISOString(),
+            }),
+            verifyCost: async ({ hours }: { hours?: number } = {}) => ({
+              ok: true,
+              hours: hours ?? 24,
+              checked: 0,
+              unpricedCalls: 0,
+              recordedTotal: 0,
+              expectedTotal: 0,
+              issues: [],
+              pricing: [],
+              checkedAt: new Date().toISOString(),
+            }),
+            monitor: async ({ minutes }: { minutes?: number } = {}) => ({
+              status: "unknown",
+              windowMinutes: minutes ?? 60,
+              minSamples: 5,
+              totals: {
+                calls: 0,
+                successCount: 0,
+                failedCount: 0,
+                successRate: null,
+                cost: null,
+                unpricedCalls: 0,
+              },
+              providers: [],
+              alerts: [],
+              checkedAt: new Date().toISOString(),
+            }),
+          },
+        },
         HealthProtectionGuard,
         {
           // 가드 검증용 스텁 — 실제 세션 조회는 auth.controller.spec에서 검증
           provide: AuthService,
           useValue: {
             validateToken: async (token: string) =>
-              token === "tok-editor"
-                ? { id: "u-e", email: "e@acos.local", role: "EDITOR" }
-                : token === "tok-viewer"
-                  ? { id: "u-v", email: "v@acos.local", role: "VIEWER" }
-                  : null,
+              token === "tok-admin"
+                ? { id: "u-a", email: "a@acos.local", role: "ADMIN" }
+                : token === "tok-editor"
+                  ? { id: "u-e", email: "e@acos.local", role: "EDITOR" }
+                  : token === "tok-viewer"
+                    ? { id: "u-v", email: "v@acos.local", role: "VIEWER" }
+                    : null,
           },
         },
       ],
@@ -205,5 +249,54 @@ describe("LLM API (API Test)", () => {
       .expect(200);
     expect(response.body.provider).toBe("mock");
     delete process.env.AUTH_PROTECT_HEALTH;
+  });
+
+  describe("운영 점검 API (TASK-1301) — 전부 ADMIN 전용", () => {
+    const paths = [
+      "/llm/providers/validate",
+      "/llm/cost-verification",
+      "/llm/monitoring",
+    ];
+
+    it("비인증은 401, EDITOR는 403 (조회도 보호된다)", async () => {
+      for (const path of paths) {
+        await request(app.getHttpServer()).get(path).expect(401);
+        await request(app.getHttpServer())
+          .get(path)
+          .set("Authorization", "Bearer tok-editor")
+          .expect(403);
+      }
+    });
+
+    it("GET /llm/providers/validate — 기본은 Live Check를 하지 않는다 (과금 방지)", async () => {
+      const off = await request(app.getHttpServer())
+        .get("/llm/providers/validate")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+      expect(off.body.liveChecked).toBe(false);
+
+      const on = await request(app.getHttpServer())
+        .get("/llm/providers/validate?live=1")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+      expect(on.body.liveChecked).toBe(true);
+    });
+
+    it("GET /llm/cost-verification — 구간(hours)을 전달한다", async () => {
+      const response = await request(app.getHttpServer())
+        .get("/llm/cost-verification?hours=6")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+      expect(response.body.hours).toBe(6);
+    });
+
+    it("GET /llm/monitoring — 관측 창(minutes)을 전달한다", async () => {
+      const response = await request(app.getHttpServer())
+        .get("/llm/monitoring?minutes=15")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+      expect(response.body.windowMinutes).toBe(15);
+      expect(response.body.status).toBe("unknown");
+    });
   });
 });

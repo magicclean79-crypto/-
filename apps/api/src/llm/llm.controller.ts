@@ -17,6 +17,7 @@ import {
   LLM_PROVIDER_REGISTRY,
 } from "@acos/core";
 import type {
+  CostVerificationDto,
   ExperimentActionDto,
   ExperimentAnalyticsDto,
   ExperimentAssignmentsDto,
@@ -31,8 +32,10 @@ import type {
   LlmHealthDto,
   LlmProvidersDto,
   LlmRoutingDto,
+  ProductionMonitorDto,
+  ProviderValidationReportDto,
 } from "@acos/shared";
-import { RequireRole } from "../auth/auth.guard";
+import { AuthGuard, RequireRole } from "../auth/auth.guard";
 import type { AuthenticatedRequest } from "../auth/auth.guard";
 import { HealthProtectionGuard } from "../auth/health-protection.guard";
 import { featureExperiment } from "./experiment-config";
@@ -40,6 +43,7 @@ import { ExperimentAnalyticsService } from "./experiment-analytics.service";
 import { ExperimentLifecycleService } from "./experiment-lifecycle.service";
 import { LlmBudgetService } from "./llm-budget.service";
 import { LlmService } from "./llm.service";
+import { ProviderProductionService } from "./provider-production.service";
 
 @Controller("llm")
 export class LlmController {
@@ -48,6 +52,7 @@ export class LlmController {
     private readonly budgetService: LlmBudgetService,
     private readonly lifecycle: ExperimentLifecycleService,
     private readonly analyticsService: ExperimentAnalyticsService,
+    private readonly production: ProviderProductionService,
   ) {}
 
   /** 선택된 Provider 확인 (기본 mock) */
@@ -82,6 +87,55 @@ export class LlmController {
         note: info.note,
       })),
     };
+  }
+
+  /**
+   * API Key Validation (TASK-1301) — Provider별 키 형식·필수 여부·어댑터
+   * 생성 여부를 확인한다. 키 값은 노출하지 않는다 (앞부분 힌트·길이만).
+   *
+   * `?live=1`이면 Provider마다 최소 완성 호출을 1회 실행한다 — **실제 과금이
+   * 발생**하므로 기본은 형식 검사만 하고, 실행 여부를 응답에 표시한다.
+   *
+   * 조회만으로도 운영 설정 지형이 드러나므로 **ADMIN 전용**
+   * (CTO 결정 1201-⑤와 같은 판단).
+   */
+  @Get("providers/validate")
+  @UseGuards(AuthGuard)
+  @RequireRole("ADMIN")
+  async validateProviders(
+    @Query("live") live?: string,
+  ): Promise<ProviderValidationReportDto> {
+    return this.production.validateProviders({
+      live: live === "1" || live === "true",
+    });
+  }
+
+  /**
+   * Cost Verification (TASK-1301) — 기록된 비용을 가격표로 재계산해 검증한다.
+   * 가격표에 없는 모델은 비용이 null로 남아 **예산 상한이 무력화**되므로
+   * 가장 먼저 드러내야 하는 문제다. ADMIN 전용.
+   */
+  @Get("cost-verification")
+  @UseGuards(AuthGuard)
+  @RequireRole("ADMIN")
+  async costVerification(
+    @Query("hours") hours?: string,
+  ): Promise<CostVerificationDto> {
+    return this.production.verifyCost({ hours: Number(hours) || undefined });
+  }
+
+  /**
+   * Production Monitoring (TASK-1301) — 관측 창 안의 Provider별 성공률·
+   * 지연 분포(p50/p95/p99)·비용과 경보. 표본이 적으면 판정하지 않는다
+   * (unknown — 1회 실패로 장애라고 말하지 않는다). ADMIN 전용.
+   */
+  @Get("monitoring")
+  @UseGuards(AuthGuard)
+  @RequireRole("ADMIN")
+  async monitoring(
+    @Query("minutes") minutes?: string,
+  ): Promise<ProductionMonitorDto> {
+    return this.production.monitor({ minutes: Number(minutes) || undefined });
   }
 
   /** 비용 예산 현황 (TASK-0902) — UTC 일/월 지출·예산·경고 상태 */

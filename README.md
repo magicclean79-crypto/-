@@ -373,6 +373,40 @@ API 키가 없으면 항상 mock으로 동작합니다 —
 | `GET` | `/health/live` | 구조화된 생존 확인 (무인증, 내부 구성 비노출) |
 | `GET` | `/health/ready` | **배포 준비 보고 (ADMIN)** — 체크리스트·구성 요소·설정 현황 |
 
+## 실 Provider 운영 점검 (TASK-1301, Sprint 13)
+
+실 Provider로 **실제 돈이 나가는 운영**을 시작할 때 필요한 확인입니다.
+웹 화면은 **`/admin/production`**(ADMIN 전용).
+
+- **API Key Validation**: Provider별 키 형식·조건부 필수 여부·어댑터 생성
+  여부. **키 값은 노출하지 않습니다**(앞 6자 힌트와 길이만). `sk-xxxx…`·
+  `changeme` 같은 **플레이스홀더를 별도 상태로** 잡습니다 — 형식 검사만으로는
+  통과해 버리는 배포 사고의 단골입니다
+- **Live Check**: 실제 API를 호출하므로 **기본으로 실행하지 않습니다**.
+  버튼(또는 `?live=1`)으로만 실행하고, 실행 여부를 응답에 명시합니다
+- **Cost Verification**: 기록된 비용을 가격표로 재계산해 대조. 가격표에 없는
+  모델은 비용이 `null`로 남아 **예산 상한이 무력화되므로** 가장 먼저 드러냅니다
+- **Production Monitoring**: Provider별 성공률·지연 분포(p50/p95/p99)·비용과
+  경보. **표본이 적으면 판정하지 않습니다**(`unknown`) — 1회 실패로 "장애"라고
+  말하지 않습니다
+- **Vision Production**: 이미지 전달 형식이 Provider마다 다릅니다(OpenAI
+  `image_url` / Anthropic `image` block / Gemini `inlineData`). 하나만 맞으면
+  Provider가 바뀌는 순간 이미지가 조용히 빠지므로 세 Provider 전부 회귀 테스트
+- **Provider Smoke Test**: `scripts/real-provider-smoke.mjs` — 키가 설정된
+  **모든** Provider Health Check + Vision 커버리지 + 비용·모니터링 판정
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `GET` | `/llm/providers/validate` | **API Key 검증 (ADMIN)** — `?live=1`이면 실호출(과금) |
+| `GET` | `/llm/cost-verification` | **비용 검증 (ADMIN)** — `?hours=`(기본 24) |
+| `GET` | `/llm/monitoring` | **운영 모니터링 (ADMIN)** — `?minutes=`(기본 60) |
+
+**운영 필수 키 (CTO 결정 1202-②)**: 설정에서 참조하는 Provider의 API Key는
+운영 필수입니다 — 참조하는데 키가 없으면 **서버가 기동하지 않습니다**(Fail
+Fast). 쓰지 않는 Provider의 키는 없어도 됩니다.
+
+자세한 내용: [docs/architecture/llm.md](docs/architecture/llm.md)
+
 ## Execution Domain (TASK-0601, Sprint 6)
 
 모든 LLM 호출(Content Generation · Analysis · Vision · 개발용 API)은 호출 1건당

@@ -6,6 +6,7 @@ import { WriteProtectionGuard } from "../auth/write-protection.guard";
 import { APP_GUARD } from "@nestjs/core";
 import { AdminSettingsService } from "../admin/admin-settings.service";
 import { ExperimentAnalyticsService } from "./experiment-analytics.service";
+import { ProviderProductionService } from "./provider-production.service";
 import { ExperimentLifecycleService } from "./experiment-lifecycle.service";
 import { LlmController } from "./llm.controller";
 import { LlmBudgetService } from "./llm-budget.service";
@@ -100,6 +101,15 @@ describe("Experiment Analytics API (TASK-1102)", () => {
           useValue: { get: () => null, all: () => ({}) },
         },
         ExperimentAnalyticsService,
+        {
+          // 운영 점검 스텁 (TASK-1301) — 전용 spec에서 검증
+          provide: ProviderProductionService,
+          useValue: {
+            validateProviders: async () => ({ providers: [], blockers: [] }),
+            verifyCost: async () => ({ ok: true, issues: [] }),
+            monitor: async () => ({ status: "unknown", providers: [], alerts: [] }),
+          },
+        },
         {
           provide: AuthService,
           useValue: {

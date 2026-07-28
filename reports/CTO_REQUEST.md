@@ -5,57 +5,80 @@
 
 ## 결정 대기
 
-### 44. TASK-1202 "Production Readiness & Deployment" 세부 해석 확인
-- 현황: 지시 7항목을 다음과 같이 구현했습니다. 설계의 축은 **"문서로만 있는
-  체크리스트는 지켜졌는지 확인할 수 없다"** 는 것입니다 — 기계가 판정할 수
-  있는 항목은 전부 자동화하고, 사람이 봐야 하는 것만 "직접 확인"으로 남겼습니다:
-  - **Environment Validation**: 환경변수 선언(`env-spec.ts`)을 **단일 원천**으로
-    두고 검증·대시보드·런북이 같은 선언을 씁니다. 운영 필수 누락과 **형식
-    오류**는 error(형식 오류는 환경 무관 — 잘못된 값은 어디서도 동작하지
-    않습니다), 운영 권고 위반(mock Provider·예산 미설정·쿠키 Secure 꺼짐 등)은
-    warning입니다
-  - **Startup Validation**: 기동 시 검증하고 **운영에서 오류가 있으면 기동하지
-    않습니다(exit 1)**. 잘못된 설정으로 뜬 서버는 조용히 오작동하다가 더 큰
-    사고를 만들기 때문입니다. 개발에서는 경고만 남기고 기동합니다
-  - **Deployment Checklist**: 환경·DB·마이그레이션·저장소·관리자 계정·실제
-    Provider·예산·Failover를 자동 판정하고, **스모크·백업은 manual**로 남깁니다.
-    마이그레이션은 확인할 수 없으면 통과가 아니라 "직접 확인"입니다 —
-    **모르는 것을 통과로 처리하지 않습니다**
-  - **Configuration Verification**: 설정 현황 표. **비밀 값은 설정 여부만**
-    노출하고 값은 화면·응답 어디에도 담지 않습니다
-  - **Health Dashboard**: 웹 `/admin/health` — 배포 가능 여부·차단 사유·
-    체크리스트·구성 요소·환경 오류/권고·설정 현황. 구성 요소 점검은 **서로
-    독립적으로 실패**합니다(저장소가 죽었다고 DB 상태까지 못 보면 장애 대응이
-    어렵습니다)
-  - **Runbook / Recovery Guide**: `docs/operations/`에 배포 절차와 **증상별
-    복구 절차**(기동 실패·DB·저장소·Provider·예산·실험·설정 미반영·롤백·
-    사고 후 정리)를 작성했습니다
-  - **API**: `GET /health`는 기존 `OK` 계약을 그대로 두고(웹 상태 표시가
-    의존), `GET /health/live`(무인증·내부 구성 비노출), **`GET /health/ready`는
-    ADMIN 전용**(결정 1201-⑤와 같은 기준)입니다
-  - **결정 1201-①~⑤ 반영**: ①②③④⑤ 모두 현행 유지로 확정하고, ②의
-    `ADMIN_SETTINGS_TTL_MS`를 환경 선언에 등록, ④는 복구 가이드의 "설정이
-    반영되지 않을 때" 절차로 명시했습니다
-  - 라이브: 운영 모드 필수 누락 → **기동 차단 exit 1** · 정상 기동 시
-    "환경 검증 통과 (22개 항목)" · **저장소가 실제로 내려간 상태를 정확히
-    탐지**해 배포 불가 판정(DB·Provider 결과는 유지) · 복구 후 통과 8·실패 0·
-    직접 확인 2로 배포 가능 · 미인증 401
-- **구현 중 발견해 고친 표시 결함**: 개발 환경에서 예산·Failover 미설정 항목이
-  상태는 `통과`인데 설명은 "비용 폭주를 막을 상한이 없습니다"·"단일 Provider
-  장애가 곧 서비스 중단입니다"였습니다. **상태와 설명이 정면으로 모순**돼 읽는
-  사람이 무엇을 해야 할지 알 수 없어, 환경별 문구로 분리하고 회귀 테스트를
-  남겼습니다.
-- 하지 않은 것: 배포 파이프라인 자동 연동(현재는 사람이 화면 확인), 백업
-  자동화(런북에 절차만), 수동 항목 확인 기록
-- 질문: ① **기동 차단 정책** — 운영에서 환경 오류가 있으면 서버를 아예 띄우지
-  않습니다. 의도한 동작이지만, 배포 파이프라인이 이를 일시 오류로 오해해
-  재시도하면 롤백이 늦어질 수 있습니다. 이대로 둘지, 아니면 "기동하되 요청을
-  거부"하는 방식이 나은지 ② **운영 필수 항목 목록**이 적절한지 (현재
-  `WEB_URL`·`DATABASE_URL`·S3 4종·`AUTH_ADMIN_EMAIL`/`PASSWORD`. 추가·제외할
-  항목이 있는지) ③ **수동 항목(스모크·백업)** — 지금은 화면에 "직접 확인"으로만
-  뜹니다. 누가 언제 확인했는지 기록하는 기능이 필요한지 ④ **배포 파이프라인
-  연동** — CI에서 `/health/ready`를 호출해 차단 항목이 있으면 배포를 막는 것을
-  다음 단계로 넣을지 ⑤ 다음 TASK 지정 요청.
+### 45. TASK-1301 "Real AI Provider Production Integration" 세부 해석 확인
+- 현황: 지시 8항목을 다음과 같이 구현했습니다. 설계의 축은 **"실 Provider로
+  넘어가는 순간 실패의 성격이 바뀐다"** 는 것입니다 — mock에서는 잘못된 설정이
+  테스트 실패로 끝나지만, 실 Provider에서는 **돈이 나가고, 요청이 깨지고,
+  그것을 나중에 압니다**:
+  - **OpenAI / Anthropic / Gemini Production**: 어댑터의 실 연결 자체는
+    TASK-0901·0903에서 완료된 상태라, 이번에는 그 위에 **운영에서 신뢰할 수
+    있는가**를 판정하는 계층을 얹었습니다(어댑터 코드는 변경 없음)
+  - **Vision Production**: 이미지 전달 형식이 Provider마다 전부 다릅니다
+    (OpenAI `image_url` data URL / Anthropic base64 `image` block / Gemini
+    `inlineData`). 하나만 맞으면 라우팅·Failover로 Provider가 바뀌는 순간
+    **이미지가 조용히 사라지고 "이미지 없이 추측한 결과"가 정상처럼 기록**됩니다
+    — 실패도 오류도 아니라 알아차릴 방법이 없어, 세 Provider 전부에 같은
+    시나리오 회귀 테스트를 두었습니다
+  - **API Key Validation** (`GET /llm/providers/validate`, ADMIN): 형식·조건부
+    필수·어댑터 생성 여부. **키 값은 어떤 경로로도 내보내지 않습니다**(앞 6자
+    힌트와 길이만). `sk-xxxx…`·`your-api-key`·`changeme` 같은 **플레이스홀더를
+    별도 상태로** 잡습니다 — 형식 검사만으로는 통과해 버리는 배포 사고의
+    단골입니다
+  - **Live Check**: `?live=1`일 때만 Provider마다 최소 완성 호출 1회.
+    **실제 과금이 발생하므로 기본은 형식 검사만** 하고, 실행 여부를
+    `liveChecked`로 명시합니다. 형식이 맞아도 유효한 키라는 보장은 없다는
+    사실을 메시지에 그대로 적었습니다
+  - **CTO 결정 1202-② 이행**: "실제 AI Provider 연결 시 Provider API Key를
+    추가"를 **필수 목록에 한 줄 더 적는 대신 조건부 필수**로 구현했습니다.
+    `env-spec.ts`의 세 Provider 키에 `requiredWhen`(설정에서 참조하면 운영
+    필수)과 형식 검사를 걸었고, 참조 여부는 `LLM_PROVIDER`·`LLM_ROUTE_*`·
+    `LLM_FAILOVER_PRIORITY`·`LLM_EXPERIMENT_*`를 훑어 판정합니다(부분 문자열
+    오탐 방지). 이 한 곳이 배포 준비 검증과 **Fail Fast 기동**에 그대로
+    반영되어, **참조하는데 키가 없으면 운영에서 서버가 뜨지 않습니다**.
+    쓰지 않는 Provider의 키는 여전히 없어도 됩니다
+  - **Cost Verification** (`GET /llm/cost-verification`, ADMIN): 기록된 비용을
+    가격표로 재계산해 대조하고 `unpriced`/`mismatch`/`missing-usage`를
+    **조치가 다르므로 구분**합니다. `unpriced`를 가장 크게 다루는 이유는
+    비용이 `null`로 남으면 예산 합계에서 빠져 **일/월 예산 상한이 조용히
+    무력화되기** 때문입니다
+  - **Production Monitoring** (`GET /llm/monitoring`, ADMIN): Provider별
+    성공률·**p50/p95/p99**·비용·경보. **표본이 적으면 판정하지 않습니다**
+    (기본 5회 미만 `unknown`) — 1회 실패로 "장애"라고 말하지 않습니다.
+    전체 상태는 **가장 나쁜 Provider**를 따릅니다. 실패 호출의 `cost=null`은
+    미산정으로 세지 않습니다(실패는 usage가 없는 게 정상이라, 그러지 않으면
+    경보가 늘 울려 무뎌집니다)
+  - **Provider Smoke Test**: API Key 검증 + **키가 설정된 모든 Provider**의
+    Health Check(기본 하나만 확인하면 전환되는 순간에야 장애를 처음 압니다)
+    + Vision 커버리지 필수화 + 비용·모니터링 판정. ADMIN 권한이 없어 건너뛴
+    항목은 `…`로 표시하고 **실패로 세지 않습니다** — 확인하지 못한 것을
+    통과라고 하지 않기 위해서입니다
+  - **웹 `/admin/production`**(ADMIN 전용) + API 3종 **전부 ADMIN 전용**
+    (조회도 보호 — 결정 1201-⑤와 같은 판단으로, 이 GET들은 어떤 Provider를
+    쓰는지·예산이 얼마나 나갔는지 같은 운영 설정 지형을 드러냅니다)
+  - 라이브: 미인증 **401 3/3** · 플레이스홀더 키 + `anthropic` 조건부 필수를
+    **blocker 2건**으로 정확히 탐지 · Live Check 실패(샌드박스 egress 차단
+    403)를 예외로 죽지 않고 보고서로 회수 · mock 6건 모니터링 `healthy`·
+    표본 1건인 openai는 `unknown`(판정 보류) · 비용 검증 일치 · **스모크 13/13
+    PASS**(`vision-analysis` 커버리지 포함)
+- 하지 않은 것: 실키 네트워크 검증(샌드박스에서 `api.openai.com` egress 차단 —
+  0603 승인 ④ · 0901 승인 ③ 정책대로 운영/스테이징 전용 유지), CI/CD
+  `/health/ready` 자동 판정(1202 승인 ④의 **다음 Sprint** 과제), 경보 전달
+  채널(메일·웹훅), 가격표 자동 갱신
+- 질문: ① **Live Check 정책** — 지금은 기본 실행하지 않고 버튼/`?live=1`로만
+  실행합니다(과금 때문). 배포 직후 1회는 **자동 실행**해서 키가 진짜인지
+  확인하는 편이 나은지, 아니면 지금처럼 사람이 명시적으로 누르게 둘지
+  ② **모니터링 기준값** — 성공률 95%/50%, p95 20초, 최소 표본 5회를 코드에
+  고정했습니다. 환경변수로 조정 가능하게 할지, 이 값을 공식 표준으로 확정할지
+  ③ **진단 호출 분리** — Health Check·Live Check도 Execution(feature `dev`)으로
+  기록되어 **운영 모니터링이 이를 사용자 트래픽과 함께 셉니다**. 결정 1002-④는
+  **Failover 계측**에 한정된 분리였으므로 현재는 포함을 유지했는데, 모니터링
+  지표에서도 분리할지(분리하려면 진단 호출에 별도 feature를 부여해야 하며,
+  이는 "feature 4종 유지"(0601 승인)에 대한 변경입니다) ④ **Cost Verification
+  주기** — 지금은 사람이 화면에서 조회할 때만 검증합니다. 주기 실행 + 문제
+  발견 시 경보로 올릴지 ⑤ **`unpriced` 처리 수위** — 가격표에 없는 모델은
+  예산 상한이 무력화되므로, 경보를 넘어 **호출 자체를 차단**하는 선택지도
+  있습니다(안전하지만 새 모델 도입이 막힙니다). 어느 쪽이 맞는지
+  ⑥ 다음 TASK 지정 요청.
 
 ### 2. tesseract Provider 유지 여부
 - 현황: OCR 기본 Provider는 mock이며, 로컬 오프라인 엔진(tesseract.js)이
@@ -78,6 +101,23 @@
 - 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
 
 ## 결정됨
+
+### 44. TASK-1202 해석 확인 → 승인 + Fail Fast·운영 필수 항목 확정 + Sprint 12 종료 (2026-07-28)
+- CTO 결정: ① **운영 환경에서 필수 설정 오류가 있으면 서버는 기동하지 않는다
+  (Fail Fast)** ② **운영 필수 항목은 `WEB_URL` / `DATABASE_URL` / Storage(S3) /
+  `AUTH_ADMIN_EMAIL` / `AUTH_ADMIN_PASSWORD`** 를 공식 표준으로 유지하되,
+  **실제 AI Provider 연결 시 Provider API Key를 추가** ③ **실 Provider Smoke
+  Test와 Backup 확인은 Manual Check 유지** ④ **다음 Sprint에서 CI/CD가
+  `/health/ready`를 호출해 배포 가능 여부를 자동 판정** ⑤ **Sprint 12 공식
+  종료** ⑥ Sprint 13 시작 — TASK-1301(Real AI Provider Production Integration)
+  지시됨 — OpenAI / Anthropic / Gemini / Vision Production · API Key Validation ·
+  Provider Smoke Test · Cost Verification · Production Monitoring.
+- 반영(TASK-1301): ①③ 현행 유지 — 변경 없이 확정. ②의 Provider API Key 추가는
+  **조건부 필수**(`requiredWhen`)로 구현했습니다 — 설정에서 참조하는 Provider의
+  키만 운영 필수가 되고, 쓰지 않는 Provider의 키는 계속 불필요합니다. 형식
+  검사도 함께 걸어 플레이스홀더·잘못된 접두사를 기동 전에 막습니다.
+  ④는 이번 Sprint 범위가 아니므로 착수하지 않았습니다(다음 지시 대기).
+  ⑥ 8항목 구현 완료 (#45 참고).
 
 ### 43. TASK-1201 해석 확인 → 승인 + 설정 우선순위·전파·권한 확정 (2026-07-28)
 - CTO 결정: ① **설정 우선순위는 DB Override → Environment Variable → Default**를

@@ -337,6 +337,9 @@ START/STOP은 기간을 이어간다. 잠시 멈췄다 재개했다고 그동안
 | `POST` | `/llm/experiments/:feature/start` · `/stop` | **Lifecycle (TASK-1101)** — EDITOR 이상 |
 | `POST` | `/llm/experiments/:feature/promote` · `/rollback` | **Lifecycle (TASK-1101)** — **ADMIN 전용**(결정 1101-④), promote는 `variantKey` 필요 |
 | `GET` | `/llm/experiments/:feature/analytics` | **Analytics (TASK-1102)** — 변형 성과·비교·승자 추천·신뢰도 |
+| `GET` | `/llm/providers/validate` | **API Key 검증 (TASK-1301)** — **ADMIN 전용**. `?live=1`이면 Provider마다 실호출 1회(과금) |
+| `GET` | `/llm/cost-verification` | **비용 검증 (TASK-1301)** — **ADMIN 전용**. `?hours=`(기본 24, 1~720) |
+| `GET` | `/llm/monitoring` | **운영 모니터링 (TASK-1301)** — **ADMIN 전용**. `?minutes=`(기본 60, 1~10080) |
 | `POST` | `/llm/complete` | `{ messages, model?, maxTokens? }` → `{ provider, model, text, usage }` (200) |
 
 오류: `400` 빈 메시지·잘못된 role·공백 content·잘못된 maxTokens.
@@ -408,3 +411,99 @@ POST /llm/complete
 | `GET` | `/admin/audit` | 변경 이력 (최신순) |
 
 웹: **`/admin/console`** (신설 — 홈 내비 "⚙️ Provider 관리 콘솔")
+
+
+## Real AI Provider Production Integration (TASK-1301, Sprint 13)
+
+실 Provider로 **실제 돈이 나가는 운영**을 시작할 때 필요한 확인을 한곳에 모은
+것이다. 웹 화면은 **`/admin/production`**(ADMIN 전용).
+
+### API Key Validation
+
+`GET /llm/providers/validate` — Provider별로 네 가지를 본다.
+
+| 항목 | 의미 |
+| --- | --- |
+| `format` | `ok` / `missing` / `invalid` / `placeholder` — **형식만** 본다 |
+| `required` | 설정(`LLM_PROVIDER`·`LLM_ROUTE_*`·`LLM_FAILOVER_PRIORITY`·`LLM_EXPERIMENT_*`)에서 이 Provider를 참조하는가 |
+| `instantiated` | 어댑터가 실제로 만들어졌는가 (키가 있어야 만들어진다) |
+| `live` | Live Check 결과 — `?live=1`일 때만 |
+
+**키 값은 어떤 경로로도 나가지 않는다** — 앞 6자 힌트(`sk-pro…`)와 길이만
+내보낸다. 형식 규칙은 `packages/core/src/llm/api-key.ts`에 한 곳으로 선언한다
+(openai `sk-` / anthropic `sk-ant-` / gemini 길이만, 공통 20자 이상).
+
+**플레이스홀더 탐지**가 별도 상태인 이유: `sk-xxxx…`·`your-api-key`·
+`changeme` 같은 값은 형식 검사만 하면 통과해 버리는데, 배포 사고의 단골이다.
+
+**Live Check는 기본으로 하지 않는다** — 실제 API를 호출해 과금되기 때문에
+눌러야만 실행하고, 응답의 `liveChecked`로 실행 여부를 명시한다. 형식이 맞아도
+유효한 키라는 보장은 없고, 메시지에 그렇게 적는다.
+
+**CTO 결정 1202-② 이행**: 참조하는 Provider의 키는 **운영 필수**다.
+`packages/core/src/ops/env-spec.ts`의 세 Provider 키 항목에 조건부 필수
+(`requiredWhen`)와 형식 검사(`validate`)를 걸었으므로, 배포 준비 검증
+(`/health/ready`)과 Fail Fast 기동에도 그대로 반영된다 — 참조하는데 키가 없으면
+운영에서 서버가 뜨지 않는다. 쓰지 않는 Provider의 키는 없어도 된다.
+
+### Cost Verification
+
+`GET /llm/cost-verification` — 기록된 Execution 비용을 가격표로 **다시
+계산해** 대조한다.
+
+| 문제 | 뜻 | 조치 |
+| --- | --- | --- |
+| `unpriced` | 가격표에 없는 모델 | **예산 상한이 무력화된다** — `DEFAULT_LLM_PRICING`에 단가 등록 |
+| `mismatch` | 기록 비용 ≠ 재계산 | 단가 변동 또는 기록 시점 가격표 차이 확인 |
+| `missing-usage` | 토큰이 없어 산정 불가 | Provider 응답의 usage 확인 |
+
+`unpriced`를 가장 크게 다루는 이유: 비용이 `null`로 남으면 예산 합계에서
+빠지고, 그러면 **일/월 예산 상한이 조용히 무력화된다**. 응답에 가격표를 함께
+실어 보내 화면에서 바로 조치할 수 있게 한다.
+
+### Production Monitoring
+
+`GET /llm/monitoring` — 관측 창 안의 Execution으로 Provider별 성공률·지연
+분포·비용을 낸다.
+
+- **표본이 적으면 판정하지 않는다** — 기본 5회 미만이면 `unknown`. 1회 실패로
+  "장애"라고 말하지 않는다(실험 분석의 최소 표본 원칙과 같은 태도).
+- **p50/p95/p99**를 함께 낸다 — 평균만 보면 꼬리 지연을 놓친다. 백분위수는
+  **최근접 순위**(보간 없음)라 관측되지 않은 값을 지어내지 않는다.
+- 상태: `healthy`(≥95%) / `degraded`(≥50%) / `down`(<50%) / `unknown`.
+  전체 상태는 **가장 나쁜 Provider**를 따른다.
+- 경보: 성공률 저하 / p95 지연 초과 / **성공했는데 비용이 없는 호출**
+  (= 예산 상한 무력화).
+- 실패 호출의 `cost=null`은 미산정으로 세지 않는다 — 실패는 usage가 없는 게
+  정상이라 그러지 않으면 경보가 늘 울린다.
+- 진단 호출(Health Check·Live Check)도 관측에 **포함**된다. 진단도 Provider를
+  실제로 호출하므로 "지금 살아 있는가"의 근거로는 옳지만, 사용자 트래픽과
+  섞이는 것도 사실이다 — 분리 여부는 CTO 확인 항목(#45-③).
+
+### Vision Production
+
+Vision은 Provider마다 **이미지 전달 형식이 전부 다르다**.
+
+| Provider | 형식 |
+| --- | --- |
+| OpenAI | `image_url` content part (data URL) |
+| Anthropic | `image` content block (base64 + media_type) |
+| Gemini | `inlineData` part (mimeType + data) |
+
+하나만 맞고 나머지가 틀리면, 라우팅·Failover로 Provider가 바뀌는 순간 이미지가
+조용히 사라지고 **"이미지 없이 추측한 결과"가 정상처럼 기록된다**. 그래서 세
+Provider 전부에 같은 시나리오를 돌리는 회귀 테스트를 둔다
+(`apps/api/src/llm/vision-production.spec.ts`).
+
+### Provider Smoke Test
+
+`scripts/real-provider-smoke.mjs`에 추가된 것:
+
+- API Key 검증 (형식 + `SMOKE_LIVE_CHECK=1`이면 Live Check)
+- **키가 설정된 모든 Provider**의 Health Check — 기본 하나만 확인하면 라우팅·
+  Failover로 전환되는 순간에야 장애를 처음 알게 된다
+- Vision(`vision-analysis`) 커버리지 필수화
+- 비용 검증·운영 모니터링 판정 (critical 경보가 있으면 실패)
+
+ADMIN 권한이 없어 건너뛴 항목은 `…`로 표시하고 **실패로 세지 않는다** —
+확인하지 못한 것을 통과라고 하지 않기 위해서다.

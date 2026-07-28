@@ -6,11 +6,21 @@
  * 1회씩 실행하고 Execution 지표로 판정한다. 개발 환경 리허설은
  * SMOKE_ALLOW_MOCK=1 로 mock Provider를 허용한다.
  *
+ * TASK-1301(Sprint 13)에서 추가된 것:
+ * - API Key 검증 (형식 + 선택적 Live Check) — ADMIN 계정일 때만 판정
+ * - 키가 설정된 **모든** Provider의 Health Check (라우팅·Failover 대비)
+ * - Vision(vision-analysis) 커버리지 필수화
+ * - 비용 검증(Cost Verification)과 운영 모니터링(Production Monitoring)
+ *
  * 사용법:
  *   API_BASE=https://<api-host> [PROJECT_ID=..] [PRODUCT_ID=..] \
- *     node scripts/real-provider-smoke.mjs
+ *     [SMOKE_LIVE_CHECK=1] node scripts/real-provider-smoke.mjs
+ *
+ * SMOKE_LIVE_CHECK=1은 Provider마다 최소 완성 호출을 1회 더 실행한다
+ * (실제 과금 발생) — 키 교체 직후 확인용.
  *
  * 판정: 모든 단계 통과 시 exit 0, 하나라도 실패하면 exit 1.
+ * ADMIN 권한이 없어 건너뛴 항목은 "…"로 표시되며 실패로 세지 않는다.
  */
 const API_BASE = process.env.API_BASE ?? "http://localhost:4000";
 const ALLOW_MOCK = process.env.SMOKE_ALLOW_MOCK === "1";
@@ -29,6 +39,11 @@ function report(step, ok, detail) {
   if (!ok) {
     failed = true;
   }
+}
+
+/** 판정하지 않고 알리기만 한다 (권한 부족 등 — 실패로 세지 않는다) */
+function note(step, detail) {
+  console.log(`… ${step} — ${detail}`);
 }
 
 async function api(path, init) {
@@ -106,6 +121,50 @@ async function main() {
       ? `${health.body.latencyMs}ms`
       : (health.body?.error ?? `HTTP ${health.status}`),
   );
+
+  // 3-a. API Key Validation (TASK-1301) — ADMIN 전용, 형식 + Live Check
+  // 실호출은 SMOKE_LIVE_CHECK=1일 때만 (기본은 형식 검사 — 불필요한 과금 방지)
+  const liveCheck = process.env.SMOKE_LIVE_CHECK === "1";
+  const validation = await api(
+    `/llm/providers/validate${liveCheck ? "?live=1" : ""}`,
+  );
+  if (validation.status === 401 || validation.status === 403) {
+    note(
+      "API Key 검증 (GET /llm/providers/validate)",
+      "ADMIN 계정이 아니어서 건너뜁니다 (판정 아님)",
+    );
+  } else {
+    report(
+      "API Key 검증 (GET /llm/providers/validate)",
+      validation.status === 200 && validation.body?.ok === true,
+      validation.status === 200
+        ? (validation.body.blockers ?? []).join(" / ") ||
+            `${validation.body.providers.length}개 Provider 형식 정상` +
+              (liveCheck ? " (Live Check 포함)" : " (형식만 — Live Check 미실행)")
+        : `HTTP ${validation.status}`,
+    );
+  }
+
+  // 3-b. 키가 설정된 Provider 전부 Health Check (TASK-1301)
+  // 라우팅·Failover로 어느 Provider든 실제로 쓰일 수 있다 — 기본 하나만
+  // 확인하면 전환되는 순간 장애를 처음 알게 된다.
+  const registry = await api("/llm/providers");
+  const configured = (registry.body?.providers ?? [])
+    .filter((entry) => entry.keyConfigured && entry.name !== "mock")
+    .map((entry) => entry.name);
+  if (configured.length === 0) {
+    note("Provider별 Health Check", "실 Provider 키가 없습니다 (mock 리허설)");
+  }
+  for (const name of configured) {
+    const result = await api(`/llm/health?provider=${encodeURIComponent(name)}`);
+    report(
+      `Provider Health (${name})`,
+      result.status === 200 && result.body?.status === "ok",
+      result.body?.status === "ok"
+        ? `${result.body.model} ${result.body.latencyMs}ms`
+        : (result.body?.error ?? `HTTP ${result.status}`),
+    );
+  }
 
   // 3. 대상 프로젝트/상품 결정 (미지정 시 자동 탐색)
   let projectId = process.env.PROJECT_ID;
@@ -192,7 +251,13 @@ async function main() {
   // 9. 운영 판정 (TASK-0901) — Provider·Feature 커버리지 + 비용 가시성
   const providerKeys = (stats.body?.byProvider ?? []).map((item) => item.key);
   const featureKeys = (stats.body?.byFeature ?? []).map((item) => item.key);
-  const requiredFeatures = ["product-analysis", "content-generation"];
+  const requiredFeatures = [
+    "product-analysis",
+    "content-generation",
+    // Vision Production (TASK-1301) — 이미지 전달 형식은 Provider마다 다르다.
+    // 빠지면 "이미지 없이 추측한 결과"가 정상처럼 기록된다.
+    "vision-analysis",
+  ];
   const missingFeatures = requiredFeatures.filter(
     (key) => !featureKeys.includes(key),
   );
@@ -208,6 +273,44 @@ async function main() {
       "비용 산정",
       false,
       `실 Provider인데 cost=${totals.cost ?? "미산정"} — 가격표(DEFAULT_LLM_PRICING)·모델명 확인 필요`,
+    );
+  }
+
+  // 10. Cost Verification (TASK-1301) — 기록된 비용이 가격표와 맞는가
+  const costCheck = await api("/llm/cost-verification?hours=1");
+  if (costCheck.status === 401 || costCheck.status === 403) {
+    note("비용 검증 (GET /llm/cost-verification)", "ADMIN 계정이 아니어서 건너뜁니다");
+  } else {
+    report(
+      "비용 검증 (GET /llm/cost-verification)",
+      costCheck.status === 200 && costCheck.body?.ok === true,
+      costCheck.status === 200
+        ? `${costCheck.body.checked}건 검사 · 기록 $${costCheck.body.recordedTotal} · 미산정 ${costCheck.body.unpricedCalls}건` +
+            (costCheck.body.issues?.length
+              ? ` — ${costCheck.body.issues.map((issue) => `${issue.model}(${issue.kind})`).join(", ")}`
+              : "")
+        : `HTTP ${costCheck.status}`,
+    );
+  }
+
+  // 11. Production Monitoring (TASK-1301) — 성공률·지연·경보
+  const monitoring = await api("/llm/monitoring?minutes=60");
+  if (monitoring.status === 401 || monitoring.status === 403) {
+    note("운영 모니터링 (GET /llm/monitoring)", "ADMIN 계정이 아니어서 건너뜁니다");
+  } else {
+    const critical = (monitoring.body?.alerts ?? []).filter(
+      (alert) => alert.level === "critical",
+    );
+    report(
+      "운영 모니터링 (GET /llm/monitoring)",
+      monitoring.status === 200 && critical.length === 0,
+      monitoring.status === 200
+        ? `상태=${monitoring.body.status} 호출=${monitoring.body.totals.calls} ` +
+            `성공률=${monitoring.body.totals.successRate ?? "판정불가"}` +
+            (monitoring.body.alerts.length
+              ? ` — 경보 ${monitoring.body.alerts.length}건: ${monitoring.body.alerts.map((alert) => alert.message).join(" / ")}`
+              : "")
+        : `HTTP ${monitoring.status}`,
     );
   }
 
