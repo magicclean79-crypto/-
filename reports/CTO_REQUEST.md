@@ -5,27 +5,27 @@
 
 ## 결정 대기
 
-### 29. TASK-0703 "Real Provider Smoke & Publishing Pipeline" 세부 해석 확인
-- 현황: 두 지시 사항을 다음과 같이 구현했다:
-  - **발행 파이프라인**: `PATCH /projects/:id/contents/:contentId/status` —
-    DRAFT→REVIEW→PUBLISHED→ARCHIVED. 전이 규칙은 Sprint 1에 선언돼 있던
-    core `canTransition`을 공식 사용: **REVIEW→DRAFT 되돌리기 허용,
-    DRAFT/REVIEW/PUBLISHED→ARCHIVED 종결 허용, ARCHIVED는 전이 불가,
-    건너뛰기(DRAFT→PUBLISHED) 불가**. PUBLISHED는 발행 조건(REVIEW+제목/본문)
-    추가 검증 + `publishedAt` 기록(ARCHIVED 후에도 보존).
-    Content.publishedAt 컬럼 추가(데이터 보존 마이그레이션)
-  - **운영 스모크**: `scripts/real-provider-smoke.mjs` 8단계 자동 판정
-    (Provider→Health→탐색→Vision 조립→READY→분석→생성→Execution 지표·비용
-    검증) + `docs/operations/real-provider-smoke.md` 절차 문서.
-    개발 환경에서 mock 리허설 **8/8 PASS**로 도구 검증 완료 — **실키 수행은
-    CTO 결정(0603 승인 ④)대로 운영/스테이징 환경 필요**
-- 하지 않은 것(스펙 없음): 발행 웹 UI(상태 전환 버튼), PUBLISHED 이후
-  채널별 포맷/외부 배포, 발행 이력 감사 테이블(전이 로그), 실키 스모크
-  실제 수행(환경 미제공)
-- 질문: ① 전이 규칙 세부(되돌리기·단계별 ARCHIVED·publishedAt 보존)가
-  의도에 부합하는지 ② **실키 스모크 수행 일정/환경**(운영 또는 스테이징
-  API 키 + egress) 지원 요청 ③ 발행 웹 UI를 다음 TASK로 지정할지
-  ④ 다음 TASK 지정 요청.
+### 30. TASK-0704 "Publishing Web UI & Audit History" 세부 해석 확인
+- 현황: 지시된 4개 구성 요소 + Playwright를 다음과 같이 구현했다:
+  - **Audit History**: `content_status_history` 테이블 — 전이 1건당
+    1레코드(from→to·시각), **전이와 한 트랜잭션** 기록,
+    `GET …/contents/:id/history`(최신순). 화면에 감사 이력 목록 표시
+  - **상태 변경 UI**: 가능한 전이만 버튼 노출(@acos/core
+    `allowedTransitions` — API 검증과 규칙 원천 단일화), 실패 오류 표시,
+    ARCHIVED는 "종결됨" 표기
+  - **Status Badge**: 상태별 색상 고정 (DRAFT 황·REVIEW 청·PUBLISHED 녹·
+    ARCHIVED 회)
+  - **PublishedAt**: UTC 표기, 최초 발행 시점 보존(승인 ② 반영 —
+    재발행에도 불변 코드 반영)
+  - **Playwright**: 발행 e2e 2종(전 구간·되돌리기) — 루트 pnpm test 게이트
+    포함 (웹 e2e 총 6종)
+- 하지 않은 것(스펙 없음): 감사 이력의 actor(수행자) 기록 — 인증/권한이
+  없어 기록 불가, 콘텐츠 생성 이벤트 기록(전이만 기록), 발행 UI의 별도
+  페이지 분리(프로젝트 상세에 통합)
+- 질문: ① 감사 이력 범위(전이만·actor 없음)가 현 단계에 적절한지
+  (actor는 인증 도입 시 확장) ② 발행 UI의 프로젝트 상세 통합 위치가
+  적절한지 ③ Sprint 7 예고분이 모두 완료된 상태 — Sprint 종료 여부와
+  다음 TASK 지정 요청.
 
 ### 2. tesseract Provider 유지 여부
 - 현황: OCR 기본 Provider는 mock이며, 로컬 오프라인 엔진(tesseract.js)이
@@ -48,6 +48,15 @@
 - 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
 
 ## 결정됨
+
+### 29. TASK-0703 해석 확인 → 승인 + 발행 표준 확정 (2026-07-28)
+- CTO 결정: ① **발행 상태 전이를 공식 표준으로 유지** — DRAFT→REVIEW,
+  REVIEW→DRAFT, REVIEW→PUBLISHED, DRAFT/REVIEW/PUBLISHED→ARCHIVED,
+  ARCHIVED는 종결 ② **publishedAt은 최초 발행 시점 보존** — ARCHIVED
+  이후에도 유지 ③ **실키 스모크는 운영/스테이징 전용** — 개발 환경은
+  mock 리허설만 ④ TASK-0704(Publishing Web UI & Audit History) 지시됨.
+- 반영(`dcc4817`): publishedAt 최초 시점 보존 코드 반영, 발행 UI·감사
+  이력 구현 (#30 참고).
 
 ### 28. TASK-0702 해석 확인 → 승인 + 게이트/정책 확정 (2026-07-28)
 - CTO 결정: ① **stats의 feature/provider/model 필터를 공식 API로 유지**

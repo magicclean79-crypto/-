@@ -13,137 +13,133 @@
 
 | 항목 | 값 |
 | --- | --- |
-| 보고 기준 TASK | **TASK-0703 — Real Provider Smoke & Publishing Pipeline** |
+| 보고 기준 TASK | **TASK-0704 — Publishing Web UI & Audit History** |
 | 보고일 | 2026-07-28 |
-| 브랜치 / 기준 커밋 | `claude/ai-product-content-os-setup-jb5oai` / `1c28a52` |
-| 핵심 성과 | **발행 파이프라인 완성**(DRAFT→REVIEW→PUBLISHED→ARCHIVED) + **운영 스모크 테스트 공식 절차·도구** (mock 리허설 8/8 PASS) |
-| 구현 중단 상태 | **TASK-0703 완료 후 즉시 중단** — CTO 승인 전 다음 TASK 미착수 |
-| 스펙 확인 필요 | 실키 수행 일정·발행 웹 UI 등 → **CTO_REQUEST #29 확인 요청** |
+| 브랜치 / 기준 커밋 | `claude/ai-product-content-os-setup-jb5oai` / `dcc4817` |
+| 핵심 성과 | 발행 파이프라인의 **화면·감사 완성** — 상태 변경 UI + Status Badge + publishedAt + Audit History, Playwright 게이트 포함 |
+| 구현 중단 상태 | **TASK-0704 완료 후 즉시 중단** — CTO 승인 전 다음 TASK 미착수 |
+| 스펙 확인 필요 | 감사 이력 범위(actor 없음) 등 → **CTO_REQUEST #30 확인 요청** |
 
 ## 2. 품질 게이트
 
 | 게이트 | 명령 | 결과 |
 | --- | --- | --- |
 | Build | `pnpm build` | ✅ 6/6 워크스페이스 성공 |
-| Test | `pnpm test` | ✅ **293** — core 126(+4) · api 163(+6) · web e2e 4 — 전체 통과 |
+| Test | `pnpm test` | ✅ **298** — core 126 · api 166(+3) · **web e2e 6(+2)** — 전체 통과 |
 | TypeScript | (빌드 포함) | ✅ 오류 0 |
 | ESLint | `pnpm lint` | ✅ 오류 0, 경고 0 |
 
 ## 3. 변경 사항 (이번 보고 주기)
 
-### TASK-0703 — Real Provider Smoke & Publishing Pipeline (`1c28a52`)
+### TASK-0703 승인 결정 반영
 
-**① 발행 파이프라인** (지시 사항):
+- **publishedAt 최초 발행 시점 보존** (결정 ②): 재발행이 가능해지는 미래
+  경로에서도 최초 시점이 덮어써지지 않도록 `!record.publishedAt` 조건 반영
+- 전이 규칙 공식 표준(결정 ①)·스모크 환경 정책(결정 ③) — 현행 확정
 
-- `PATCH /projects/:projectId/contents/:contentId/status` `{ status }` —
-  **DRAFT → REVIEW → PUBLISHED → ARCHIVED** (+ REVIEW→DRAFT 되돌리기,
-  단계별 ARCHIVED 종결, ARCHIVED는 전이 불가)
-- 전이 규칙은 **Sprint 1에 선언돼 있던 @acos/core `canTransition`을 공식
-  사용** (기존 구현 재사용 원칙 — `content/content-status.ts`로 정리, 공개
-  API 불변). 위반 시 400 + 가능한 전이 목록 안내
-- **PUBLISHED 전이는 발행 조건 추가 검증** (`isPublishable`): REVIEW 상태 +
-  제목/본문 비어 있지 않음. 전이 시 **`publishedAt` 기록** — 이후 ARCHIVED
-  되어도 발행 이력 보존
-- `Content.publishedAt` 컬럼 추가 — **데이터 보존 마이그레이션**(ADD COLUMN,
-  기존 데이터 무영향), drift 없음. `ContentDto.publishedAt`·`CONTENT_STATUSES`
-  공유 타입 추가
+### TASK-0704 — Publishing Web UI & Audit History (`dcc4817`)
 
-**② 운영 환경 스모크 테스트** (지시 사항):
+지시된 4개 구성 요소 전부 + Playwright:
 
-- `scripts/real-provider-smoke.mjs` — 운영/스테이징(실키+egress 허용)에서
-  실행하는 8단계 자동 판정 도구: Provider 확인(mock이면 실패) → Health(실호출)
-  → 대상 자동 탐색 → Vision 조립(이미지 가드 경유) → READY 전이 → 분석 →
-  상세페이지 생성 → **Execution 지표 판정**(해당 구간 4건+·실패 0·실
-  Provider면 **cost 산정 여부 검증**). PASS/FAIL exit code
-- `docs/operations/real-provider-smoke.md` — 공식 절차 문서(사전 조건·실행·
-  판정·실패 시 확인 포인트)
-- **개발 환경 리허설**: `SMOKE_ALLOW_MOCK=1`로 도구 자체를 검증 — **8/8
-  PASS** (실키 수행은 CTO 결정대로 운영/스테이징 — 개발 egress 제한)
+1. **Audit History**: `content_status_history` 테이블 신설 — 상태 전이
+   1건당 1레코드(fromStatus→toStatus·시각), **전이와 한 트랜잭션**으로 기록
+   (누락 불가), 콘텐츠 삭제 시 Cascade. 조회:
+   `GET /projects/:id/contents/:contentId/history` (최신순).
+   마이그레이션 1건(신규 테이블, 기존 데이터 무영향), drift 없음
+2. **상태 변경 UI** (`/projects/[id]` 상세페이지 목록): 현재 상태에서
+   **가능한 전이만 버튼으로 노출** — 규칙 원천은 @acos/core
+   `allowedTransitions` 하나(웹에 core 의존성 추가), 최종 검증은 API.
+   실패 시 오류 메시지 표시, ARCHIVED는 "종결됨 (전이 불가)" 표기
+3. **Status Badge**: 상태별 색상 고정 — DRAFT 황색 · REVIEW 청색 ·
+   PUBLISHED 녹색 · ARCHIVED 회색
+4. **PublishedAt**: 발행 시각(UTC) 표기 — ARCHIVED 후에도 유지(결정 ②)
+5. **Playwright** (지시 사항): `publishing.spec.ts` 2종 — ① DRAFT→REVIEW→
+   PUBLISHED(publishedAt·감사 이력 확인)→ARCHIVED(종결) 전 구간
+   ② REVIEW→DRAFT 되돌리기. 스텁 API에 발행 시나리오(상태 유지형)+CORS 추가.
+   **루트 pnpm test 게이트에 포함** (웹 e2e 총 6종)
 
 ### 누적 완료 TASK
 
 | Sprint | TASK | 상태 |
 | --- | --- | --- |
-| Sprint 7 | 0701 Dashboard UI · 0702 Filter & Web Testing | 승인 |
-| Sprint 7 | **TASK-0703 — Smoke & Publishing Pipeline** | **완료 (`1c28a52`) — 승인 대기** |
+| Sprint 7 | 0701 Dashboard UI · 0702 Filter & Testing · 0703 Smoke & Publishing | 승인 |
+| Sprint 7 | **TASK-0704 — Publishing Web UI & Audit History** | **완료 (`dcc4817`) — 승인 대기** |
 | Sprint 1~6 | Foundation ~ Execution 관측 | 전체 승인 · 공식 종료 |
 
 ## 4. 테스트 결과
 
 | 위치 | 종류 | 수 | 결과 |
 | --- | --- | --- | --- |
-| `packages/core` | Unit — 기존 122 · **전이 규칙 4** | 126 | ✅ |
-| `apps/api` | Service+API — 기존 157 · **발행 파이프라인 6** | 163 | ✅ |
-| `apps/web` | Playwright e2e (게이트 유지) | 4 | ✅ |
-| **합계** | | **293** | **전체 통과** |
+| `packages/core` | Unit | 126 | ✅ (변경 없음) |
+| `apps/api` | Service+API — 기존 163 · **감사 이력 3** | 166 | ✅ |
+| `apps/web` | Playwright e2e — 기존 4 · **발행 UI 2** | 6 | ✅ |
+| **합계** | | **298** | **전체 통과** |
 
 신규 테스트가 검증하는 것:
-- 전이 규칙: 정방향·되돌리기·종결 허용, 건너뛰기·역행·ARCHIVED 이후 거부,
-  발행 조건 4케이스
-- API: DRAFT→REVIEW→PUBLISHED(publishedAt 기록)→ARCHIVED(이력 보존),
-  REVIEW→DRAFT, 건너뛰기 400, 빈 본문 발행 400, 잘못된 값 400/404,
-  HTTP 계약(PATCH …/status)
+- API: 전이마다 이력 기록(from→to 최신순), 재발행 시 publishedAt 보존,
+  없는 콘텐츠 이력 404, HTTP 계약(GET …/history)
+- 웹 e2e: 배지 상태 변화·발행 버튼 강조·publishedAt 표기·감사 이력 표시·
+  종결 상태·되돌리기 — 브라우저에서 전 구간 자동 검증
 
-라이브 검증 (실 PostgreSQL — 마이그레이션 적용):
-- 발행 파이프라인 전 구간: REVIEW → PUBLISHED(publishedAt 기록) →
-  ARCHIVED(발행 이력 보존), ARCHIVED→DRAFT 400,
-  DRAFT→PUBLISHED 400("가능한 전이: REVIEW, ARCHIVED" 안내)
-- **스모크 리허설 8/8 PASS** — 도구가 전 경로(조립→READY→분석→생성→지표)를
-  실제로 구동·판정함을 확인
+라이브 검증 (실 PostgreSQL + 실스택 브라우저):
+- 실제 프로젝트 화면에서 DRAFT→REVIEW 클릭 → 배지 즉시 전환 + **감사 이력
+  실시간 표시** ("DRAFT → REVIEW", UTC 시각)
+- 0703에서 ARCHIVED된 콘텐츠: 발행 시각 유지 표기 + "종결됨" 확인 (스크린샷 첨부)
 
 ## 5. 아키텍처 변경 및 현황
 
-**이번 주기 변경 — 콘텐츠 수명주기 완성 + 운영 전환 준비 완료**:
+**이번 주기 변경 — 발행 파이프라인의 조작·감사 완성**:
 
 ```
-생성 (0502)  →  발행 파이프라인 (0703)                 운영 전환:
-Content(DRAFT) → REVIEW → PUBLISHED(publishedAt) → ARCHIVED   scripts/real-provider-smoke.mjs
-                   ↺ DRAFT                                     (8단계 판정 — 실키 환경에서 실행)
+/projects/[id] 화면                 API                        DB
+ Status Badge(색상 고정)     PATCH …/status ─┬─ contents.status 갱신
+ 전이 버튼(allowedTransitions)               └─ content_status_history 기록
+ publishedAt(UTC)·감사 이력  GET …/history      (한 트랜잭션 — 누락 불가)
+      └─ Playwright e2e 6종 (공식 게이트)
 ```
 
-① 파이프라인 전체가 완결: 업로드→OCR→조립→READY 검증→생성→**발행**.
-② 전이 규칙·발행 조건은 core 순수 로직(Product Object 상태 전이와 같은 결) —
-Sprint 1 선언의 공식화로 새 코드 최소. ③ 실키 전환의 남은 절차가 명문화됨:
-운영/스테이징에서 스모크 1회 실행 → 대시보드로 비용·오류 관측.
+① 전이 규칙의 단일 원천: core 함수 하나를 API(검증)와 웹(버튼 노출)이 공용 —
+규칙 변경 시 한 곳만 수정. ② 감사 이력은 전이와 원자적 — 수동 기록 없음.
+③ CTO 결정(모든 웹 기능 Playwright 통과) 이행 — 발행 UI가 게이트에 포함됨.
 
-**유지되는 핵심 결정**: Port/Adapter 계층 · mock 기본 원칙 · 이력 보존 모델 · Advisory 검증 · Playwright 공식 게이트
+**유지되는 핵심 결정**: Port/Adapter 계층 · mock 기본 원칙 · 이력 보존 모델 · Playwright 공식 게이트 · 발행 전이 표준
 
-**현황**: 모노레포(web·api·core/shared/agents/ui), **마이그레이션 17건**(+1), drift 없음
+**현황**: 모노레포(web·api·core/shared/agents/ui), **마이그레이션 18건**(+1), drift 없음
 
 ## 6. 데이터 모델
 
 ```
-Content: + publishedAt DateTime?  (TASK-0703 — PUBLISHED 전이 시 기록, 이력 보존)
-status: DRAFT → REVIEW → PUBLISHED → ARCHIVED (전이 규칙 core 강제)
+Content ──< ContentStatusHistory (신설 — 전이 1건당 1레코드)
+  id · contentId(FK, Cascade) · fromStatus · toStatus · createdAt
+  인덱스: (contentId, createdAt)
 ```
 
-(그 외 변경 없음)
+(그 외 변경 없음 — publishedAt은 0703 컬럼 유지)
 
 ## 7. API 표면
 
 | 영역 | 엔드포인트 |
 | --- | --- |
 | 기존 전체 | (유지 — 이전 보고 참조) |
-| 콘텐츠 | 기존 4종 + **`PATCH /projects/:id/contents/:contentId/status`** (발행 파이프라인) |
-| 운영 도구 | `scripts/real-provider-smoke.mjs` (API 아님 — 운영 절차 도구) |
+| 콘텐츠 | 기존 5종 + **`GET /projects/:id/contents/:contentId/history`** (감사 이력) |
 
-웹: 변경 없음 (발행 UI는 스펙 없음 — #29 질문)
+웹: `/projects/[id]` — **발행 UI 추가** (배지·전이 버튼·publishedAt·감사 이력)
 
 ## 8. 리스크·기술 부채
 
-1. **0703 해석 미확인** — 전이 규칙 세부(되돌리기·단계별 종결)·publishedAt
-   보존·스모크 단계 구성 (CTO_REQUEST #29)
-2. **실키 스모크 미수행** — 도구·절차는 완비, 실행은 운영/스테이징 환경 필요
-   (API 키 + egress — CTO 지원 필요)
-3. **발행 웹 UI 부재** — API만 제공. 웹 추가 시 Playwright 게이트 준수 예정
-4. **PUBLISHED 이후 배포 없음** — 채널별 포맷/외부 배포는 스펙 없음(제안 백로그)
-5. **Anthropic/Gemini 공식 연결** — 대기
+1. **0704 해석 미확인** — 감사 이력에 actor(수행자) 없음(인증 부재 전제)·
+   프로젝트 화면 통합 위치 (CTO_REQUEST #30)
+2. **감사 이력 표시는 전이 발생 콘텐츠만** — 생성 직후(전이 0건)는 이력
+   섹션 미표시 (생성 이벤트 기록은 스펙 없음)
+3. **실키 스모크(운영/스테이징)** — 대기 (CTO 결정: 해당 환경에서만)
+4. **Anthropic/Gemini 공식 연결** — 대기
+5. **채널별 포맷/배포** — PUBLISHED 소비 스펙 없음 (제안 백로그)
 
 ## 9. 다음 권장 사항 (Sprint 7 후속 후보)
 
-1. **CTO_REQUEST #29 확인** — TASK-0703 해석 확인 및 다음 지시
-2. **실키 스모크 실행** — 운영/스테이징에서 `real-provider-smoke.mjs` 1회
-   (결과를 절차 문서에 기록)
-3. **발행 웹 UI** — 프로젝트 화면에서 콘텐츠 상태 전환 (Playwright 포함)
-4. **채널별 포맷/배포** — PUBLISHED 콘텐츠의 소비 스펙 (제안 백로그)
-5. **Anthropic/Gemini 공식 연결** — OpenAI 5항목 패턴 재적용
+1. **CTO_REQUEST #30 확인** — TASK-0704 해석 확인 및 다음 지시
+2. **Sprint 7 종료 검토** — 0701~0704 완료 (Dashboard UI·필터·웹 게이트·
+   스모크·발행 파이프라인·발행 UI) — 회고/종료 또는 잔여 지시 요청
+3. **채널별 포맷/배포** — PUBLISHED 콘텐츠 소비 스펙 (제안 백로그)
+4. **Anthropic/Gemini 공식 연결** — OpenAI 5항목 패턴 재적용
+5. **인증/권한** — 감사 이력 actor 기록의 전제 (스펙 필요)

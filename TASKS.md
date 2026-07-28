@@ -8,11 +8,12 @@
 
 ## 미완료 (스펙 확정, 구현 대기)
 
-- (없음 — TASK-0703 완료. CTO 리뷰/승인 대기 중이며 승인 전 다음 TASK를 시작하지 않는다)
+- (없음 — TASK-0704 완료. CTO 리뷰/승인 대기 중이며 승인 전 다음 TASK를 시작하지 않는다)
 
 ## 완료 — Sprint 7
 
-- [x] **TASK-0703 — Real Provider Smoke & Publishing Pipeline** (`1c28a52`): 발행 파이프라인(PATCH /projects/:id/contents/:contentId/status — DRAFT→REVIEW→PUBLISHED→ARCHIVED, 전이 규칙 @acos/core canTransition 공식 사용, PUBLISHED는 isPublishable 검증+publishedAt 기록, 데이터 보존 마이그레이션) + 운영 스모크 테스트(scripts/real-provider-smoke.mjs 8단계 자동 판정 + docs/operations 절차 문서, mock 리허설 8/8 PASS — 실키 수행은 운영/스테이징) — 해석 확인 CTO_REQUEST #29
+- [x] **TASK-0704 — Publishing Web UI & Audit History** (`dcc4817`): 감사 이력(content_status_history — 전이 1건당 1레코드, 전이와 한 트랜잭션, GET …/contents/:id/history 최신순) + publishedAt 최초 발행 시점 보존 반영(0703 승인 ②) + 발행 Web UI(상태별 색상 Status Badge·allowedTransitions 기반 상태 변경 버튼·publishedAt UTC 표기·감사 이력 목록) + Playwright e2e 2종(전 구간 전이·되돌리기, 스텁 CORS) — 해석 확인 CTO_REQUEST #30
+- [x] **TASK-0703 — Real Provider Smoke & Publishing Pipeline** (`1c28a52`, CTO 승인 — 전이 규칙 공식 표준 확정, publishedAt 최초 발행 시점 보존, 실키 스모크는 운영/스테이징 전용(개발은 mock 리허설만) 확정): 발행 파이프라인(PATCH /projects/:id/contents/:contentId/status — DRAFT→REVIEW→PUBLISHED→ARCHIVED, 전이 규칙 @acos/core canTransition 공식 사용, PUBLISHED는 isPublishable 검증+publishedAt 기록, 데이터 보존 마이그레이션) + 운영 스모크 테스트(scripts/real-provider-smoke.mjs 8단계 자동 판정 + docs/operations 절차 문서, mock 리허설 8/8 PASS — 실키 수행은 운영/스테이징) — 해석 확인 CTO_REQUEST #29
 - [x] **TASK-0702 — Dashboard Filter & Web Testing** (`1f9ab8b`, CTO 승인 — stats 필터 공식 API·hour 31일 정책·자유 입력 유지(자동완성 후속)·Playwright 공식 게이트(모든 웹 기능 통과 필수) 확정): 대시보드 필터(Feature/Provider/Model/From/To UTC, GET 폼, stats+timeline 적용, interval 전환 시 유지) + Stats API 필터 확장(feature/provider/model) + hour 조회 최대 31일 제한(from 미지정 시 최근 31일 창, 초과 400) + Playwright CI 품질 게이트(web pnpm test — Dashboard/Filter/Empty/Error 스모크 4종, 모드 전환형 스텁 API, 사전 설치 chromium) — 해석 확인 CTO_REQUEST #28
 - [x] **TASK-0701 — Execution Dashboard Web UI** (`eb202c6`, CTO 승인 — CSS 차트 유지(외부 라이브러리 미도입)·필터 추가·hour 31일 제한·Playwright CI 게이트 지시 → TASK-0702로 이행): /executions 운영 대시보드 — Stats/Timeline API 소비, KPI 카드 4종(성공률은 UI에서 % 표시), Timeline Chart(hour/day/week 전환·성공/실패 스택 막대·UTC 축·빈 버킷 UI 보간), Feature/Provider/Model 통계 테이블, 서버 컴포넌트+CSS 차트(외부 라이브러리 없음), API 미연결 안내 — 브라우저(Playwright) 검증, 해석 확인 CTO_REQUEST #27
 
