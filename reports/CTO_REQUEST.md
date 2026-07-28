@@ -5,6 +5,30 @@
 
 ## 결정 대기
 
+### 19. TASK-0504 "Analysis Engine Integration" 세부 해석 확인
+- 현황: 지시 사항(Prompt Engine/LLM Gateway/Company Brain으로 기존 Mock
+  Analysis 교체, AnalysisResult 모델 유지)을 다음과 같이 구현했다:
+  - **공식 엔진 = LlmAnalysisProvider** — 구 MockAnalysisProvider는 제거.
+    `product-analysis` 템플릿 렌더링 → LLM Gateway 호출(responseFormat
+    "json") → 응답 엄격 파싱(name 필수, 실패 시 재시도 후 FAILED)
+  - **Company Brain**: 상품 이름 질의·PROJECT 스코프 조회 — 0502 결정
+    (상품 제목 기준 검색)과 동일 기준을 분석에도 적용
+  - **초안(Draft) 설계**: 프롬프트에 규칙 기반 초안 JSON(OCR 첫 줄→이름,
+    category "미분류", confidence 0.3)을 포함해 "검증·보강"을 지시.
+    mock LLM은 json 모드에서 이 초안을 그대로 반환 — 키 없는 오프라인
+    환경에서도 전체 파이프라인이 결정적으로 동작
+  - **LlmRequest.responseFormat("text"|"json") 추가** — 구조화 출력 계약.
+    실제 어댑터 3종은 아직 프롬프트 지침으로만 강제(옵션 매핑은 실연결 시)
+  - **ANALYSIS_PROVIDER 환경 변수 제거** — 분석 모델 선택을 LLM Gateway의
+    LLM_PROVIDER 하나로 일원화
+  - AnalysisResult 모델·분석 API 3종·1:N 이력·apply 동작은 변경 없음.
+    새 실행은 provider `llm:<provider>`(예: llm:mock)로 기록, 구 mock 이력 보존
+- 하지 않은 것(스펙 없음): 이미지 바이트(Vision) 멀티모달 입력, Provider별
+  구조화 출력 옵션(json_schema) 매핑, 분석 결과의 Product Object 자동 반영
+- 질문: ① 초안 에코 방식의 mock 설계·responseFormat 추가·ANALYSIS_PROVIDER
+  제거가 의도에 부합하는지 ② Vision(이미지) 입력을 분석 프롬프트에 포함할
+  시점 ③ 다음 TASK 지정 요청.
+
 ### 2. tesseract Provider 유지 여부
 - 현황: OCR 기본 Provider는 mock이며, 로컬 오프라인 엔진(tesseract.js)이
   선택 옵션(`OCR_PROVIDER=tesseract`)으로 유지되어 있다. 외부 API 아님.
@@ -25,25 +49,13 @@
 - 현황: TASK-0302에서 최소 규칙(제목 + OCR/Vision 요약 중 1개)으로 구현됨.
 - 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
 
-### 18. TASK-0503 "Prompt Engine" 세부 해석 확인
-- 현황: 지시 사항(프롬프트 로직을 Content Generation에서 분리, 독립 엔진,
-  모든 AI 기능 공용 설계)을 다음과 같이 구현했다:
-  - **선언적 템플릿 구조**: `PromptTemplate`(key/name/description/build) +
-    `PromptEngine`(레지스트리·렌더러, 중복/미등록 key 검증) — @acos/core,
-    렌더링은 결정적(같은 컨텍스트 → 같은 메시지, LLM 없이 테스트 가능)
-  - **공용 설계 규칙**: 새 AI 기능은 ①core에 템플릿 선언 ②기본 엔진 등록
-    ③서비스에서 `PROMPT_ENGINE.render(key, context)` — 서비스 안에서
-    프롬프트 문자열 직접 조립 금지 (docs/architecture/prompt.md에 명문화)
-  - 상세페이지 프롬프트를 `content-generation` 템플릿으로 이관 —
-    ContentGenerationService는 엔진 render만 사용 (출력은 기존과 동일)
-  - `GET /prompt/templates` — 등록 템플릿 조회 (개발용)
-- 하지 않은 것(스펙 없음): 템플릿 버전 관리, DB 저장(런타임 편집),
-  프리뷰/render API 노출, 다국어 템플릿
-- 질문: ① 템플릿을 코드 선언으로 유지할지 DB 관리(런타임 편집)로 갈지
-  ② 템플릿 버전 관리 필요 여부 ③ 다음 확장 대상(Analysis/Vision 템플릿화
-  또는 mock Generator 통합) 지정 요청.
-
 ## 결정됨
+
+### 18. TASK-0503 해석 확인 → 승인 + Code-first 확정 (2026-07-28)
+- CTO 결정: ① Prompt Template은 **Code-first 유지** — DB 관리 기능 미구현
+  ② Template Version은 이번 Sprint 미구현 ③ **다음 확장 대상은 Analysis**
+  → TASK-0504(Analysis Engine Integration)로 지시됨.
+- 반영(`74e9fbb`): `product-analysis` 템플릿 추가로 공용 설계 실증 (#19 참고).
 
 ### 17. TASK-0502 해석 확인 → 승인 + 공식 엔진 확정 (2026-07-27)
 - CTO 결정: ① Content Generation Engine이 **공식 생성 엔진**
