@@ -501,6 +501,14 @@ export interface LlmMessageDto {
 /** 기대 응답 형식 — "json"이면 Provider에 JSON 객체 하나만 출력하도록 요구한다 */
 export type LlmResponseFormat = "text" | "json";
 
+/** LLM 요청에 첨부하는 이미지 (멀티모달 — TASK-0505) */
+export interface LlmImageDto {
+  /** 예: "image/png", "image/jpeg" */
+  mimeType: string;
+  /** base64로 인코딩된 원본 바이트 */
+  base64: string;
+}
+
 export interface LlmCompleteRequest {
   messages: LlmMessageDto[];
   /** Provider 기본 모델을 덮어쓸 모델 ID (선택) */
@@ -509,6 +517,8 @@ export interface LlmCompleteRequest {
   maxTokens?: number;
   /** 기대 응답 형식 (선택, 기본 "text") — 구조화 출력이 필요한 기능이 사용 */
   responseFormat?: LlmResponseFormat;
+  /** 첨부 이미지 (선택) — Vision 등 멀티모달 기능이 사용 */
+  images?: LlmImageDto[];
 }
 
 export interface LlmUsageDto {

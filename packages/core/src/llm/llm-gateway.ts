@@ -107,5 +107,16 @@ export function validateLlmRequest(request: Partial<LlmRequest>): string[] {
   ) {
     errors.push("maxTokens는 1 이상의 정수여야 합니다.");
   }
+  request.images?.forEach((image, index) => {
+    if (
+      typeof image?.mimeType !== "string" ||
+      !image.mimeType.startsWith("image/")
+    ) {
+      errors.push(`images[${index}].mimeType은 "image/*" 형식이어야 합니다.`);
+    }
+    if (typeof image?.base64 !== "string" || image.base64.length === 0) {
+      errors.push(`images[${index}].base64은(는) 비어 있을 수 없습니다.`);
+    }
+  });
   return errors;
 }

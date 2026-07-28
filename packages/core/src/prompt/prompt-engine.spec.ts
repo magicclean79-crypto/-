@@ -66,6 +66,11 @@ describe("PromptEngine", () => {
         name: "상품 분석",
         description: expect.stringContaining("ProductAnalysis"),
       },
+      {
+        key: "vision-analysis",
+        name: "Vision 이미지 분석",
+        description: expect.stringContaining("VisionSummary"),
+      },
     ]);
   });
 });

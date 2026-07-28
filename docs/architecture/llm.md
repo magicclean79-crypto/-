@@ -32,20 +32,27 @@ Google Gemini)는 환경변수 하나로 교체되며, **기본은 mock** — AP
 - **Port (`packages/core/src/llm/`)** — 프레임워크 무관
   - `LlmProvider`: `name` · `defaultModel` · `complete(request)`
   - `LlmRequest`: `messages`(system/user/assistant) · `model?` · `maxTokens?` ·
-    `responseFormat?`("text" 기본 | "json" — 구조화 출력 요구, TASK-0504)
+    `responseFormat?`("text" 기본 | "json" — 구조화 출력 요구, TASK-0504) ·
+    `images?`(`{ mimeType, base64 }[]` — 멀티모달 첨부, TASK-0505.
+    검증: mimeType은 "image/*", base64 비어 있지 않음)
   - `LlmResult`: `provider` · `model` · `text` · `usage`(input/outputTokens) · `raw`
   - `LlmGateway`: 요청 검증(빈 메시지·role·공백 content·maxTokens) +
     지수 백오프 재시도 — OcrExecutionService와 같은 결
   - `MockLlmProvider`: 결정적 응답(마지막 user 메시지 반영), 추정 usage.
     `responseFormat: "json"`이면 프롬프트의 마지막 ```json 블록(템플릿이 넣은
-    초안)을 그대로 반환 — 구조화 파이프라인의 오프라인 검증용 (TASK-0504)
+    초안)을 그대로 반환 — 구조화 파이프라인의 오프라인 검증용 (TASK-0504).
+    첨부 이미지는 해석하지 않고 개수만 raw.imageCount에 기록 (TASK-0505)
 - **어댑터 (`apps/api/src/llm/providers/`)** — 공식 SDK 사용
   - Anthropic: system은 별도 파라미터, 응답은 content 블록에서 text 추출
   - OpenAI: chat.completions, system 메시지 그대로 전달
   - Gemini: systemInstruction/contents 분리, assistant → model role 매핑
+  - **이미지 매핑 (TASK-0505)**: `images`는 마지막 user 메시지에 Provider별
+    형식으로 첨부된다 — Anthropic `image` content block(base64) · OpenAI
+    `image_url`(data URL) · Gemini `inlineData` part
   - 실제 어댑터 3종은 `responseFormat`을 아직 매핑하지 않는다 — JSON 출력은
     프롬프트 지침으로 강제되며, Provider별 구조화 출력 옵션(예: OpenAI
-    response_format) 매핑은 실모델 연결 시 확장 지점이다
+    response_format) 매핑은 **실제 Provider 연결 시 적용한다 (CTO 결정,
+    TASK-0504 승인)**
 
 ## API
 

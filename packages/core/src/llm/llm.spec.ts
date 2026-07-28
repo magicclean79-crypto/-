@@ -53,6 +53,15 @@ describe("MockLlmProvider", () => {
     });
     expect(result.text).toBe("{}");
   });
+
+  it("첨부 이미지는 해석하지 않고 개수만 raw에 기록한다 (멀티모달)", async () => {
+    const provider = new MockLlmProvider();
+    const result = await provider.complete({
+      ...request,
+      images: [{ mimeType: "image/png", base64: "aW1n" }],
+    });
+    expect(result.raw).toMatchObject({ imageCount: 1 });
+  });
 });
 
 describe("LlmGateway", () => {
@@ -79,6 +88,27 @@ describe("LlmGateway", () => {
       }),
     ).toHaveLength(1);
     expect(validateLlmRequest(request)).toEqual([]);
+  });
+
+  it("요청 검증 — 이미지 mimeType/base64 (멀티모달)", () => {
+    expect(
+      validateLlmRequest({
+        ...request,
+        images: [{ mimeType: "text/plain", base64: "aW1n" }],
+      }),
+    ).toHaveLength(1);
+    expect(
+      validateLlmRequest({
+        ...request,
+        images: [{ mimeType: "image/png", base64: "" }],
+      }),
+    ).toHaveLength(1);
+    expect(
+      validateLlmRequest({
+        ...request,
+        images: [{ mimeType: "image/png", base64: "aW1n" }],
+      }),
+    ).toEqual([]);
   });
 
   it("Provider 실패 시 지수 백오프로 재시도한다", async () => {

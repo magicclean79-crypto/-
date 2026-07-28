@@ -1,7 +1,4 @@
-import {
-  createMockVisionSummary,
-  ProductObjectBuilder,
-} from "./product-object.builder";
+import { ProductObjectBuilder } from "./product-object.builder";
 
 const project = {
   id: "proj-1",
@@ -41,7 +38,14 @@ describe("ProductObjectBuilder (Unit Test)", () => {
 
   it("제목 우선순위: Vision 제안 → OCR 첫 줄 → 프로젝트 이름", () => {
     const ocr = [{ imageId: "img-1", text: "OCR 첫 줄", confidence: 0.9 }];
-    const vision = { ...createMockVisionSummary("x"), suggestedTitle: "Vision 제목" };
+    const vision = {
+      source: "llm:mock",
+      labels: ["product"],
+      brand: null,
+      category: null,
+      suggestedTitle: "Vision 제목",
+      confidence: 0.9,
+    };
 
     expect(
       new ProductObjectBuilder(project)
@@ -90,19 +94,5 @@ describe("ProductObjectBuilder (Unit Test)", () => {
       .withOcrResults([{ imageId: "img-1", text: "텍스트", confidence: null }])
       .build();
     expect(draft.ocrSummary?.averageConfidence).toBeNull();
-  });
-});
-
-describe("createMockVisionSummary", () => {
-  it("결정적인 mock 요약을 반환한다", () => {
-    const vision = createMockVisionSummary("테스트 상품");
-    expect(vision).toEqual({
-      source: "mock",
-      labels: ["mock-vision", "product"],
-      brand: null,
-      category: "생활용품",
-      suggestedTitle: "테스트 상품",
-      confidence: 0.9,
-    });
   });
 });

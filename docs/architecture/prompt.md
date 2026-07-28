@@ -10,7 +10,8 @@ AI 기능 (Content Generation, 향후 Analysis/Vision/…)
             │
             └─ PromptTemplate 레지스트리 (@acos/core, 프레임워크 무관)
                  ├── "content-generation" — 상세페이지 생성 (TASK-0502에서 분리)
-                 └── "product-analysis"   — 상품 분석 (TASK-0504)
+                 ├── "product-analysis"   — 상품 분석 (TASK-0504)
+                 └── "vision-analysis"    — Vision 이미지 분석 (TASK-0505)
 ```
 
 ## 구조 (`packages/core/src/prompt/`)
@@ -37,6 +38,7 @@ AI 기능 (Content Generation, 향후 Analysis/Vision/…)
 | --- | --- | --- | --- |
 | `content-generation` | 상세페이지 생성 | `ContentGenerationContext` (READY PO + Company Brain) | ContentGenerationService (TASK-0502) |
 | `product-analysis` | 상품 분석 | `ProductAnalysisContext` (상품/OCR + Company Brain) | LlmAnalysisProvider (TASK-0504) — `responseFormat: "json"` 호출·엄격 파싱 |
+| `vision-analysis` | Vision 이미지 분석 | `VisionAnalysisContext` (프로젝트/OCR + Company Brain) | LlmVisionProvider (TASK-0505) — 이미지는 LLM Gateway `images`로 첨부 |
 
 ## API
 

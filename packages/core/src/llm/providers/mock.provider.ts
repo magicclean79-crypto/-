@@ -58,6 +58,8 @@ export class MockLlmProvider implements LlmProvider {
         messageCount: request.messages.length,
         maxTokens: request.maxTokens ?? null,
         responseFormat: request.responseFormat ?? "text",
+        // mock은 이미지를 해석하지 않는다 — 첨부 개수만 기록 (TASK-0505)
+        imageCount: request.images?.length ?? 0,
       },
     };
   }

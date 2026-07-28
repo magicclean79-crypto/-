@@ -24,12 +24,37 @@ export class AnthropicLlmProvider implements LlmProvider {
       .filter((message) => message.role === "system")
       .map((message) => message.content)
       .join("\n");
-    const messages = request.messages
+    const messages: Anthropic.MessageParam[] = request.messages
       .filter((message) => message.role !== "system")
       .map((message) => ({
         role: message.role as "user" | "assistant",
         content: message.content,
       }));
+
+    // 첨부 이미지(멀티모달)는 content block으로 마지막 user 메시지에 붙인다
+    if (request.images && request.images.length > 0) {
+      const imageBlocks: Anthropic.ImageBlockParam[] = request.images.map(
+        (image) => ({
+          type: "image",
+          source: {
+            type: "base64",
+            media_type:
+              image.mimeType as Anthropic.Base64ImageSource["media_type"],
+            data: image.base64,
+          },
+        }),
+      );
+      const lastUserIndex = messages
+        .map((message) => message.role)
+        .lastIndexOf("user");
+      const target = messages[lastUserIndex];
+      if (target && typeof target.content === "string") {
+        target.content = [
+          ...imageBlocks,
+          { type: "text", text: target.content },
+        ];
+      }
+    }
 
     const model = request.model ?? this.defaultModel;
     const response = await this.client.messages.create({

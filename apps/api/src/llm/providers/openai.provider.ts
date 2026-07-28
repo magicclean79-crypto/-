@@ -19,14 +19,34 @@ export class OpenAiLlmProvider implements LlmProvider {
   }
 
   async complete(request: LlmRequest): Promise<LlmResult> {
+    const messages: OpenAI.Chat.ChatCompletionMessageParam[] =
+      request.messages.map((message) => ({
+        role: message.role,
+        content: message.content,
+      }));
+
+    // 첨부 이미지(멀티모달)는 data URL(image_url)로 마지막 user 메시지에 붙인다
+    if (request.images && request.images.length > 0) {
+      const lastUserIndex = messages
+        .map((message) => message.role)
+        .lastIndexOf("user");
+      const target = messages[lastUserIndex];
+      if (target && typeof target.content === "string") {
+        target.content = [
+          ...request.images.map((image) => ({
+            type: "image_url" as const,
+            image_url: { url: `data:${image.mimeType};base64,${image.base64}` },
+          })),
+          { type: "text" as const, text: target.content },
+        ];
+      }
+    }
+
     const model = request.model ?? this.defaultModel;
     const response = await this.client.chat.completions.create({
       model,
       max_completion_tokens: request.maxTokens ?? DEFAULT_MAX_TOKENS,
-      messages: request.messages.map((message) => ({
-        role: message.role,
-        content: message.content,
-      })),
+      messages,
     });
 
     return {

@@ -1,6 +1,11 @@
 import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
-import { MockVisionProvider, type VisionProvider } from "@acos/core";
+import {
+  createDefaultPromptEngine,
+  LlmVisionProvider,
+  MockLlmProvider,
+  type VisionProvider,
+} from "@acos/core";
 import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
 import { ProductObjectService } from "./product-object.service";
@@ -10,10 +15,28 @@ import {
 } from "./product-object.spec-helpers";
 import { VISION_PROVIDER } from "./vision.constants";
 
+/** 공식 Vision 엔진(LLM 기반)을 mock LLM으로 구성 — 운영 기본 구성과 동일한 경로 */
+function createTestVisionProvider(): LlmVisionProvider {
+  const llm = new MockLlmProvider();
+  return new LlmVisionProvider({
+    promptEngine: createDefaultPromptEngine(),
+    llmProviderName: llm.name,
+    complete: async (request) => {
+      const result = await llm.complete(request);
+      return { provider: result.provider, model: result.model, text: result.text };
+    },
+    loadCompanyBrain: async () => ({
+      knowledge: [],
+      decisions: [],
+      memories: [],
+    }),
+  });
+}
+
 describe("ProductObjectService (Service Test)", () => {
   async function createService(
     prisma: ReturnType<typeof createPrismaMock>,
-    vision: VisionProvider = new MockVisionProvider(),
+    vision: VisionProvider = createTestVisionProvider(),
   ) {
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -29,7 +52,7 @@ describe("ProductObjectService (Service Test)", () => {
     return moduleRef.get(ProductObjectService);
   }
 
-  it("OCR + Vision(mock)을 조립해 v1 Product Object를 생성한다", async () => {
+  it("OCR + Vision(LLM 기반 공식 엔진)을 조립해 v1 Product Object를 생성한다", async () => {
     const prisma = createPrismaMock();
     prisma.project.findUnique.mockResolvedValue(projectWithOcr);
     const service = await createService(prisma);
@@ -38,11 +61,12 @@ describe("ProductObjectService (Service Test)", () => {
 
     expect(result.version).toBe(1);
     expect(result.status).toBe("DRAFT");
-    expect(result.title).toBe("매직클린 걸레"); // vision.suggestedTitle 우선
-    expect(result.category).toBe("생활용품");
+    // mock LLM 초안 기준 vision.suggestedTitle = OCR 첫 줄
+    expect(result.title).toBe("Magic Clean PVC Mat");
+    expect(result.category).toBe("미분류");
     expect(result.ocrSummary?.sources).toHaveLength(1);
     expect(result.ocrSummary?.averageConfidence).toBe(0.94);
-    expect(result.visionSummary?.source).toBe("mock");
+    expect(result.visionSummary?.source).toBe("llm:mock");
     expect(result.metadata?.imageCount).toBe(2);
   });
 

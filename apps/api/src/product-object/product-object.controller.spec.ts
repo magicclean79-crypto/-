@@ -1,6 +1,10 @@
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
-import { MockVisionProvider } from "@acos/core";
+import {
+  createDefaultPromptEngine,
+  LlmVisionProvider,
+  MockLlmProvider,
+} from "@acos/core";
 import request from "supertest";
 import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
@@ -31,7 +35,30 @@ describe("Product Object API (API Test)", () => {
           provide: StorageService,
           useValue: { getObject: jest.fn(async () => Buffer.from("img")) },
         },
-        { provide: VISION_PROVIDER, useValue: new MockVisionProvider() },
+        {
+          // 공식 Vision 엔진(LLM 기반)을 mock LLM으로 구성
+          provide: VISION_PROVIDER,
+          useValue: (() => {
+            const llm = new MockLlmProvider();
+            return new LlmVisionProvider({
+              promptEngine: createDefaultPromptEngine(),
+              llmProviderName: llm.name,
+              complete: async (req) => {
+                const result = await llm.complete(req);
+                return {
+                  provider: result.provider,
+                  model: result.model,
+                  text: result.text,
+                };
+              },
+              loadCompanyBrain: async () => ({
+                knowledge: [],
+                decisions: [],
+                memories: [],
+              }),
+            });
+          })(),
+        },
       ],
     }).compile();
 
@@ -52,13 +79,14 @@ describe("Product Object API (API Test)", () => {
       projectId: "proj-1",
       version: 1,
       status: "DRAFT",
-      title: "매직클린 걸레",
-      category: "생활용품",
+      // mock LLM 초안 기준 vision.suggestedTitle = OCR 첫 줄
+      title: "Magic Clean PVC Mat",
+      category: "미분류",
     });
     expect(response.body.ocrSummary.combinedText).toContain(
       "Magic Clean PVC Mat",
     );
-    expect(response.body.visionSummary.source).toBe("mock");
+    expect(response.body.visionSummary.source).toBe("llm:mock");
     expect(response.body.metadata.builderVersion).toBe("1.0.0");
   });
 

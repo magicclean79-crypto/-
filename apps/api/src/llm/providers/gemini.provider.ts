@@ -27,8 +27,27 @@ export class GeminiLlmProvider implements LlmProvider {
       .filter((message) => message.role !== "system")
       .map((message) => ({
         role: message.role === "assistant" ? "model" : "user",
-        parts: [{ text: message.content }],
+        parts: [{ text: message.content }] as (
+          | { text: string }
+          | { inlineData: { mimeType: string; data: string } }
+        )[],
       }));
+
+    // 첨부 이미지(멀티모달)는 inlineData part로 마지막 user 메시지 앞에 붙인다
+    if (request.images && request.images.length > 0) {
+      const lastUserIndex = contents
+        .map((content) => content.role)
+        .lastIndexOf("user");
+      const target = contents[lastUserIndex];
+      if (target) {
+        target.parts = [
+          ...request.images.map((image) => ({
+            inlineData: { mimeType: image.mimeType, data: image.base64 },
+          })),
+          ...target.parts,
+        ];
+      }
+    }
 
     const model = request.model ?? this.defaultModel;
     const response = await this.client.models.generateContent({

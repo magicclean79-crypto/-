@@ -125,14 +125,16 @@ OCR·Vision 결과를 조립한 **핵심 데이터 모델**입니다. 프로젝�
 
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
-| `POST` | `/projects/:projectId/product-object` | OCR+Vision(mock) 조립 → 새 버전 생성 |
+| `POST` | `/projects/:projectId/product-object` | OCR+Vision(LLM 기반) 조립 → 새 버전 생성 |
 | `GET` | `/projects/:projectId/product-object?version=N` | 최신(또는 특정) 버전 조회 |
 | `GET` | `/projects/:projectId/product-object/history` | 버전 이력 |
 | `PATCH` | `/projects/:projectId/product-object/:version/status` | 상태 전이 (`DRAFT ⇄ READY`, `→ ARCHIVED`; READY는 검증 통과 필요) |
 
 - 상태: `DRAFT → READY → ARCHIVED` · 버전: `projectId+version` 유니크, 생성마다 증가
-- Vision: `VISION_PROVIDER`로 교체 가능한 Provider가 visionSummary 공급 (기본 mock,
-  실패 시 null 폴백) — [docs/architecture/vision.md](docs/architecture/vision.md)
+- Vision: **LLM 기반 멀티모달 공식 엔진**(TASK-0505)이 visionSummary 공급 — 이미지
+  바이트(base64, 최대 5장) + Prompt Engine(`vision-analysis`) + LLM Gateway +
+  Company Brain 사용, 모델 선택은 `LLM_PROVIDER` 하나(기본 mock, 실패 시 null 폴백)
+  — [docs/architecture/vision.md](docs/architecture/vision.md)
 
 ## AI 분석 (TASK-0204 · TASK-0504에서 LLM 기반 엔진으로 교체)
 
@@ -224,7 +226,7 @@ SOP와 나란히 회사 지식을 축적합니다 — [docs/architecture/decisio
 
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
-| `GET` | `/prompt/templates` | 등록된 템플릿 목록 (현재: `content-generation`, `product-analysis`) |
+| `GET` | `/prompt/templates` | 등록된 템플릿 목록 (현재: `content-generation`, `product-analysis`, `vision-analysis`) |
 
 ## LLM Gateway (TASK-0501)
 

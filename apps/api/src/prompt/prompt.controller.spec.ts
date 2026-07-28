@@ -24,19 +24,16 @@ describe("Prompt API (API Test)", () => {
     await app.close();
   });
 
-  it("GET /prompt/templates — 등록된 템플릿 목록 (content-generation, product-analysis)", async () => {
+  it("GET /prompt/templates — 등록된 템플릿 목록 (3종)", async () => {
     const response = await request(app.getHttpServer())
       .get("/prompt/templates")
       .expect(200);
 
-    expect(response.body.templates).toHaveLength(2);
-    expect(response.body.templates[0]).toMatchObject({
-      key: "content-generation",
-      name: "상세페이지 생성",
-    });
-    expect(response.body.templates[1]).toMatchObject({
-      key: "product-analysis",
-      name: "상품 분석",
-    });
+    expect(response.body.templates).toHaveLength(3);
+    expect(response.body.templates.map((t: { key: string }) => t.key)).toEqual([
+      "content-generation",
+      "product-analysis",
+      "vision-analysis",
+    ]);
   });
 });

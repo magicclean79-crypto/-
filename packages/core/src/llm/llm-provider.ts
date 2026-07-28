@@ -1,4 +1,8 @@
-import type { LlmMessageDto, LlmResponseFormat } from "@acos/shared";
+import type {
+  LlmImageDto,
+  LlmMessageDto,
+  LlmResponseFormat,
+} from "@acos/shared";
 
 /**
  * LLM Provider 추상화 (Port). (TASK-0501, Sprint 5 — AI Execution)
@@ -29,6 +33,12 @@ export interface LlmRequest {
    * 옵션(예: OpenAI response_format)은 어댑터에서 선택적으로 매핑한다.
    */
   responseFormat?: LlmResponseFormat;
+  /**
+   * 첨부 이미지 (멀티모달 — TASK-0505). 어댑터가 Provider별 이미지 입력
+   * 형식(content block/image_url/inlineData)으로 매핑해 마지막 user 메시지에
+   * 붙인다. mock은 이미지를 읽지 않고 개수만 raw에 기록한다.
+   */
+  images?: LlmImageDto[];
 }
 
 export interface LlmResult {

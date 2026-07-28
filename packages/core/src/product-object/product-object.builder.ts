@@ -119,18 +119,3 @@ export class ProductObjectBuilder {
     };
   }
 }
-
-/**
- * Vision 연동 전까지 사용하는 결정적 Mock Vision 요약.
- * 실제 Vision Provider가 붙으면 이 함수 호출부만 교체하면 된다.
- */
-export function createMockVisionSummary(projectName: string): VisionSummary {
-  return {
-    source: "mock",
-    labels: ["mock-vision", "product"],
-    brand: null,
-    category: "생활용품",
-    suggestedTitle: projectName,
-    confidence: 0.9,
-  };
-}
