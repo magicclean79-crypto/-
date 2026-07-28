@@ -8,11 +8,12 @@
 
 ## 미완료 (스펙 확정, 구현 대기)
 
-- (없음 — TASK-0701 완료. CTO 리뷰/승인 대기 중이며 승인 전 다음 TASK를 시작하지 않는다)
+- (없음 — TASK-0702 완료. CTO 리뷰/승인 대기 중이며 승인 전 다음 TASK를 시작하지 않는다)
 
 ## 완료 — Sprint 7
 
-- [x] **TASK-0701 — Execution Dashboard Web UI** (`eb202c6`): /executions 운영 대시보드 — Stats/Timeline API 소비, KPI 카드 4종(성공률은 UI에서 % 표시), Timeline Chart(hour/day/week 전환·성공/실패 스택 막대·UTC 축·빈 버킷 UI 보간), Feature/Provider/Model 통계 테이블, 서버 컴포넌트+CSS 차트(외부 라이브러리 없음), API 미연결 안내 — 브라우저(Playwright) 검증, 해석 확인 CTO_REQUEST #27
+- [x] **TASK-0702 — Dashboard Filter & Web Testing** (`1f9ab8b`): 대시보드 필터(Feature/Provider/Model/From/To UTC, GET 폼, stats+timeline 적용, interval 전환 시 유지) + Stats API 필터 확장(feature/provider/model) + hour 조회 최대 31일 제한(from 미지정 시 최근 31일 창, 초과 400) + Playwright CI 품질 게이트(web pnpm test — Dashboard/Filter/Empty/Error 스모크 4종, 모드 전환형 스텁 API, 사전 설치 chromium) — 해석 확인 CTO_REQUEST #28
+- [x] **TASK-0701 — Execution Dashboard Web UI** (`eb202c6`, CTO 승인 — CSS 차트 유지(외부 라이브러리 미도입)·필터 추가·hour 31일 제한·Playwright CI 게이트 지시 → TASK-0702로 이행): /executions 운영 대시보드 — Stats/Timeline API 소비, KPI 카드 4종(성공률은 UI에서 % 표시), Timeline Chart(hour/day/week 전환·성공/실패 스택 막대·UTC 축·빈 버킷 UI 보간), Feature/Provider/Model 통계 테이블, 서버 컴포넌트+CSS 차트(외부 라이브러리 없음), API 미연결 안내 — 브라우저(Playwright) 검증, 해석 확인 CTO_REQUEST #27
 
 ## 완료 — Sprint 6 (CTO 공식 종료, 2026-07-28)
 

@@ -5,25 +5,25 @@
 
 ## 결정 대기
 
-### 27. TASK-0701 "Execution Dashboard Web UI" 세부 해석 확인
-- 현황: 지시 사항(Stats/Timeline API로 KPI·Timeline Chart·Provider/Feature/
-  Model 통계 화면)을 `/executions` 페이지로 구현했다:
-  - **KPI 카드 4종**: 호출 수(성공/실패) · 성공률/실패율(**API 0~1 → UI %
-    변환**, 0602 승인 ② 준수) · 토큰(입력/출력) · 비용/지연(평균·최대)
-  - **Timeline Chart**: hour/day/week 전환(쿼리 파라미터) · 성공/실패 스택
-    막대 · UTC 축 · **빈 버킷 UI 보간**(0605 승인 ② 준수) · hover 상세
-  - **테이블 3종**: Feature/Provider/Model — 호출·성공률·실패·토큰·비용·지연
-  - 구현: 서버 컴포넌트 + **CSS 막대(외부 차트 라이브러리 무의존)**,
-    API 미연결 안내, 홈 내비게이션 추가
-  - Playwright 브라우저 검증 + 전체 스크린샷 (openai 실패 이력이 차트·
-    테이블에 정확히 표시됨)
-- 하지 않은 것(스펙 없음): Timeline의 feature/provider/model 필터 UI 노출,
-  hour 기간 제한(다음 Sprint 예고), 자동 새로고침/실시간 갱신, 웹 자동화
-  테스트 인프라(web 워크스페이스는 기존부터 미구축 — 브라우저 수동 검증)
-- 질문: ① CSS 스택 막대 방식(라이브러리 무의존)이 적절한지, 차트
-  라이브러리 도입 필요 여부 ② 필터 UI(feature/provider/model)를 화면에
-  노출할지 ③ 웹 자동화 테스트(Playwright CI) 도입 여부 ④ 다음 TASK 지정
-  요청.
+### 28. TASK-0702 "Dashboard Filter & Web Testing" 세부 해석 확인
+- 현황: 승인 결정 4항목(필터·hour 31일·Playwright 게이트·CSS 차트 유지)을
+  다음과 같이 이행했다:
+  - **Filter**: Feature(선택 목록)/Provider(자유 입력)/Model(자유 입력)/
+    From/To(UTC) — GET 폼(서버 컴포넌트 유지), stats+timeline 양쪽 적용,
+    interval 전환 시 필터 유지, 초기화 버튼
+  - **Stats API 필터 확장**: 화면 필터가 KPI·테이블에도 적용되도록
+    `GET /executions/stats`에 feature/provider/model 정확 일치 필터를
+    추가했다 (지시는 "Dashboard Filter"였으므로 화면 전체 반영으로 해석)
+  - **hour 31일 제한**: 명시 범위 31일 초과 → 400. **from 미지정 시 최근
+    31일 창을 기본 적용**(400 대신 자동 축소 — 화면 기본 동작 보호)
+  - **Playwright CI 게이트**: 루트 pnpm test에 web e2e 4종 포함 —
+    Dashboard/Filter/Empty/Error. **모드 전환형 스텁 API**로 상태를
+    결정적으로 재현(실 DB/API 불필요), 사전 설치 chromium 사용
+- 하지 않은 것(스펙 없음): Provider/Model 자동완성(datalist), 실 API 통합
+  e2e(스텁 아닌 실환경 — 운영 스모크와 함께 권장), 필터 다중 선택
+- 질문: ① Stats API 필터 확장·hour 기본 31일 창(400 대신 자동 축소)이
+  의도에 부합하는지 ② Provider/Model 자유 입력 방식이 적절한지(자동완성
+  필요 여부) ③ 다음 TASK 지정 요청.
 
 ### 2. tesseract Provider 유지 여부
 - 현황: OCR 기본 Provider는 mock이며, 로컬 오프라인 엔진(tesseract.js)이
@@ -46,6 +46,14 @@
 - 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
 
 ## 결정됨
+
+### 27. TASK-0701 해석 확인 → 승인 + Dashboard 확장 지시 (2026-07-28)
+- CTO 결정: ① **CSS 기반 차트 구조 유지 — 외부 차트 라이브러리 미도입**
+  ② **Dashboard Filter 추가** (Feature/Provider/Model/From/To)
+  ③ **hour 조회 최대 31일 제한** ④ **Playwright를 CI 품질 게이트에 포함** —
+  Dashboard/Empty/Error 스모크 ⑤ TASK-0702(Dashboard Filter & Web Testing)
+  지시됨.
+- 반영(`1f9ab8b`): ②③④ 전부 구현 (#28 참고).
 
 ### 26. TASK-0605 해석 확인 → 승인 + Timeline 표준 확정 + Sprint 6 종료 (2026-07-28)
 - CTO 결정: ① **UTC · ISO Week · hour/day/week 구조를 공식 표준으로 유지**
