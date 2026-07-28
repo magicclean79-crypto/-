@@ -5,28 +5,25 @@
 
 ## 결정 대기
 
-### 25. TASK-0604 "Image Guard & Preprocessing" 세부 해석 확인
-- 현황: 지시된 5개 항목(검증·리사이즈·최적화·EXIF 제거·용량 제한)을 Vision
-  Provider 호출 전 파이프라인으로 구현했다:
-  - **검증**: MIME 허용 목록(jpeg/png/webp/gif) · 빈 파일 · 원본 최대 20MB
-  - **리사이즈**: 최대 변 1024px(비율 유지·확대 없음) — 실모델 토큰·전송
-    비용 예측 가능
-  - **최적화**: JPEG q82 재인코딩(투명 PNG는 PNG 유지, webp/gif도 JPEG 정규화)
-  - **EXIF 제거**: Orientation을 픽셀 회전으로 반영 후 메타데이터 없이
-    재인코딩 — 위치정보 등 개인정보가 외부 API로 나가지 않음
-  - **용량 제한**: 전처리 후에도 5MB 초과면 거부
-  - 구조: core Port(정책·순수 검증) + sharp 어댑터(apps/api, 의존성 추가).
-    정책은 `VISION_IMAGE_*` 환경변수로 조정(기본값 core 선언)
-  - **실패 설계**: 위반 이미지는 분석을 막지 않고 스킵(raw.skippedImages에
-    사유 기록), 인프라 오류는 기존 재시도→null 폴백 유지
-  - **저장 원본 불변**: 전처리는 호출 시점에만 수행 — 업로드된 원본 파일은
-    변경하지 않음 (업로드 검증 10MB/MIME은 TASK-0201 그대로)
-- 하지 않은 것(스펙 없음): 업로드 저장 시점 최적화, OCR 경로 전처리 적용,
-  Provider별 최적 해상도 차등(예: OpenAI detail 옵션)
-- 질문: ① 기본값(1024px·원본 20MB·출력 5MB·JPEG q82)이 적절한지
-  ② 위반 이미지 "스킵 후 계속" 동작이 의도에 부합하는지(전체 실패가
-  필요하면 지시 요청) ③ 저장 시점(업로드) 최적화 도입 여부 ④ 다음 TASK
-  지정 요청 (후보: 일별 시계열 — Sprint 6 후반 예고).
+### 26. TASK-0605 "Execution Timeline" 세부 해석 확인
+- 현황: 지시 사항(hour/day/week 단위, 6개 지표, feature/provider/model 필터)을
+  다음과 같이 구현했다:
+  - **`GET /executions/timeline?interval=hour|day|week`** (기본 day) —
+    Dashboard(0602)와 동일한 `ExecutionStats` 계약(호출 수·성공/실패율 0~1·
+    Latency 가중 평균+최대·Token·Cost)을 시간 버킷으로 제공
+  - **버킷 기준**: DB `date_trunc`, **UTC** — week는 ISO 주(월요일 시작).
+    버킷은 시간 오름차순이며 **데이터가 있는 버킷만 포함**(빈 버킷 0 채움
+    없음 — UI에서 채움 처리 가정)
+  - **필터**: feature/provider/model 정확 일치 + from/to 기간.
+    잘못된 interval/날짜/역전 기간 400
+  - 집계: (버킷, status) 단위 $queryRaw(전 값 파라미터 바인딩·interval
+    화이트리스트) → core 병합 로직 재사용. 집계 결과 비저장
+- 하지 않은 것(스펙 없음): 빈 버킷 0 채움, 기간/버킷 수 상한, KST 등
+  타임존 옵션, 집계 캐싱
+- 질문: ① 빈 버킷 미포함(UI 채움)·UTC 버킷·ISO 주 기준이 의도에 부합하는지
+  ② hour 장기간 조회의 기간 상한 필요 여부 ③ Sprint 6 예고분(Execution·
+  Dashboard API·시계열·OpenAI 연결·이미지 가드)이 모두 완료된 상태 —
+  Sprint 종료 여부와 다음 TASK 지정 요청.
 
 ### 2. tesseract Provider 유지 여부
 - 현황: OCR 기본 Provider는 mock이며, 로컬 오프라인 엔진(tesseract.js)이
@@ -49,6 +46,13 @@
 - 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
 
 ## 결정됨
+
+### 25. TASK-0604 해석 확인 → 승인 + 정책 확정 (2026-07-28)
+- CTO 결정: ① **Image Guard 기본 정책 유지** — 원본 20MB · 최대 변 1024px ·
+  출력 5MB · JPEG q82 ② **위반 이미지는 스킵 후 계속 진행 유지**
+  ③ **업로드 원본 무변경 — 전처리는 호출 시점에만 수행**
+  ④ TASK-0605(Execution Timeline) 지시됨.
+- 반영(`7dbb42c`): 현행 구현 확정, Timeline 구현 (#26 참고).
 
 ### 24. TASK-0603 해석 확인 → 승인 + 실키 검증 환경 확정 (2026-07-28)
 - CTO 결정: ① **가격표 Code-first 유지** — gpt-4o/gpt-4o-mini 단가·접두사
