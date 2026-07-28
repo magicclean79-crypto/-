@@ -9,17 +9,17 @@ datasource db {
 
 // 최상위 루트 엔티티 — 여러 상품과 Product Object 버전을 묶는 작업 단위 (TASK-0301)
 model Project {
-  id             String          @id @default(cuid())
-  name           String
-  description    String?
-  products       Product[]
-  productObjects ProductObject[]
-  contents       Content[]
+  id              String          @id @default(cuid())
+  name            String
+  description     String?
+  products        Product[]
+  productObjects  ProductObject[]
+  contents        Content[]
   sopRuns         SopRun[]
   decisions       Decision[]
   projectMemories ProjectMemory[]
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
 
   @@map("projects")
 }
@@ -191,16 +191,16 @@ enum SopRunStatus {
 
 // 의사결정 로그 — 프로젝트별 결정 기록 (TASK-0306)
 model Decision {
-  id           String   @id @default(cuid())
-  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  id           String       @id @default(cuid())
+  project      Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
   projectId    String
   title        String
   description  String?
   reason       String
   decisionType DecisionType
   author       String
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
 
   @@index([projectId])
   @@map("decisions")
@@ -229,8 +229,8 @@ model Memory {
   key         String
   value       Json
   description String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
 
   @@unique([scope, scopeId, key])
   @@index([scope, scopeId])
@@ -280,4 +280,28 @@ enum DecisionType {
   QUALITY
   SECURITY
   OTHER
+}
+
+// ── Execution Domain (TASK-0601, Sprint 6) ─────────────
+// 모든 LLM 호출(Content/Analysis/Vision/개발용) 1건당 1레코드 — 관측 전용
+enum ExecutionStatus {
+  SUCCESS
+  FAILED
+}
+
+model Execution {
+  id           String          @id @default(cuid())
+  feature      String // content-generation | product-analysis | vision-analysis | dev
+  provider     String
+  model        String
+  status       ExecutionStatus
+  inputTokens  Int?
+  outputTokens Int?
+  cost         Decimal?        @db.Decimal(12, 6) // 예상 비용(USD) — 가격표 없는 모델은 null
+  latencyMs    Int
+  error        String?
+  createdAt    DateTime        @default(now())
+
+  @@index([feature, createdAt])
+  @@map("executions")
 }

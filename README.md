@@ -243,6 +243,16 @@ SOP와 나란히 회사 지식을 축적합니다 — [docs/architecture/decisio
 - 키 설정: `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY`
   (+ `LLM_*_MODEL`로 모델 덮어쓰기, `LLM_MAX_ATTEMPTS` 재시도)
 
+## Execution Domain (TASK-0601, Sprint 6)
+
+모든 LLM 호출(Content Generation · Analysis · Vision · 개발용 API)은 호출 1건당
+**Execution 1건**을 기록합니다 — Provider/Model/Token/Cost(USD)/Latency/Status.
+기록 실패는 호출을 실패시키지 않습니다 — [docs/architecture/execution.md](docs/architecture/execution.md)
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `GET` | `/executions?feature=&limit=` | LLM 호출 이력 (최신순) — feature: `content-generation` `product-analysis` `vision-analysis` `dev` |
+
 ## Memory — 표준 Structured Memory (TASK-0402)
 
 Company Brain의 표준 Memory는 `scope / scopeId / key / value / description` 기반의

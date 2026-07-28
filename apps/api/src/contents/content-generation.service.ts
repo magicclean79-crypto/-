@@ -163,9 +163,10 @@ export class ContentGenerationService {
       productObject: input.productObject,
       companyBrain,
     };
-    const completion = await this.llm.complete({
-      messages: this.promptEngine.render("content-generation", context),
-    });
+    const completion = await this.llm.complete(
+      { messages: this.promptEngine.render("content-generation", context) },
+      { feature: "content-generation" },
+    );
 
     return {
       title: extractMarkdownTitle(

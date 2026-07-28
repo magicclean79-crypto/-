@@ -1,10 +1,24 @@
 import { BadRequestException } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { MockLlmProvider } from "@acos/core";
-import type { LlmProvider } from "@acos/core";
+import type {
+  ExecutionRecord,
+  ExecutionStore,
+  LlmProvider,
+  NewExecution,
+} from "@acos/core";
 import { LLM_PROVIDER } from "./llm.constants";
 import { LlmService } from "./llm.service";
 import { createLlmProvider } from "./llm.module";
+
+class InMemoryExecutionStore implements ExecutionStore {
+  entries: NewExecution[] = [];
+
+  async record(entry: NewExecution): Promise<ExecutionRecord> {
+    this.entries.push(entry);
+    return { ...entry, id: `exec-${this.entries.length}`, createdAt: new Date() };
+  }
+}
 
 describe("LlmService (Service Test)", () => {
   async function createService(provider: LlmProvider = new MockLlmProvider()) {
@@ -65,6 +79,85 @@ describe("LlmService (Service Test)", () => {
       provider: "mock",
       defaultModel: "mock-llm-1",
     });
+  });
+});
+
+describe("LlmService — Execution 기록 (TASK-0601)", () => {
+  const request = {
+    messages: [{ role: "user" as const, content: "PVC 매트 소개 문구를 써줘." }],
+  };
+
+  it("호출 성공 시 feature가 태깅된 SUCCESS Execution을 기록한다", async () => {
+    const store = new InMemoryExecutionStore();
+    const service = new LlmService(new MockLlmProvider(), store);
+
+    await service.complete(request, { feature: "content-generation" });
+
+    expect(store.entries).toHaveLength(1);
+    expect(store.entries[0]).toMatchObject({
+      feature: "content-generation",
+      provider: "mock",
+      model: "mock-llm-1",
+      status: "SUCCESS",
+      cost: 0,
+      error: null,
+    });
+    expect(store.entries[0].inputTokens).toBeGreaterThan(0);
+    expect(store.entries[0].latencyMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("feature 미지정 시 'dev'로 기록한다 (개발용 API 경로)", async () => {
+    const store = new InMemoryExecutionStore();
+    const service = new LlmService(new MockLlmProvider(), store);
+
+    await service.complete(request);
+
+    expect(store.entries[0].feature).toBe("dev");
+  });
+
+  it("호출 실패 시 FAILED Execution(폴백 provider/model + 오류)을 기록한다", async () => {
+    const failing: LlmProvider = {
+      name: "failing",
+      defaultModel: "failing-1",
+      complete: async () => {
+        throw new Error("모델 오류");
+      },
+    };
+    process.env.LLM_MAX_ATTEMPTS = "1";
+    try {
+      const store = new InMemoryExecutionStore();
+      const service = new LlmService(failing, store);
+
+      await expect(service.complete(request)).rejects.toThrow("모델 오류");
+
+      expect(store.entries[0]).toMatchObject({
+        feature: "dev",
+        provider: "failing",
+        model: "failing-1",
+        status: "FAILED",
+        inputTokens: null,
+        cost: null,
+        error: "모델 오류",
+      });
+    } finally {
+      delete process.env.LLM_MAX_ATTEMPTS;
+    }
+  });
+
+  it("검증 오류(400)는 LLM 호출이 아니므로 Execution을 기록하지 않는다", async () => {
+    const store = new InMemoryExecutionStore();
+    const service = new LlmService(new MockLlmProvider(), store);
+
+    await expect(service.complete({ messages: [] })).rejects.toThrow(
+      BadRequestException,
+    );
+    expect(store.entries).toHaveLength(0);
+  });
+
+  it("저장소 미주입 시(단독 구성) 기록 없이 호출만 수행한다", async () => {
+    const service = new LlmService(new MockLlmProvider());
+    const completion = await service.complete(request);
+    expect(completion.text).toContain("[mock-llm]");
   });
 });
 

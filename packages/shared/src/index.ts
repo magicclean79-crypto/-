@@ -540,6 +540,29 @@ export interface LlmGatewayInfoDto {
   defaultModel: string;
 }
 
+// ── Execution Domain (TASK-0601, Sprint 6) ─────────────
+
+export const EXECUTION_STATUSES = ["SUCCESS", "FAILED"] as const;
+
+/** LLM 호출 1건의 실행 결과 상태 */
+export type ExecutionStatus = (typeof EXECUTION_STATUSES)[number];
+
+export interface ExecutionDto {
+  id: string;
+  /** 호출 기능 (content-generation | product-analysis | vision-analysis | dev) */
+  feature: string;
+  provider: string;
+  model: string;
+  status: ExecutionStatus;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  /** 예상 비용 (USD) — 가격표에 없는 모델은 null */
+  cost: number | null;
+  latencyMs: number;
+  error: string | null;
+  createdAt: string;
+}
+
 // ── Prompt Engine (TASK-0503) ──────────────────────────
 
 export interface PromptTemplateInfoDto {

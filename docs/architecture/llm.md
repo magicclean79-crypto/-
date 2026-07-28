@@ -81,6 +81,8 @@ POST /llm/complete
 - **mock 기본**: 키 미설정 환경(테스트·CI 포함)에서 실제 API 호출이 절대
   일어나지 않는다. 실제 Provider는 `LLM_PROVIDER` + 해당 API 키를 모두
   설정했을 때만 활성화된다.
-- **호출 이력 비저장**: LLM 요청/응답은 DB에 저장하지 않는다 (이력화 스펙 없음).
-- **소비 계층 미연결**: 기존 파이프라인(Analysis/Vision/Content Generator)을
-  LLM Gateway로 갈아타는 작업은 다음 TASK 스펙 수신 시 진행.
+- **호출 관측 (TASK-0601)**: 모든 호출은 호출 1건당 **Execution 1건**
+  (feature/provider/model/token/cost/latency/status)으로 기록된다 —
+  [execution.md](execution.md). 요청/응답 본문은 저장하지 않는다.
+- **소비 계층 연결 완료**: Content Generation(0502)·Analysis(0504)·
+  Vision(0505)·구 Generator 경로(0506)가 전부 LLM Gateway를 사용한다.

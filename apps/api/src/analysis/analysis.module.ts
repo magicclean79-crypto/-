@@ -38,7 +38,10 @@ import { PrismaAnalysisRunStore } from "./prisma-analysis-run.store";
           promptEngine,
           llmProviderName: llm.info().provider,
           complete: async ({ messages, responseFormat }) => {
-            const completion = await llm.complete({ messages, responseFormat });
+            const completion = await llm.complete(
+              { messages, responseFormat },
+              { feature: "product-analysis" },
+            );
             return {
               provider: completion.provider,
               model: completion.model,
