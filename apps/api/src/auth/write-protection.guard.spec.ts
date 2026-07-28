@@ -16,6 +16,7 @@ function user(role: UserRole): UserDto {
     name: role,
     role,
     disabled: false,
+    lockedUntil: null,
     createdAt: "",
   };
 }

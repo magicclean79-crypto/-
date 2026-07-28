@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import type { UserDto } from "@acos/shared";
 import {
-  authHeaders,
+  authFetchInit,
   AUTH_USER_KEY,
   getAuthToken,
 } from "../../lib/auth-client";
@@ -48,14 +48,17 @@ export default function AccountPage() {
     }
     setBusy(true);
     try {
-      const response = await fetch(`${API_URL}/auth/password`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({
-          currentPassword: form.current,
-          newPassword: form.next,
+      const response = await fetch(
+        `${API_URL}/auth/password`,
+        authFetchInit({
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            currentPassword: form.current,
+            newPassword: form.next,
+          }),
         }),
-      });
+      );
       if (response.ok) {
         setSuccess(true);
         setForm({ current: "", next: "", confirm: "" });

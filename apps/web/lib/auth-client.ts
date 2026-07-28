@@ -14,3 +14,18 @@ export function authHeaders(): Record<string, string> {
   const token = getAuthToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
+
+/**
+ * 인증 fetch 옵션 (TASK-0804) — Bearer 헤더(개발 localStorage)와
+ * httpOnly 쿠키 전송(credentials, 운영 쿠키 전용 모드)을 함께 지원한다.
+ */
+export function authFetchInit(init: RequestInit = {}): RequestInit {
+  return {
+    ...init,
+    credentials: "include",
+    headers: {
+      ...(init.headers as Record<string, string> | undefined),
+      ...authHeaders(),
+    },
+  };
+}

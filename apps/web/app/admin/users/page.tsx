@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { USER_ROLES } from "@acos/shared";
 import type { UserAuditLogDto, UserDto, UserRole } from "@acos/shared";
-import { authHeaders, getAuthToken } from "../../../lib/auth-client";
+import { authFetchInit, getAuthToken } from "../../../lib/auth-client";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
@@ -35,8 +35,8 @@ export default function AdminUsersPage() {
     }
     try {
       const [usersRes, auditRes] = await Promise.all([
-        fetch(`${API_URL}/auth/users`, { headers: authHeaders() }),
-        fetch(`${API_URL}/auth/audit`, { headers: authHeaders() }),
+        fetch(`${API_URL}/auth/users`, authFetchInit()),
+        fetch(`${API_URL}/auth/audit`, authFetchInit()),
       ]);
       if (!usersRes.ok) {
         const data = (await usersRes.json()) as { message?: string };
@@ -63,11 +63,14 @@ export default function AdminUsersPage() {
     setBusy(true);
     setActionError(null);
     try {
-      const response = await fetch(`${API_URL}${path}`, {
-        method,
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify(body),
-      });
+      const response = await fetch(
+        `${API_URL}${path}`,
+        authFetchInit({
+          method,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+      );
       if (!response.ok) {
         const data = (await response.json()) as { message?: string };
         setActionError(data.message ?? `실패 (HTTP ${response.status})`);
@@ -167,6 +170,12 @@ export default function AdminUsersPage() {
                             활성
                           </span>
                         )}
+                        {user.lockedUntil &&
+                        new Date(user.lockedUntil) > new Date() ? (
+                          <span className="ml-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+                            잠김
+                          </span>
+                        ) : null}
                       </td>
                       <td className="py-1.5 pr-3">
                         <div className="flex flex-wrap items-center gap-1.5">

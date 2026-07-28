@@ -25,7 +25,11 @@ import type {
 import { AuthGuard, RequireRole } from "./auth.guard";
 import type { AuthenticatedRequest } from "./auth.guard";
 import { AuthService } from "./auth.service";
-import { extractRequestToken, sessionCookieOptions } from "./session-config";
+import {
+  extractRequestToken,
+  isCookieOnly,
+  sessionCookieOptions,
+} from "./session-config";
 import { Public } from "./write-protection.guard";
 
 @Controller("auth")
@@ -33,9 +37,10 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   /**
-   * 로그인 — 세션 토큰 발급 (기본 7일).
-   * 응답 본문 토큰(개발 localStorage)과 함께 httpOnly 쿠키도 발급한다
-   * (TASK-0803 — 운영은 쿠키 사용: AUTH_COOKIE_SECURE/AUTH_COOKIE_SAMESITE)
+   * 로그인 — 세션 토큰 발급 (TTL은 AUTH_SESSION_TTL_HOURS, 기본 7일).
+   * httpOnly 쿠키를 발급하고, 개발은 본문 토큰(localStorage) 병행,
+   * **쿠키 전용 모드(운영 기본, TASK-0804)에서는 본문 토큰을 제외**한다
+   * (CTO 결정 0803-①).
    */
   @Post("login")
   @HttpCode(200)
@@ -49,9 +54,9 @@ export class AuthController {
     );
     response.setHeader(
       "Set-Cookie",
-      buildSessionCookie(result.token, sessionCookieOptions()),
+      buildSessionCookie(result.token as string, sessionCookieOptions()),
     );
-    return result;
+    return isCookieOnly() ? { ...result, token: null } : result;
   }
 
   /** 로그아웃 — 현재 토큰의 세션 폐기 + 쿠키 만료 (모든 역할 가능) */

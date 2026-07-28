@@ -1,6 +1,8 @@
 import {
   BadRequestException,
   ConflictException,
+  HttpException,
+  HttpStatus,
   Injectable,
   Logger,
   UnauthorizedException,
@@ -9,8 +11,8 @@ import type { OnModuleInit } from "@nestjs/common";
 import {
   generateSessionToken,
   hashPassword,
-  PASSWORD_MIN_LENGTH,
-  SESSION_TTL_MS,
+  SlidingWindowRateLimiter,
+  validatePasswordComplexity,
   verifyPassword,
 } from "@acos/core";
 import { USER_ROLES } from "@acos/shared";
@@ -26,6 +28,11 @@ import type {
 } from "@acos/shared";
 import type { User } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
+import {
+  lockoutConfig,
+  loginRateLimitConfig,
+  sessionTtlMs,
+} from "./session-config";
 
 function toDto(user: User): UserDto {
   return {
@@ -34,6 +41,7 @@ function toDto(user: User): UserDto {
     name: user.name,
     role: user.role,
     disabled: user.disabled,
+    lockedUntil: user.lockedUntil ? user.lockedUntil.toISOString() : null,
     createdAt: user.createdAt.toISOString(),
   };
 }
@@ -85,26 +93,79 @@ export class AuthService implements OnModuleInit {
     );
   }
 
+  // 로그인 Rate Limit (TASK-0804) — 이메일 키 슬라이딩 윈도우 (인메모리 1차 방어)
+  private limiter: SlidingWindowRateLimiter | null = null;
+  private limiterConfig: { limit: number; windowMs: number } | null = null;
+
+  private rateLimiter(): SlidingWindowRateLimiter {
+    const config = loginRateLimitConfig();
+    if (
+      !this.limiter ||
+      this.limiterConfig?.limit !== config.limit ||
+      this.limiterConfig?.windowMs !== config.windowMs
+    ) {
+      this.limiter = new SlidingWindowRateLimiter(config.limit, config.windowMs);
+      this.limiterConfig = config;
+    }
+    return this.limiter;
+  }
+
+  /**
+   * 로그인 (TASK-0804 보호 순서):
+   * Rate Limit(429) → 잠금 검사 → 비밀번호 검증(실패 시 카운트·임계 도달 시
+   * 잠금·감사) → 비활성 검사 → 성공 시 카운터 초기화 + 세션 발급(TTL env)
+   */
   async login(request: LoginRequest): Promise<LoginResponseDto> {
     const email = request.email?.trim().toLowerCase();
     if (!email || !request.password) {
       throw new BadRequestException("email과 password는 필수입니다.");
     }
+    if (!this.rateLimiter().attempt(email).allowed) {
+      throw new HttpException(
+        "로그인 시도가 너무 많습니다. 잠시 후 다시 시도해 주세요.",
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
     const user = await this.prisma.user.findUnique({ where: { email } });
+    const now = new Date();
+    if (user?.lockedUntil && user.lockedUntil > now) {
+      await this.recordAudit(
+        "LOGIN_FAILED",
+        email,
+        email,
+        "잠금 상태에서 로그인 시도",
+      );
+      throw new UnauthorizedException(
+        "로그인 실패가 반복되어 계정이 잠겼습니다. 잠시 후 다시 시도해 주세요.",
+      );
+    }
     if (!user || !(await verifyPassword(request.password, user.passwordHash))) {
+      if (user) {
+        await this.handleFailedLogin(user, now);
+      }
       throw new UnauthorizedException(
         "이메일 또는 비밀번호가 올바르지 않습니다.",
       );
     }
     if (user.disabled) {
+      await this.recordAudit("LOGIN_FAILED", email, email, "비활성화된 계정");
       throw new UnauthorizedException("비활성화된 계정입니다.");
     }
+
+    if (user.failedLoginCount > 0 || user.lockedUntil) {
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: { failedLoginCount: 0, lockedUntil: null },
+      });
+    }
+    this.rateLimiter().reset(email);
 
     const session = await this.prisma.authSession.create({
       data: {
         token: generateSessionToken(),
         userId: user.id,
-        expiresAt: new Date(Date.now() + SESSION_TTL_MS),
+        expiresAt: new Date(Date.now() + sessionTtlMs()),
       },
     });
     return {
@@ -112,6 +173,34 @@ export class AuthService implements OnModuleInit {
       expiresAt: session.expiresAt.toISOString(),
       user: toDto(user),
     };
+  }
+
+  /** 실패 카운트 증가 + 임계 도달 시 잠금 (TASK-0804 Account Lockout) */
+  private async handleFailedLogin(user: User, now: Date): Promise<void> {
+    const { threshold, lockMs } = lockoutConfig();
+    const failedCount = user.failedLoginCount + 1;
+    const lock = failedCount >= threshold;
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        failedLoginCount: failedCount,
+        ...(lock ? { lockedUntil: new Date(now.getTime() + lockMs) } : {}),
+      },
+    });
+    await this.recordAudit(
+      "LOGIN_FAILED",
+      user.email,
+      user.email,
+      `잘못된 비밀번호 (${failedCount}/${threshold})`,
+    );
+    if (lock) {
+      await this.recordAudit(
+        "ACCOUNT_LOCKED",
+        user.email,
+        user.email,
+        `연속 ${failedCount}회 실패 — ${Math.round(lockMs / 60_000)}분 잠금`,
+      );
+    }
   }
 
   async logout(token: string): Promise<void> {
@@ -267,7 +356,12 @@ export class AuthService implements OnModuleInit {
 
     await this.prisma.user.update({
       where: { id },
-      data: { passwordHash: await hashPassword(newPassword) },
+      // 재설정은 잠금/실패 카운트도 해제한다 (TASK-0804 — ADMIN 복구 경로)
+      data: {
+        passwordHash: await hashPassword(newPassword),
+        failedLoginCount: 0,
+        lockedUntil: null,
+      },
     });
     await this.prisma.authSession.deleteMany({ where: { userId: id } });
     await this.recordAudit("PASSWORD_RESET", actor, user.email);
@@ -277,10 +371,10 @@ export class AuthService implements OnModuleInit {
     newPassword: string | undefined,
     currentPassword?: string,
   ): void {
-    if ((newPassword ?? "").length < PASSWORD_MIN_LENGTH) {
-      throw new BadRequestException(
-        `새 비밀번호는 최소 ${PASSWORD_MIN_LENGTH}자여야 합니다.`,
-      );
+    // 복잡도 정책 (TASK-0804): 최소 8자 + 영문 + 숫자 — core 단일 정의
+    const violation = validatePasswordComplexity(newPassword);
+    if (violation) {
+      throw new BadRequestException(violation);
     }
     if (currentPassword !== undefined && newPassword === currentPassword) {
       throw new BadRequestException(
@@ -316,10 +410,10 @@ export class AuthService implements OnModuleInit {
         `role은 다음 중 하나여야 합니다: ${USER_ROLES.join(", ")}`,
       );
     }
-    if ((request.password ?? "").length < PASSWORD_MIN_LENGTH) {
-      throw new BadRequestException(
-        `password는 최소 ${PASSWORD_MIN_LENGTH}자여야 합니다.`,
-      );
+    // 복잡도 정책 (TASK-0804) — 생성·변경·재설정 공통
+    const violation = validatePasswordComplexity(request.password);
+    if (violation) {
+      throw new BadRequestException(violation);
     }
     const exists = await this.prisma.user.findUnique({ where: { email } });
     if (exists) {

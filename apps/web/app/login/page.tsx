@@ -40,6 +40,7 @@ export default function LoginPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
+        credentials: "include", // httpOnly 세션 쿠키 수신 (TASK-0803/0804)
       });
       const data = (await response.json()) as LoginResponseDto & {
         message?: string;
@@ -49,7 +50,12 @@ export default function LoginPage() {
         setBusy(false);
         return;
       }
-      localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+      // 쿠키 전용 모드(운영, TASK-0804)에서는 본문 토큰이 없다 — 쿠키만 사용
+      if (data.token) {
+        localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+      } else {
+        localStorage.removeItem(AUTH_TOKEN_KEY);
+      }
       localStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
       router.push("/");
     } catch {
@@ -60,12 +66,12 @@ export default function LoginPage() {
 
   async function logout() {
     const token = localStorage.getItem(AUTH_TOKEN_KEY);
-    if (token) {
-      await fetch(`${API_URL}/auth/logout`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-      }).catch(() => undefined);
-    }
+    // 쿠키 전용 모드는 토큰이 없어도 쿠키로 로그아웃 (TASK-0804)
+    await fetch(`${API_URL}/auth/logout`, {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      credentials: "include",
+    }).catch(() => undefined);
     localStorage.removeItem(AUTH_TOKEN_KEY);
     localStorage.removeItem(AUTH_USER_KEY);
     setCurrentUser(null);

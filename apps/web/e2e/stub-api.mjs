@@ -49,6 +49,8 @@ const EMPTY_TOTALS = {
 let stubUsers;
 let stubAudit;
 let stubPassword; // 관리자 비밀번호 (TASK-0803 변경 흐름 검증용)
+let stubFailedLogins; // 연속 실패 횟수 (TASK-0804 잠금 검증용, 임계 5회)
+let stubLocked;
 function resetUsers() {
   stubUsers = [
     {
@@ -57,13 +59,24 @@ function resetUsers() {
       name: "관리자",
       role: "ADMIN",
       disabled: false,
+      lockedUntil: null,
       createdAt: "2026-07-28T00:00:00.000Z",
     },
   ];
   stubAudit = [];
   stubPassword = "admin1234";
+  stubFailedLogins = 0;
+  stubLocked = false;
 }
 resetUsers();
+
+// 복잡도 정책 스텁 (TASK-0804) — 실제 API와 동일 메시지
+function complexityError(password) {
+  if ((password ?? "").length < 8) return "비밀번호는 최소 8자여야 합니다.";
+  if (!/[a-zA-Z]/.test(password)) return "비밀번호에 영문자를 1자 이상 포함해 주세요.";
+  if (!/[0-9]/.test(password)) return "비밀번호에 숫자를 1자 이상 포함해 주세요.";
+  return null;
+}
 
 // 발행 파이프라인 스텁 상태 (TASK-0704) — /__mode 전환 시 초기화
 let pubContent;
@@ -89,7 +102,9 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
 
   // 브라우저(3100)에서의 클라이언트 호출 허용 (실제 API도 CORS 허용)
-  res.setHeader("access-control-allow-origin", "*");
+  // credentials 포함 요청(TASK-0804)은 와일드카드 불가 — origin 반사
+  res.setHeader("access-control-allow-origin", req.headers.origin ?? "*");
+  res.setHeader("access-control-allow-credentials", "true");
   res.setHeader("access-control-allow-methods", "GET,POST,PATCH,OPTIONS");
   res.setHeader("access-control-allow-headers", "content-type, authorization");
   if (req.method === "OPTIONS") {
@@ -139,6 +154,7 @@ const server = http.createServer((req, res) => {
           name: data.name,
           role: data.role,
           disabled: false,
+          lockedUntil: null,
           createdAt: new Date().toISOString(),
         };
         stubUsers.push(user);
@@ -178,11 +194,10 @@ const server = http.createServer((req, res) => {
           );
           return;
         }
-        if ((newPassword ?? "").length < 8) {
+        const violation = complexityError(newPassword);
+        if (violation) {
           res.statusCode = 400;
-          res.end(
-            JSON.stringify({ message: "새 비밀번호는 최소 8자여야 합니다." }),
-          );
+          res.end(JSON.stringify({ message: violation }));
           return;
         }
         stubAudit.push({
@@ -261,9 +276,10 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ message: "현재 비밀번호가 올바르지 않습니다." }));
         return;
       }
-      if ((newPassword ?? "").length < 8) {
+      const violation = complexityError(newPassword);
+      if (violation) {
         res.statusCode = 400;
-        res.end(JSON.stringify({ message: "새 비밀번호는 최소 8자여야 합니다." }));
+        res.end(JSON.stringify({ message: violation }));
         return;
       }
       if (newPassword === currentPassword) {
@@ -285,14 +301,25 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // ── 인증 (TASK-0801) ──
+  // ── 인증 (TASK-0801 · TASK-0804 잠금) ──
   if (req.method === "POST" && url.pathname === "/auth/login") {
     let body = "";
     req.on("data", (chunk) => (body += chunk));
     req.on("end", () => {
       const { email, password } = JSON.parse(body);
       res.setHeader("content-type", "application/json");
+      if (stubLocked) {
+        res.statusCode = 401;
+        res.end(
+          JSON.stringify({
+            message:
+              "로그인 실패가 반복되어 계정이 잠겼습니다. 잠시 후 다시 시도해 주세요.",
+          }),
+        );
+        return;
+      }
       if (email === "admin@acos.local" && password === stubPassword) {
+        stubFailedLogins = 0;
         res.end(
           JSON.stringify({
             token: "stub-token",
@@ -302,11 +329,34 @@ const server = http.createServer((req, res) => {
               email: "admin@acos.local",
               name: "관리자",
               role: "ADMIN",
+              lockedUntil: null,
               createdAt: "2026-07-28T00:00:00.000Z",
             },
           }),
         );
       } else {
+        if (email === "admin@acos.local") {
+          stubFailedLogins += 1;
+          stubAudit.push({
+            id: `a-${stubAudit.length + 1}`,
+            actor: email,
+            action: "LOGIN_FAILED",
+            targetEmail: email,
+            detail: `잘못된 비밀번호 (${stubFailedLogins}/5)`,
+            createdAt: new Date().toISOString(),
+          });
+          if (stubFailedLogins >= 5) {
+            stubLocked = true;
+            stubAudit.push({
+              id: `a-${stubAudit.length + 1}`,
+              actor: email,
+              action: "ACCOUNT_LOCKED",
+              targetEmail: email,
+              detail: "연속 5회 실패 — 15분 잠금",
+              createdAt: new Date().toISOString(),
+            });
+          }
+        }
         res.statusCode = 401;
         res.end(
           JSON.stringify({ message: "이메일 또는 비밀번호가 올바르지 않습니다." }),

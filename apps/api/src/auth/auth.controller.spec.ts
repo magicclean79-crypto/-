@@ -36,6 +36,8 @@ function createPrismaMock() {
         const user = {
           id: `user-${++sequence}`,
           disabled: false,
+          failedLoginCount: 0,
+          lockedUntil: null,
           createdAt: now,
           updatedAt: now,
           ...data,
@@ -286,14 +288,18 @@ describe("Auth API (TASK-0801)", () => {
       .get("/auth/audit")
       .set("Authorization", `Bearer ${admin.token}`)
       .expect(200);
-    const actions = audit.body.audit.map(
+    // 로그인 실패 감사(TASK-0804)는 순서 단언에서 제외 — 관리 액션만 검사
+    const managementEntries = audit.body.audit.filter(
+      (item: { action: string }) => item.action !== "LOGIN_FAILED",
+    );
+    const actions = managementEntries.map(
       (item: { action: string; targetEmail: string }) =>
         `${item.action}:${item.targetEmail}`,
     );
     expect(actions[0]).toBe("USER_DISABLED:editor@acos.local");
     expect(actions[1]).toBe("ROLE_CHANGED:editor@acos.local");
     expect(actions).toContain("USER_CREATED:editor@acos.local");
-    expect(audit.body.audit[0].actor).toBe("admin@acos.local");
+    expect(managementEntries[0].actor).toBe("admin@acos.local");
   });
 
   it("비밀번호 변경 — 본인 확인·다른 세션 폐기·감사 기록 (TASK-0803)", async () => {
@@ -360,8 +366,11 @@ describe("Auth API (TASK-0801)", () => {
       .get("/auth/audit")
       .set("Authorization", `Bearer ${admin.token}`)
       .expect(200);
-    expect(audit.body.audit[0]).toMatchObject({
-      action: "PASSWORD_CHANGED",
+    expect(
+      audit.body.audit.find(
+        (item: { action: string }) => item.action === "PASSWORD_CHANGED",
+      ),
+    ).toMatchObject({
       actor: "pw@acos.local",
       targetEmail: "pw@acos.local",
     });
@@ -417,11 +426,143 @@ describe("Auth API (TASK-0801)", () => {
       .get("/auth/audit")
       .set("Authorization", `Bearer ${admin.token}`)
       .expect(200);
-    expect(audit.body.audit[0]).toMatchObject({
-      action: "PASSWORD_RESET",
+    expect(
+      audit.body.audit.find(
+        (item: { action: string }) => item.action === "PASSWORD_RESET",
+      ),
+    ).toMatchObject({
       actor: "admin@acos.local",
       targetEmail: "pw@acos.local",
     });
+  });
+
+  it("계정 잠금 — 연속 5회 실패 시 잠금·감사·재설정으로 해제 (TASK-0804)", async () => {
+    const admin = (await login("admin@acos.local", "admin1234")).body;
+    await request(app.getHttpServer())
+      .post("/auth/users")
+      .set("Authorization", `Bearer ${admin.token}`)
+      .send({
+        email: "lock@acos.local",
+        name: "잠금",
+        password: "lock-pass-11",
+        role: "EDITOR",
+      })
+      .expect(201);
+
+    // 연속 5회 실패 → 잠금
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      expect((await login("lock@acos.local", "wrong-pass")).status).toBe(401);
+    }
+    // 잠금 후에는 올바른 비밀번호도 거부 (잠금 메시지)
+    const locked = await login("lock@acos.local", "lock-pass-11");
+    expect(locked.status).toBe(401);
+    expect(locked.body.message).toContain("계정이 잠겼습니다");
+
+    // 감사: ACCOUNT_LOCKED + LOGIN_FAILED 기록
+    const audit = await request(app.getHttpServer())
+      .get("/auth/audit")
+      .set("Authorization", `Bearer ${admin.token}`)
+      .expect(200);
+    const actions = audit.body.audit.map(
+      (item: { action: string; targetEmail: string }) =>
+        `${item.action}:${item.targetEmail}`,
+    );
+    expect(actions).toContain("ACCOUNT_LOCKED:lock@acos.local");
+    expect(
+      actions.filter((a: string) => a === "LOGIN_FAILED:lock@acos.local")
+        .length,
+    ).toBeGreaterThanOrEqual(5);
+
+    // ADMIN 재설정이 잠금까지 해제한다
+    const list = await request(app.getHttpServer())
+      .get("/auth/users")
+      .set("Authorization", `Bearer ${admin.token}`)
+      .expect(200);
+    const target = list.body.users.find(
+      (item: { email: string }) => item.email === "lock@acos.local",
+    );
+    expect(target.lockedUntil).not.toBeNull();
+    await request(app.getHttpServer())
+      .post(`/auth/users/${target.id}/password-reset`)
+      .set("Authorization", `Bearer ${admin.token}`)
+      .send({ newPassword: "unlock-pass-11" })
+      .expect(200);
+    expect((await login("lock@acos.local", "unlock-pass-11")).status).toBe(
+      200,
+    );
+  });
+
+  it("로그인 Rate Limit — 윈도우 초과 시 429 (TASK-0804)", async () => {
+    process.env.AUTH_LOGIN_MAX_ATTEMPTS = "3";
+    process.env.AUTH_LOGIN_WINDOW_SEC = "60";
+    try {
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        expect((await login("rl@acos.local", "whatever-1")).status).toBe(401);
+      }
+      const limited = await login("rl@acos.local", "whatever-1");
+      expect(limited.status).toBe(429);
+      expect(limited.body.message).toContain("로그인 시도가 너무 많습니다");
+    } finally {
+      delete process.env.AUTH_LOGIN_MAX_ATTEMPTS;
+      delete process.env.AUTH_LOGIN_WINDOW_SEC;
+    }
+  });
+
+  it("비밀번호 복잡도 — 최소 8자 + 영문 + 숫자 (TASK-0804)", async () => {
+    const admin = (await login("admin@acos.local", "admin1234")).body;
+    const create = (password: string) =>
+      request(app.getHttpServer())
+        .post("/auth/users")
+        .set("Authorization", `Bearer ${admin.token}`)
+        .send({ email: "cx@acos.local", name: "복잡도", password, role: "VIEWER" });
+
+    expect((await create("abcdefgh")).body.message).toContain("숫자");
+    expect((await create("12345678")).body.message).toContain("영문자");
+    expect((await create("a1")).body.message).toContain("8자");
+
+    // 변경 경로에도 동일 정책
+    const change = await request(app.getHttpServer())
+      .patch("/auth/password")
+      .set("Authorization", `Bearer ${admin.token}`)
+      .send({ currentPassword: "admin1234", newPassword: "aaaaaaaa" })
+      .expect(400);
+    expect(change.body.message).toContain("숫자");
+  });
+
+  it("쿠키 전용 모드 — 본문 토큰 제외, 쿠키로만 인증 (TASK-0804, CTO 결정 0803-①)", async () => {
+    process.env.AUTH_COOKIE_ONLY = "1";
+    try {
+      const response = await login("admin@acos.local", "admin1234");
+      expect(response.status).toBe(200);
+      expect(response.body.token).toBeNull();
+      const setCookie = String(response.headers["set-cookie"]?.[0] ?? "");
+      const token = /acos_session=([0-9a-f]{64})/.exec(setCookie)?.[1];
+      expect(token).toBeDefined();
+
+      await request(app.getHttpServer())
+        .get("/auth/me")
+        .set("Cookie", `acos_session=${token}`)
+        .expect(200);
+    } finally {
+      delete process.env.AUTH_COOKIE_ONLY;
+    }
+  });
+
+  it("Session Timeout — AUTH_SESSION_TTL_HOURS로 세션 수명 지정 (TASK-0804)", async () => {
+    process.env.AUTH_SESSION_TTL_HOURS = "1";
+    try {
+      const response = await login("admin@acos.local", "admin1234");
+      const ttlMs =
+        new Date(response.body.expiresAt).getTime() - Date.now();
+      expect(ttlMs).toBeGreaterThan(50 * 60_000);
+      expect(ttlMs).toBeLessThanOrEqual(60 * 60_000);
+      // 쿠키 수명도 TTL을 따른다
+      expect(String(response.headers["set-cookie"]?.[0] ?? "")).toContain(
+        "Max-Age=3600",
+      );
+    } finally {
+      delete process.env.AUTH_SESSION_TTL_HOURS;
+    }
   });
 
   it("쿠키 세션 — httpOnly 발급·쿠키 인증·로그아웃 시 만료 (TASK-0803)", async () => {

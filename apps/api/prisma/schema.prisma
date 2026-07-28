@@ -184,15 +184,17 @@ enum UserRole {
 }
 
 model User {
-  id           String        @id @default(cuid())
-  email        String        @unique
-  name         String
-  passwordHash String
-  role         UserRole      @default(VIEWER)
-  disabled     Boolean       @default(false) // 비활성화 시 로그인/세션 무효 (TASK-0802)
-  sessions     AuthSession[]
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
+  id               String        @id @default(cuid())
+  email            String        @unique
+  name             String
+  passwordHash     String
+  role             UserRole      @default(VIEWER)
+  disabled         Boolean       @default(false) // 비활성화 시 로그인/세션 무효 (TASK-0802)
+  failedLoginCount Int           @default(0) // 연속 로그인 실패 횟수 (TASK-0804 잠금)
+  lockedUntil      DateTime? // 이 시각까지 로그인 잠금 (TASK-0804, null=잠금 없음)
+  sessions         AuthSession[]
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
 
   @@map("users")
 }

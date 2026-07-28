@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { authHeaders } from "../../../lib/auth-client";
+import { authFetchInit } from "../../../lib/auth-client";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
@@ -18,12 +18,15 @@ async function callApi(
   body?: unknown,
 ): Promise<{ ok: boolean; message: string }> {
   try {
-    const response = await fetch(`${API_URL}${path}`, {
-      method,
-      // TASK-0802: 모든 쓰기 API 인증 — 토큰 첨부
-      headers: { "Content-Type": "application/json", ...authHeaders() },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    // TASK-0802: 모든 쓰기 API 인증 — 토큰/쿠키 첨부
+    const response = await fetch(
+      `${API_URL}${path}`,
+      authFetchInit({
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      }),
+    );
     const data = (await response.json()) as { message?: string | string[] };
     if (!response.ok) {
       const message = Array.isArray(data.message)

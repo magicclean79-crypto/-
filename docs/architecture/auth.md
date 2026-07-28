@@ -1,7 +1,8 @@
-# 인증/권한 아키텍처 (TASK-0801 Foundation · 0802 전면 쓰기 보호 · 0803 비밀번호/운영 보안, Sprint 8)
+# 인증/권한 아키텍처 (TASK-0801 Foundation · 0802 전면 쓰기 보호 · 0803 비밀번호/운영 보안 · 0804 로그인 보호, Sprint 8)
 
 User Entity · DB 세션 · RBAC · Actor Audit · Login UI · 사용자 관리 UI ·
-비밀번호 관리 · 쿠키 세션으로 구성된 인증 체계다.
+비밀번호 관리 · 쿠키 세션 · 로그인 보호(Rate Limit/잠금)로 구성된 인증
+체계다.
 
 **적용 범위 (TASK-0802 — CTO 지시 "모든 Write API 인증")**:
 - **모든 쓰기(POST/PATCH/PUT/DELETE)**: 전역 `WriteProtectionGuard`(APP_GUARD)
@@ -70,6 +71,23 @@ POST /auth/login { email, password }
 - **Web UI**: `/account`(비밀번호 변경 폼·성공/오류 안내),
   `/admin/users` 행별 "비밀번호 재설정" 인라인 입력. Playwright 3종 포함
 
+## 로그인 보호 (TASK-0804)
+
+로그인은 다음 순서로 보호된다:
+**Rate Limit(429) → 잠금 검사 → 비밀번호 검증(실패 카운트) → 비활성 검사**
+
+| 항목 | 동작 | 환경변수 (기본) |
+| --- | --- | --- |
+| **Rate Limit** | 이메일 키 슬라이딩 윈도우 — 초과 시 429. 인메모리 1차 방어(재시작 시 초기화, core `SlidingWindowRateLimiter`) | `AUTH_LOGIN_MAX_ATTEMPTS`(30) / `AUTH_LOGIN_WINDOW_SEC`(60) |
+| **Account Lockout** | 연속 실패 임계 도달 시 DB 잠금(`users.lockedUntil`) — 잠금 중엔 올바른 비밀번호도 거부. 시간 경과로 자동 해제, **ADMIN 비밀번호 재설정 시 즉시 해제**. 성공 로그인은 카운터 초기화 | `AUTH_LOCKOUT_THRESHOLD`(5회) / `AUTH_LOCKOUT_MINUTES`(15분) |
+| **Password Complexity** | 최소 8자 + 영문 1자 + 숫자 1자 (core `validatePasswordComplexity`, Code-first) — 생성·변경·재설정 공통 | (코드 정의) |
+| **Failed Login Audit** | LOGIN_FAILED(사유·n/임계) · ACCOUNT_LOCKED — 실존 계정만 기록(스팸 방지), 감사 로그·/admin/users 잠김 배지 표시 | — |
+| **Cookie 전용 모드** | 로그인 응답에서 본문 토큰 제외 — httpOnly 쿠키만 사용 (CTO 결정 0803-①: 운영은 쿠키 전용). 미지정 시 운영/스테이징 자동 켜짐 | `AUTH_COOKIE_ONLY`(NODE_ENV 따름) |
+| **Session Timeout** | 세션·쿠키 수명 지정 (기본 7일) | `AUTH_SESSION_TTL_HOURS`(168) |
+
+웹은 모든 인증 호출에 `credentials: "include"`를 사용해 Bearer(개발
+localStorage)와 쿠키(운영) 두 모드를 모두 지원한다.
+
 ## /llm/health 보호 (TASK-0803 — CTO 결정 0802-③)
 
 GET이지만 **실 Provider 호출·Execution 기록이 발생**하므로:
@@ -94,8 +112,9 @@ GET이지만 **실 Provider 호출·Execution 기록이 발생**하므로:
 - **비활성화(disable)**: 로그인 401("비활성화된 계정") + 기존 세션 전부
   즉시 폐기 + 토큰 검증 거부. 활성화로 복구 가능
 - **감사 확장**: `user_audit_log` — USER_CREATED / ROLE_CHANGED /
-  USER_DISABLED / USER_ENABLED / PASSWORD_CHANGED / PASSWORD_RESET
-  1건당 1레코드(actor·대상·상세), `GET /auth/audit`(최신순 100건)
+  USER_DISABLED / USER_ENABLED / PASSWORD_CHANGED / PASSWORD_RESET /
+  LOGIN_FAILED / ACCOUNT_LOCKED 1건당 1레코드(actor·대상·상세),
+  `GET /auth/audit`(최신순 100건)
 - **Web UI**: `/admin/users` — 목록·생성 폼·역할 select·비활성화 토글·감사
   로그. 미로그인/권한 부족 시 안내. Playwright 3종 포함
 

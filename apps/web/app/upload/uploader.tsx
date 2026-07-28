@@ -10,7 +10,7 @@ import {
   type ProductDetailDto,
 } from "@acos/shared";
 import { Badge } from "@acos/ui";
-import { authHeaders, getAuthToken } from "../../lib/auth-client";
+import { authFetchInit, getAuthToken } from "../../lib/auth-client";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
@@ -68,7 +68,8 @@ function uploadWithProgress(
     xhr.onerror = () =>
       reject(new Error("API 서버에 연결할 수 없습니다. (localhost:4000)"));
     xhr.open("POST", `${API_URL}/uploads/images`);
-    // TASK-0802: 모든 쓰기 API 인증 — 토큰 첨부
+    // TASK-0802: 모든 쓰기 API 인증 — 토큰 첨부 (+쿠키 전용 모드는 쿠키 전송)
+    xhr.withCredentials = true;
     const token = getAuthToken();
     if (token) {
       xhr.setRequestHeader("Authorization", `Bearer ${token}`);
@@ -95,14 +96,17 @@ export function Uploader() {
     setCreating(true);
     setCreateError(null);
     try {
-      const response = await fetch(`${API_URL}/products`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({
-          name: productName.trim() || undefined,
-          imageIds: doneImageIds,
+      const response = await fetch(
+        `${API_URL}/products`,
+        authFetchInit({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: productName.trim() || undefined,
+            imageIds: doneImageIds,
+          }),
         }),
-      });
+      );
       const body = (await response.json()) as ProductDetailDto & {
         message?: string | string[];
       };

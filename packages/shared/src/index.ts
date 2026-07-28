@@ -62,6 +62,8 @@ export interface UserDto {
   role: UserRole;
   /** 비활성화 여부 (TASK-0802) — true면 로그인/세션 무효 */
   disabled: boolean;
+  /** 잠금 해제 시각 (TASK-0804) — 미래 시각이면 로그인 잠금 상태 */
+  lockedUntil: string | null;
   createdAt: string;
 }
 
@@ -78,6 +80,8 @@ export const USER_AUDIT_ACTIONS = [
   "USER_ENABLED",
   "PASSWORD_CHANGED",
   "PASSWORD_RESET",
+  "LOGIN_FAILED",
+  "ACCOUNT_LOCKED",
 ] as const;
 
 export type UserAuditAction = (typeof USER_AUDIT_ACTIONS)[number];
@@ -98,7 +102,8 @@ export interface LoginRequest {
 }
 
 export interface LoginResponseDto {
-  token: string;
+  /** 세션 토큰 — 쿠키 전용 모드(운영, TASK-0804)에서는 null (httpOnly 쿠키만 발급) */
+  token: string | null;
   expiresAt: string;
   user: UserDto;
 }
