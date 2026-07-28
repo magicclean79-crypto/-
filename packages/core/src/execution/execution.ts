@@ -44,16 +44,42 @@ export interface ExecutionStore {
 }
 
 /**
- * 모델별 가격표 (USD / 1M 토큰) — 코드 선언.
- * mock은 실제 API를 호출하지 않으므로 0. 실모델 가격은 공식 단가 스펙이
- * 확정되면 여기에 추가한다 (없는 모델은 cost=null로 기록됨 — CTO_REQUEST 참고).
+ * 모델별 가격표 (USD / 1M 토큰) — 코드 선언 중앙 정의 (CTO 결정, TASK-0601 승인 ④).
+ * mock은 실제 API를 호출하지 않으므로 0. 없는 모델은 cost=null로 기록된다.
+ *
+ * OpenAI 단가는 TASK-0603(Provider Integration)에서 공식 공개 단가 기준으로
+ * 등록 — 단가 변동 시 이 표 한 곳만 갱신하면 된다.
  */
 export const DEFAULT_LLM_PRICING: Record<
   string,
   { inputPerMillion: number; outputPerMillion: number }
 > = {
   "mock-llm-1": { inputPerMillion: 0, outputPerMillion: 0 },
+  // OpenAI (TASK-0603) — 공식 공개 단가 (USD / 1M tokens)
+  "gpt-4o": { inputPerMillion: 2.5, outputPerMillion: 10 },
+  "gpt-4o-mini": { inputPerMillion: 0.15, outputPerMillion: 0.6 },
 };
+
+/**
+ * 모델 이름으로 가격을 찾는다 — 정확 일치 우선, 없으면 최장 접두사 일치.
+ * (OpenAI 등은 응답 모델이 버전 스냅샷일 수 있다: "gpt-4o-2024-08-06" → "gpt-4o".
+ *  "gpt-4o-mini-…"처럼 겹치는 경우 더 긴 key가 우선한다.)
+ */
+function findPricing(
+  model: string,
+  pricing: typeof DEFAULT_LLM_PRICING,
+): { inputPerMillion: number; outputPerMillion: number } | null {
+  if (pricing[model]) {
+    return pricing[model];
+  }
+  let best: string | null = null;
+  for (const key of Object.keys(pricing)) {
+    if (model.startsWith(key) && (best === null || key.length > best.length)) {
+      best = key;
+    }
+  }
+  return best ? pricing[best] : null;
+}
 
 /** 토큰 사용량 → 예상 비용(USD). 가격표에 없는 모델이나 사용량 미상은 null */
 export function estimateLlmCost(
@@ -61,7 +87,7 @@ export function estimateLlmCost(
   usage: { inputTokens: number | null; outputTokens: number | null },
   pricing: typeof DEFAULT_LLM_PRICING = DEFAULT_LLM_PRICING,
 ): number | null {
-  const price = pricing[model];
+  const price = findPricing(model, pricing);
   if (!price) {
     return null;
   }

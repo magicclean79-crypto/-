@@ -44,21 +44,30 @@ Google Gemini)는 환경변수 하나로 교체되며, **기본은 mock** — AP
     첨부 이미지는 해석하지 않고 개수만 raw.imageCount에 기록 (TASK-0505)
 - **어댑터 (`apps/api/src/llm/providers/`)** — 공식 SDK 사용
   - Anthropic: system은 별도 파라미터, 응답은 content 블록에서 text 추출
-  - OpenAI: chat.completions, system 메시지 그대로 전달
+  - **OpenAI (TASK-0603 공식 연결)**: chat.completions —
+    `responseFormat "json"` → `response_format { type: "json_object" }` 매핑
+    (프롬프트 지침과 이중 강제), 멀티모달 image_url, gpt-4o 계열 단가가
+    가격표에 등록되어 Execution Cost 활성화. 테스트용 클라이언트 주입 지원
   - Gemini: systemInstruction/contents 분리, assistant → model role 매핑
   - **이미지 매핑 (TASK-0505)**: `images`는 마지막 user 메시지에 Provider별
     형식으로 첨부된다 — Anthropic `image` content block(base64) · OpenAI
     `image_url`(data URL) · Gemini `inlineData` part
-  - 실제 어댑터 3종은 `responseFormat`을 아직 매핑하지 않는다 — JSON 출력은
-    프롬프트 지침으로 강제되며, Provider별 구조화 출력 옵션(예: OpenAI
-    response_format) 매핑은 **실제 Provider 연결 시 적용한다 (CTO 결정,
-    TASK-0504 승인)**
+  - Anthropic/Gemini의 `responseFormat` 구조화 출력 옵션 매핑은 해당 Provider
+    공식 연결 시 적용한다 (CTO 결정, TASK-0504 승인 — OpenAI는 0603에서 완료)
+
+## Health Check (TASK-0603)
+
+`GET /llm/health` — 실제 최소 완성 호출("ping", maxTokens 16)로 키·네트워크·
+모델 접근을 확인한다. 성공 시 `{ status: "ok", latencyMs }`, 실패 시 예외
+대신 `{ status: "error", error }` 반환. 이 호출도 Execution(feature "dev")으로
+기록되므로 실패 이력이 대시보드에 남는다.
 
 ## API
 
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
 | `GET` | `/llm` | 선택된 Provider 확인 — `{ provider, defaultModel }` |
+| `GET` | `/llm/health` | **Provider 상태 점검 (TASK-0603)** — 최소 실호출 기반 |
 | `POST` | `/llm/complete` | `{ messages, model?, maxTokens? }` → `{ provider, model, text, usage }` (200) |
 
 오류: `400` 빈 메시지·잘못된 role·공백 content·잘못된 maxTokens.

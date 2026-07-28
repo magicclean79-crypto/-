@@ -238,6 +238,7 @@ SOP와 나란히 회사 지식을 축적합니다 — [docs/architecture/decisio
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
 | `GET` | `/llm` | 선택된 Provider 확인 |
+| `GET` | `/llm/health` | **Provider 상태 점검 (TASK-0603)** — 최소 실호출로 키/네트워크/모델 확인 |
 | `POST` | `/llm/complete` | `{ messages, model?, maxTokens? }` → 완성 텍스트 + usage (200) |
 
 - 키 설정: `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY`

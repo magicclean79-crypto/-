@@ -16,6 +16,7 @@ import type {
   LlmCompleteRequest,
   LlmCompletionDto,
   LlmGatewayInfoDto,
+  LlmHealthDto,
 } from "@acos/shared";
 import { EXECUTION_STORE } from "../execution/execution.constants";
 import { LLM_PROVIDER } from "./llm.constants";
@@ -96,5 +97,37 @@ export class LlmService {
       provider: this.gateway.providerName,
       defaultModel: this.gateway.defaultModel,
     };
+  }
+
+  /**
+   * Provider 상태 점검 (TASK-0603) — 실제 최소 완성 호출("ping", 소량 토큰)로
+   * 키·네트워크·모델 접근을 확인한다. 이 호출도 Execution으로 기록된다
+   * (feature "dev" — CTO 결정의 4종 유지). 실패해도 예외 대신 error 상태를 반환.
+   */
+  async health(): Promise<LlmHealthDto> {
+    const startedAt = Date.now();
+    try {
+      const completion = await this.complete({
+        messages: [{ role: "user", content: "ping" }],
+        maxTokens: 16,
+      });
+      return {
+        provider: completion.provider,
+        model: completion.model,
+        status: "ok",
+        latencyMs: Date.now() - startedAt,
+        error: null,
+        checkedAt: new Date().toISOString(),
+      };
+    } catch (error) {
+      return {
+        provider: this.gateway.providerName,
+        model: this.gateway.defaultModel,
+        status: "error",
+        latencyMs: Date.now() - startedAt,
+        error: error instanceof Error ? error.message : String(error),
+        checkedAt: new Date().toISOString(),
+      };
+    }
   }
 }

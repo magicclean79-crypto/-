@@ -48,6 +48,31 @@ describe("estimateLlmCost", () => {
     );
     expect(cost).toBe(7); // 2 + 5
   });
+
+  it("gpt-4o 공식 단가가 등록되어 있다 (TASK-0603)", () => {
+    expect(
+      estimateLlmCost("gpt-4o", {
+        inputTokens: 1_000_000,
+        outputTokens: 1_000_000,
+      }),
+    ).toBe(12.5); // 2.5 + 10
+  });
+
+  it("버전 스냅샷 모델은 최장 접두사로 매칭한다 (gpt-4o-2024-… / gpt-4o-mini-…)", () => {
+    expect(
+      estimateLlmCost("gpt-4o-2024-08-06", {
+        inputTokens: 1_000_000,
+        outputTokens: 0,
+      }),
+    ).toBe(2.5);
+    // gpt-4o-mini 스냅샷은 gpt-4o가 아니라 더 긴 gpt-4o-mini 단가를 쓴다
+    expect(
+      estimateLlmCost("gpt-4o-mini-2024-07-18", {
+        inputTokens: 1_000_000,
+        outputTokens: 0,
+      }),
+    ).toBe(0.15);
+  });
 });
 
 describe("ExecutionTracker", () => {

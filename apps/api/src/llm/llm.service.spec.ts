@@ -161,6 +161,55 @@ describe("LlmService — Execution 기록 (TASK-0601)", () => {
   });
 });
 
+describe("LlmService — Health Check (TASK-0603)", () => {
+  it("정상 Provider면 ok + Execution(dev) 기록", async () => {
+    const store = new InMemoryExecutionStore();
+    const service = new LlmService(new MockLlmProvider(), store);
+
+    const health = await service.health();
+
+    expect(health).toMatchObject({
+      provider: "mock",
+      model: "mock-llm-1",
+      status: "ok",
+      error: null,
+    });
+    expect(health.latencyMs).toBeGreaterThanOrEqual(0);
+    expect(store.entries[0]).toMatchObject({ feature: "dev", status: "SUCCESS" });
+  });
+
+  it("Provider 실패 시 예외 대신 error 상태를 반환하고 FAILED Execution을 기록한다", async () => {
+    const failing: LlmProvider = {
+      name: "openai",
+      defaultModel: "gpt-4o",
+      complete: async () => {
+        throw new Error("401 Incorrect API key");
+      },
+    };
+    process.env.LLM_MAX_ATTEMPTS = "1";
+    try {
+      const store = new InMemoryExecutionStore();
+      const service = new LlmService(failing, store);
+
+      const health = await service.health();
+
+      expect(health).toMatchObject({
+        provider: "openai",
+        model: "gpt-4o",
+        status: "error",
+        error: "401 Incorrect API key",
+      });
+      expect(store.entries[0]).toMatchObject({
+        feature: "dev",
+        status: "FAILED",
+        provider: "openai",
+      });
+    } finally {
+      delete process.env.LLM_MAX_ATTEMPTS;
+    }
+  });
+});
+
 describe("createLlmProvider (Provider 선택 팩토리)", () => {
   const saved = { ...process.env };
   afterEach(() => {

@@ -540,6 +540,16 @@ export interface LlmGatewayInfoDto {
   defaultModel: string;
 }
 
+/** LLM Provider 상태 점검 결과 (TASK-0603) — 최소 완성 호출로 확인 */
+export interface LlmHealthDto {
+  provider: string;
+  model: string;
+  status: "ok" | "error";
+  latencyMs: number;
+  error: string | null;
+  checkedAt: string;
+}
+
 // ── Execution Domain (TASK-0601, Sprint 6) ─────────────
 
 export const EXECUTION_STATUSES = ["SUCCESS", "FAILED"] as const;

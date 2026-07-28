@@ -4,17 +4,39 @@ import type { LlmProvider, LlmRequest, LlmResult } from "@acos/core";
 const DEFAULT_MODEL = "gpt-4o";
 const DEFAULT_MAX_TOKENS = 1024;
 
+/** 테스트에서 대체 가능한 최소 클라이언트 표면 (chat.completions.create) */
+export interface OpenAiChatClient {
+  chat: {
+    completions: {
+      create: (
+        params: OpenAI.Chat.ChatCompletionCreateParamsNonStreaming,
+      ) => Promise<OpenAI.Chat.ChatCompletion>;
+    };
+  };
+}
+
 /**
- * OpenAI 어댑터 — 공식 openai SDK 사용.
+ * OpenAI 어댑터 — 공식 openai SDK 사용. (TASK-0501 · 공식 연결 TASK-0603)
  * OPENAI_API_KEY가 설정된 경우에만 LLM_PROVIDER=openai로 선택된다.
+ *
+ * TASK-0603에서 활성화된 것:
+ * - responseFormat "json" → response_format { type: "json_object" } 매핑
+ *   (프롬프트의 JSON 지침과 이중 강제)
+ * - Multimodal: images → image_url(data URL) content part (TASK-0505 유지)
+ * - Execution Cost: gpt-4o 계열 단가가 가격표에 등록됨 (@acos/core)
  */
 export class OpenAiLlmProvider implements LlmProvider {
   readonly name = "openai";
   readonly defaultModel: string;
-  private readonly client: OpenAI;
+  private readonly client: OpenAiChatClient;
 
-  constructor(options: { apiKey: string; model?: string }) {
-    this.client = new OpenAI({ apiKey: options.apiKey });
+  constructor(options: {
+    apiKey: string;
+    model?: string;
+    /** 테스트 전용 — 미지정 시 공식 SDK 클라이언트 생성 */
+    client?: OpenAiChatClient;
+  }) {
+    this.client = options.client ?? new OpenAI({ apiKey: options.apiKey });
     this.defaultModel = options.model ?? DEFAULT_MODEL;
   }
 
@@ -47,6 +69,10 @@ export class OpenAiLlmProvider implements LlmProvider {
       model,
       max_completion_tokens: request.maxTokens ?? DEFAULT_MAX_TOKENS,
       messages,
+      // 구조화 출력 — CTO 결정(TASK-0504 승인 ②): 실제 Provider 연결 시 매핑
+      ...(request.responseFormat === "json"
+        ? { response_format: { type: "json_object" as const } }
+        : {}),
     });
 
     return {
