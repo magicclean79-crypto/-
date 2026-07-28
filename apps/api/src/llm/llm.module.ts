@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { AuthModule } from "../auth/auth.module";
 import { ExecutionModule } from "../execution/execution.module";
+import { ExperimentLifecycleService } from "./experiment-lifecycle.service";
 import { LlmBudgetService } from "./llm-budget.service";
 import { LLM_PROVIDER, LLM_PROVIDER_MAP } from "./llm.constants";
 import { LlmController } from "./llm.controller";
@@ -19,6 +20,7 @@ import { createLlmProvider, createLlmProviderMap } from "./provider.factory";
   providers: [
     LlmService,
     LlmBudgetService,
+    ExperimentLifecycleService,
     {
       provide: LLM_PROVIDER,
       useFactory: createLlmProvider,
@@ -29,6 +31,6 @@ import { createLlmProvider, createLlmProviderMap } from "./provider.factory";
       useFactory: createLlmProviderMap,
     },
   ],
-  exports: [LlmService],
+  exports: [LlmService, ExperimentLifecycleService],
 })
 export class LlmModule {}

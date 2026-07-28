@@ -15,6 +15,8 @@ import {
 export type LlmAnalysisClient = (request: {
   messages: LlmMessageDto[];
   responseFormat: LlmResponseFormat;
+  /** 배정 주체 프로젝트 (TASK-1101 Sticky Assignment) */
+  projectId?: string;
 }) => Promise<{ provider: string; model: string; text: string }>;
 
 /** Company Brain 컨텍스트 소스 (Port) — 상품 기준으로 지식/결정/설정을 읽는다 */
@@ -66,6 +68,7 @@ export class LlmAnalysisProvider implements AnalysisProvider {
     const completion = await this.options.complete({
       messages,
       responseFormat: "json",
+      projectId: input.product.projectId,
     });
     const analysis = parseProductAnalysisResponse(completion.text);
 

@@ -371,3 +371,69 @@ model Execution {
   @@index([feature, createdAt])
   @@map("executions")
 }
+
+// ── Experiment Lifecycle & Sticky Assignment (TASK-1101, Sprint 11) ──
+
+enum ExperimentStatus {
+  RUNNING // 배정 진행 — 실험 정의(환경변수)가 있으면 기본 상태
+  STOPPED // 중단 — 배정하지 않고 기존 라우팅으로 처리
+  PROMOTED // 승자 확정 — 전 트래픽을 승자 변형으로 보낸다
+}
+
+// feature별 실험의 운영 상태. 정의(변형·가중치)는 환경변수가 원천이고
+// (CTO 결정 1003-②로 표기법 확정), 이 표는 **운영 중 바뀌는 상태**만 갖는다.
+// 행이 없으면 RUNNING으로 본다 (TASK-1003 동작 보존).
+model ExperimentState {
+  id              String           @id @default(cuid())
+  feature         String           @unique
+  status          ExperimentStatus @default(RUNNING)
+  // 승자 변형 키 (`provider` 또는 `provider:model`) — PROMOTED일 때만 유효
+  promotedVariant String?
+  actor           String? // 마지막 조작자 (이메일)
+  note            String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  events      ExperimentEvent[]
+  assignments ExperimentAssignment[]
+
+  @@map("experiment_states")
+}
+
+// 상태 전이 이력 — Rollback은 이 이력의 직전 상태로 되돌린다 (감사 겸용)
+model ExperimentEvent {
+  id              String           @id @default(cuid())
+  stateId         String
+  state           ExperimentState  @relation(fields: [stateId], references: [id], onDelete: Cascade)
+  action          String // START | STOP | PROMOTE | ROLLBACK
+  fromStatus      ExperimentStatus
+  toStatus        ExperimentStatus
+  fromVariant     String?
+  toVariant       String?
+  actor           String?
+  note            String?
+  createdAt       DateTime         @default(now())
+
+  @@index([stateId, createdAt])
+  @@map("experiment_events")
+}
+
+// Project 기반 Sticky Assignment — 같은 프로젝트는 항상 같은 변형을 받는다.
+// 배정은 결정적 해시로 정해지므로 이 표가 없어도 결과는 같고, 표는
+// **관측·감사(Assignment Dashboard)** 를 위해 남긴다.
+model ExperimentAssignment {
+  id         String          @id @default(cuid())
+  stateId    String
+  state      ExperimentState @relation(fields: [stateId], references: [id], onDelete: Cascade)
+  feature    String
+  projectId  String
+  variantKey String
+  // 배정이 만들어진 시점의 실험 정의 서명 — 정의가 바뀌면 재배정한다
+  signature  String
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+
+  @@unique([feature, projectId])
+  @@index([feature, variantKey])
+  @@map("experiment_assignments")
+}

@@ -4,4 +4,5 @@ export * from "./failover";
 export * from "./provider-registry";
 export * from "./routing";
 export * from "./experiment";
+export * from "./experiment-lifecycle";
 export * from "./providers/mock.provider";

@@ -111,7 +111,7 @@ describe("Routing Experiment (TASK-1003)", () => {
     expect(openai.calls.length + anthropic.calls.length).toBe(40);
     expect(openai.calls.length).toBeGreaterThan(anthropic.calls.length);
 
-    const [experiment] = service.experiments().experiments;
+    const [experiment] = (await service.experiments()).experiments;
     expect(experiment).toMatchObject({
       feature: "product-analysis",
       env: "LLM_EXPERIMENT_ANALYSIS",
@@ -155,7 +155,7 @@ describe("Routing Experiment (TASK-1003)", () => {
       "openai:gpt-4o-mini",
     ]);
 
-    const [experiment] = service.experiments().experiments;
+    const [experiment] = (await service.experiments()).experiments;
     expect(experiment).toMatchObject({ name: "ab-4o-vs-sonnet", kind: "ab" });
     for (const variant of experiment.variants) {
       expect(variant.actualShare).toBeGreaterThan(0);
@@ -176,7 +176,7 @@ describe("Routing Experiment (TASK-1003)", () => {
 
     // 99:1이므로 대다수가 baseline으로 간다
     expect(openai.calls.length).toBeGreaterThanOrEqual(40);
-    const [experiment] = service.experiments().experiments;
+    const [experiment] = (await service.experiments()).experiments;
     expect(experiment.kind).toBe("canary");
     expect(experiment.variants[1]).toMatchObject({
       key: "anthropic",
@@ -199,7 +199,7 @@ describe("Routing Experiment (TASK-1003)", () => {
     expect(openai.calls).toHaveLength(10); // 전부 openai로
     expect(anthropic.calls).toHaveLength(0);
 
-    const [experiment] = service.experiments().experiments;
+    const [experiment] = (await service.experiments()).experiments;
     expect(experiment.active).toBe(true);
     expect(experiment.variants).toEqual([
       expect.objectContaining({ key: "openai", effectiveShare: 1 }),
@@ -224,7 +224,7 @@ describe("Routing Experiment (TASK-1003)", () => {
     expect(result.provider).toBe("anthropic");
     expect(anthropic.calls).toHaveLength(1);
     expect(openai.calls).toHaveLength(0);
-    expect(service.experiments().experiments).toEqual([]);
+    expect((await service.experiments()).experiments).toEqual([]);
   });
 
   it("전 변형을 쓸 수 없으면 실험을 적용하지 않고 라우팅으로 처리한다", async () => {
@@ -239,7 +239,7 @@ describe("Routing Experiment (TASK-1003)", () => {
 
     expect(result.provider).toBe("anthropic");
     expect(anthropic.calls).toHaveLength(1);
-    const [experiment] = service.experiments().experiments;
+    const [experiment] = (await service.experiments()).experiments;
     expect(experiment.active).toBe(false);
     expect(experiment.reason).toContain("기존 라우팅");
   });
@@ -285,6 +285,6 @@ describe("Routing Experiment (TASK-1003)", () => {
 
     expect(result.provider).toBe("anthropic");
     expect(openai.calls).toHaveLength(0);
-    expect(service.experiments().experiments[0].assignments).toBe(0);
+    expect((await service.experiments()).experiments[0].assignments).toBe(0);
   });
 });

@@ -64,6 +64,82 @@ test.describe("Experiment Dashboard (TASK-1003)", () => {
     await expect(page.getByTestId("experiment-card")).toHaveCount(0);
   });
 
+  test("Sticky 배정 목록이 프로젝트·변형과 함께 렌더링된다 (TASK-1101)", async ({
+    page,
+  }) => {
+    await setMode("data");
+    await page.goto("/experiments");
+
+    await expect(page.getByTestId("assignment-dashboard")).toBeVisible();
+    await expect(page.getByTestId("assignment-row")).toHaveCount(2);
+    const table = page.getByTestId("assignment-table");
+    await expect(table).toContainText("여름 신상");
+    await expect(table).toContainText("openai:gpt-4o");
+    await expect(table).toContainText("겨울 기획");
+    await expect(table).toContainText("anthropic:claude-sonnet-5");
+  });
+
+  test("Stop → 상태가 중단됨으로 바뀌고 이력이 남는다 (TASK-1101)", async ({
+    page,
+  }) => {
+    await setMode("data");
+    await page.goto("/experiments");
+    await page.evaluate(() =>
+      localStorage.setItem("acos_token", "stub-token"),
+    );
+    await page.reload();
+
+    const card = page.getByTestId("experiment-card").first();
+    await expect(card.getByTestId("experiment-status")).toContainText("진행 중");
+
+    await card.getByRole("button", { name: "중단" }).click();
+    await expect(page.getByTestId("experiments-notice")).toContainText("중단");
+    await expect(card.getByTestId("experiment-status")).toContainText("중단됨");
+    await expect(card.getByTestId("lifecycle-history")).toContainText("중단");
+  });
+
+  test("Winner Promotion → 승자 변형이 상태에 표시된다 (TASK-1101)", async ({
+    page,
+  }) => {
+    await setMode("data");
+    await page.goto("/experiments");
+    await page.evaluate(() =>
+      localStorage.setItem("acos_token", "stub-token"),
+    );
+    await page.reload();
+
+    const card = page.getByTestId("experiment-card").first();
+    // 승격 버튼은 사용 가능한 변형마다 하나씩
+    await expect(card.getByTestId("promote-button")).toHaveCount(2);
+    await card
+      .getByTestId("promote-button")
+      .filter({ hasText: "anthropic:claude-sonnet-5" })
+      .click();
+
+    await expect(page.getByTestId("experiments-notice")).toContainText("승격");
+    await expect(card.getByTestId("experiment-status")).toContainText(
+      "승자 확정",
+    );
+    await expect(card.getByTestId("experiment-status")).toContainText(
+      "anthropic:claude-sonnet-5",
+    );
+  });
+
+  test("미인증 상태의 상태 전이는 안내를 표시한다 (TASK-1101)", async ({
+    page,
+  }) => {
+    await setMode("data");
+    await page.goto("/experiments");
+    await page.evaluate(() => localStorage.removeItem("acos_token"));
+
+    await page
+      .getByTestId("experiment-card")
+      .first()
+      .getByRole("button", { name: "중단" })
+      .click();
+    await expect(page.getByTestId("experiments-notice")).toContainText("실패");
+  });
+
   test("API 오류 시 오류 안내를 표시한다", async ({ page }) => {
     await setMode("error");
     await page.goto("/experiments");

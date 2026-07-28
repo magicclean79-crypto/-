@@ -175,8 +175,58 @@ Execution의 `provider`와 같은 의미를 갖는다.
 Provider가 호출될 수 있다. 대시보드는 **배정(추첨)** 과 **실행(Execution)** 을
 나란히 보여주며, 두 값의 차이가 곧 그 변형의 실패 규모다.
 
-**무상태 배정**: 호출마다 독립 추첨한다. 사용자·세션 고정 배정(sticky)은
-LLM 호출 계층이 주체 식별자를 갖지 않아 별도 스펙이 필요하다.
+**배정 계층** (TASK-1101에서 확장): `projectId`가 전달되면 **Project 기반
+Sticky 배정**, 없으면 기존 무상태 추첨.
+
+## Sticky Assignment & Experiment Lifecycle (TASK-1101, Sprint 11)
+
+실험 **정의**(변형·가중치)는 환경변수가 원천이고(CTO 결정 1003-② 표기법
+확정), 여기서 더하는 것은 **누가 어떤 변형을 받는지**와 **실험의 운영 상태**다.
+
+### Project 기반 Sticky Assignment
+
+같은 프로젝트는 항상 같은 변형을 받는다. 배정은 저장소가 아니라
+**결정적 해시**로 정해진다:
+
+```
+변형 = 가중추첨(변형목록, random = hash(정의서명 + projectId))
+```
+
+- 해시는 FNV-1a + **fmix32 최종 혼합**이다. FNV만 쓰면 `proj-1`,`proj-2`처럼
+  **연속적인 키가 뭉쳐** 배정이 한쪽으로 쏠린다(순번 ID 환경에서 실제로 발생).
+- 저장소(`experiment_assignments`)가 비어 있어도, 재기동해도, 여러 인스턴스
+  에서도 **같은 프로젝트는 같은 변형**을 받는다. 저장은 관측·감사용이며
+  저장 실패가 호출을 실패시키지 않는다.
+- **정의 서명**(`변형=가중치` 목록)이 바뀌면 기존 배정은 무효가 되어 다시
+  배정된다. 이름·종류만 바꾸면 서명은 그대로다(표시용 메타데이터 —
+  CTO 결정 1003-③).
+- `projectId`는 Content Generation·Product Analysis·Vision Analysis 호출
+  경로에서 전달된다. 없으면(개발용 호출 등) 기존 무상태 추첨.
+
+### Lifecycle — Start / Stop / Promote / Rollback
+
+| 상태 | 동작 |
+| --- | --- |
+| **RUNNING** (기본) | 변형 배정 진행. 행이 없으면 이 상태로 본다 (TASK-1003 동작 보존 — 실험을 켜려고 별도 조작이 필요 없다) |
+| **STOPPED** | 실험을 적용하지 않고 **기존 라우팅**으로 처리. 배정 기록은 보존 |
+| **PROMOTED** | 배정 없이 **승자 변형으로 전 트래픽**. 승자가 현재 정의에 없거나 Provider를 쓸 수 없으면 라우팅으로 내려간다 |
+
+- **Promote**는 승자 변형이 **현재 정의에 있어야** 한다 (없으면 400).
+- **Rollback**은 직전 전이의 **이전 상태**로 되돌린다(이력이 없으면 RUNNING).
+  ROLLBACK 자체는 되돌리기 대상에서 제외해 무한 왕복을 막는다.
+- 상태 갱신과 이력 기록은 **한 트랜잭션** — 감사 이력이 상태와 어긋나지 않는다.
+- 모든 전이는 쓰기 API이므로 전역 WriteProtectionGuard가 **EDITOR 이상**을
+  요구하고, 수행자(actor)가 이력에 남는다.
+
+### Assignment Dashboard
+
+웹 `/experiments` — 실험 카드에 상태 배지·조작 버튼(시작/중단/되돌리기/변형별
+승격)·상태 변경 이력이 붙고, 하단에 **프로젝트별 배정 표**가 나온다.
+`GET /llm/experiments/assignments`(`?feature=`로 좁힘)가 원천이다.
+
+**배정과 실행은 별개다** (CTO 결정 1003-④): Assignment는 실험이 정한 결과,
+Execution은 실제 수행 결과다. 변형이 실패하거나 불건강해지면 Failover가
+개입해 둘이 달라질 수 있으므로 대시보드는 둘을 **나란히** 유지한다.
 
 ## 구조
 
@@ -231,7 +281,9 @@ LLM 호출 계층이 주체 식별자를 갖지 않아 별도 스펙이 필요�
 | `GET` | `/llm/health` | **Provider 상태 점검 (TASK-0603)** — 최소 실호출 기반. `?provider=`로 특정 Provider 점검 (TASK-1002, Failover 미사용) |
 | `GET` | `/llm/routing` | **Routing 현황 (TASK-1001)** — feature별 Provider·모델·결정 근거 |
 | `GET` | `/llm/failover` | **Failover 현황 (TASK-1002)** — 우선순위·타임아웃·Provider 건강 상태·계측 |
-| `GET` | `/llm/experiments` | **Experiment 현황 (TASK-1003)** — 실험 종류·변형·가중치·실제 배정 |
+| `GET` | `/llm/experiments` | **Experiment 현황 (TASK-1003)** — 실험 종류·변형·가중치·실제 배정 + 운영 상태(1101) |
+| `GET` | `/llm/experiments/assignments` | **Assignment Dashboard (TASK-1101)** — Project별 Sticky 배정·변형 분포 |
+| `POST` | `/llm/experiments/:feature/:action` | **Lifecycle (TASK-1101)** — `start`/`stop`/`promote`/`rollback` (EDITOR 이상, promote는 `variantKey` 필요) |
 | `POST` | `/llm/complete` | `{ messages, model?, maxTokens? }` → `{ provider, model, text, usage }` (200) |
 
 오류: `400` 빈 메시지·잘못된 role·공백 content·잘못된 maxTokens.

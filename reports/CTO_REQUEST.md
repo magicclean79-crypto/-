@@ -5,51 +5,51 @@
 
 ## 결정 대기
 
-### 40. TASK-1003 "Routing Experiment & Traffic Control" 세부 해석 확인
-- 현황: 지시 5항목과 **CTO 결정 1002-①·④**를 다음과 같이 구현했다:
-  - **하나의 가중 추첨 엔진**: Percentage / A·B / Canary / Weighted는 서로
-    다른 알고리즘이 아니라 같은 메커니즘의 다른 사용법이라 판단해 엔진을
-    하나로 두고, **종류(kind)는 운영자의 의도 선언**으로 삼았습니다
-    (대시보드 표시·검증용 — 선택 로직은 동일)
-  - **형식**: `LLM_EXPERIMENT_CONTENT`/`_ANALYSIS`/`_VISION` =
-    `이름|종류|변형=가중치,…` (이름·종류 생략 가능, 가중치 생략 시 균등).
-    변형은 라우팅과 같은 `provider` 또는 `provider:model`.
-    **미설정이면 실험 없음** — 기존 라우팅 그대로
-  - **Graceful degradation**: 쓸 수 없는 변형은 제외하고 재정규화, 전부
-    불가면 실험 미적용하고 라우팅으로 처리 (실험이 호출을 실패시키지 않음)
-  - **우선순위**: 호출자 `model` > 실험 변형 > 라우팅 규칙 > `LLM_MODEL_*`
-  - **Dashboard**: `GET /llm/experiments` + 웹 `/experiments` ·
-    **Metrics**: `/executions/stats`의 `byVariant`(`feature→provider:model`)
-  - **결정 1002-① 이행**: Failover 대상을 `timeout`/`server_error`/
-    `rate_limit`/`network` 4종으로 한정하고, `budget`/`validation`/`auth`
-    (401·403·잘못된 키)/`invalid_request`는 제외. 상태 코드 → 오류 코드 →
-    메시지 순으로 판정하며 SDK별 위치(`status`/`statusCode`/
-    `response.status`)를 모두 인식합니다
-  - **결정 1002-④ 이행**: `GET /llm/health`를 `attempts`/`failovers`/
-    `exhausted`/`skipped`/`byProvider`에서 분리하고 `metrics.healthChecks`로
-    따로 집계했습니다 (Provider 건강 상태에는 계속 반영)
-  - 라이브: canary 80/20 → 실제 배정 12/6, 변형별 실행 지표 비교
-    (mock 성공률 100% vs openai 0%), openai 403은 `auth`로 분류돼
-    **Failover 미발생**, health 3회 후에도 `attempts` 불변·`healthChecks`만 증가
-- **구현 중 확인된 상호작용**: 배정(추첨 결과)과 실제 실행이 다를 수 있습니다.
-  변형이 불건강해지면 Failover가 체인을 재정렬해 배정된 변형 대신 건강한
-  Provider가 호출됩니다. 가용성 우선 설계상 올바른 동작이라 판단해 감추지
-  않고 **대시보드에 배정과 실행을 나란히** 표시했습니다(차이 = 그 변형의 실패
-  규모). 다만 "실험 중인 변형은 Failover에서 제외한다" 같은 다른 정책도
-  가능하므로 확인이 필요합니다.
-- 하지 않은 것: 고정 배정(sticky — 사용자·프로젝트 단위), 통계적 유의성 판정,
-  실험 종료·승자 승격 자동화, 실험 설정의 ADMIN 화면 관리
-- 질문: ① **`unknown` 오류 정책** — 확정된 목록 어디에도 해당하지 않는 오류를
-  현재는 **안전 측으로 Failover 제외**했습니다(잘못된 요청을 전 Provider에
-  반복하는 것보다 즉시 실패가 낫다는 판단). 반대로 "미분류는 일시적 오류로
-  보고 전환"이 맞는지 ② **실험 표기법** — `이름|종류|변형=가중치` 단일 문자열
-  방식이 적절한지, 아니면 종류별로 환경변수를 나누는 편이 나은지
-  ③ **종류(kind) 선언** — 현재는 표시·추정용일 뿐 동작에 영향이 없습니다.
-  종류별로 다른 규칙(예: canary는 소수 변형 상한 강제, ab는 균등 강제)을
-  적용해야 하는지 ④ **고정 배정 필요 여부** — 필요하다면 배정 주체를
-  무엇으로 할지(프로젝트 / 사용자 / 상품) 지정 요청
-  ⑤ **배정 대 실행** — 위 상호작용에서 현재 방식(Failover 우선)을 유지할지,
-  실험 중인 변형은 Failover 대상에서 빼고 실패를 그대로 노출할지
+### 41. TASK-1101 "Sticky Assignment & Experiment Lifecycle" 세부 해석 확인
+- 현황: 지시 5항목을 다음과 같이 구현했습니다. 실험 **정의**는 환경변수가
+  원천이라는 결정(1003-②)을 유지하고, **배정 주체**와 **운영 상태**를 더했습니다:
+  - **Project 기반 Sticky Assignment**: 같은 프로젝트는 항상 같은 변형.
+    배정을 저장소가 아니라 **결정적 해시**(정의 서명 + projectId)로 정해
+    저장 실패·재기동·다중 인스턴스와 무관하게 일관됩니다. 저장
+    (`experiment_assignments`)은 관측·감사용입니다
+  - **정의 서명**: `변형=가중치` 목록으로 만들며, 정의가 바뀌면 기존 배정을
+    버리고 재배정합니다. **이름·종류는 서명에서 제외**했습니다
+    (표시용 메타데이터 — 결정 1003-③을 코드로 못박음)
+  - **Start/Stop**: STOPPED는 실험을 적용하지 않고 기존 라우팅으로 처리.
+    **상태 행이 없으면 RUNNING**으로 보아 TASK-1003 동작을 보존했습니다
+    (실험을 켜려고 별도 조작이 필요 없습니다)
+  - **Winner Promotion**: 승자 변형으로 전 트래픽. 현재 정의에 없는 변형은
+    400으로 거부하고, 승자 Provider를 쓸 수 없게 되면 라우팅으로 강등합니다
+  - **Rollback**: 직전 전이의 이전 상태로 복원(이력이 없으면 RUNNING).
+    ROLLBACK 자체는 되돌리기 대상에서 제외해 무한 왕복을 막았습니다
+  - **Assignment Dashboard**: `GET /llm/experiments/assignments` + 웹
+    `/experiments`(상태 배지·조작 버튼·전이 이력·프로젝트별 배정 표)
+  - **권한**: 전이는 쓰기 API이므로 전역 WriteProtectionGuard가 **EDITOR
+    이상**을 요구하고 수행자(actor)를 이력에 남깁니다
+  - **결정 1003-①~④ 반영**: ① unknown 제외 현행 유지(공식 표준 확정)
+    ② 표기법 유지 ③ kind는 서명에서 제외해 알고리즘 무영향임을 명시
+    ④ 배정(Assignment)과 실행(Execution)을 각각 저장하고 대시보드에 병기
+  - 라이브: 같은 프로젝트 6회 연속 동일 변형·두 프로젝트가 서로 다른 변형·
+    STOP→라우팅(anthropic)·PROMOTE→승자(mock) SUCCESS·잘못된 변형 400·
+    ROLLBACK(PROMOTED→STOPPED)·미인증 401
+- **구현 중 발견해 고친 결함**: 해시를 FNV-1a만으로 쓰면 `proj-1`,`proj-2`처럼
+  **연속적인 프로젝트 ID가 뭉쳐** 배정이 한쪽으로 완전히 쏠렸습니다(12개
+  프로젝트가 전부 한 변형으로). 최종 혼합(fmix32) 단계를 더해 해결하고 이
+  실패 형태를 재현하는 회귀 테스트를 남겼습니다. 순번 ID를 쓰는 환경에서는
+  실험이 통째로 무의미해지는 결함이라 보고에 명시합니다.
+- 하지 않은 것: 사용자별·상품별 배정(지시대로 Project 기반), 통계적 유의성
+  판정, 승격 후 실험 정의 자동 정리, 실험 정의의 ADMIN 화면 관리
+- 질문: ① **기본 상태** — 상태 행이 없을 때 **RUNNING**으로 본 판단이 맞는지
+  (TASK-1003 동작 보존이 목적입니다. 반대로 "명시적으로 START해야 시작"이
+  맞다면 기존 실험이 조작 전까지 멈추게 됩니다)
+  ② **배정 주체** — Project 하나로 충분한지, 상품·사용자 축도 필요한지
+  ③ **승격 이후 절차** — 현재는 PROMOTED 상태로 승자만 쓰되 환경변수의 변형
+  목록은 그대로 남습니다. "승자를 라우팅 기본값으로 확정하고 실험 정의를
+  비우는" 마지막 단계를 자동화할지, 운영자 수동 절차로 둘지
+  ④ **전이 권한** — 승격·되돌리기는 트래픽 100%를 바꾸는 조작입니다.
+  현재 EDITOR 이상인데 **ADMIN 전용**으로 올릴지
+  ⑤ **정의 변경 시 재배정** — 현재는 서명이 바뀌면 조용히 재배정합니다
+  (기존 배정 무효). 재배정 전에 경고하거나 이력을 남길 필요가 있는지
   ⑥ 다음 TASK 지정 요청.
 
 ### 2. tesseract Provider 유지 여부
@@ -73,6 +73,20 @@
 - 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
 
 ## 결정됨
+
+### 40. TASK-1003 해석 확인 → 승인 + 실험 표준 확정 + Sprint 10 종료 (2026-07-28)
+- CTO 결정: ① **`unknown` 오류는 Failover 대상이 아님** — 현재 정책을 공식
+  표준으로 확정 ② **실험 표기법은 `이름|종류|변형=가중치` 단일 형식 유지**
+  ③ **종류(kind)는 운영 메타데이터이며 Routing 알고리즘에 영향을 주지 않음**
+  ④ **배정과 실제 실행은 분리** — Assignment는 실험 결과, Execution은 실제
+  수행 결과이며 Dashboard에 두 정보를 모두 유지 ⑤ **Sprint 10 공식 종료**
+  ⑥ Sprint 11 시작 — TASK-1101(Sticky Assignment & Experiment Lifecycle)
+  지시됨 — Project 기반 Sticky Assignment / Experiment Start·Stop /
+  Winner Promotion / Rollback / Assignment Dashboard.
+- 반영(TASK-1101): ①② 현행 유지 — 변경 없이 확정. ③ 배정 서명에서 kind·이름을
+  제외해 "표시용"임을 코드로 못박음. ④ 배정을 `experiment_assignments`에
+  따로 저장하고 실행 지표(`byVariant`)와 나란히 표시. ⑥ 5항목 구현 완료
+  (#41 참고).
 
 ### 39. TASK-1002 해석 확인 → 승인 + 오류 분류·모델 승계·Health 표준 확정 (2026-07-28)
 - CTO 결정: ① **Failover 대상 오류 확정** — Timeout · Provider 5xx ·

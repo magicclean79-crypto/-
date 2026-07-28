@@ -65,10 +65,10 @@ function createImageGuardPolicy(): ImageGuardPolicy {
           // Image Guard & Preprocessing (TASK-0604)
           imagePreprocessor: new SharpImagePreprocessor(),
           imagePolicy: createImageGuardPolicy(),
-          complete: async ({ messages, images, responseFormat }) => {
+          complete: async ({ messages, images, responseFormat, projectId }) => {
             const completion = await llm.complete(
               { messages, images, responseFormat },
-              { feature: "vision-analysis" },
+              { feature: "vision-analysis", projectId },
             );
             return {
               provider: completion.provider,

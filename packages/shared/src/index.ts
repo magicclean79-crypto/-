@@ -800,6 +800,69 @@ export interface ExperimentDto {
   /** 이 실험의 총 배정 횟수 */
   assignments: number;
   variants: ExperimentVariantDto[];
+  /** 운영 상태 (TASK-1101) — 정의는 환경변수, 상태는 DB */
+  lifecycle: ExperimentLifecycleDto;
+}
+
+// ── Experiment Lifecycle & Sticky Assignment (TASK-1101, Sprint 11) ──
+
+/** 실험 운영 상태 — 정의(변형·가중치)는 환경변수가 원천 */
+export type ExperimentStatusDto = "RUNNING" | "STOPPED" | "PROMOTED";
+
+/** 상태 전이 동작 */
+export type ExperimentActionDto = "START" | "STOP" | "PROMOTE" | "ROLLBACK";
+
+/** 상태 전이 이력 1건 (Rollback 근거 + 감사) */
+export interface ExperimentEventDto {
+  id: string;
+  action: ExperimentActionDto;
+  fromStatus: ExperimentStatusDto;
+  toStatus: ExperimentStatusDto;
+  fromVariant: string | null;
+  toVariant: string | null;
+  actor: string | null;
+  note: string | null;
+  createdAt: string;
+}
+
+/** feature 하나의 실험 운영 상태 */
+export interface ExperimentLifecycleDto {
+  feature: string;
+  status: ExperimentStatusDto;
+  /** 승자 변형 키 (PROMOTED일 때 유효) */
+  promotedVariant: string | null;
+  actor: string | null;
+  note: string | null;
+  /** Sticky 배정된 프로젝트 수 */
+  assignmentCount: number;
+  updatedAt: string | null;
+  events: ExperimentEventDto[];
+}
+
+/** Project → 변형 Sticky 배정 1건 */
+export interface ExperimentAssignmentDto {
+  feature: string;
+  projectId: string;
+  projectName: string | null;
+  variantKey: string;
+  /** 배정 시점의 실험 정의 서명 — 현재와 다르면 다음 호출에서 재배정 */
+  signature: string;
+  assignedAt: string;
+  updatedAt: string;
+}
+
+/** Assignment Dashboard 응답 (TASK-1101) */
+export interface ExperimentAssignmentsDto {
+  assignments: ExperimentAssignmentDto[];
+  /** feature별 변형 배정 분포 */
+  distribution: { variantKey: string; projects: number }[];
+}
+
+/** 상태 전이 요청 본문 */
+export interface ExperimentTransitionRequest {
+  /** PROMOTE 대상 변형 키 (`provider` 또는 `provider:model`) */
+  variantKey?: string;
+  note?: string;
 }
 
 /** Routing Experiment 현황 (TASK-1003) */

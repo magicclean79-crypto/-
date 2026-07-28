@@ -6,6 +6,8 @@ import http from "node:http";
 const PORT = 4999;
 let mode = "data";
 let lastUrls = [];
+// 실험 운영 상태 스텁 (TASK-1101) — 전이 후 응답에 반영된다
+let stubLifecycle = null;
 
 const stats = (totals, groups) => ({
   range: { from: null, to: null },
@@ -193,6 +195,7 @@ const server = http.createServer((req, res) => {
     req.on("end", () => {
       mode = JSON.parse(body).mode;
       lastUrls = [];
+      stubLifecycle = null;
       resetPublishing();
       resetUsers();
       res.end(JSON.stringify({ mode }));
@@ -569,6 +572,74 @@ const server = http.createServer((req, res) => {
     );
     return;
   }
+  // ── Experiment Lifecycle & Sticky Assignment (TASK-1101) ──
+  if (url.pathname === "/llm/experiments/assignments") {
+    res.end(
+      JSON.stringify(
+        mode === "data"
+          ? {
+              assignments: [
+                { feature: "product-analysis", projectId: "proj-a", projectName: "여름 신상", variantKey: "openai:gpt-4o", signature: "openai:gpt-4o=90,anthropic:claude-sonnet-5=10", assignedAt: "2026-07-28T10:00:00.000Z", updatedAt: "2026-07-28T10:00:00.000Z" },
+                { feature: "product-analysis", projectId: "proj-b", projectName: "겨울 기획", variantKey: "anthropic:claude-sonnet-5", signature: "openai:gpt-4o=90,anthropic:claude-sonnet-5=10", assignedAt: "2026-07-28T11:00:00.000Z", updatedAt: "2026-07-28T11:00:00.000Z" },
+              ],
+              distribution: [],
+            }
+          : { assignments: [], distribution: [] },
+      ),
+    );
+    return;
+  }
+  // 상태 전이 (START / STOP / PROMOTE / ROLLBACK) — 인증 필요
+  const transition = url.pathname.match(
+    /^\/llm\/experiments\/([^/]+)\/(start|stop|promote|rollback)$/,
+  );
+  if (req.method === "POST" && transition) {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = 401;
+      res.end(JSON.stringify({ message: "로그인이 필요합니다." }));
+      return;
+    }
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      const parsed = body ? JSON.parse(body) : {};
+      const action = transition[2].toUpperCase();
+      stubLifecycle = {
+        feature: transition[1],
+        status:
+          action === "STOP"
+            ? "STOPPED"
+            : action === "PROMOTE"
+              ? "PROMOTED"
+              : "RUNNING",
+        promotedVariant: action === "PROMOTE" ? parsed.variantKey ?? null : null,
+        actor: "admin@acos.local",
+        note: null,
+        assignmentCount: 2,
+        updatedAt: new Date().toISOString(),
+        events: [
+          {
+            id: "ev-1",
+            action,
+            fromStatus: "RUNNING",
+            toStatus:
+              action === "STOP"
+                ? "STOPPED"
+                : action === "PROMOTE"
+                  ? "PROMOTED"
+                  : "RUNNING",
+            fromVariant: null,
+            toVariant: action === "PROMOTE" ? parsed.variantKey ?? null : null,
+            actor: "admin@acos.local",
+            note: null,
+            createdAt: new Date().toISOString(),
+          },
+        ],
+      };
+      res.end(JSON.stringify(stubLifecycle));
+    });
+    return;
+  }
   // ── Routing Experiment (TASK-1003) ──
   if (url.pathname === "/llm/experiments") {
     res.end(
@@ -586,6 +657,16 @@ const server = http.createServer((req, res) => {
                   active: true,
                   reason: null,
                   assignments: 100,
+                  lifecycle: stubLifecycle ?? {
+                    feature: "product-analysis",
+                    status: "RUNNING",
+                    promotedVariant: null,
+                    actor: null,
+                    note: null,
+                    assignmentCount: 2,
+                    updatedAt: null,
+                    events: [],
+                  },
                   variants: [
                     { key: "openai:gpt-4o", provider: "openai", model: "gpt-4o", weight: 90, weightShare: 0.9, available: true, effectiveShare: 0.9, assignments: 91, actualShare: 0.91 },
                     { key: "anthropic:claude-sonnet-5", provider: "anthropic", model: "claude-sonnet-5", weight: 10, weightShare: 0.1, available: true, effectiveShare: 0.1, assignments: 9, actualShare: 0.09 },
@@ -600,6 +681,16 @@ const server = http.createServer((req, res) => {
                   reason:
                     "사용 가능한 변형이 없어 실험을 적용하지 않고 기존 라우팅으로 처리합니다 (API 키 미설정 등).",
                   assignments: 0,
+                  lifecycle: {
+                    feature: "vision-analysis",
+                    status: "RUNNING",
+                    promotedVariant: null,
+                    actor: null,
+                    note: null,
+                    assignmentCount: 0,
+                    updatedAt: null,
+                    events: [],
+                  },
                   variants: [
                     { key: "gemini", provider: "gemini", model: null, weight: 1, weightShare: 0.5, available: false, effectiveShare: 0, assignments: 0, actualShare: null },
                     { key: "cohere", provider: "cohere", model: null, weight: 1, weightShare: 0.5, available: false, effectiveShare: 0, assignments: 0, actualShare: null },

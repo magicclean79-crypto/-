@@ -166,7 +166,7 @@ export class ContentGenerationService {
     };
     const completion = await this.llm.complete(
       { messages: this.promptEngine.render("content-generation", context) },
-      { feature: "content-generation" },
+      { feature: "content-generation", projectId: input.project.id },
     );
 
     return {

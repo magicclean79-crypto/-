@@ -324,6 +324,13 @@ API 키가 없으면 항상 mock으로 동작합니다 —
   지원하고, 사용 불가 변형은 제외 후 재정규화(전부 불가 시 기존 라우팅) ·
   `GET /llm/experiments` · 변형별 지표(`/executions/stats`의 `byVariant`) ·
   웹 **`/experiments`** 대시보드(설정 비율 ↔ 실제 배정 ↔ 실행 지표 비교)
+- **Sticky Assignment & Lifecycle (TASK-1101)**: **Project 기반 고정 배정** —
+  같은 프로젝트는 항상 같은 변형(결정적 해시라 재기동·다중 인스턴스와 무관,
+  정의가 바뀌면 재배정) · **Start / Stop / Promote / Rollback** 상태 전이
+  (`POST /llm/experiments/:feature/:action`, EDITOR 이상, 전이 이력 감사) ·
+  STOPPED는 기존 라우팅으로, PROMOTED는 승자 변형으로 전 트래픽 ·
+  **Assignment Dashboard**(`GET /llm/experiments/assignments` + 웹
+  `/experiments`) — 배정(실험 결과)과 실행(Execution)을 나란히 표시
 
 ## Execution Domain (TASK-0601, Sprint 6)
 

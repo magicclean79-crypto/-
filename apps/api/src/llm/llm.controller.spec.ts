@@ -4,6 +4,7 @@ import { MockLlmProvider } from "@acos/core";
 import request from "supertest";
 import { AuthService } from "../auth/auth.service";
 import { HealthProtectionGuard } from "../auth/health-protection.guard";
+import { ExperimentLifecycleService } from "./experiment-lifecycle.service";
 import { LlmBudgetService } from "./llm-budget.service";
 import { LLM_PROVIDER } from "./llm.constants";
 import { LlmController } from "./llm.controller";
@@ -29,6 +30,35 @@ describe("LLM API (API Test)", () => {
               checkedAt: new Date().toISOString(),
             }),
             assertWithinBudget: async () => undefined,
+          },
+        },
+        {
+          // 실험 상태·배정 스텁 (TASK-1101) — DB 동작은 전용 spec에서 검증
+          provide: ExperimentLifecycleService,
+          useValue: {
+            lifecycle: async (feature: string) => ({
+              feature,
+              status: "RUNNING",
+              promotedVariant: null,
+              actor: null,
+              note: null,
+              assignmentCount: 0,
+              updatedAt: null,
+              events: [],
+            }),
+            state: async () => ({ status: "RUNNING", promotedVariant: null }),
+            assignments: async () => [],
+            distribution: async () => [],
+            transition: async () => ({
+              feature: "product-analysis",
+              status: "STOPPED",
+              promotedVariant: null,
+              actor: null,
+              note: null,
+              assignmentCount: 0,
+              updatedAt: new Date().toISOString(),
+              events: [],
+            }),
           },
         },
         HealthProtectionGuard,

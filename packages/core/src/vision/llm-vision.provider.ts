@@ -30,6 +30,8 @@ export type LlmVisionClient = (request: {
   messages: LlmMessageDto[];
   images: LlmImageDto[];
   responseFormat: LlmResponseFormat;
+  /** 배정 주체 프로젝트 (TASK-1101 Sticky Assignment) */
+  projectId?: string;
 }) => Promise<{ provider: string; model: string; text: string }>;
 
 /** Company Brain 컨텍스트 소스 (Port) — 프로젝트 기준으로 지식/결정/설정을 읽는다 */
@@ -133,6 +135,7 @@ export class LlmVisionProvider implements VisionProvider {
       messages,
       images,
       responseFormat: "json",
+      projectId: input.project.id,
     });
     const draft = parseVisionSummaryResponse(completion.text);
     // source는 실제 호출된 Provider 기준 (TASK-1002, CTO 결정 1001-③) —

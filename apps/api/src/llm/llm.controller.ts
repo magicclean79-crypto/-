@@ -1,14 +1,26 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
   HttpCode,
+  Param,
   Post,
   Query,
+  Req,
   UseGuards,
 } from "@nestjs/common";
-import { LLM_FEATURE_MODEL_ENV, LLM_PROVIDER_REGISTRY } from "@acos/core";
+import {
+  EXPERIMENT_ACTIONS,
+  LLM_FEATURE_EXPERIMENT_ENV,
+  LLM_FEATURE_MODEL_ENV,
+  LLM_PROVIDER_REGISTRY,
+} from "@acos/core";
 import type {
+  ExperimentActionDto,
+  ExperimentAssignmentsDto,
+  ExperimentLifecycleDto,
+  ExperimentTransitionRequest,
   LlmBudgetDto,
   LlmCompleteRequest,
   LlmCompletionDto,
@@ -19,7 +31,10 @@ import type {
   LlmProvidersDto,
   LlmRoutingDto,
 } from "@acos/shared";
+import type { AuthenticatedRequest } from "../auth/auth.guard";
 import { HealthProtectionGuard } from "../auth/health-protection.guard";
+import { featureExperiment } from "./experiment-config";
+import { ExperimentLifecycleService } from "./experiment-lifecycle.service";
 import { LlmBudgetService } from "./llm-budget.service";
 import { LlmService } from "./llm.service";
 
@@ -28,6 +43,7 @@ export class LlmController {
   constructor(
     private readonly llmService: LlmService,
     private readonly budgetService: LlmBudgetService,
+    private readonly lifecycle: ExperimentLifecycleService,
   ) {}
 
   /** 선택된 Provider 확인 (기본 mock) */
@@ -107,8 +123,60 @@ export class LlmController {
    * 실제 배정 분포. Percentage / A·B / Canary / Weighted를 모두 표현한다.
    */
   @Get("experiments")
-  experiments(): LlmExperimentsDto {
+  async experiments(): Promise<LlmExperimentsDto> {
     return this.llmService.experiments();
+  }
+
+  /**
+   * Assignment Dashboard (TASK-1101) — Project별 Sticky 배정 목록과
+   * 변형별 분포. `?feature=`로 좁힐 수 있다.
+   */
+  @Get("experiments/assignments")
+  async assignments(
+    @Query("feature") feature?: string,
+    @Query("limit") limit?: string,
+  ): Promise<ExperimentAssignmentsDto> {
+    const [assignments, distribution] = await Promise.all([
+      this.lifecycle.assignments({ feature, limit: Number(limit) || undefined }),
+      feature
+        ? this.lifecycle.distribution(feature)
+        : Promise.resolve<{ variantKey: string; projects: number }[]>([]),
+    ]);
+    return { assignments, distribution };
+  }
+
+  /**
+   * 실험 상태 전이 (TASK-1101) — Start / Stop / Promote / Rollback.
+   * 쓰기 작업이므로 전역 WriteProtectionGuard가 EDITOR 이상을 요구한다.
+   * PROMOTE는 `variantKey`(승자)를 함께 보낸다.
+   */
+  @Post("experiments/:feature/:action")
+  @HttpCode(200)
+  async transition(
+    @Param("feature") feature: string,
+    @Param("action") action: string,
+    @Body() body: ExperimentTransitionRequest,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<ExperimentLifecycleDto> {
+    const normalized = action.toUpperCase();
+    if (!(EXPERIMENT_ACTIONS as readonly string[]).includes(normalized)) {
+      throw new BadRequestException(
+        `지원하지 않는 동작입니다: ${action} (${EXPERIMENT_ACTIONS.join(" / ")})`,
+      );
+    }
+    if (!LLM_FEATURE_EXPERIMENT_ENV[feature]) {
+      throw new BadRequestException(
+        `실험 대상 feature가 아닙니다: ${feature} (${Object.keys(LLM_FEATURE_EXPERIMENT_ENV).join(" / ")})`,
+      );
+    }
+    return this.lifecycle.transition({
+      feature,
+      action: normalized as ExperimentActionDto,
+      variantKey: body?.variantKey ?? null,
+      note: body?.note ?? null,
+      actor: request.user?.email ?? null,
+      experiment: featureExperiment(feature),
+    });
   }
 
   /** 텍스트 완성 — 게이트웨이를 통해 선택된 Provider 호출 */

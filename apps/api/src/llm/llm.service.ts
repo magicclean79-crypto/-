@@ -21,9 +21,12 @@ import {
   validateLlmRequest,
   withTimeout,
 } from "@acos/core";
+import { resolveLifecycle, variantKey } from "@acos/core";
 import type {
   ExecutionStore,
+  Experiment,
   ExperimentAssignment,
+  ExperimentVariant,
   LlmProvider,
   RoutingResolution,
 } from "@acos/core";
@@ -38,6 +41,7 @@ import type {
 } from "@acos/shared";
 import { EXECUTION_STORE } from "../execution/execution.constants";
 import { allExperiments, featureExperiment } from "./experiment-config";
+import { ExperimentLifecycleService } from "./experiment-lifecycle.service";
 import {
   failoverPriority,
   healthOptions,
@@ -103,6 +107,7 @@ export class LlmService {
     @Optional()
     @Inject(LLM_PROVIDER_MAP)
     providerMap?: Map<string, LlmProvider>,
+    @Optional() private readonly lifecycleService?: ExperimentLifecycleService,
   ) {
     const createGateway = (target: LlmProvider): LlmGateway =>
       new LlmGateway(target, {
@@ -163,6 +168,12 @@ export class LlmService {
       feature?: string;
       /** 특정 Provider로 강제 (Health Check 등) — 라우팅을 건너뛴다 */
       provider?: string;
+      /**
+       * 배정 주체 프로젝트 (TASK-1101 Sticky Assignment) —
+       * 지정하면 같은 프로젝트가 항상 같은 실험 변형을 받는다.
+       * 미지정이면 기존 무상태 추첨 (TASK-1003 동작).
+       */
+      projectId?: string;
       /** false면 Failover 없이 1순위만 시도 (기본 true) */
       failover?: boolean;
       /**
@@ -201,24 +212,19 @@ export class LlmService {
       this.logger.warn(`라우팅 폴백 (${route.feature}): ${route.reason}`);
     }
 
-    // Routing Experiment (TASK-1003): 실험이 설정된 feature는 변형 추첨이
-    // 라우팅 결과를 대신한다. Provider 강제(진단)·전 변형 사용 불가면
-    // 실험을 적용하지 않고 기존 라우팅으로 처리한다 (호출을 실패시키지 않음).
-    const experiment = options.provider ? null : featureExperiment(options.feature);
-    const assignment: ExperimentAssignment | null = experiment
-      ? pickVariant(experiment.variants, {
-          availableProviders: [...this.gateways.keys()],
-        })
+    // Routing Experiment (TASK-1003) + Lifecycle·Sticky (TASK-1101):
+    // 실험이 설정된 feature는 변형 선택이 라우팅 결과를 대신한다.
+    // Provider 강제(진단)·전 변형 사용 불가면 실험을 적용하지 않고 기존
+    // 라우팅으로 처리한다 (실험 설정이 호출을 실패시키지 않는다).
+    const experiment = options.provider
+      ? null
+      : featureExperiment(options.feature);
+    const chosen = experiment
+      ? await this.chooseVariant(experiment, options.projectId)
       : null;
-    if (assignment) {
-      this.assignments.set(
-        `${experiment!.feature}|${assignment.key}`,
-        (this.assignments.get(`${experiment!.feature}|${assignment.key}`) ?? 0) + 1,
-      );
-    }
 
     // 모델 우선순위: 호출자 명시 > 실험 변형 > 라우팅 규칙
-    const resolvedModel = assignment?.variant.model ?? route.model;
+    const resolvedModel = chosen?.model ?? route.model;
     if (request.model === undefined && resolvedModel) {
       request = { ...request, model: resolvedModel };
     }
@@ -230,8 +236,7 @@ export class LlmService {
 
     // Provider Failover (TASK-1002): 라우팅 결과를 1순위로 하는 시도 체인.
     // Provider 강제/Failover 비활성(Health Check 등)이면 단일 Provider만.
-    const primary =
-      options.provider ?? assignment?.variant.provider ?? route.provider;
+    const primary = options.provider ?? chosen?.provider ?? route.provider;
     const chain =
       options.failover === false
         ? [this.gateways.has(primary) ? primary : this.gateway.providerName]
@@ -339,6 +344,74 @@ export class LlmService {
     throw lastError ?? new Error("LLM 호출에 실패했습니다.");
   }
 
+  /**
+   * 실험 변형 선택 (TASK-1003 추첨 + TASK-1101 Lifecycle·Sticky).
+   *
+   * 1. **Lifecycle**: STOPPED면 적용하지 않고, PROMOTED면 승자 변형으로 고정
+   * 2. **Sticky**: projectId가 있으면 프로젝트별 고정 배정(결정적 해시)
+   * 3. 그 외(프로젝트를 모르는 호출)는 기존 무상태 추첨
+   *
+   * 상태 조회가 실패해도 호출을 막지 않는다 — 기본값(RUNNING)으로 진행한다.
+   */
+  private async chooseVariant(
+    experiment: Experiment,
+    projectId?: string,
+  ): Promise<ExperimentVariant | null> {
+    const available = [...this.gateways.keys()];
+
+    if (this.lifecycleService) {
+      let resolved;
+      try {
+        const state = await this.lifecycleService.state(experiment.feature);
+        resolved = resolveLifecycle(state, experiment, available);
+      } catch (error) {
+        this.logger.warn(`실험 상태 조회 실패 (RUNNING으로 진행): ${error}`);
+        resolved = { mode: "assign" as const };
+      }
+      if (resolved.mode === "skip") {
+        this.logger.debug?.(
+          `실험 미적용 (${experiment.feature}): ${resolved.reason}`,
+        );
+        return null;
+      }
+      if (resolved.mode === "promoted") {
+        // 승자 확정 — 배정 없이 전 트래픽이 승자로 간다
+        this.countAssignment(experiment.feature, variantKey(resolved.variant));
+        return resolved.variant;
+      }
+
+      // Sticky Assignment — 같은 프로젝트는 항상 같은 변형
+      if (projectId) {
+        const sticky = await this.lifecycleService.assign(
+          experiment,
+          projectId,
+          available,
+        );
+        if (!sticky) {
+          return null;
+        }
+        this.countAssignment(experiment.feature, sticky.key);
+        return sticky.variant;
+      }
+    }
+
+    // 프로젝트를 모르는 호출 — 무상태 추첨 (TASK-1003 동작)
+    const assignment: ExperimentAssignment | null = pickVariant(
+      experiment.variants,
+      { availableProviders: available },
+    );
+    if (!assignment) {
+      return null;
+    }
+    this.countAssignment(experiment.feature, assignment.key);
+    return assignment.variant;
+  }
+
+  private countAssignment(feature: string, key: string): void {
+    const mapKey = `${feature}|${key}`;
+    this.assignments.set(mapKey, (this.assignments.get(mapKey) ?? 0) + 1);
+  }
+
   private countProvider(provider: string, outcome: "success" | "failed"): void {
     const entry = this.metrics.byProvider.get(provider) ?? {
       success: 0,
@@ -380,20 +453,34 @@ export class LlmService {
    * 설정된 변형·가중치와 **실제 배정 횟수**를 함께 돌려준다 —
    * 설정 비율대로 트래픽이 나뉘고 있는지 대시보드에서 바로 확인한다.
    */
-  experiments(): LlmExperimentsDto {
+  async experiments(): Promise<LlmExperimentsDto> {
     const available = [...this.gateways.keys()];
-    return {
-      availableProviders: available,
-      experiments: allExperiments().map((experiment) => {
+    const experiments = await Promise.all(
+      allExperiments().map(async (experiment) => {
         const view = describeExperiment(experiment, available);
         const counts = view.variants.map(
           (variant) =>
             this.assignments.get(`${experiment.feature}|${variant.key}`) ?? 0,
         );
         const total = counts.reduce((sum, count) => sum + count, 0);
+        const lifecycle = (await this.lifecycleService?.lifecycle(
+          experiment.feature,
+        )) ?? {
+          feature: experiment.feature,
+          status: "RUNNING" as const,
+          promotedVariant: null,
+          actor: null,
+          note: null,
+          assignmentCount: 0,
+          updatedAt: null,
+          events: [],
+        };
         return {
           ...view,
+          // 상태에 따라 실제 적용 여부가 달라진다 (TASK-1101)
+          active: view.active && lifecycle.status !== "STOPPED",
           assignments: total,
+          lifecycle,
           variants: view.variants.map((variant, index) => ({
             ...variant,
             assignments: counts[index],
@@ -401,6 +488,10 @@ export class LlmService {
           })),
         };
       }),
+    );
+    return {
+      availableProviders: available,
+      experiments,
       checkedAt: new Date().toISOString(),
     };
   }

@@ -4,11 +4,36 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import type {
   ExecutionDashboardDto,
+  ExperimentActionDto,
+  ExperimentAssignmentsDto,
   ExperimentKindDto,
+  ExperimentStatusDto,
   LlmExperimentsDto,
 } from "@acos/shared";
+import { authFetchInit } from "../../lib/auth-client";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+
+const STATUS_LABEL: Record<ExperimentStatusDto, string> = {
+  RUNNING: "진행 중",
+  STOPPED: "중단됨",
+  PROMOTED: "승자 확정",
+};
+
+const STATUS_STYLE: Record<ExperimentStatusDto, string> = {
+  RUNNING:
+    "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
+  STOPPED: "bg-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
+  PROMOTED:
+    "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-300",
+};
+
+const ACTION_LABEL: Record<ExperimentActionDto, string> = {
+  START: "시작",
+  STOP: "중단",
+  PROMOTE: "승격",
+  ROLLBACK: "되돌리기",
+};
 
 const KIND_LABEL: Record<ExperimentKindDto, string> = {
   percentage: "Percentage",
@@ -38,29 +63,79 @@ function percent(value: number | null): string {
 export default function ExperimentsPage() {
   const [data, setData] = useState<LlmExperimentsDto | null>(null);
   const [stats, setStats] = useState<ExecutionDashboardDto | null>(null);
+  const [assignments, setAssignments] =
+    useState<ExperimentAssignmentsDto | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    async function load() {
-      try {
-        const [experimentsRes, statsRes] = await Promise.all([
-          fetch(`${API_URL}/llm/experiments`),
-          fetch(`${API_URL}/executions/stats`),
-        ]);
-        if (!experimentsRes.ok) {
-          setError(`조회 실패 (HTTP ${experimentsRes.status})`);
-          return;
-        }
-        setData((await experimentsRes.json()) as LlmExperimentsDto);
-        if (statsRes.ok) {
-          setStats((await statsRes.json()) as ExecutionDashboardDto);
-        }
-      } catch {
-        setError("API 서버에 연결할 수 없습니다.");
+  async function load() {
+    try {
+      const [experimentsRes, statsRes, assignmentsRes] = await Promise.all([
+        fetch(`${API_URL}/llm/experiments`),
+        fetch(`${API_URL}/executions/stats`),
+        fetch(`${API_URL}/llm/experiments/assignments`),
+      ]);
+      if (!experimentsRes.ok) {
+        setError(`조회 실패 (HTTP ${experimentsRes.status})`);
+        return;
       }
+      setError(null);
+      setData((await experimentsRes.json()) as LlmExperimentsDto);
+      if (statsRes.ok) {
+        setStats((await statsRes.json()) as ExecutionDashboardDto);
+      }
+      if (assignmentsRes.ok) {
+        setAssignments(
+          (await assignmentsRes.json()) as ExperimentAssignmentsDto,
+        );
+      }
+    } catch {
+      setError("API 서버에 연결할 수 없습니다.");
     }
+  }
+
+  // 최초 1회만 조회한다 (이후는 상태 전이 후 load()로 갱신)
+  useEffect(() => {
     void load();
   }, []);
+
+  /** 상태 전이 — Start / Stop / Promote / Rollback (쓰기 API, EDITOR 이상) */
+  async function transition(
+    feature: string,
+    action: ExperimentActionDto,
+    variantKey?: string,
+  ) {
+    setBusy(true);
+    setNotice(null);
+    try {
+      const response = await fetch(
+        `${API_URL}/llm/experiments/${feature}/${action.toLowerCase()}`,
+        authFetchInit({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(variantKey ? { variantKey } : {}),
+        }),
+      );
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as {
+          message?: string;
+        } | null;
+        setNotice(
+          `${ACTION_LABEL[action]} 실패 (HTTP ${response.status}) — ${body?.message ?? "권한 또는 요청을 확인해 주세요."}`,
+        );
+        return;
+      }
+      setNotice(
+        `${feature} 실험을 ${ACTION_LABEL[action]}했습니다${variantKey ? ` (승자 ${variantKey})` : ""}.`,
+      );
+      await load();
+    } catch {
+      setNotice("API 서버에 연결할 수 없습니다.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <main className="mx-auto flex min-h-screen max-w-4xl flex-col gap-8 px-6 py-16">
@@ -85,6 +160,15 @@ export default function ExperimentsPage() {
           className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300"
         >
           {error}
+        </div>
+      ) : null}
+
+      {notice ? (
+        <div
+          data-testid="experiments-notice"
+          className="rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-sm dark:border-zinc-800 dark:bg-zinc-900"
+        >
+          {notice}
         </div>
       ) : null}
 
@@ -127,6 +211,15 @@ export default function ExperimentsPage() {
                   {KIND_LABEL[experiment.kind]}
                 </span>
                 <span
+                  data-testid="experiment-status"
+                  className={`rounded-full px-2 py-0.5 text-xs ${STATUS_STYLE[experiment.lifecycle.status]}`}
+                >
+                  {STATUS_LABEL[experiment.lifecycle.status]}
+                  {experiment.lifecycle.promotedVariant
+                    ? ` · ${experiment.lifecycle.promotedVariant}`
+                    : ""}
+                </span>
+                <span
                   className={`rounded-full px-2 py-0.5 text-xs ${
                     experiment.active
                       ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
@@ -139,8 +232,85 @@ export default function ExperimentsPage() {
               <p className="mt-1 text-xs text-zinc-500">
                 <span className="font-mono">{experiment.feature}</span> ·{" "}
                 <span className="font-mono">{experiment.env}</span> · 배정{" "}
-                <span className="font-mono">{experiment.assignments}건</span>
+                <span className="font-mono">{experiment.assignments}건</span> ·
+                고정 배정 프로젝트{" "}
+                <span className="font-mono">
+                  {experiment.lifecycle.assignmentCount}개
+                </span>
               </p>
+
+              {/* Lifecycle 조작 (TASK-1101) — 쓰기 API, EDITOR 이상 */}
+              <div
+                className="mt-3 flex flex-wrap items-center gap-2"
+                data-testid="lifecycle-controls"
+              >
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void transition(experiment.feature, "START")}
+                  className="rounded-lg border border-zinc-300 px-2.5 py-1 text-xs font-medium hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                >
+                  시작
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void transition(experiment.feature, "STOP")}
+                  className="rounded-lg border border-zinc-300 px-2.5 py-1 text-xs font-medium hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                >
+                  중단
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void transition(experiment.feature, "ROLLBACK")}
+                  className="rounded-lg border border-zinc-300 px-2.5 py-1 text-xs font-medium hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                >
+                  되돌리기
+                </button>
+                <span className="ml-1 text-xs text-zinc-500">승격:</span>
+                {experiment.variants
+                  .filter((variant) => variant.available)
+                  .map((variant) => (
+                    <button
+                      key={variant.key}
+                      type="button"
+                      disabled={busy}
+                      data-testid="promote-button"
+                      onClick={() =>
+                        void transition(
+                          experiment.feature,
+                          "PROMOTE",
+                          variant.key,
+                        )
+                      }
+                      className="rounded-lg border border-indigo-300 px-2.5 py-1 font-mono text-xs text-indigo-800 hover:bg-indigo-50 disabled:opacity-50 dark:border-indigo-800 dark:text-indigo-300 dark:hover:bg-indigo-950"
+                    >
+                      {variant.key}
+                    </button>
+                  ))}
+              </div>
+
+              {experiment.lifecycle.events.length > 0 ? (
+                <details className="mt-2" data-testid="lifecycle-history">
+                  <summary className="cursor-pointer text-xs text-zinc-500">
+                    상태 변경 이력 {experiment.lifecycle.events.length}건
+                  </summary>
+                  <ul className="mt-1 space-y-0.5">
+                    {experiment.lifecycle.events.map((event) => (
+                      <li key={event.id} className="text-xs text-zinc-500">
+                        <span className="font-mono">
+                          {ACTION_LABEL[event.action]}
+                        </span>{" "}
+                        {event.fromStatus} → {event.toStatus}
+                        {event.toVariant ? ` (${event.toVariant})` : ""}
+                        {event.actor ? ` · ${event.actor}` : ""} ·{" "}
+                        {new Date(event.createdAt).toLocaleString("ko-KR")}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              ) : null}
               {experiment.reason ? (
                 <p
                   data-testid="experiment-reason"
@@ -231,6 +401,62 @@ export default function ExperimentsPage() {
               </div>
             </section>
           ))}
+
+          {assignments && assignments.assignments.length > 0 ? (
+            <section
+              data-testid="assignment-dashboard"
+              className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800"
+            >
+              <h2 className="text-sm font-semibold">
+                Sticky Assignment (Project 기반)
+              </h2>
+              <p className="mt-1 text-xs text-zinc-500">
+                같은 프로젝트는 항상 같은 변형을 받습니다. 배정은 결정적
+                해시(실험 정의 + 프로젝트)로 정해지므로 재기동·다중 인스턴스와
+                무관하게 일관됩니다.
+              </p>
+              <div className="mt-3 overflow-x-auto">
+                <table
+                  className="w-full text-left text-sm"
+                  data-testid="assignment-table"
+                >
+                  <thead className="text-xs text-zinc-500">
+                    <tr>
+                      <th className="py-1 pr-3 font-medium">Feature</th>
+                      <th className="py-1 pr-3 font-medium">프로젝트</th>
+                      <th className="py-1 pr-3 font-medium">변형</th>
+                      <th className="py-1 pr-3 font-medium">배정 시각</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {assignments.assignments.map((item) => (
+                      <tr
+                        key={`${item.feature}|${item.projectId}`}
+                        data-testid="assignment-row"
+                        className="border-t border-zinc-100 dark:border-zinc-800"
+                      >
+                        <td className="py-1.5 pr-3 font-mono text-xs">
+                          {item.feature}
+                        </td>
+                        <td className="py-1.5 pr-3 text-xs">
+                          {item.projectName ?? "(이름 없음)"}
+                          <span className="ml-1 font-mono text-zinc-500">
+                            {item.projectId}
+                          </span>
+                        </td>
+                        <td className="py-1.5 pr-3 font-mono text-xs">
+                          {item.variantKey}
+                        </td>
+                        <td className="py-1.5 pr-3 text-xs text-zinc-500">
+                          {new Date(item.assignedAt).toLocaleString("ko-KR")}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          ) : null}
 
           <p className="text-xs text-zinc-500">
             배정 비율은 사용 불가 변형을 제외하고 재정규화한 값입니다. 실제
