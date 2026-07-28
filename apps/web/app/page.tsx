@@ -61,6 +61,12 @@ export default function Home() {
             ⚙️ Provider 관리 콘솔
           </Link>
           <Link
+            href="/admin/health"
+            className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+          >
+            🩺 배포 준비 상태
+          </Link>
+          <Link
             href="/login"
             className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
           >

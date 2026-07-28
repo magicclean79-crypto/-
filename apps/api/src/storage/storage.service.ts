@@ -60,6 +60,18 @@ export class StorageService implements OnModuleInit {
     }
   }
 
+  /**
+   * 저장소 접근 점검 (TASK-1202) — 버킷 존재 확인.
+   * 실패는 예외로 올린다 (호출자가 사유를 그대로 보고한다).
+   */
+  async check(): Promise<string> {
+    const exists = await this.client.bucketExists(this.bucket);
+    if (!exists) {
+      throw new Error(`버킷을 찾을 수 없습니다: ${this.bucket}`);
+    }
+    return `버킷 접근 정상 (${this.bucket})`;
+  }
+
   private async ensureBucket(): Promise<void> {
     if (this.bucketReady) {
       return;

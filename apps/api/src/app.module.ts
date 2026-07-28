@@ -4,6 +4,7 @@ import { AppService } from "./app.service";
 import { AnalysisModule } from "./analysis/analysis.module";
 import { AdminSettingsModule } from "./admin/admin-settings.module";
 import { AdminModule } from "./admin/admin.module";
+import { HealthModule } from "./health/health.module";
 import { AuthModule } from "./auth/auth.module";
 import { CompanyBrainModule } from "./company-brain/company-brain.module";
 import { ContentsModule } from "./contents/contents.module";
@@ -48,6 +49,7 @@ import { UploadsModule } from "./uploads/uploads.module";
     AuthModule,
     AdminSettingsModule,
     AdminModule,
+    HealthModule,
   ],
   controllers: [AppController],
   providers: [AppService],

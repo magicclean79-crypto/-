@@ -2,6 +2,7 @@ import "dotenv/config";
 import { NestFactory } from "@nestjs/core";
 import { Logger } from "@nestjs/common";
 import { AppModule } from "./app.module";
+import { ReadinessService } from "./health/readiness.service";
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -11,6 +12,19 @@ async function bootstrap() {
     // httpOnly 세션 쿠키(TASK-0803)를 교차 출처 요청에도 실어 보낼 수 있게 허용
     credentials: true,
   });
+
+  // Startup Validation (TASK-1202) — 환경을 먼저 검증한다.
+  // 운영에서 오류가 있으면 **기동하지 않는다**: 잘못된 설정으로 뜬 서버는
+  // 조용히 오작동하다가 더 큰 사고를 만든다. 개발에서는 경고만 남기고 뜬다.
+  const startup = app.get(ReadinessService).validateOnStartup();
+  if (!startup.ok && startup.fatal) {
+    Logger.error(
+      "환경 검증에 실패해 기동을 중단합니다 — 위 오류를 해결한 뒤 다시 시작하세요.",
+      "Bootstrap",
+    );
+    await app.close();
+    process.exit(1);
+  }
 
   const port = Number(process.env.PORT ?? 4000);
   await app.listen(port);

@@ -349,6 +349,30 @@ API 키가 없으면 항상 mock으로 동작합니다 —
   막고(마지막 Provider는 끌 수 없음), 모든 변경은 감사 이력으로 남습니다.
   `GET /admin/console` · `PUT /admin/settings/:key` · `GET /admin/audit`
 
+## 운영 준비 (TASK-1202, Sprint 12)
+
+배포해도 되는지를 **실제 상태로 판정**합니다 — 문서로만 있는 체크리스트는
+지켜졌는지 확인할 수 없으므로, 기계가 판정할 수 있는 항목은 전부 자동화하고
+사람이 봐야 하는 항목만 "직접 확인"으로 남깁니다.
+
+- **Environment Validation**: 환경변수 선언(`packages/core/src/ops/env-spec.ts`)이
+  **단일 원천** — 검증·대시보드·런북이 같은 선언을 씁니다
+- **Startup Validation**: 기동 시 환경을 검증하고, **운영에서 오류가 있으면
+  기동하지 않습니다**(잘못된 설정으로 뜬 서버가 더 위험). 개발에서는 경고만
+- **Deployment Checklist**: 환경·DB·마이그레이션·저장소·관리자·Provider·
+  예산·Failover를 자동 판정, 스모크·백업은 직접 확인
+- **Health Dashboard**: 웹 **`/admin/health`** — 배포 가능 여부·차단 사유·
+  구성 요소·설정 현황(비밀 값은 설정 여부만)
+- **Runbook / Recovery Guide**:
+  [docs/operations/production-runbook.md](docs/operations/production-runbook.md) ·
+  [docs/operations/recovery-guide.md](docs/operations/recovery-guide.md)
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `GET` | `/health` | 생존 확인 — 본문 `OK` (무인증) |
+| `GET` | `/health/live` | 구조화된 생존 확인 (무인증, 내부 구성 비노출) |
+| `GET` | `/health/ready` | **배포 준비 보고 (ADMIN)** — 체크리스트·구성 요소·설정 현황 |
+
 ## Execution Domain (TASK-0601, Sprint 6)
 
 모든 LLM 호출(Content Generation · Analysis · Vision · 개발용 API)은 호출 1건당

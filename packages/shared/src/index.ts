@@ -1159,3 +1159,93 @@ export interface AdminAuditEntryDto {
   note: string | null;
   createdAt: string;
 }
+
+// ── Production Readiness (TASK-1202, Sprint 12) ──
+
+export type EnvSeverityDto = "error" | "warning";
+export type EnvCategoryDto =
+  | "core"
+  | "database"
+  | "storage"
+  | "auth"
+  | "llm"
+  | "ops";
+
+/** 환경 검증 문제 1건 */
+export interface EnvIssueDto {
+  name: string;
+  severity: EnvSeverityDto;
+  message: string;
+  category: EnvCategoryDto;
+}
+
+/** 설정 현황 1건 — 비밀 값은 설정 여부만 노출 */
+export interface EnvSettingViewDto {
+  name: string;
+  category: EnvCategoryDto;
+  description: string;
+  requiredInProduction: boolean;
+  configured: boolean;
+  /** 비밀이 아닌 값의 실제 값 (비밀이면 null) */
+  value: string | null;
+  secret: boolean;
+  fallback: string | null;
+}
+
+/** 구성 요소 점검 결과 (DB·저장소 등) */
+export interface ComponentHealthDto {
+  name: string;
+  ok: boolean;
+  detail: string;
+  latencyMs: number;
+}
+
+export type ChecklistStatusDto = "pass" | "fail" | "warn" | "manual";
+
+/** 배포 체크리스트 1건 */
+export interface ChecklistItemDto {
+  id: string;
+  title: string;
+  status: ChecklistStatusDto;
+  detail: string;
+  /** 실패 시 배포를 막아야 하는가 */
+  blocking: boolean;
+}
+
+export interface ReadinessSummaryDto {
+  ready: boolean;
+  pass: number;
+  fail: number;
+  warn: number;
+  manual: number;
+  blockers: ChecklistItemDto[];
+}
+
+/** 배포 준비 보고 (Health Dashboard 원천) */
+export interface ReadinessReportDto {
+  /** 배포 가능한가 (blocking 실패 없음) */
+  ready: boolean;
+  production: boolean;
+  nodeEnv: string;
+  environment: {
+    ok: boolean;
+    errors: EnvIssueDto[];
+    warnings: EnvIssueDto[];
+    checked: number;
+  };
+  components: ComponentHealthDto[];
+  /** 미적용 마이그레이션 수 (확인 불가면 null) */
+  pendingMigrations: number | null;
+  providers: { available: string[]; default: string };
+  checklist: ChecklistItemDto[];
+  summary: ReadinessSummaryDto;
+  configuration: EnvSettingViewDto[];
+  checkedAt: string;
+}
+
+/** 간단 생존 확인 (인증 불필요) */
+export interface LivenessDto {
+  status: "ok";
+  uptimeSeconds: number;
+  nodeEnv: string;
+}

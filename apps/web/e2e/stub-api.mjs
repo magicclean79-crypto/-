@@ -577,6 +577,81 @@ const server = http.createServer((req, res) => {
     );
     return;
   }
+  // ── Production Readiness (TASK-1202) ── ADMIN 전용
+  if (url.pathname === "/health/ready") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    const ready = mode === "data";
+    res.end(
+      JSON.stringify({
+        ready,
+        production: !ready,
+        nodeEnv: ready ? "development" : "production",
+        environment: ready
+          ? { ok: true, errors: [], warnings: [], checked: 22 }
+          : {
+              ok: false,
+              errors: [
+                { name: "S3_BUCKET", severity: "error", message: "필수 환경변수가 없습니다 — 이미지 버킷 이름.", category: "storage" },
+              ],
+              warnings: [
+                { name: "LLM_DAILY_BUDGET_USD", severity: "warning", message: "운영 일 예산이 설정되지 않았습니다 — 비용 폭주를 막을 상한이 없습니다.", category: "llm" },
+              ],
+              checked: 22,
+            },
+        components: [
+          { name: "database", ok: true, detail: "연결 정상", latencyMs: 3 },
+          { name: "storage", ok: ready, detail: ready ? "버킷 접근 정상 (acos)" : "접근 실패: 버킷을 찾을 수 없습니다", latencyMs: 12 },
+        ],
+        pendingMigrations: ready ? 0 : 2,
+        providers: { available: ready ? ["mock", "openai"] : ["mock"], default: "mock" },
+        checklist: ready
+          ? [
+              { id: "env", title: "환경변수 검증", status: "pass", detail: "22개 항목 이상 없음.", blocking: true },
+              { id: "database", title: "데이터베이스 연결", status: "pass", detail: "연결 정상", blocking: true },
+              { id: "migrations", title: "마이그레이션 적용", status: "pass", detail: "미적용 마이그레이션 없음.", blocking: true },
+              { id: "storage", title: "이미지 저장소 접근", status: "pass", detail: "버킷 접근 정상 (acos)", blocking: true },
+              { id: "admin-user", title: "관리자 계정", status: "pass", detail: "ADMIN 계정이 존재합니다.", blocking: true },
+              { id: "provider", title: "실제 Provider 연결", status: "pass", detail: "사용 가능: openai (기본 mock)", blocking: false },
+              { id: "smoke", title: "실 Provider 스모크 (배포 직후 1회)", status: "manual", detail: "node scripts/real-provider-smoke.mjs 실행", blocking: false },
+            ]
+          : [
+              { id: "env", title: "환경변수 검증", status: "fail", detail: "필수/형식 오류 1건 — S3_BUCKET", blocking: true },
+              { id: "database", title: "데이터베이스 연결", status: "pass", detail: "연결 정상", blocking: true },
+              { id: "migrations", title: "마이그레이션 적용", status: "fail", detail: "미적용 마이그레이션 2건 — 배포 전에 적용하세요.", blocking: true },
+              { id: "storage", title: "이미지 저장소 접근", status: "fail", detail: "접근 실패: 버킷을 찾을 수 없습니다", blocking: true },
+              { id: "provider", title: "실제 Provider 연결", status: "fail", detail: "mock만 사용 가능합니다 — 운영에서는 실제 Provider 키가 필요합니다.", blocking: true },
+              { id: "budget", title: "비용 예산 설정", status: "warn", detail: "예산이 없습니다 — 비용 폭주를 막을 상한이 없습니다.", blocking: false },
+              { id: "smoke", title: "실 Provider 스모크 (배포 직후 1회)", status: "manual", detail: "node scripts/real-provider-smoke.mjs 실행", blocking: false },
+            ],
+        summary: ready
+          ? { ready: true, pass: 6, fail: 0, warn: 0, manual: 1, blockers: [] }
+          : {
+              ready: false,
+              pass: 1,
+              fail: 4,
+              warn: 1,
+              manual: 1,
+              blockers: [
+                { id: "env", title: "환경변수 검증", status: "fail", detail: "필수/형식 오류 1건 — S3_BUCKET", blocking: true },
+                { id: "migrations", title: "마이그레이션 적용", status: "fail", detail: "미적용 마이그레이션 2건 — 배포 전에 적용하세요.", blocking: true },
+                { id: "storage", title: "이미지 저장소 접근", status: "fail", detail: "접근 실패: 버킷을 찾을 수 없습니다", blocking: true },
+                { id: "provider", title: "실제 Provider 연결", status: "fail", detail: "mock만 사용 가능합니다 — 운영에서는 실제 Provider 키가 필요합니다.", blocking: true },
+              ],
+            },
+        configuration: [
+          { name: "DATABASE_URL", category: "database", description: "PostgreSQL 연결 문자열", requiredInProduction: true, configured: true, value: null, secret: true, fallback: null },
+          { name: "S3_BUCKET", category: "storage", description: "이미지 버킷 이름", requiredInProduction: true, configured: ready, value: ready ? "acos" : null, secret: false, fallback: null },
+          { name: "LLM_PROVIDER", category: "llm", description: "기본 LLM Provider", requiredInProduction: false, configured: false, value: null, secret: false, fallback: "mock (실제 호출 없음)" },
+        ],
+        checkedAt: new Date().toISOString(),
+      }),
+    );
+    return;
+  }
   // ── Provider Administration Console (TASK-1201) ── ADMIN 전용
   if (url.pathname === "/admin/console" || url.pathname === "/admin/audit" ||
       url.pathname.startsWith("/admin/settings/")) {
