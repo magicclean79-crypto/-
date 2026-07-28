@@ -5,25 +5,27 @@
 
 ## 결정 대기
 
-### 28. TASK-0702 "Dashboard Filter & Web Testing" 세부 해석 확인
-- 현황: 승인 결정 4항목(필터·hour 31일·Playwright 게이트·CSS 차트 유지)을
-  다음과 같이 이행했다:
-  - **Filter**: Feature(선택 목록)/Provider(자유 입력)/Model(자유 입력)/
-    From/To(UTC) — GET 폼(서버 컴포넌트 유지), stats+timeline 양쪽 적용,
-    interval 전환 시 필터 유지, 초기화 버튼
-  - **Stats API 필터 확장**: 화면 필터가 KPI·테이블에도 적용되도록
-    `GET /executions/stats`에 feature/provider/model 정확 일치 필터를
-    추가했다 (지시는 "Dashboard Filter"였으므로 화면 전체 반영으로 해석)
-  - **hour 31일 제한**: 명시 범위 31일 초과 → 400. **from 미지정 시 최근
-    31일 창을 기본 적용**(400 대신 자동 축소 — 화면 기본 동작 보호)
-  - **Playwright CI 게이트**: 루트 pnpm test에 web e2e 4종 포함 —
-    Dashboard/Filter/Empty/Error. **모드 전환형 스텁 API**로 상태를
-    결정적으로 재현(실 DB/API 불필요), 사전 설치 chromium 사용
-- 하지 않은 것(스펙 없음): Provider/Model 자동완성(datalist), 실 API 통합
-  e2e(스텁 아닌 실환경 — 운영 스모크와 함께 권장), 필터 다중 선택
-- 질문: ① Stats API 필터 확장·hour 기본 31일 창(400 대신 자동 축소)이
-  의도에 부합하는지 ② Provider/Model 자유 입력 방식이 적절한지(자동완성
-  필요 여부) ③ 다음 TASK 지정 요청.
+### 29. TASK-0703 "Real Provider Smoke & Publishing Pipeline" 세부 해석 확인
+- 현황: 두 지시 사항을 다음과 같이 구현했다:
+  - **발행 파이프라인**: `PATCH /projects/:id/contents/:contentId/status` —
+    DRAFT→REVIEW→PUBLISHED→ARCHIVED. 전이 규칙은 Sprint 1에 선언돼 있던
+    core `canTransition`을 공식 사용: **REVIEW→DRAFT 되돌리기 허용,
+    DRAFT/REVIEW/PUBLISHED→ARCHIVED 종결 허용, ARCHIVED는 전이 불가,
+    건너뛰기(DRAFT→PUBLISHED) 불가**. PUBLISHED는 발행 조건(REVIEW+제목/본문)
+    추가 검증 + `publishedAt` 기록(ARCHIVED 후에도 보존).
+    Content.publishedAt 컬럼 추가(데이터 보존 마이그레이션)
+  - **운영 스모크**: `scripts/real-provider-smoke.mjs` 8단계 자동 판정
+    (Provider→Health→탐색→Vision 조립→READY→분석→생성→Execution 지표·비용
+    검증) + `docs/operations/real-provider-smoke.md` 절차 문서.
+    개발 환경에서 mock 리허설 **8/8 PASS**로 도구 검증 완료 — **실키 수행은
+    CTO 결정(0603 승인 ④)대로 운영/스테이징 환경 필요**
+- 하지 않은 것(스펙 없음): 발행 웹 UI(상태 전환 버튼), PUBLISHED 이후
+  채널별 포맷/외부 배포, 발행 이력 감사 테이블(전이 로그), 실키 스모크
+  실제 수행(환경 미제공)
+- 질문: ① 전이 규칙 세부(되돌리기·단계별 ARCHIVED·publishedAt 보존)가
+  의도에 부합하는지 ② **실키 스모크 수행 일정/환경**(운영 또는 스테이징
+  API 키 + egress) 지원 요청 ③ 발행 웹 UI를 다음 TASK로 지정할지
+  ④ 다음 TASK 지정 요청.
 
 ### 2. tesseract Provider 유지 여부
 - 현황: OCR 기본 Provider는 mock이며, 로컬 오프라인 엔진(tesseract.js)이
@@ -46,6 +48,14 @@
 - 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
 
 ## 결정됨
+
+### 28. TASK-0702 해석 확인 → 승인 + 게이트/정책 확정 (2026-07-28)
+- CTO 결정: ① **stats의 feature/provider/model 필터를 공식 API로 유지**
+  ② **hour 정책 확정** — 최근 31일 기본 창 + 31일 초과 400 ③ **Provider/
+  Model 자유 입력 유지** — 자동완성은 후속 Sprint ④ **Playwright는 공식
+  품질 게이트 — 모든 Web 기능은 Playwright를 통과해야 함**
+  ⑤ TASK-0703(Real Provider Smoke & Publishing Pipeline) 지시됨.
+- 반영(`1c28a52`): 현행 구현 확정 (#29 참고).
 
 ### 27. TASK-0701 해석 확인 → 승인 + Dashboard 확장 지시 (2026-07-28)
 - CTO 결정: ① **CSS 기반 차트 구조 유지 — 외부 차트 라이브러리 미도입**
