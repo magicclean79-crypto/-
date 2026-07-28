@@ -8,11 +8,12 @@
 
 ## 미완료 (스펙 확정, 구현 대기)
 
-- (없음 — TASK-0901 완료. CTO 리뷰/승인 대기 중이며 승인 전 다음 TASK를 시작하지 않는다)
+- (없음 — TASK-0902 완료. CTO 리뷰/승인 대기 중이며 승인 전 다음 TASK를 시작하지 않는다)
 
 ## 완료 — Sprint 9
 
-- [x] **TASK-0901 — Real Provider Integration: OpenAI Production** (`8d095e3`): feature별 운영 출력 상한(LlmService 단일 관문 — content 4096/analysis 2048/vision 2048, LLM_*_MAX_TOKENS 조정) + JSON 잘림 방어(finish_reason=length+json → 명확한 오류·Execution FAILED) + OpenAI Production 통합 검증(주입 클라이언트로 실 응답 형태 재현 — Content 텍스트/Analysis json_object 엄격 파싱/Vision image_url 첨부/스냅샷 모델 접두사 비용/잘림 FAILED, openai-production.spec.ts 4종) + Production Smoke 10단계 확장(쿠키 전용 운영 모드 로그인 지원·운영 판정: byProvider/byFeature 커버리지·실키 cost>0) + 운영 런북(환경 세트) — 실키 네트워크 검증은 운영/스테이징 스모크 전용(0603 승인 ④), 해석 확인 CTO_REQUEST #35
+- [x] **TASK-0902 — Cost Governance & Multi-Provider Foundation** (`5b39867`): Daily/Monthly Budget(LLM_DAILY/MONTHLY_BUDGET_USD, UTC 경계, 미설정=무제한 — 초과 시 LlmService 단일 관문 429 차단·Execution 미기록) + Cost Alert(80% 임계 LLM_BUDGET_ALERT_RATIO — 상태 전이 로그·대시보드 배지, core evaluateBudgetWindow 순수 로직) + Provider Registry(Code-first LLM_PROVIDER_REGISTRY — official/adapter-ready/mock·키 설정 여부만 노출, GET /llm/providers) + Model Routing(LLM_MODEL_CONTENT/ANALYSIS/VISION — 호출자 명시 우선, 선택된 Provider 내 모델 선택) + Provider Dashboard(웹 /providers — Registry·라우팅·예산 카드·Provider별 통계, Playwright 3종 → web e2e 21) + GET /llm/budget — 스키마 변경 없음, 해석 확인 CTO_REQUEST #36
+- [x] **TASK-0901 — Real Provider Integration: OpenAI Production** (`8d095e3`, CTO 승인 — 출력 상한 공식 표준(Content 4096/Analysis 2048/Vision 2048, 환경변수 조정 유지), JSON은 length 시 FAILED·Text는 부분 결과 허용 확정, 실 Provider Smoke 정책 확정(운영/스테이징 배포 직후 1회 필수·모델 변경 시·인증/쿠키 변경 시 재실행 — 현재 런북·스크립트가 공식 운영 절차)): feature별 운영 출력 상한(LlmService 단일 관문 — content 4096/analysis 2048/vision 2048, LLM_*_MAX_TOKENS 조정) + JSON 잘림 방어(finish_reason=length+json → 명확한 오류·Execution FAILED) + OpenAI Production 통합 검증(주입 클라이언트로 실 응답 형태 재현 — Content 텍스트/Analysis json_object 엄격 파싱/Vision image_url 첨부/스냅샷 모델 접두사 비용/잘림 FAILED, openai-production.spec.ts 4종) + Production Smoke 10단계 확장(쿠키 전용 운영 모드 로그인 지원·운영 판정: byProvider/byFeature 커버리지·실키 cost>0) + 운영 런북(환경 세트) — 실키 네트워크 검증은 운영/스테이징 스모크 전용(0603 승인 ④), 해석 확인 CTO_REQUEST #35
 
 ## 완료 — Sprint 8 (CTO 공식 종료, 2026-07-28)
 

@@ -5,33 +5,32 @@
 
 ## 결정 대기
 
-### 35. TASK-0901 "Real Provider Integration — OpenAI Production" 세부 해석 확인
-- 현황: 지시 6영역(Content Generation · Product Analysis · Vision
-  Analysis · Execution Log · Dashboard · Production Smoke)을 다음과 같이
-  실 OpenAI 연결 수준으로 완성했다:
-  - **구조 확인**: 3개 엔진은 LLM Gateway 단일 진입점 경유 —
-    `LLM_PROVIDER=openai` + `OPENAI_API_KEY`만으로 전 기능 전환(0504~0603
-    설계 효과). Execution/Dashboard도 Provider 무관 동작
-  - **운영 출력 상한**: LlmService 단일 관문에서 feature 기본값 주입 —
-    content 4096 · analysis 2048 · vision 2048 (`LLM_*_MAX_TOKENS` 조정,
-    어댑터 기본 1024는 상세페이지 잘림 위험)
-  - **JSON 잘림 방어**: finish_reason=length + json → 명확한 오류로 실패
-    (Execution FAILED 기록). 텍스트는 부분 결과 허용
-  - **통합 검증**: 주입 클라이언트로 실 응답 형태(스냅샷 모델명·usage·
-    finish_reason) 재현 — 3개 엔진 전 경로 4종 테스트(요청 매핑
-    json_object/image_url/상한 → 엄격 파싱 → 접두사 매칭 비용 산정)
-  - **Production Smoke 10단계**: 쿠키 전용 운영 모드 로그인(Set-Cookie
-    자동 인식) + 운영 판정(byProvider/byFeature 커버리지 + 실키 cost>0).
-    mock 리허설·쿠키 전용 리허설 각 10/10 PASS
-  - **운영 런북**: 환경 세트(Provider·상한·인증/쿠키·스모크 계정·egress)
-    표준화 — docs/operations/real-provider-smoke.md
-- 하지 않은 것: **실키 네트워크 호출**(개발 샌드박스 egress 차단 — 0603
-  승인 ④대로 운영/스테이징 스모크로 수행, 준비 완료), 비용 상한/알림,
-  feature별 모델 라우팅, Anthropic/Gemini 연결
-- 질문: ① 출력 상한 기본값(4096/2048/2048)과 잘림 정책(JSON 실패·텍스트
-  부분 허용)이 적절한지 ② **운영/스테이징 실키 스모크의 실행 주체·시점**
-  지정 요청 (스크립트·런북·자동 판정 구비 완료) ③ 비용 거버넌스(일/월
-  예산 상한·알림) 도입 여부 ④ 다음 TASK 지정 요청.
+### 36. TASK-0902 "Cost Governance & Multi-Provider Foundation" 세부 해석 확인
+- 현황: 지시 6항목(Daily Budget · Monthly Budget · Cost Alert · Provider
+  Registry · Model Routing · Provider Dashboard)을 다음과 같이 구현했다:
+  - **예산**: `LLM_DAILY_BUDGET_USD`/`LLM_MONTHLY_BUDGET_USD` — Execution
+    cost(USD) 합계를 **UTC 일/월** 기준 비교(시계열 표준 동일). 미설정 =
+    무제한(검사 오버헤드 없음 — mock 개발 무영향)
+  - **Cost Alert**: 80% 임계(`LLM_BUDGET_ALERT_RATIO`) 경고 — 상태 전이
+    시 서버 로그 + `/providers` 배지. **초과 시 새 호출 429 차단** —
+    LlmService 단일 관문 호출 전 검사(Execution 미기록), 예산 상향/기간
+    경과로 자동 해제
+  - **Provider Registry**: Code-first(`LLM_PROVIDER_REGISTRY`, core) —
+    mock/openai(official)/anthropic·gemini(adapter-ready), 키는 설정
+    여부만 노출. `GET /llm/providers`
+  - **Model Routing**: `LLM_MODEL_CONTENT/ANALYSIS/VISION` — 호출자 명시 >
+    라우팅 > Provider 기본. **현 단계는 선택된 Provider 안의 모델 선택**
+    (예: 분석만 gpt-4o-mini) — cross-provider 라우팅은 다음 단계
+  - **Provider Dashboard**: 웹 `/providers` — 예산 카드(진행 바·배지)·
+    라우팅 표·Registry 표·Provider별 호출 통계 + Playwright 3종
+- 하지 않은 것(스펙 없음): 외부 알림 채널(이메일/슬랙 — 메일 인프라
+  부재), cross-provider 라우팅(feature별 Provider 분리 — 어댑터 다중
+  기동 설계 필요), 예산의 DB/화면 관리(현재 환경변수 Code-first)
+- 질문: ① **초과 시 429 차단** 정책이 의도에 부합하는지 (대안: 경고만
+  하고 차단하지 않음) ② 경고 임계 80% 기본값 적절성 ③ 라우팅 범위(현
+  단계 Provider 내 모델 선택) 확정 — cross-provider 분리 시점 ④ 예산
+  설정을 환경변수로 유지할지, ADMIN 화면 관리로 확장할지 ⑤ 다음 TASK
+  지정 요청.
 
 ### 2. tesseract Provider 유지 여부
 - 현황: OCR 기본 Provider는 mock이며, 로컬 오프라인 엔진(tesseract.js)이
@@ -54,6 +53,17 @@
 - 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
 
 ## 결정됨
+
+### 35. TASK-0901 해석 확인 → 승인 + 운영 표준·스모크 정책 확정 (2026-07-28)
+- CTO 결정: ① **출력 상한 공식 표준 확정** — Content Generation 4096 ·
+  Product Analysis 2048 · Vision Analysis 2048 (환경변수 기반 조정 구조
+  유지) ② **JSON 출력은 finish_reason=length 시 FAILED 처리, Text 출력은
+  부분 결과 허용** ③ **실 Provider Smoke 정책 확정** — 운영/스테이징 배포
+  직후 1회 필수 · 모델 변경 시 재실행 · 인증/쿠키 변경 시 재실행, 현재
+  런북·스크립트를 공식 운영 절차로 사용 ④ TASK-0902(Cost Governance &
+  Multi-Provider Foundation) 지시됨.
+- 반영(`5b39867`): 전 항목 현행 구현과 일치 — 변경 없이 확정. 비용
+  거버넌스·Provider Registry 구현 (#36 참고).
 
 ### 34. TASK-0804 해석 확인 → 승인 + 보안 표준 확정 + Sprint 8 종료 (2026-07-28)
 - CTO 결정: ① **기본 로그인 보안 정책 공식 표준 확정** — Rate Limit
