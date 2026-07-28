@@ -13,139 +13,130 @@
 
 | 항목 | 값 |
 | --- | --- |
-| 보고 기준 TASK | **TASK-0603 — Provider Integration (OpenAI)** |
+| 보고 기준 TASK | **TASK-0604 — Image Guard & Preprocessing** |
 | 보고일 | 2026-07-28 |
-| 브랜치 / 기준 커밋 | `claude/ai-product-content-os-setup-jb5oai` / `34d1426` |
-| 핵심 성과 | OpenAI Provider **공식 연결** — 지시된 5개 항목(API Key·Health Check·responseFormat·Multimodal·Execution Cost) 전부 활성화 |
-| 구현 중단 상태 | **TASK-0603 완료 후 즉시 중단** — CTO 승인 전 다음 TASK 미착수 |
-| 스펙 확인 필요 | **실키 호출 미검증(환경 제약)** 등 → **CTO_REQUEST #24 확인 요청** |
+| 브랜치 / 기준 커밋 | `claude/ai-product-content-os-setup-jb5oai` / `6c00dfb` |
+| 핵심 성과 | Vision 호출 전 **이미지 검증→리사이즈→최적화→EXIF 제거→용량 제한** 파이프라인 완성 — 실제 Provider 연결 전 필수 가드(0505 승인 ④) 이행 |
+| 구현 중단 상태 | **TASK-0604 완료 후 즉시 중단** — CTO 승인 전 다음 TASK 미착수 |
+| 스펙 확인 필요 | 정책 기본값·스킵 동작 등 → **CTO_REQUEST #25 확인 요청** |
 
 ## 2. 품질 게이트
 
 | 게이트 | 명령 | 결과 |
 | --- | --- | --- |
 | Build | `pnpm build` | ✅ 6/6 워크스페이스 성공 |
-| Test | `pnpm test` | ✅ 261/261 통과 (core 115 · api 146) — 이번 주기 +8 |
+| Test | `pnpm test` | ✅ 273/273 통과 (core 121 · api 152) — 이번 주기 +12 |
 | TypeScript | (빌드 포함) | ✅ 오류 0 |
 | ESLint | `pnpm lint` | ✅ 오류 0, 경고 0 |
 
 ## 3. 변경 사항 (이번 보고 주기)
 
-### TASK-0602 승인 결정 반영
+### TASK-0604 — Image Guard & Preprocessing (`6c00dfb`)
 
-- 지표 구성·비율 0~1 API 반환(%는 UI)·from/to 공식 채택 — 현행 확정 (변경 없음)
-- Dashboard 화면(다음 Sprint)·일별 시계열(Sprint 6 후반) — 백로그 기록
+지시된 5개 항목 — Vision Provider 호출 전에 순서대로 적용:
 
-### TASK-0603 — Provider Integration: OpenAI (`34d1426`)
+1. **이미지 검증** (`validateSourceImage`, @acos/core 순수 로직):
+   MIME 허용 목록(jpeg/png/webp/gif) · 빈 파일 거부 · 원본 최대 20MB
+2. **리사이즈**: 최대 변 1024px, 비율 유지, 확대 없음
+3. **최적화**: JPEG q82 재인코딩 (투명도 있는 PNG는 PNG 유지 —
+   webp/gif도 JPEG로 정규화되어 Provider 호환성 확보)
+4. **EXIF 제거**: Orientation을 실제 픽셀 회전으로 반영한 뒤 메타데이터
+   없이 재인코딩 — 위치정보 등 개인정보가 외부 API로 나가지 않음
+5. **용량 제한**: 전처리 후에도 5MB 초과면 거부
 
-지시된 5개 활성화 항목:
-
-1. **API Key**: `LLM_PROVIDER=openai` + `OPENAI_API_KEY` 조합으로 활성화
-   (키 없으면 mock 폴백 — 기존 안전 원칙 유지), .env.example 가이드 갱신
-2. **Health Check**: `GET /llm/health` 신설 — **실제 최소 완성 호출**("ping",
-   maxTokens 16)로 키·네트워크·모델 접근을 확인. 실패 시 예외 대신
-   `{ status: "error", error }` 반환. 점검 호출도 Execution(feature "dev")으로
-   기록되어 실패 이력이 대시보드에 남음
-3. **responseFormat**: OpenAI 어댑터가 `"json"`을
-   `response_format { type: "json_object" }`로 매핑 — 프롬프트 지침과 이중
-   강제 (CTO 결정 0504 승인 ②의 "실연결 시 매핑" 적용)
-4. **Multimodal**: `image_url`(data URL) 매핑 유지 + **테스트용 클라이언트
-   주입** 구조 추가로 요청 파라미터 계약(모델·토큰·이미지·구조화 출력)을
-   단위 테스트로 고정
-5. **Execution Cost**: 가격표(Code-first 중앙 정의)에 OpenAI 공식 공개 단가
-   등록 — `gpt-4o` $2.5/$10, `gpt-4o-mini` $0.15/$0.6 (USD/1M). 응답 모델이
-   버전 스냅샷(`gpt-4o-2024-08-06`)이어도 **최장 접두사 일치**로 단가 매칭
-   (`gpt-4o-mini-…`가 `gpt-4o`로 오매칭되지 않도록 더 긴 key 우선)
-
-- Anthropic/Gemini는 이번 TASK 범위 아님 — responseFormat 매핑은 해당
-  Provider 연결 시 (CTO 지시: "우선 OpenAI")
-- DB 변경 없음. 문서: llm.md(Health Check·OpenAI 연결)/execution.md(단가)/
-  README/.env.example 갱신
+구조 (기존 Port/Adapter 원칙 그대로):
+- **core**: `ImageGuardPolicy`(기본값 선언) + `ImagePreprocessor` Port +
+  순수 검증 — `LlmVisionProvider`가 첨부 직전에 검증→전처리 호출
+- **apps/api**: `SharpImagePreprocessor` (sharp 어댑터 — 의존성 추가)
+- **실패 처리 설계**: 위반 이미지(`ImageGuardError`)는 **분석을 막지 않고
+  스킵** — `raw.skippedImages`에 id·사유 기록 후 나머지로 계속.
+  스토리지 오류 등 인프라 실패는 그대로 전파되어 기존 재시도 → null 폴백
+  유지 (0505 구조 불변)
+- **정책 환경변수화** (0505 승인 ① 결과 동일 패턴): `VISION_IMAGE_MAX_SOURCE_BYTES` ·
+  `VISION_IMAGE_MAX_DIMENSION` · `VISION_IMAGE_MAX_OUTPUT_BYTES`
+- DB·API 계약 변경 없음. 문서: vision.md에 Image Guard 섹션, README/.env.example 갱신
 
 ### 누적 완료 TASK
 
 | Sprint | TASK | 상태 |
 | --- | --- | --- |
-| Sprint 6 | 0601 Execution Domain · 0602 Dashboard | 승인 |
-| Sprint 6 | **TASK-0603 — Provider Integration (OpenAI)** | **완료 (`34d1426`) — 승인 대기** |
+| Sprint 6 | 0601 Execution · 0602 Dashboard · 0603 OpenAI 연결 | 승인 |
+| Sprint 6 | **TASK-0604 — Image Guard & Preprocessing** | **완료 (`6c00dfb`) — 승인 대기** |
 | Sprint 1~5 | Foundation ~ AI Execution | 전체 승인 · 공식 종료 |
 
 ## 4. 테스트 결과
 
 | 위치 | 종류 | 수 | 결과 |
 | --- | --- | --- | --- |
-| `packages/core` | Unit — 기존 113 · **단가 2** (gpt-4o 계산·접두사 매칭) | 115 | ✅ |
-| `apps/api` | Service+API — 기존 140 · **OpenAI 어댑터 4 + Health 2** | 146 | ✅ |
-| **합계** | | **261** | **전체 통과** |
+| `packages/core` | Unit — 기존 115 · **검증 3 + Vision 통합 3** | 121 | ✅ |
+| `apps/api` | Service+API — 기존 146 · **sharp 전처리 6** | 152 | ✅ |
+| **합계** | | **273** | **전체 통과** |
 
 신규 테스트가 검증하는 것:
-- OpenAI 어댑터(가짜 클라이언트 주입): 응답→LlmResult 매핑(스냅샷 모델·usage),
-  json 시에만 response_format 전달, 이미지 image_url 첨부 순서, 모델/maxTokens
-- Health: mock ok + Execution(dev) 기록, 실패 Provider면 error 상태 +
-  FAILED Execution (예외 미발생)
-- 단가: gpt-4o 1M/1M → $12.5, 스냅샷 접두사 매칭(gpt-4o-mini 우선순위 포함)
+- 검증: MIME 거부·빈 파일·원본 용량 초과·통과
+- Vision 통합: 전처리된 바이트가 첨부됨, 위반 이미지 스킵 + raw.skippedImages
+  기록 + 분석 계속, **인프라 오류는 스킵하지 않고 전파**(null 폴백 경로 보존)
+- sharp 어댑터(실제 sharp로 이미지 생성·검증): 2000×1500→1024×768 비율 축소,
+  확대 없음, **EXIF Orientation 6 → 픽셀 회전(400×200→200×400) 후 EXIF 완전
+  제거**, 투명 PNG 유지, 출력 용량 초과 거부, 손상 파일 → ImageGuardError
 
 라이브 검증:
-- mock 구성: `GET /llm/health` → ok (latency 포함), Execution dev SUCCESS 기록
-- **openai 구성(무효 테스트 키)**: `GET /llm` → openai/gpt-4o 선택 확인,
-  `/llm/health` → **실제 API 호출 시도** 후 error 반환, Execution에
-  `dev | openai gpt-4o | FAILED` 기록 — 배선 전체가 실호출까지 도달함을 실증
-- ⚠️ **실키 검증 불가**: 이 개발 샌드박스의 네트워크 egress 허용 목록에
-  `api.openai.com`이 없어(403 Host not in allowlist) 유효 키가 있어도 호출이
-  차단됨 — 환경 설정 또는 다른 환경에서의 스모크 테스트 필요 (#24)
+- 조립 실행 → 가드 경유 후 visionSummary 정상 생성 (경로 무파괴 확인)
+- 실제 전처리 데모(운영 코드 직접 실행): **3000×2000 EXIF(Orientation 6)
+  JPEG 36KB → 683×1024 · EXIF 없음 · 4.4KB** (회전 반영+축소+최적화+제거 동시 확인)
+- 거부 데모: `application/pdf` 형식 거부 · 원본 용량 제한 초과 거부
 
 ## 5. 아키텍처 변경 및 현황
 
-**이번 주기 변경 — 첫 실제 Provider 공식 연결**:
+**이번 주기 변경 — Vision 입력 앞의 가드 계층**:
 
 ```
-LLM_PROVIDER=openai + OPENAI_API_KEY
-   └─▶ OpenAiLlmProvider: json_object 구조화 출력 + image_url 멀티모달
-         ├─ GET /llm/health : 실호출 상태 점검 (실패도 Execution 기록)
-         └─ Execution Cost  : gpt-4o 계열 단가 자동 산정 (접두사 매칭)
+getBytes() → 검증(core 순수) → SharpImagePreprocessor(리사이즈·최적화·EXIF 제거·용량)
+                │ ImageGuardError → 해당 이미지 스킵 (분석 계속, 사유 기록)
+                ▼
+          base64 첨부 → LLM Gateway (멀티모달)
 ```
 
-① mock 기본 원칙은 그대로 — 키를 설정한 환경에서만 실호출. ② 관측 루프
-완성: 연결(0603) → 기록(0601) → 집계(0602)가 한 흐름 — 실키 투입 즉시
-비용/성능 지표가 대시보드에 나타난다. ③ 어댑터 테스트 패턴 수립(클라이언트
-주입) — Anthropic/Gemini 연결 시 동일 패턴 적용 예정.
+① 실제 Provider 연결 전 필수 가드(0505 승인 ④) 이행 — 실키 투입 시
+대형 원본/EXIF 개인정보가 외부 API로 나가지 않고, 토큰·전송 비용이
+예측 가능해짐. ② 실패 등급 구분: 콘텐츠 위반(스킵) vs 인프라 오류(폴백) —
+기존 graceful degradation 불변. ③ 정책은 core 선언 + 환경변수 조정 —
+가격표와 같은 Code-first 패턴.
 
 **유지되는 핵심 결정**: Port/Adapter 계층 · mock 기본 원칙 · 이력 보존 모델 · Advisory 검증 · Execution 6항 결정
 
-**현황**: 모노레포(web·api·core/shared/agents/ui), 마이그레이션 16건(변경 없음), drift 없음
+**현황**: 모노레포(web·api·core/shared/agents/ui), 마이그레이션 16건(변경 없음), drift 없음, 신규 의존성 sharp(apps/api)
 
 ## 6. 데이터 모델
 
-(TASK-0603은 스키마 변경 없음 — 가격표는 코드 선언, Health는 기존 Execution으로 기록)
+(TASK-0604는 스키마 변경 없음 — 전처리는 호출 경로 내에서만 수행, 저장물 원본은 불변)
 
 ## 7. API 표면
 
 | 영역 | 엔드포인트 |
 | --- | --- |
-| 기존 전체 | (유지 — 이전 보고 참조) |
-| LLM Gateway | `GET /llm` · **`GET /llm/health`** (신설) · `POST /llm/complete` |
-| Execution | `GET /executions` · `GET /executions/stats` — 변경 없음 (openai 호출도 자동 집계) |
+| 전체 | **변경 없음** — 조립(POST /projects/:id/product-object) 내부에서 가드가 적용될 뿐 계약 동일 |
 
 웹: 변경 없음
 
 ## 8. 리스크·기술 부채
 
-1. **실키 스모크 테스트 미수행** — 개발 환경 egress 제한(`api.openai.com`
-   차단)으로 유효 키 검증 불가. 무효 키로 배선(실호출 도달·오류 기록)은
-   실증 완료 (CTO_REQUEST #24)
-2. **이미지 용량 가드 미구현** — CTO 결정(0505 승인 ④): 실제 Provider 연결
-   전 구현 — **다음 TASK 후보로 이행 필요** (Vision을 openai로 실행하기 전)
-3. **단가 변동 추적** — 가격표는 코드 선언(승인 ④ 유지) — OpenAI 단가 변경
-   시 수동 갱신 필요
-4. **Anthropic/Gemini responseFormat 미매핑** — 해당 Provider 연결 TASK에서
-5. **Dashboard 화면·일별 시계열** — CTO 일정대로 대기 (다음 Sprint / Sprint 6 후반)
+1. **0604 해석 미확인** — 기본값(1024px/20MB/5MB/JPEG q82)·위반 시 스킵
+   동작·업로드 원본 무변경 방침 (CTO_REQUEST #25)
+2. **업로드 경로는 별도** — 업로드(TASK-0201)의 10MB/MIME 검증은 기존 유지,
+   저장 원본은 전처리하지 않음(호출 시점 전처리) — 저장 시점 최적화가
+   필요하면 별도 스펙
+3. **sharp 네이티브 의존성** — 배포 환경 아키텍처별 바이너리 확인 필요
+   (현 환경 linux-x64 정상)
+4. **실키 스모크 테스트** — CTO 결정대로 운영/스테이징에서 수행 대기
+   (이제 이미지 가드까지 갖춰져 Vision 실호출 준비 완료)
+5. **Dashboard 화면(다음 Sprint)·일별 시계열(Sprint 6 후반)** — CTO 일정 대기
 
 ## 9. 다음 권장 사항 (Sprint 6 후속 후보)
 
-1. **CTO_REQUEST #24 확인** — TASK-0603 해석 확인 및 다음 지시
-2. **실키 스모크 테스트** — 운영/스테이징 환경(egress 허용)에서 유효 키로
-   health→생성→분석→Vision 1회씩 + /executions/stats 비용 확인
-3. **이미지 용량 가드·리사이즈** — CTO 결정상 실제 Provider 연결 전 구현
-   항목 — openai로 Vision을 돌리기 전에 필요
-4. **일별 시계열 집계** — CTO 예고(Sprint 6 후반)
-5. **Anthropic/Gemini 공식 연결** — OpenAI와 동일 5항목 패턴 재적용
+1. **CTO_REQUEST #25 확인** — TASK-0604 해석 확인 및 다음 지시
+2. **일별 시계열 집계** — CTO 예고(Sprint 6 후반) 항목
+3. **실키 스모크 테스트(운영/스테이징)** — health→생성→분석→Vision(이미지
+   가드 포함)→/executions/stats 비용 확인
+4. **Anthropic/Gemini 공식 연결** — OpenAI 5항목 패턴 재적용
+5. **저장 시점 이미지 최적화** — 업로드 파이프라인에 가드 재사용 (스펙 필요)
