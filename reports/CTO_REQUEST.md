@@ -5,30 +5,24 @@
 
 ## 결정 대기
 
-### 22. TASK-0601 "Execution Domain" 세부 해석 확인
-- 현황: 지시 사항(모든 LLM 호출이 Execution 생성 — Provider/Model/Token/
-  Cost/Latency/Status 기록)을 다음과 같이 구현했다:
-  - **기록 지점 단일화**: 모든 LLM 호출의 유일한 통로인
-    `LlmService.complete(request, { feature })`에서 ExecutionTracker
-    (@acos/core)로 기록 — Content(`content-generation`, 공식·구 Wrapper·SOP
-    포함) / Analysis(`product-analysis`) / Vision(`vision-analysis`) /
-    개발용 API(`dev`)의 4종 feature 태그
-  - **기록 규칙**: 호출 1건 = 레코드 1건 (LlmGateway 내부 재시도는 1건으로
-    집계). 성공 시 실제 응답의 provider/model/usage, 실패 시 폴백
-    provider/model + 오류. 검증 오류(400)는 호출 시도가 아니므로 비기록.
-    **기록 실패는 호출을 실패시키지 않음**(가용성 우선). 요청/응답 본문은
-    저장하지 않음(관측 지표만)
-  - **비용(Cost)**: 코드 선언 가격표(USD/1M 토큰) 기준 예상 비용 —
-    mock은 0, **가격표에 없는 모델은 null 기록** (공식 단가 스펙 없이
-    임의 단가를 기록하지 않기 위함)
-  - **조회**: `GET /executions?feature=&limit=` (읽기 전용) — 집계/대시보드는
-    미구현(스펙 없음)
-- 하지 않은 것(스펙 없음): 실모델 단가 등록, 재시도 attempts 세분 기록,
-  기간별 비용 집계 API, 프로젝트/상품 연관(FK — Execution은 독립 테이블)
-- 질문: ① feature 4종·검증 오류 비기록·본문 비저장이 의도에 부합하는지
-  ② **실모델 공식 단가 스펙**(모델별 USD/1M input·output) 확정 요청 —
-  등록 즉시 실모델 cost 기록 활성화 ③ Execution을 프로젝트/기능 엔티티와
-  연관(FK)할 필요 여부 ④ 다음 TASK 지정 요청.
+### 23. TASK-0602 "Execution Dashboard" 세부 해석 확인
+- 현황: 지시 사항(호출 수·성공률·실패율·Latency·Token·Cost를 Provider/
+  Feature/Model 통계로 제공하는 Dashboard API)을 다음과 같이 구현했다:
+  - **`GET /executions/stats?from=&to=`** — 전체(totals) + byFeature +
+    byProvider + byModel (호출 수 내림차순)
+  - 그룹별 지표: 호출 수 · 성공/실패 카운트와 **비율(0~1, 표본 없으면
+    null)** · 토큰 합계(input/output) · **비용 USD 합계**(가격 산정된 호출이
+    없으면 null — #22 결정 유지) · **지연: 호출 수 가중 평균 + 최대치**
+  - **기간 필터 from/to**(ISO, 미지정 시 전체 기간) — 잘못된 날짜·역전
+    기간 400 (지시에 없는 항목이나 운영 조회에 필요해 추가)
+  - 집계 구조: DB (차원, status) groupBy 4쿼리(병렬) → @acos/core 순수
+    병합 로직 — 통계 규칙이 DB 없이 단위 테스트됨. 집계 결과는 저장하지
+    않음(조회 시 계산)
+- 하지 않은 것(스펙 없음): 웹 Dashboard 화면, 일별 시계열(추이), 백분위
+  지연(p95 — 원시 지연값 보관 구조 필요), 집계 결과 캐싱/저장
+- 질문: ① 지표 구성(비율 0~1 표기·가중 평균+최대 지연)·기간 필터 추가가
+  의도에 부합하는지 ② 웹 Dashboard 화면 필요 여부 ③ 일별 시계열(추이)
+  확장 여부 ④ 다음 TASK 지정 요청.
 
 ### 2. tesseract Provider 유지 여부
 - 현황: OCR 기본 Provider는 mock이며, 로컬 오프라인 엔진(tesseract.js)이
@@ -51,6 +45,15 @@
 - 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
 
 ## 결정됨
+
+### 22. TASK-0601 해석 확인 → 승인 + 6항 결정 확정 (2026-07-28)
+- CTO 결정: ① **feature 4종 유지**(content-generation/product-analysis/
+  vision-analysis/dev) ② **400 Validation Error는 Execution 비생성**
+  ③ **Prompt/Response 본문 비저장 — 운영 지표만 기록** ④ **LLM 가격표
+  Code-first 중앙 정의 유지, 미등록 모델 cost=null 유지** ⑤ **FK 없는
+  독립 도메인 유지** ⑥ TASK-0602(Execution Dashboard) 지시됨.
+- 반영: 전 항목 현행 구현과 일치 — 변경 없이 확정. 실모델 공식 단가
+  스펙은 확정 시 가격표(DEFAULT_LLM_PRICING) 1곳에 추가하면 됨 (요청 유지).
 
 ### 21. TASK-0506 해석 확인 → 승인 + Sprint 5 공식 종료 (2026-07-28)
 - CTO 결정: ① **EngineContentGenerator의 apps/api Wrapper 구조 유지**

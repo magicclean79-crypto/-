@@ -13,146 +13,132 @@
 
 | 항목 | 값 |
 | --- | --- |
-| 보고 기준 TASK | **TASK-0601 — Execution Domain** (Sprint 6 첫 TASK) |
+| 보고 기준 TASK | **TASK-0602 — Execution Dashboard** |
 | 보고일 | 2026-07-28 |
-| 브랜치 / 기준 커밋 | `claude/ai-product-content-os-setup-jb5oai` / `fcbf6ce` |
-| 핵심 성과 | **모든 LLM 호출이 관측 가능해짐** — 호출 1건당 Execution 1건 (Provider/Model/Token/Cost/Latency/Status), 기록 지점 단일화 |
-| 구현 중단 상태 | **TASK-0601 완료 후 즉시 중단** — CTO 승인 전 다음 TASK 미착수 |
-| 스펙 확인 필요 | 실모델 가격표·feature 범위 등 → **CTO_REQUEST #22 확인 요청** |
+| 브랜치 / 기준 커밋 | `claude/ai-product-content-os-setup-jb5oai` / `162f165` |
+| 핵심 성과 | **운영 지표 집계 완성** — 호출 수·성공/실패율·토큰·비용·지연을 전체 + Feature/Provider/Model별로 제공하는 Dashboard API |
+| 구현 중단 상태 | **TASK-0602 완료 후 즉시 중단** — CTO 승인 전 다음 TASK 미착수 |
+| 스펙 확인 필요 | 지표 구성·기간 필터 등 → **CTO_REQUEST #23 확인 요청** |
 
 ## 2. 품질 게이트
 
 | 게이트 | 명령 | 결과 |
 | --- | --- | --- |
 | Build | `pnpm build` | ✅ 6/6 워크스페이스 성공 |
-| Test | `pnpm test` | ✅ 246/246 통과 (core 109 · api 137) — 이번 주기 +15 |
+| Test | `pnpm test` | ✅ 253/253 통과 (core 113 · api 140) — 이번 주기 +7 |
 | TypeScript | (빌드 포함) | ✅ 오류 0 |
 | ESLint | `pnpm lint` | ✅ 오류 0, 경고 0 |
 
 ## 3. 변경 사항 (이번 보고 주기)
 
-### Sprint 5 종료 반영
+### TASK-0601 승인 결정 반영
 
-- CTO 결정: TASK-0506 승인 (Wrapper 구조·CONTENT_GENERATOR 제거 유지,
-  Deprecated Generator는 **Sprint 6 이후 제거 검토 대상**으로 유지),
-  **Sprint 5 공식 종료** — TASKS.md에 기록
+- CTO 결정 6항(feature 4종 유지 · 400 비기록 · 본문 비저장 · 가격표
+  Code-first + 미등록 모델 cost null · FK 없는 독립 도메인) 전부 **현행
+  구현과 일치** — 변경 없이 확정 사항으로 기록 (CTO_REQUEST #22 → 결정됨)
 
-### TASK-0601 — Execution Domain (`fcbf6ce`)
+### TASK-0602 — Execution Dashboard (`162f165`)
 
-- **Execution 모델 신설** (`executions` 테이블 + `ExecutionStatus` enum):
-  feature · provider · model · inputTokens/outputTokens · **cost(Decimal, USD)** ·
-  latencyMs · status(SUCCESS/FAILED) · error · createdAt,
-  인덱스 (feature, createdAt) — 마이그레이션 1건(신규 테이블, 기존 데이터
-  무영향), drift 없음
-- **모든 LLM 호출이 Execution 생성** (지시 사항): 기록 지점을 모든 호출의
-  유일한 통로인 `LlmService.complete(request, { feature })`로 단일화 —
-  - Content: `content-generation` (공식 경로·구 Wrapper 경로·SOP 전부 포함)
-  - Analysis: `product-analysis` / Vision: `vision-analysis`
-  - 개발용 `POST /llm/complete`: `dev`
-- **`ExecutionTracker`** (@acos/core, 프레임워크 무관): 호출을 감싸 지연을
-  측정하고, 성공 시 실제 응답의 provider/model/usage/비용을, 실패 시 폴백
-  provider/model + 오류를 기록 후 원래 오류를 그대로 전파.
-  **기록 실패는 호출을 실패시키지 않는다**(가용성 우선, 경고 로그).
-  검증 오류(400)는 호출 시도가 아니므로 기록하지 않음
-- **비용 계산**: 코드 선언 가격표(`estimateLlmCost`, USD/1M 토큰) — mock 0,
-  **가격표에 없는 모델은 null 기록** (임의 단가를 만들어 기록하지 않음 —
-  실모델 공식 단가는 #22로 스펙 요청)
-- **조회 API**: `GET /executions?feature=&limit=` (읽기 전용, 최신순) —
-  기록용 쓰기 API는 없음
-- 문서: docs/architecture/execution.md 신설, llm.md(0501의 "호출 이력 비저장"
-  경계를 Execution 관측으로 갱신)/README 반영
+- **Dashboard API**: `GET /executions/stats?from=&to=` — 지시된 지표 전부 제공:
+  - **호출 수** `count` · **성공률/실패율** `successRate`/`failureRate`
+    (0~1, 표본 없으면 null) · **Token** `inputTokens`/`outputTokens` 합계 ·
+    **Cost** USD 합계(가격 산정된 호출이 없으면 null — 0601 원칙 유지) ·
+    **Latency** `avgLatencyMs`(호출 수 가중 평균) + `maxLatencyMs`
+  - 집계 축: **전체(totals) + byFeature + byProvider + byModel** (호출 수
+    내림차순 정렬)
+- **집계 구조**: DB에서 (차원, status) 단위 `groupBy` 1회씩(총 4쿼리, 병렬) →
+  @acos/core의 순수 병합 로직 `buildExecutionStats`/`buildExecutionTotals` —
+  성공/실패 병합·비율·가중 평균 규칙이 DB 없이 단위 테스트됨
+- **기간 필터**: `from`/`to`(ISO, 미지정 시 전체 기간) — 잘못된 날짜·역전
+  기간은 400
+- 기록 규칙·Execution 모델은 변경 없음 (DB 변경 없음, 조회 전용 추가)
+- 문서: execution.md에 Dashboard 섹션 추가, README 갱신
 
 ### 누적 완료 TASK
 
 | Sprint | TASK | 상태 |
 | --- | --- | --- |
-| Sprint 6 | **TASK-0601 — Execution Domain** | **완료 (`fcbf6ce`) — 승인 대기** |
-| Sprint 5 | 0501~0506 (LLM Gateway → Legacy 통합) | 전체 승인 · **공식 종료** |
+| Sprint 6 | TASK-0601 — Execution Domain | 승인 (6항 결정 확정) |
+| Sprint 6 | **TASK-0602 — Execution Dashboard** | **완료 (`162f165`) — 승인 대기** |
+| Sprint 5 | 0501~0506 (AI Execution) | 전체 승인 · 공식 종료 |
 | Sprint 1~4 | Foundation ~ Company Brain Integration | 전체 승인 · 공식 종료 |
 
 ## 4. 테스트 결과
 
 | 위치 | 종류 | 수 | 결과 |
 | --- | --- | --- | --- |
-| `packages/core` | Unit — 기존 102 · **Execution 7** (Tracker 3 · 비용 계산 4) | 109 | ✅ |
-| `apps/api` | Service+API — 기존 129 · **LlmService 기록 5 + Execution API 3** | 137 | ✅ |
-| **합계** | | **246** | **전체 통과** |
+| `packages/core` | Unit — 기존 109 · **집계 병합 4** | 113 | ✅ |
+| `apps/api` | Service+API — 기존 137 · **stats API 3** | 140 | ✅ |
+| **합계** | | **253** | **전체 통과** |
 
 신규 테스트가 검증하는 것:
-- Tracker: 성공 시 SUCCESS(usage/cost/latency, 가짜 시계), 실패 시 FAILED
-  (폴백+오류) 후 원래 오류 전파, **저장소 장애 시에도 호출 성공 유지**
-- 비용: mock 0 · 미등록 모델 null · 사용량 미상 null · 가격표 단가 계산
-- LlmService: feature 태깅(미지정 시 dev), FAILED 기록, 검증 오류 비기록,
-  저장소 미주입(단독 구성) 동작
-- Execution API: 최신순 목록(cost 숫자/null 직렬화), feature 필터, limit 400
+- 병합 로직: (key, status) 행 → 성공/실패 카운트·비율(0.75/0.25), 호출 수
+  가중 평균 지연((10×3+50×1)/4=20), cost 미상 그룹 null, 빈 표본 처리,
+  호출 수 내림차순 정렬
+- stats API: totals+3축 응답 형태, cost Decimal→숫자 직렬화, 기간 필터가
+  DB where로 전달, 잘못된 날짜·역전 기간 400
 
-라이브 검증 (실 PostgreSQL — 마이그레이션 적용 후):
-- 5개 경로 호출(공식 생성·구 경로·분석·조립(Vision)·/llm/complete) →
-  `GET /executions`에 **feature별로 정확히 기록** (mock, cost 0, token·latency 포함)
-- 구 Wrapper 경로도 content-generation으로 집계됨 (생성 코어 단일화 효과)
-- `?feature=vision-analysis` 필터 정상, drift 체크 empty
+라이브 검증 (실 PostgreSQL — 0601에서 기록된 실데이터):
+- `GET /executions/stats` → totals(5건, successRate 1, 토큰 합계, cost 0) +
+  byFeature 4종(content-generation 2 · vision-analysis · dev ·
+  product-analysis) + byProvider(mock) + byModel(mock-llm-1)
+- **실시간 반영**: `/llm/complete` 호출 직후 totals 6건·dev 2건으로 증가 확인
+- 기간 필터 정상, 잘못된 날짜 400
 
 ## 5. 아키텍처 변경 및 현황
 
-**이번 주기 변경 — AI Execution에 관측 계층 추가**:
+**이번 주기 변경 — 관측 계층의 읽기 완성 (기록 0601 → 집계 0602)**:
 
 ```
-Content Generation ─┐                        ┌─▶ Execution (기록: feature/model/
-Analysis ───────────┼─▶ LlmService.complete ─┤    token/cost/latency/status)
-Vision ─────────────┤   (유일한 LLM 통로)     └─▶ LLM Gateway → Provider
-POST /llm/complete ─┘
+LLM 호출 전부 ─▶ Execution 기록 (0601)
+                   ├─ GET /executions        : 원시 이력 (건별)
+                   └─ GET /executions/stats  : 운영 지표 (호출/성공률/토큰/비용/지연
+                                               × 전체/Feature/Provider/Model)  ← 신설
 ```
 
-① 0501 승인 시 예고된 "LLM 호출 이력·비용의 별도 Execution 도메인"이 구현됨 —
-모든 호출이 이미 LlmService 한 지점을 지나도록 Sprint 5에서 수렴시켜 두었기에
-**기록 지점이 정확히 한 곳**. ② 관측은 부수 기능이라는 원칙: 기록 실패가
-호출을 막지 않고, 요청/응답 본문은 저장하지 않음(비용·성능 지표만).
-③ 새 AI 기능 합류 규칙 확장: 템플릿 등록 + `feature` 태그 지정.
+① 집계는 **조회 전용 계층** — 기록 규칙·모델을 건드리지 않고 위에 얹음.
+② 병합 규칙은 core 순수 함수로 분리 — DB 집계(groupBy)와 통계 규칙(비율·
+가중 평균·cost null)이 각자 테스트됨. ③ 실모델 전환 시 이 API가 곧
+비용/성능 모니터링 창구가 된다 (가격표 등록만 남음).
 
-**유지되는 핵심 결정**: Port/Adapter 계층 · mock 기본 원칙 · 이력 보존 모델 · Advisory 검증
+**유지되는 핵심 결정**: Port/Adapter 계층 · mock 기본 원칙 · 이력 보존 모델 · Advisory 검증 · Execution 6항 결정(#22)
 
-**현황**: 모노레포(web·api·core/shared/agents/ui), **마이그레이션 16건**(+1), drift 없음
+**현황**: 모노레포(web·api·core/shared/agents/ui), 마이그레이션 16건(변경 없음), drift 없음
 
 ## 6. 데이터 모델
 
-```
-Project ──< Product ──< AnalysisResult
-        ──< ProductObject ──▶ Content
-        ──< SopRun · Decision · ProjectMemory
-Memory · Knowledge — Company Brain
-Execution — LLM 호출 관측 (독립 테이블, FK 없음 — 호출 1건당 1레코드)  ← 신설
-```
+(TASK-0602는 스키마 변경 없음 — executions 테이블 재사용, 조회 전용)
 
-Execution 필드: feature/provider/model/inputTokens/outputTokens/
-cost(Decimal 12,6)/latencyMs/status/error/createdAt
+```
+Execution — LLM 호출 관측 (독립 테이블, FK 없음 — CTO 결정)
+  └─ 집계: (feature|provider|model, status) groupBy → 통계 병합 (저장하지 않음)
+```
 
 ## 7. API 표면
 
 | 영역 | 엔드포인트 |
 | --- | --- |
 | 기존 전체 | (유지 — 이전 보고 참조) |
-| **Execution** | **`GET /executions?feature=&limit=`** (조회 전용) |
-| LLM Gateway | `GET /llm` · `POST /llm/complete` (개발용 — 이제 feature "dev"로 기록됨) |
+| Execution | `GET /executions?feature=&limit=` (이력) · **`GET /executions/stats?from=&to=`** (Dashboard 집계) |
 
-웹: 변경 없음 (Execution 화면은 스펙 없음 — API만 제공)
+웹: 변경 없음 (Dashboard 화면은 스펙 없음 — API만 제공)
 
 ## 8. 리스크·기술 부채
 
-1. **0601 해석 미확인** — 가격표 코드 선언·미등록 모델 cost null·feature 4종
-   범위 (CTO_REQUEST #22)
-2. **실모델 단가 미확정** — 실제 Provider 모델의 공식 단가 스펙이 없어
-   실모델 호출 시 cost가 null로 기록됨 (단가 확정 즉시 가격표 1곳에 추가)
-3. **재시도 세분 미기록** — LlmGateway 내부 재시도는 1건으로 집계 (attempts
-   세분 기록은 스펙 없음)
-4. **집계/대시보드 부재** — 원시 이력 조회만 제공 (기간별 비용 합계 등은 후속)
-5. **실모델 연결 준비 항목** — 이미지 용량 가드(CTO 결정: 실연결 전)·구조화
-   출력 매핑·스모크 테스트 — 이전 보고와 동일
+1. **0602 해석 미확인** — 지표 구성(가중 평균 지연·최대치)·기간 필터·화면
+   부재 (CTO_REQUEST #23)
+2. **실모델 단가 미확정** — cost가 mock 0 외에는 null (단가 스펙 확정 시
+   가격표 1곳 추가로 활성화 — #22에서 요청 유지)
+3. **웹 Dashboard 화면 부재** — API만 제공 (화면은 스펙 없음)
+4. **시계열 미제공** — 기간 전체의 합계·평균만 제공, 일별 추이는 후속
+5. **실모델 연결 준비 항목** — 이미지 용량 가드·구조화 출력 매핑·스모크
+   테스트 — 이전 보고와 동일
 
 ## 9. 다음 권장 사항 (Sprint 6 후속 후보)
 
-1. **CTO_REQUEST #22 확인** — TASK-0601 해석 확인 및 다음 지시
-2. **실모델 단가 스펙 확정** — 가격표 등록으로 실모델 cost 기록 활성화
-3. **Execution 집계 API/화면** — 기간·기능별 토큰/비용 합계 (운영 가시성)
-4. **실모델 연결 준비 TASK** — 이미지 용량 가드 + 구조화 출력 매핑 + 스모크
-   테스트 묶음 (API 키 확보 필요, CTO_REQUEST #6)
-5. **Deprecated Generator 제거 검토** — CTO 결정대로 Sprint 6 이후 검토 대상
+1. **CTO_REQUEST #23 확인** — TASK-0602 해석 확인 및 다음 지시
+2. **웹 Dashboard 화면** — /executions 페이지 (stats API 소비, 표+지표 카드)
+3. **일별 시계열 집계** — 추이 그래프용 (기간 × 일 단위 groupBy)
+4. **실모델 단가 등록** — #22 요청 유지 (등록 즉시 비용 지표 활성화)
+5. **실모델 연결 준비 TASK** — 이미지 용량 가드 + 구조화 출력 매핑 + 스모크
+   테스트 묶음 (API 키 스펙 필요, CTO_REQUEST #6)
