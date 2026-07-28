@@ -13,148 +13,148 @@
 
 | 항목 | 값 |
 | --- | --- |
-| 보고 기준 TASK | **TASK-0902 — Cost Governance & Multi-Provider Foundation** (Sprint 9) |
+| 보고 기준 TASK | **TASK-0903 — Anthropic & Gemini Provider Integration** (Sprint 9) |
 | 보고일 | 2026-07-28 |
-| 브랜치 / 기준 커밋 | `claude/ai-product-content-os-setup-jb5oai` / `5b39867` |
-| 핵심 성과 | 일/월 예산·**초과 시 429 차단**·80% 경고 + Provider Registry + Model Routing + **`/providers` 대시보드** |
-| 구현 중단 상태 | **TASK-0902 완료 후 즉시 중단** — CTO 승인 전 다음 TASK 미착수 |
-| 스펙 확인 필요 | 초과 시 차단 정책·라우팅 범위 등 → **CTO_REQUEST #36 확인 요청** |
+| 브랜치 / 기준 커밋 | `claude/ai-product-content-os-setup-jb5oai` / `f9cbda5` |
+| 핵심 성과 | **3사(OpenAI·Anthropic·Gemini) 전부 공식 연결** + Registry 기반 Provider Factory + Unified Execution + Provider 비교 대시보드 |
+| 구현 중단 상태 | **TASK-0903 완료 후 즉시 중단** — CTO 승인 전 다음 TASK 미착수 |
+| 스펙 확인 필요 | Anthropic JSON 매핑 방식·가격표 등록 모델 범위 등 → **CTO_REQUEST #37 확인 요청** |
 
 ## 2. 품질 게이트
 
 | 게이트 | 명령 | 결과 |
 | --- | --- | --- |
 | Build | `pnpm build` | ✅ 6/6 워크스페이스 성공 |
-| Test | `pnpm test` | ✅ **362** — core 142(+4) · api 199(+7) · **web e2e 21(+3)** — 전체 통과 |
+| Test | `pnpm test` | ✅ **373** — core 142 · **api 210(+11)** · web e2e 21 — 전체 통과 |
 | TypeScript | (빌드 포함) | ✅ 오류 0 |
 | ESLint | `pnpm lint` | ✅ 오류 0, 경고 0 |
 
 ## 3. 변경 사항 (이번 보고 주기)
 
-### TASK-0902 — Cost Governance & Multi-Provider Foundation (`5b39867`)
+### TASK-0903 — Anthropic & Gemini Provider Integration (`f9cbda5`)
 
-지시 6항목 전부 이행:
+지시 5항목(Anthropic · Gemini · Provider Factory · Unified Execution ·
+Provider Comparison Dashboard) 전부 이행:
 
-1. **Daily Budget**: `LLM_DAILY_BUDGET_USD` — Execution cost(USD) 합계를
-   **UTC 당일** 기준으로 비교 (시계열 표준과 동일 경계)
-2. **Monthly Budget**: `LLM_MONTHLY_BUDGET_USD` — UTC 당월 기준.
-   두 예산 모두 **미설정 = 무제한**(기존 동작·검사 오버헤드 없음 — mock
-   개발 흐름 무영향)
-3. **Cost Alert**: 예산의 **80%**(`LLM_BUDGET_ALERT_RATIO` 조정) 도달 시
-   경고 — **상태 전이 시 서버 로그**(반복 로그 없음) + 대시보드 배지.
-   **초과 시 새 LLM 호출을 429로 차단** — LlmService 단일 관문에서
-   호출 전 검사(Execution 미기록 — 검증 오류와 동일 원칙), 예산 상향
-   또는 기간 경과로 자동 해제
-4. **Provider Registry**: Code-first 중앙 정의(`LLM_PROVIDER_REGISTRY`,
-   core) — mock/openai(official)/anthropic·gemini(adapter-ready)의 연결
-   상태·기본 모델·키 환경변수. `GET /llm/providers` — **키는 설정 여부만
-   노출**(값 비노출)
-5. **Model Routing**: feature별 모델 지정 —
-   `LLM_MODEL_CONTENT/ANALYSIS/VISION`. 우선순위: **호출자 명시 > 라우팅 >
-   Provider 기본**. 현 단계는 선택된 Provider 안의 모델 선택(예: 분석만
-   gpt-4o-mini로 비용 절감) — cross-provider 라우팅은 Foundation 다음 단계
-6. **Provider Dashboard**: 웹 **`/providers`** 신설 — 일/월 예산 카드
-   (진행 바·상태 배지), 선택 Provider·라우팅 표, Provider Registry 표
-   (연결 배지·키·선택됨), Provider별 호출 통계(비용 포함).
-   **Playwright 3종** 포함(공식 게이트)
-- 예산 판정은 core 순수 함수(`evaluateBudgetWindow`), 합산·차단·로깅은
-  `LlmBudgetService`(api) — 계층 원칙 유지. 스키마 변경 없음(Execution
-  집계 기반)
+1. **Anthropic 공식 연결**: `responseFormat "json"` →
+   **JSON 전용 system 지시 강화**로 매핑. Claude 4.6+ 모델은 assistant
+   prefill이 400이므로 **prefill 방식을 쓰지 않고**, 지시 + 엄격 파싱
+   (기존 재시도 경로)이 공식 매핑이다. 멀티모달 `image` content block,
+   테스트용 클라이언트 주입, 잘림 방어(`stop_reason=max_tokens` + json)
+2. **Gemini 공식 연결**: `responseFormat "json"` →
+   **`responseMimeType: "application/json"`**(Gemini 공식 JSON 모드) 매핑,
+   멀티모달 `inlineData` part, 응답 **`modelVersion`(스냅샷) 기록**으로
+   접두사 매칭 비용 산정, 잘림 방어(`finishReason=MAX_TOKENS`)
+   — 잘림 정책은 **CTO 확정 0901-② 그대로 3사 통일**(JSON은 FAILED,
+   텍스트는 부분 결과 허용)
+3. **Provider Factory**: `provider.factory.ts` 신설 — Registry
+   (`LLM_PROVIDER_REGISTRY`, core) 기반 **테이블 드리븐** 생성.
+   키 환경변수는 Registry가 단일 정의, 미설정 시 경고 후 mock 폴백.
+   `llm.module.ts`의 switch 팩토리를 대체 — **새 Provider 추가는
+   Registry·어댑터 테이블·가격표 3곳**으로 축소
+4. **Unified Execution**: 가격표에 claude-opus-5($5/$25) ·
+   claude-sonnet-5($3/$15) · claude-haiku-4-5($1/$5) ·
+   gemini-2.5-flash($0.3/$2.5) 단가 등록 — 전 Provider가 **동일 Execution
+   스키마 + 비용 산정**. **Registry의 모든 모델이 가격표에 있는지 테스트가
+   보증**(누락 시 실패)
+5. **Provider Comparison Dashboard**: `/providers` 비교 표 확장 —
+   호출 수 · **성공률** · **평균 지연** · 토큰 · 비용 · **비용/호출**을
+   Provider별로 나란히 비교. Playwright 갱신(다중 Provider 행·지표 검증)
+- Registry 연결 상태: anthropic·gemini → **`official`** 승격(3사 전부)
 
 ### 누적 완료 TASK
 
 | Sprint | TASK | 상태 |
 | --- | --- | --- |
-| Sprint 9 | 0901 OpenAI Production | 승인 (상한·잘림·스모크 정책 확정) |
-| Sprint 9 | **TASK-0902 — Cost Governance & Multi-Provider Foundation** | **완료 (`5b39867`) — 승인 대기** |
+| Sprint 9 | 0901 OpenAI Production · 0902 Cost Governance | 승인 (표준 확정) |
+| Sprint 9 | **TASK-0903 — Anthropic & Gemini Provider Integration** | **완료 (`f9cbda5`) — 승인 대기** |
 | Sprint 1~8 | Foundation ~ 인증/보안 | 전체 승인 · 공식 종료 |
 
 ## 4. 테스트 결과
 
 | 위치 | 종류 | 수 | 결과 |
 | --- | --- | --- | --- |
-| `packages/core` | Unit — 기존 138 · **예산 판정 4** | 142 | ✅ |
-| `apps/api` | Service+API — 기존 192 · **예산 4 + Registry/budget API 2 + 라우팅 1** | 199 | ✅ |
-| `apps/web` | Playwright e2e — 기존 18 · **Provider Dashboard 3** | 21 | ✅ |
-| **합계** | | **362** | **전체 통과** |
+| `packages/core` | Unit | 142 | ✅ (변경 없음) |
+| `apps/api` | Service+API — 기존 199 · **Anthropic 4 · Gemini 4 · Multi-Provider 통합 3** | 210 | ✅ |
+| `apps/web` | Playwright e2e (비교 대시보드 검증 확장) | 21 | ✅ |
+| **합계** | | **373** | **전체 통과** |
 
 신규 테스트가 검증하는 것:
-- core: off(미설정/0)·ok→alert(80%)→exceeded(100%) 판정·임계 조정·UTC 경계
-- api: status 계산(일 alert/월 ok) · 미설정 시 **조회 없이 통과** ·
-  초과 429 + **LlmService 차단 시 Execution 미기록** · 월 초과 차단·임계
-  조정 · GET /llm/providers(Registry 4종·라우팅·키 값 비노출·선택 상태) ·
-  GET /llm/budget · Model Routing(라우팅 적용·호출자 우선·기본 폴백)
-- 웹 e2e: Registry/라우팅/예산 경고/통계 렌더링 · 예산 미설정 표시 ·
-  API 오류 안내
+- **Anthropic 어댑터**: system 분리 매핑 · JSON 지시 강화(**prefill 미추가**
+  확인) · image block 첨부 · 잘림(JSON 실패 / 텍스트 부분 허용)
+- **Gemini 어댑터**: 스냅샷 모델 매핑 · `responseMimeType` 지정/미지정 ·
+  inlineData 첨부 · 잘림(JSON 실패 / 텍스트 부분 허용)
+- **Multi-Provider 통합**: Product Analysis@Anthropic(JSON 지시·상한 2048·
+  claude-opus-5 단가 정확 일치) · Vision Analysis@Gemini(inlineData·JSON
+  모드·상한 2048·스냅샷 접두사 비용) · **Registry 전 모델 가격표 등록 보증**
 
 라이브 검증 (실 PostgreSQL + 실스택):
-- **초과 차단**: 비용 $20 시드 + 일 예산 $10 재기동 → `/llm/budget`
-  daily exceeded(ratio 2) → `POST /llm/complete` **429** + 서버 로그
-  "예산 초과 — 새 호출을 차단합니다"
-- **경고 상태**: 일 예산 $25 → daily alert(정확히 0.8) · monthly ok
-- **Model Routing**: `LLM_MODEL_ANALYSIS=gpt-4o-mini` → 분석 실행 →
-  Execution model=**gpt-4o-mini** 기록 확인
-- `/llm/providers` 라이브 확인(Registry 4종·키 설정 여부·라우팅) ·
-  브라우저에서 `/providers` 전체 렌더링(경고 배지·진행 바 — 스크린샷 첨부)
-- **스모크 리허설 10/10 PASS** (회귀 없음) · 시드 데이터 정리 완료
+- **Anthropic 배선**: `LLM_PROVIDER=anthropic` 재기동 → `/llm` provider
+  anthropic · `/llm/providers` official·models 3종 · **`/llm/health`가 실
+  `api.anthropic.com`까지 도달해 401 authentication_error 반환**(무효 키 —
+  네트워크·SDK·에러 처리 배선 확인). 실키 검증은 운영/스테이징 스모크
+- **Gemini 폴백**: `LLM_PROVIDER=gemini`(키 없음) → Factory가 경고 로그
+  "GEMINI_API_KEY가 없어 mock으로 대체합니다" 후 mock 기동
+- **비교 대시보드**: anthropic/gemini 실행 이력 시드 → `/executions/stats`
+  byProvider 4종 집계 → 브라우저에서 4행 비교 렌더링 확인(성공률 50%/100%,
+  지연 1701ms/575ms, 비용/호출 $0.0123/$0.0007 — 스크린샷 첨부), 시드 정리
+- **스모크 리허설 10/10 PASS** (회귀 없음)
 
 ## 5. 아키텍처 변경 및 현황
 
-**이번 주기 변경 — 비용 통제 계층 + Provider 확장 기반**:
+**이번 주기 변경 — 멀티 Provider 운영 체계 완성**:
 
 ```
-LLM 호출 ─▶ LlmService (단일 관문)
-              ├─ 출력 상한 주입 (0901) → Model Routing (0902) → 예산 검사 (0902)
-              │     예산 초과 → 429 차단 (Execution 미기록)
-              └─ Provider 호출 → Execution 기록 (cost) ─┐
-   ┌──────────────────────────────────────────────────┘
-   └▶ 일/월 cost 합계 (UTC) ─▶ off/ok/alert(80%)/exceeded ─▶ /providers 대시보드
-Provider Registry (Code-first): mock · openai(official) · anthropic/gemini(adapter-ready)
+LLM_PROVIDER ─▶ Provider Factory (Registry 테이블 드리븐)
+                  ├─ mock(기본) · openai · anthropic · gemini  ※키 없으면 mock 폴백
+                  └─ 어댑터: 구조화 출력(각 사 공식 옵션) · 멀티모달 · 잘림 방어(통일)
+                        └─▶ LlmService(단일 관문) ─▶ Unified Execution
+                                 (동일 스키마 · 전 Provider 비용 산정)
+                                      └─▶ /providers 비교 (성공률·지연·비용/호출)
 ```
 
-① 비용 통제가 기록과 같은 단일 관문에 위치 — 우회 경로 없음.
-② Registry가 멀티 Provider 확장의 선언적 기준점 — 새 Provider 공식 연결은
-Registry+어댑터 팩토리+가격표 3곳 갱신으로 완결. ③ 라우팅으로 feature별
-비용 최적화 준비(분석·Vision을 mini 모델로).
+① Provider 교체가 **환경변수 1개**로 완결되고, 추가는 **3곳 갱신**으로
+축소(스위치 분기 제거). ② 각 사의 구조화 출력을 그 사의 공식 방식으로
+매핑하되 **실패 정책은 통일**(잘림 = JSON FAILED). ③ Execution이 진짜
+Unified — Provider별 성공률·지연·단가 비교가 데이터로 가능해짐.
 
-**유지되는 핵심 결정**: 단일 관문(LlmService) · Code-first(가격표·Registry) ·
-UTC 표준 · 조회 비보호 · Playwright 공식 게이트
+**유지되는 핵심 결정**: mock 기본 · 단일 관문 기록 · 가격표 Code-first
+접두사 매칭 · 잘림 정책(0901-②) · Provider 내 모델 라우팅(0902 승인 ②)
 
 **현황**: 모노레포(web·api·core/shared/agents/ui), 마이그레이션 21건
 (이번 TASK 스키마 변경 없음), drift 없음
 
 ## 6. 데이터 모델
 
-변경 없음 — 예산은 Execution cost 집계(aggregate) 기반
+변경 없음 — 가격표(`DEFAULT_LLM_PRICING`, core)에 4개 모델 단가 추가
 
 ## 7. API 표면
 
-| 영역 | 엔드포인트 |
+| 영역 | 변경 |
 | --- | --- |
-| Provider | **`GET /llm/providers`** — Registry·라우팅·선택 상태 (키 값 비노출) |
-| 예산 | **`GET /llm/budget`** — 일/월 지출·예산·상태 (UTC) |
-| 차단 | 모든 LLM 경유 호출 — 예산 초과 시 **429** (message에 해제 방법 안내) |
+| `GET /llm/providers` | anthropic·gemini `connection: "official"`, models 확장 |
+| LLM 호출 전반 | Provider 무관 동일 계약 — 구조화 출력·멀티모달·비용이 3사 모두 활성 |
+| 그 외 | 변경 없음 |
 
-웹: **`/providers`** (신설 — 홈 내비 "🔌 Provider 현황")
+웹: `/providers` **Provider 비교 표** 확장(성공률·평균 지연·비용/호출 추가)
 
 ## 8. 리스크·기술 부채
 
-1. **0902 해석 미확인** — 초과 시 차단(429) 정책·80% 기본 임계·라우팅
-   범위(Provider 내 모델 선택) (CTO_REQUEST #36)
-2. **경고 알림 채널** — 현재 서버 로그 + 대시보드 배지. 이메일/슬랙 등
-   외부 알림은 메일 인프라 부재로 미구현 (스펙 대기)
-3. **모델 기준 가격표** — 라우팅으로 가격표 등록 모델명을 mock에서 쓰면
-   비용이 계산되어 표기됨(개발 데모 시 유의 — mock 기본 모델은 0)
-4. **cross-provider 라우팅 미구현** — 현 단계는 LLM_PROVIDER 하나 + 모델
-   선택. feature별 Provider 분리는 어댑터 다중 기동 설계 필요
-5. **실키 스모크(운영/스테이징 배포 직후)** — 정책 확정됨, 실행 대기
+1. **0903 해석 미확인** — Anthropic JSON을 **지시 강화 방식**으로 매핑한
+   판단(prefill 400 제약), 가격표 등록 모델 범위 (CTO_REQUEST #37)
+2. **실키 네트워크 검증 미수행** — Anthropic은 401까지 도달해 배선이
+   확인됐고, 실 응답 검증은 운영/스테이징 스모크(0901 승인 ③ 정책)
+3. **Cross-Provider Routing 미구현** — 0902 승인 ②대로 이번 TASK 이후가
+   구현 시점(Registry·Factory 준비 완료)
+4. **Anthropic 구조화 출력의 스키마 강제 부재** — 스키마 없는 자유 JSON은
+   지시+파싱 재시도에 의존(도구/구조화 출력 API 도입은 스펙 대기)
+5. **Rate Limit 인메모리 · 예산 알림 채널** — 기존 부채 유지
 
 ## 9. 다음 권장 사항 (Sprint 9 후속 후보)
 
-1. **CTO_REQUEST #36 확인** — TASK-0902 해석 확인 및 다음 지시
-2. **Anthropic/Gemini 공식 연결** — Registry 기반: 구조화 출력 매핑·
-   가격표·통합 검증 (OpenAI 패턴 재적용)
-3. **cross-provider Model Routing** — feature별 Provider 분리 (Registry
-   이미 준비됨)
-4. **예산 알림 채널** — 메일/웹훅 (Cost Alert 확장)
-5. **Sprint 9 종료 여부 판단** — 실 Provider 운영 준비 완성도 리뷰
+1. **CTO_REQUEST #37 확인** — TASK-0903 해석 확인 및 다음 지시
+2. **Cross-Provider Model Routing** — feature별 Provider 분리 (0902 승인 ②의
+   전제 조건인 3사 연결이 이번에 충족됨)
+3. **운영/스테이징 실키 스모크** — 3사 각각 1회 (0901 승인 ③ 정책 적용)
+4. **Provider Failover** — 장애·rate limit 시 대체 Provider 자동 전환
+5. **Sprint 9 종료 여부 판단** — 멀티 Provider 운영 준비 완성도 리뷰

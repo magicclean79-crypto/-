@@ -5,32 +5,37 @@
 
 ## 결정 대기
 
-### 36. TASK-0902 "Cost Governance & Multi-Provider Foundation" 세부 해석 확인
-- 현황: 지시 6항목(Daily Budget · Monthly Budget · Cost Alert · Provider
-  Registry · Model Routing · Provider Dashboard)을 다음과 같이 구현했다:
-  - **예산**: `LLM_DAILY_BUDGET_USD`/`LLM_MONTHLY_BUDGET_USD` — Execution
-    cost(USD) 합계를 **UTC 일/월** 기준 비교(시계열 표준 동일). 미설정 =
-    무제한(검사 오버헤드 없음 — mock 개발 무영향)
-  - **Cost Alert**: 80% 임계(`LLM_BUDGET_ALERT_RATIO`) 경고 — 상태 전이
-    시 서버 로그 + `/providers` 배지. **초과 시 새 호출 429 차단** —
-    LlmService 단일 관문 호출 전 검사(Execution 미기록), 예산 상향/기간
-    경과로 자동 해제
-  - **Provider Registry**: Code-first(`LLM_PROVIDER_REGISTRY`, core) —
-    mock/openai(official)/anthropic·gemini(adapter-ready), 키는 설정
-    여부만 노출. `GET /llm/providers`
-  - **Model Routing**: `LLM_MODEL_CONTENT/ANALYSIS/VISION` — 호출자 명시 >
-    라우팅 > Provider 기본. **현 단계는 선택된 Provider 안의 모델 선택**
-    (예: 분석만 gpt-4o-mini) — cross-provider 라우팅은 다음 단계
-  - **Provider Dashboard**: 웹 `/providers` — 예산 카드(진행 바·배지)·
-    라우팅 표·Registry 표·Provider별 호출 통계 + Playwright 3종
-- 하지 않은 것(스펙 없음): 외부 알림 채널(이메일/슬랙 — 메일 인프라
-  부재), cross-provider 라우팅(feature별 Provider 분리 — 어댑터 다중
-  기동 설계 필요), 예산의 DB/화면 관리(현재 환경변수 Code-first)
-- 질문: ① **초과 시 429 차단** 정책이 의도에 부합하는지 (대안: 경고만
-  하고 차단하지 않음) ② 경고 임계 80% 기본값 적절성 ③ 라우팅 범위(현
-  단계 Provider 내 모델 선택) 확정 — cross-provider 분리 시점 ④ 예산
-  설정을 환경변수로 유지할지, ADMIN 화면 관리로 확장할지 ⑤ 다음 TASK
-  지정 요청.
+### 37. TASK-0903 "Anthropic & Gemini Provider Integration" 세부 해석 확인
+- 현황: 지시 5항목(Anthropic · Gemini · Provider Factory · Unified
+  Execution · Provider Comparison Dashboard)을 다음과 같이 구현했다:
+  - **Anthropic 공식 연결**: `responseFormat "json"` → **JSON 전용 system
+    지시 강화**로 매핑. Claude 4.6+ 모델은 assistant prefill이 400이므로
+    prefill 방식을 쓰지 않고, 지시 + 엄격 파싱(기존 재시도)이 공식 매핑.
+    멀티모달 image block, 잘림 방어(stop_reason=max_tokens)
+  - **Gemini 공식 연결**: `responseMimeType: "application/json"`(공식 JSON
+    모드) 매핑, inlineData 멀티모달, 응답 `modelVersion`(스냅샷) 기록으로
+    접두사 매칭 비용, 잘림 방어(finishReason=MAX_TOKENS)
+    — 잘림 정책은 **0901-② 확정 그대로 3사 통일**(JSON FAILED·텍스트 부분 허용)
+  - **Provider Factory**: Registry 기반 테이블 드리븐(`provider.factory.ts`)
+    — 키 환경변수 단일 정의·미설정 시 mock 폴백. 새 Provider 추가는
+    **Registry·어댑터 테이블·가격표 3곳**
+  - **Unified Execution**: claude-opus-5($5/$25)·claude-sonnet-5($3/$15)·
+    claude-haiku-4-5($1/$5)·gemini-2.5-flash($0.3/$2.5) 단가 등록 —
+    전 Provider 동일 스키마·비용 산정, **Registry 전 모델의 가격표 등록을
+    테스트가 보증**
+  - **Provider 비교 대시보드**: `/providers` — 호출·성공률·평균 지연·토큰·
+    비용·**비용/호출**을 Provider별 비교
+  - 라이브: Anthropic은 무효 키로 **실 api.anthropic.com까지 도달해 401**
+    (배선 확인), Gemini는 키 없음 → mock 폴백 로그 확인
+- 하지 않은 것(스펙 없음): Cross-Provider Routing(0902 승인 ②대로 이번
+  연결 이후가 시점), Provider Failover(장애 시 자동 전환), Anthropic
+  스키마 강제(tool/structured output API — 현재는 지시+파싱 재시도),
+  실키 응답 검증(운영/스테이징 스모크 — 0901 승인 ③)
+- 질문: ① Anthropic JSON을 **지시 강화 방식**으로 매핑한 판단이 적절한지
+  (prefill은 400이라 불가 — 스키마 강제가 필요하면 별도 TASK 필요)
+  ② 가격표 등록 모델 범위(사별 대표 모델만) 유지 여부 ③ **Cross-Provider
+  Routing / Provider Failover 도입 여부·순서** ④ 다음 TASK 지정 요청
+  (Sprint 9 종료 여부 포함).
 
 ### 2. tesseract Provider 유지 여부
 - 현황: OCR 기본 Provider는 mock이며, 로컬 오프라인 엔진(tesseract.js)이
@@ -53,6 +58,15 @@
 - 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
 
 ## 결정됨
+
+### 36. TASK-0902 해석 확인 → 승인 + 예산 표준·라우팅 범위 확정 (2026-07-28)
+- CTO 결정: ① **예산 정책 공식 표준 확정** — 80% = Alert, 100% 초과 = 429
+  차단 (현재 정책 유지) ② **Model Routing은 현재 Provider 내부 모델 선택만
+  지원** — Cross-Provider Routing은 Anthropic/Gemini 공식 연결 이후 구현
+  ③ **Budget은 환경변수(Code-first) 유지** — ADMIN 화면 관리 기능은 후속
+  Sprint ④ TASK-0903(Anthropic & Gemini Provider Integration) 지시됨.
+- 반영(`f9cbda5`): ①③ 현행 확정, ②의 전제인 3사 공식 연결 완료 —
+  Cross-Provider Routing은 다음 지시 대기 (#37 참고).
 
 ### 35. TASK-0901 해석 확인 → 승인 + 운영 표준·스모크 정책 확정 (2026-07-28)
 - CTO 결정: ① **출력 상한 공식 표준 확정** — Content Generation 4096 ·
