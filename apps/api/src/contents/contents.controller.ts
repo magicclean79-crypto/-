@@ -1,5 +1,9 @@
-import { Body, Controller, Get, Param, Post } from "@nestjs/common";
-import type { ContentDto, GenerateContentRequest } from "@acos/shared";
+import { Body, Controller, Get, Param, Patch, Post } from "@nestjs/common";
+import type {
+  ContentDto,
+  GenerateContentRequest,
+  UpdateContentStatusRequest,
+} from "@acos/shared";
 import { ContentGenerationService } from "./content-generation.service";
 import { ContentsService } from "./contents.service";
 
@@ -40,6 +44,20 @@ export class ContentsController {
     @Param("projectId") projectId: string,
   ): Promise<{ contents: ContentDto[] }> {
     return { contents: await this.contentsService.list(projectId) };
+  }
+
+  /** 발행 파이프라인 상태 전이 (TASK-0703) — DRAFT → REVIEW → PUBLISHED → ARCHIVED */
+  @Patch(":contentId/status")
+  async updateStatus(
+    @Param("projectId") projectId: string,
+    @Param("contentId") contentId: string,
+    @Body() body?: UpdateContentStatusRequest,
+  ): Promise<ContentDto> {
+    return this.contentsService.updateStatus(
+      projectId,
+      contentId,
+      body?.status ?? "",
+    );
   }
 
   @Get(":contentId")

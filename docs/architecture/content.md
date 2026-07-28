@@ -39,8 +39,22 @@ ContentsService                                  ← 구 흐름 그대로
   `LLM_PROVIDER` 하나로 관리된다 (기본 mock).
 - 콘텐츠는 **READY로 검수된 Product Object**에서만 생성된다.
 - `Content.productObjectId`로 어떤 버전에서 생성됐는지 추적된다(원본 삭제 시 SetNull).
-- Content 자체의 상태(`DRAFT → REVIEW → PUBLISHED | ARCHIVED`)는 기존
-  `ContentStatus`를 사용하며 발행 파이프라인은 후속 TASK다.
+
+## 발행 파이프라인 (TASK-0703)
+
+`PATCH /projects/:projectId/contents/:contentId/status` `{ status }`
+
+```
+DRAFT → REVIEW → PUBLISHED → ARCHIVED
+  ↑       │
+  └───────┘ (REVIEW → DRAFT 되돌리기) · DRAFT/REVIEW/PUBLISHED → ARCHIVED(종결)
+```
+
+- 전이 규칙은 @acos/core `canTransition`(Sprint 1 선언을 공식 사용) —
+  위반 시 400에 가능한 전이 목록 안내, ARCHIVED는 종결(전이 불가)
+- **PUBLISHED 전이는 발행 조건(`isPublishable`) 추가 검증**: REVIEW 상태 +
+  제목/본문 비어 있지 않음. 전이 시 `publishedAt` 기록(이후 ARCHIVED에도 보존)
+- 채널별 포맷/배포는 스펙 없음 (후속)
 
 ## 생성 로직 변경 방법
 

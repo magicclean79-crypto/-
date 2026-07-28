@@ -43,6 +43,7 @@ function toDto(record: ContentWithVersion): ContentDto {
     title: record.title,
     body: record.body,
     status: record.status,
+    publishedAt: record.publishedAt?.toISOString() ?? null,
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
   };

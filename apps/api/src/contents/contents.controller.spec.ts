@@ -103,6 +103,33 @@ describe("Contents API (API Test)", () => {
       .expect(404);
   });
 
+  it("PATCH /projects/:id/contents/:contentId/status — 발행 파이프라인 (TASK-0703)", async () => {
+    const created = await request(app.getHttpServer())
+      .post("/projects/proj-1/contents")
+      .send({})
+      .expect(201);
+    const id = created.body.id;
+
+    const review = await request(app.getHttpServer())
+      .patch(`/projects/proj-1/contents/${id}/status`)
+      .send({ status: "REVIEW" })
+      .expect(200);
+    expect(review.body.status).toBe("REVIEW");
+
+    const published = await request(app.getHttpServer())
+      .patch(`/projects/proj-1/contents/${id}/status`)
+      .send({ status: "PUBLISHED" })
+      .expect(200);
+    expect(published.body.status).toBe("PUBLISHED");
+    expect(published.body.publishedAt).toBeTruthy();
+
+    // PUBLISHED → REVIEW 역행은 400
+    await request(app.getHttpServer())
+      .patch(`/projects/proj-1/contents/${id}/status`)
+      .send({ status: "REVIEW" })
+      .expect(400);
+  });
+
   it("POST — 없는 프로젝트 404", async () => {
     await request(app.getHttpServer())
       .post("/projects/nope/contents")

@@ -27,13 +27,14 @@ export default tseslint.config(
     },
   },
   {
-    // Node 스크립트 (Playwright 스텁 서버 등, TASK-0702)
-    files: ["**/e2e/**/*.mjs"],
+    // Node 스크립트 (Playwright 스텁 서버·운영 스모크 등, TASK-0702/0703)
+    files: ["**/e2e/**/*.mjs", "scripts/**/*.mjs"],
     languageOptions: {
       globals: {
         process: "readonly",
         console: "readonly",
         URL: "readonly",
+        fetch: "readonly",
       },
     },
   },

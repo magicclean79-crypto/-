@@ -2,7 +2,14 @@ export const APP_NAME = "AI Product Content OS";
 
 export type HealthStatus = "OK" | "DEGRADED" | "DOWN";
 
-export type ContentStatus = "DRAFT" | "REVIEW" | "PUBLISHED" | "ARCHIVED";
+export const CONTENT_STATUSES = [
+  "DRAFT",
+  "REVIEW",
+  "PUBLISHED",
+  "ARCHIVED",
+] as const;
+
+export type ContentStatus = (typeof CONTENT_STATUSES)[number];
 
 export interface ProductDto {
   id: string;
@@ -19,8 +26,15 @@ export interface ContentDto {
   title: string;
   body: string;
   status: ContentStatus;
+  /** 발행 시각 (TASK-0703) — PUBLISHED 전이 시 기록 */
+  publishedAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** 콘텐츠 상태 전이 요청 (TASK-0703 — 발행 파이프라인) */
+export interface UpdateContentStatusRequest {
+  status: ContentStatus;
 }
 
 export interface GenerateContentRequest {

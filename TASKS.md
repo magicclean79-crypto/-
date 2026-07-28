@@ -43,7 +43,7 @@
 ## 제안 (스펙 대기 — 구현하지 않음)
 
 - [ ] 실제 Provider/Generator 연결 (OCR/Analysis/Vision/Content 중 CTO 지정 — API 키·모델 스펙 필요, CTO_REQUEST #6)
-- [ ] Content 발행 파이프라인 (DRAFT → REVIEW → PUBLISHED) 및 채널별 포맷
+- [ ] Content 채널별 포맷/배포 (발행 파이프라인 자체는 TASK-0703으로 구현됨)
 
 ## 완료 — Sprint 3 (CTO 최종 승인, 2026-07-27)
 

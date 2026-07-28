@@ -4,9 +4,16 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
+import {
+  allowedTransitions,
+  canTransition,
+  isPublishable,
+} from "@acos/core";
 import type { ContentGenerator } from "@acos/core";
+import { CONTENT_STATUSES } from "@acos/shared";
 import type {
   ContentDto,
+  ContentStatus,
   GenerateContentRequest,
   OcrSummary,
   VisionSummary,
@@ -28,6 +35,7 @@ function toDto(record: ContentWithVersion): ContentDto {
     title: record.title,
     body: record.body,
     status: record.status,
+    publishedAt: record.publishedAt?.toISOString() ?? null,
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
   };
@@ -104,6 +112,58 @@ export class ContentsService {
       include: { productObject: { select: { version: true } } },
     });
     return records.map(toDto);
+  }
+
+  /**
+   * 발행 파이프라인 상태 전이 (TASK-0703).
+   * DRAFT → REVIEW → PUBLISHED → ARCHIVED (전이 규칙은 @acos/core
+   * canTransition — REVIEW→DRAFT 되돌리기·단계별 ARCHIVED 포함).
+   * PUBLISHED 전이는 발행 조건(isPublishable: REVIEW + 제목/본문)을 추가로
+   * 검증하고 publishedAt을 기록한다.
+   */
+  async updateStatus(
+    projectId: string,
+    contentId: string,
+    status: string,
+  ): Promise<ContentDto> {
+    if (!(CONTENT_STATUSES as readonly string[]).includes(status)) {
+      throw new BadRequestException(
+        `status는 다음 중 하나여야 합니다: ${CONTENT_STATUSES.join(", ")}`,
+      );
+    }
+    const target = status as ContentStatus;
+
+    const record = await this.prisma.content.findFirst({
+      where: { id: contentId, projectId },
+    });
+    if (!record) {
+      throw new NotFoundException(`콘텐츠를 찾을 수 없습니다: ${contentId}`);
+    }
+
+    if (!canTransition(record.status, target)) {
+      const allowed = allowedTransitions(record.status);
+      throw new BadRequestException(
+        `${record.status}에서 ${target}(으)로 전이할 수 없습니다.` +
+          (allowed.length > 0
+            ? ` 가능한 전이: ${allowed.join(", ")}`
+            : " (ARCHIVED는 종결 상태입니다)"),
+      );
+    }
+    if (target === "PUBLISHED" && !isPublishable(record)) {
+      throw new BadRequestException(
+        "발행 조건을 충족하지 않습니다 — REVIEW 상태이며 제목과 본문이 있어야 합니다.",
+      );
+    }
+
+    const updated = await this.prisma.content.update({
+      where: { id: record.id },
+      data: {
+        status: target,
+        ...(target === "PUBLISHED" ? { publishedAt: new Date() } : {}),
+      },
+      include: { productObject: { select: { version: true } } },
+    });
+    return toDto(updated);
   }
 
   async getById(projectId: string, contentId: string): Promise<ContentDto> {

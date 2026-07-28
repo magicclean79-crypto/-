@@ -187,6 +187,10 @@ READY 상태의 Product Object를 단일 입력으로 상세페이지(Markdown)�
 | `POST` | `/projects/:projectId/contents` | ⚠️ Deprecated — 구 경로, 내부는 공식 엔진 호출 (TASK-0506 통합 완료) |
 | `GET` | `/projects/:projectId/contents` | 목록 |
 | `GET` | `/projects/:projectId/contents/:contentId` | 단건 |
+| `PATCH` | `/projects/:projectId/contents/:contentId/status` | **발행 파이프라인 (TASK-0703)** — `DRAFT → REVIEW → PUBLISHED → ARCHIVED`, PUBLISHED는 발행 조건 검증 + publishedAt 기록 |
+
+운영: **실제 Provider 스모크 테스트 (TASK-0703)** — `node scripts/real-provider-smoke.mjs`
+(운영/스테이징 실키 환경 절차: [docs/operations/real-provider-smoke.md](docs/operations/real-provider-smoke.md))
 
 ## SOP 실행 (TASK-0305)
 

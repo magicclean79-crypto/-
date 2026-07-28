@@ -152,6 +152,7 @@ model Content {
   title           String
   body            String
   status          ContentStatus  @default(DRAFT)
+  publishedAt     DateTime? // 발행 시각 (TASK-0703) — PUBLISHED 전이 시 기록
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 

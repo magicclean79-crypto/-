@@ -46,11 +46,28 @@ export function createPrismaMock() {
           const row = {
             id: `content-${++sequence}`,
             status: "DRAFT",
+            publishedAt: null,
             createdAt: now,
             updatedAt: now,
             ...data,
           } as Content;
           contents.set(row.id, row);
+          const po = productObjects.find(
+            (item) => item.id === row.productObjectId,
+          );
+          return { ...row, productObject: po ? { version: po.version } : null };
+        },
+      ),
+      update: jest.fn(
+        async ({
+          where,
+          data,
+        }: {
+          where: { id: string };
+          data: Partial<Content>;
+        }) => {
+          const row = contents.get(where.id) as Content;
+          Object.assign(row, data, { updatedAt: new Date() });
           const po = productObjects.find(
             (item) => item.id === row.productObjectId,
           );
