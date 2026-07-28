@@ -1,5 +1,6 @@
 import {
   buildExecutionStats,
+  buildExecutionTimeline,
   buildExecutionTotals,
   type ExecutionStatGroupRow,
 } from "./execution-stats";
@@ -64,6 +65,57 @@ describe("buildExecutionStats", () => {
   it("가격 산정된 호출이 없는 그룹의 cost는 null", () => {
     const result = buildExecutionStats(rows);
     expect(result[0].stats.cost).toBeNull(); // product-analysis
+  });
+});
+
+describe("buildExecutionTimeline", () => {
+  it("버킷(ISO key)별로 병합하고 시간 오름차순으로 정렬한다", () => {
+    const timeline = buildExecutionTimeline([
+      {
+        key: "2026-07-28T10:00:00.000Z",
+        status: "SUCCESS",
+        count: 1,
+        inputTokens: 100,
+        outputTokens: 20,
+        cost: 0.01,
+        avgLatencyMs: 10,
+        maxLatencyMs: 10,
+      },
+      {
+        key: "2026-07-28T09:00:00.000Z",
+        status: "SUCCESS",
+        count: 2,
+        inputTokens: 200,
+        outputTokens: 40,
+        cost: null,
+        avgLatencyMs: 20,
+        maxLatencyMs: 30,
+      },
+      {
+        key: "2026-07-28T09:00:00.000Z",
+        status: "FAILED",
+        count: 1,
+        inputTokens: 0,
+        outputTokens: 0,
+        cost: null,
+        avgLatencyMs: 40,
+        maxLatencyMs: 40,
+      },
+    ]);
+
+    expect(timeline.map((b) => b.bucketStart)).toEqual([
+      "2026-07-28T09:00:00.000Z",
+      "2026-07-28T10:00:00.000Z",
+    ]);
+    expect(timeline[0].stats).toMatchObject({
+      count: 3,
+      successCount: 2,
+      failedCount: 1,
+      successRate: 0.6667,
+      avgLatencyMs: 26.7, // (20*2 + 40*1) / 3
+      cost: null,
+    });
+    expect(timeline[1].stats.cost).toBe(0.01);
   });
 });
 

@@ -602,6 +602,32 @@ export interface ExecutionDashboardDto {
   byModel: ExecutionGroupStatsDto[];
 }
 
+// ── Execution Timeline (TASK-0605) ─────────────────────
+
+export const EXECUTION_TIMELINE_INTERVALS = ["hour", "day", "week"] as const;
+
+export type ExecutionTimelineInterval =
+  (typeof EXECUTION_TIMELINE_INTERVALS)[number];
+
+export interface ExecutionTimelineBucketDto {
+  /** 버킷 시작 시각 (ISO, UTC date_trunc 기준) */
+  bucketStart: string;
+  stats: ExecutionStats;
+}
+
+export interface ExecutionTimelineDto {
+  interval: ExecutionTimelineInterval;
+  range: { from: string | null; to: string | null };
+  /** 적용된 필터 (미적용 필드는 null) */
+  filter: {
+    feature: string | null;
+    provider: string | null;
+    model: string | null;
+  };
+  /** 시간 오름차순 — 데이터가 있는 버킷만 포함 */
+  buckets: ExecutionTimelineBucketDto[];
+}
+
 // ── Prompt Engine (TASK-0503) ──────────────────────────
 
 export interface PromptTemplateInfoDto {

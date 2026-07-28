@@ -1,9 +1,32 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
-import { buildExecutionStats, buildExecutionTotals } from "@acos/core";
+import {
+  buildExecutionStats,
+  buildExecutionTimeline,
+  buildExecutionTotals,
+} from "@acos/core";
 import type { ExecutionStatGroupRow } from "@acos/core";
-import type { ExecutionDashboardDto, ExecutionDto } from "@acos/shared";
-import type { Execution, Prisma } from "@prisma/client";
+import { EXECUTION_TIMELINE_INTERVALS } from "@acos/shared";
+import type {
+  ExecutionDashboardDto,
+  ExecutionDto,
+  ExecutionTimelineDto,
+  ExecutionTimelineInterval,
+} from "@acos/shared";
+import { Prisma } from "@prisma/client";
+import type { Execution } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
+
+/** date_trunc 집계 결과 행 — $queryRaw 반환 형태 */
+interface TimelineRow {
+  bucketStart: Date;
+  status: "SUCCESS" | "FAILED";
+  count: number;
+  inputTokens: number;
+  outputTokens: number;
+  cost: unknown | null;
+  avgLatencyMs: number | null;
+  maxLatencyMs: number | null;
+}
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -87,6 +110,93 @@ export class ExecutionService {
       byFeature: buildExecutionStats(featureRows),
       byProvider: buildExecutionStats(providerRows),
       byModel: buildExecutionStats(modelRows),
+    };
+  }
+
+  /**
+   * Execution Timeline (TASK-0605) — hour/day/week 단위(UTC date_trunc)
+   * 시간 축 집계. feature/provider/model 필터 지원.
+   * DB에서 (버킷, status) 단위 집계 후 @acos/core 병합 로직으로 통계화한다.
+   */
+  async timeline(options: {
+    interval: string;
+    from?: Date;
+    to?: Date;
+    feature?: string;
+    provider?: string;
+    model?: string;
+  }): Promise<ExecutionTimelineDto> {
+    const interval = options.interval as ExecutionTimelineInterval;
+    if (!EXECUTION_TIMELINE_INTERVALS.includes(interval)) {
+      throw new BadRequestException(
+        `interval은 다음 중 하나여야 합니다: ${EXECUTION_TIMELINE_INTERVALS.join(", ")}`,
+      );
+    }
+    if (options.from && options.to && options.from > options.to) {
+      throw new BadRequestException("from은 to보다 이후일 수 없습니다.");
+    }
+
+    const conditions: Prisma.Sql[] = [];
+    if (options.from) {
+      conditions.push(Prisma.sql`"createdAt" >= ${options.from}`);
+    }
+    if (options.to) {
+      conditions.push(Prisma.sql`"createdAt" <= ${options.to}`);
+    }
+    if (options.feature) {
+      conditions.push(Prisma.sql`"feature" = ${options.feature}`);
+    }
+    if (options.provider) {
+      conditions.push(Prisma.sql`"provider" = ${options.provider}`);
+    }
+    if (options.model) {
+      conditions.push(Prisma.sql`"model" = ${options.model}`);
+    }
+    const where =
+      conditions.length > 0
+        ? Prisma.sql`WHERE ${Prisma.join(conditions, " AND ")}`
+        : Prisma.empty;
+
+    // interval은 화이트리스트 검증을 통과한 값만 바인딩된다
+    const rows = await this.prisma.$queryRaw<TimelineRow[]>(Prisma.sql`
+      SELECT
+        date_trunc(${interval}, "createdAt") AS "bucketStart",
+        "status",
+        COUNT(*)::int            AS "count",
+        COALESCE(SUM("inputTokens"), 0)::int  AS "inputTokens",
+        COALESCE(SUM("outputTokens"), 0)::int AS "outputTokens",
+        SUM("cost")              AS "cost",
+        AVG("latencyMs")::float8 AS "avgLatencyMs",
+        MAX("latencyMs")::int    AS "maxLatencyMs"
+      FROM "executions"
+      ${where}
+      GROUP BY "bucketStart", "status"
+    `);
+
+    // createdAt은 UTC 기준 저장 — date_trunc 결과도 UTC 버킷 시작 시각이다
+    const statRows: ExecutionStatGroupRow[] = rows.map((row) => ({
+      key: row.bucketStart.toISOString(),
+      status: row.status,
+      count: row.count,
+      inputTokens: row.inputTokens,
+      outputTokens: row.outputTokens,
+      cost: row.cost === null ? null : Number(row.cost),
+      avgLatencyMs: row.avgLatencyMs,
+      maxLatencyMs: row.maxLatencyMs,
+    }));
+
+    return {
+      interval,
+      range: {
+        from: options.from?.toISOString() ?? null,
+        to: options.to?.toISOString() ?? null,
+      },
+      filter: {
+        feature: options.feature ?? null,
+        provider: options.provider ?? null,
+        model: options.model ?? null,
+      },
+      buckets: buildExecutionTimeline(statRows),
     };
   }
 

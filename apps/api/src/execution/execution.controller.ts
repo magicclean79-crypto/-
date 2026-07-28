@@ -1,5 +1,9 @@
 import { BadRequestException, Controller, Get, Query } from "@nestjs/common";
-import type { ExecutionDashboardDto, ExecutionDto } from "@acos/shared";
+import type {
+  ExecutionDashboardDto,
+  ExecutionDto,
+  ExecutionTimelineDto,
+} from "@acos/shared";
 import { ExecutionService } from "./execution.service";
 
 /** ISO 날짜/일시 파싱 — 잘못된 값은 400 */
@@ -19,6 +23,29 @@ function parseDate(name: string, value?: string): Date | undefined {
 @Controller("executions")
 export class ExecutionController {
   constructor(private readonly executionService: ExecutionService) {}
+
+  /**
+   * Execution Timeline (TASK-0605) — ?interval=hour|day|week (기본 day),
+   * from/to 기간 + feature/provider/model 필터
+   */
+  @Get("timeline")
+  async timeline(
+    @Query("interval") interval?: string,
+    @Query("from") from?: string,
+    @Query("to") to?: string,
+    @Query("feature") feature?: string,
+    @Query("provider") provider?: string,
+    @Query("model") model?: string,
+  ): Promise<ExecutionTimelineDto> {
+    return this.executionService.timeline({
+      interval: interval || "day",
+      from: parseDate("from", from),
+      to: parseDate("to", to),
+      feature: feature || undefined,
+      provider: provider || undefined,
+      model: model || undefined,
+    });
+  }
 
   /** Execution Dashboard (TASK-0602) — ?from=&to= (ISO, 미지정 시 전체 기간) */
   @Get("stats")

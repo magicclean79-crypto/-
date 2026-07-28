@@ -38,7 +38,34 @@ const rows: Execution[] = [
 describe("Execution API (API Test)", () => {
   let app: INestApplication;
   const groupByCalls: { by: string[]; where?: unknown }[] = [];
+  const rawQueries: { values: unknown[] }[] = [];
   const prismaMock = {
+    // TASK-0605 timeline — date_trunc 집계 결과를 흉내 낸다
+    $queryRaw: jest.fn(async (query: { values: unknown[] }) => {
+      rawQueries.push(query);
+      return [
+        {
+          bucketStart: new Date("2026-07-28T10:00:00Z"),
+          status: "SUCCESS",
+          count: 1,
+          inputTokens: 100,
+          outputTokens: 20,
+          cost: "0",
+          avgLatencyMs: 10,
+          maxLatencyMs: 10,
+        },
+        {
+          bucketStart: new Date("2026-07-28T09:00:00Z"),
+          status: "SUCCESS",
+          count: 2,
+          inputTokens: 200,
+          outputTokens: 40,
+          cost: "0",
+          avgLatencyMs: 5,
+          maxLatencyMs: 8,
+        },
+      ];
+    }),
     execution: {
       findMany: jest.fn(
         async ({ where, take }: { where?: { feature?: string }; take: number }) =>
@@ -185,6 +212,68 @@ describe("Execution API (API Test)", () => {
       .get(
         "/executions/stats?from=2026-07-29T00:00:00Z&to=2026-07-28T00:00:00Z",
       )
+      .expect(400);
+  });
+
+  it("GET /executions/timeline — 시간 오름차순 버킷 통계 (TASK-0605, 기본 day)", async () => {
+    const response = await request(app.getHttpServer())
+      .get("/executions/timeline?interval=hour")
+      .expect(200);
+
+    expect(response.body.interval).toBe("hour");
+    expect(response.body.filter).toEqual({
+      feature: null,
+      provider: null,
+      model: null,
+    });
+    expect(
+      response.body.buckets.map(
+        (bucket: { bucketStart: string }) => bucket.bucketStart,
+      ),
+    ).toEqual(["2026-07-28T09:00:00.000Z", "2026-07-28T10:00:00.000Z"]);
+    expect(response.body.buckets[0].stats).toMatchObject({
+      count: 2,
+      successRate: 1,
+      inputTokens: 200,
+      cost: 0,
+      avgLatencyMs: 5,
+      maxLatencyMs: 8,
+    });
+
+    const defaulted = await request(app.getHttpServer())
+      .get("/executions/timeline")
+      .expect(200);
+    expect(defaulted.body.interval).toBe("day");
+  });
+
+  it("GET /executions/timeline — feature/provider/model 필터가 쿼리에 바인딩된다", async () => {
+    rawQueries.length = 0;
+    const response = await request(app.getHttpServer())
+      .get(
+        "/executions/timeline?interval=day&feature=dev&provider=mock&model=mock-llm-1&from=2026-07-28T00:00:00Z",
+      )
+      .expect(200);
+
+    expect(response.body.filter).toEqual({
+      feature: "dev",
+      provider: "mock",
+      model: "mock-llm-1",
+    });
+    // Prisma.sql 바인딩 값: interval + from + feature + provider + model
+    expect(rawQueries[0].values).toEqual(
+      expect.arrayContaining([
+        "day",
+        "dev",
+        "mock",
+        "mock-llm-1",
+        new Date("2026-07-28T00:00:00Z"),
+      ]),
+    );
+  });
+
+  it("GET /executions/timeline — 잘못된 interval은 400", async () => {
+    await request(app.getHttpServer())
+      .get("/executions/timeline?interval=month")
       .expect(400);
   });
 });

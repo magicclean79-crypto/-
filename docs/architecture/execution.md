@@ -1,4 +1,4 @@
-# Execution Domain 아키텍처 (TASK-0601 · Dashboard TASK-0602, Sprint 6)
+# Execution Domain 아키텍처 (TASK-0601 · Dashboard 0602 · Timeline 0605, Sprint 6)
 
 **모든 LLM 호출은 호출 1건당 Execution 1건을 기록한다** — Content Generation ·
 Analysis · Vision · 개발용 API가 대상이며, Provider/Model/Token/Cost/Latency/
@@ -81,12 +81,25 @@ USD / 1M 토큰) 기준.
 - `from`/`to`(ISO)로 기간 필터 (미지정 시 전체 기간). 잘못된 날짜·역전 기간은 400
 - 그룹 정렬: 호출 수 내림차순
 
+## Timeline (TASK-0605)
+
+`GET /executions/timeline?interval=hour|day|week&from=&to=&feature=&provider=&model=`
+— Dashboard와 같은 통계(`ExecutionStats`)를 **시간 축 버킷**으로 제공한다.
+
+- `interval`: `hour` / `day` / `week` (기본 day, 그 외 400) — DB
+  `date_trunc`(UTC) 기준. week는 ISO 주(월요일 시작)
+- 필터: `feature` · `provider` · `model` (정확 일치) + `from`/`to` 기간
+- 버킷은 시간 오름차순, **데이터가 있는 버킷만 포함** (빈 버킷 0 채움 없음)
+- 집계 경로: DB에서 (버킷, status) 단위 집계($queryRaw, 값 전부 파라미터
+  바인딩·interval은 화이트리스트) → core `buildExecutionTimeline` 병합
+
 ## API
 
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
 | `GET` | `/executions?feature=&limit=` | 이력 조회 (최신순, limit 기본 50·최대 200) |
 | `GET` | `/executions/stats?from=&to=` | **Dashboard 집계** — totals + byFeature/byProvider/byModel |
+| `GET` | `/executions/timeline?interval=&from=&to=&feature=&provider=&model=` | **시간 축 집계** — hour/day/week 버킷 |
 
 기록용 쓰기 API는 없다 — 기록은 LlmService 내부에서만 일어난다.
 
@@ -99,7 +112,7 @@ USD / 1M 토큰) 기준.
 - Service: `apps/api/src/llm/llm.service.spec.ts` — feature 태깅, FAILED 기록,
   검증 오류 비기록, 저장소 미주입 동작
 - API: `apps/api/src/execution/execution.controller.spec.ts` — 목록/필터/limit ·
-  stats 집계/기간 필터/날짜 검증
+  stats 집계/기간 필터/날짜 검증 · timeline 버킷 정렬/필터 바인딩/interval 검증
 
 ```bash
 pnpm test

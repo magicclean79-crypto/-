@@ -100,3 +100,15 @@ export function buildExecutionTotals(
   const grouped = buildExecutionStats(rows.map((row) => ({ ...row, key: "" })));
   return grouped[0]?.stats ?? emptyStats();
 }
+
+/**
+ * Timeline 병합 (TASK-0605) — key가 버킷 시작 시각(ISO)인 행들을
+ * 시간 오름차순 버킷 통계로 병합한다. 데이터가 있는 버킷만 반환한다.
+ */
+export function buildExecutionTimeline(
+  rows: ExecutionStatGroupRow[],
+): { bucketStart: string; stats: ExecutionStats }[] {
+  return buildExecutionStats(rows)
+    .map(({ key, stats }) => ({ bucketStart: key, stats }))
+    .sort((a, b) => a.bucketStart.localeCompare(b.bucketStart));
+}
