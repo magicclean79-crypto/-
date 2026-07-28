@@ -193,6 +193,23 @@ READY 상태의 Product Object를 단일 입력으로 상세페이지(Markdown)�
 운영: **실제 Provider 스모크 테스트 (TASK-0703)** — `node scripts/real-provider-smoke.mjs`
 (운영/스테이징 실키 환경 절차: [docs/operations/real-provider-smoke.md](docs/operations/real-provider-smoke.md))
 
+## 인증/권한 Foundation (TASK-0801)
+
+User Entity(역할 ADMIN/EDITOR/VIEWER) · DB 세션(Bearer 토큰, 기본 7일) · RBAC ·
+**Actor Audit**(발행 전이 수행자 기록) · **Login UI**(`/login`) —
+[docs/architecture/auth.md](docs/architecture/auth.md)
+
+| 메서드 | 경로 | 보호 |
+| --- | --- | --- |
+| `POST` | `/auth/login` | 공개 — `{ email, password }` → 세션 토큰 |
+| `POST` | `/auth/logout` · `GET /auth/me` | 인증 |
+| `POST` | `/auth/users` | **ADMIN** — 사용자 생성 |
+
+- 발행 전이(`PATCH …/contents/:id/status`)는 **EDITOR 이상** 인증 필요,
+  수행자가 감사 이력 actor에 기록됨
+- 최초 기동 시 사용자 0명이면 관리자 자동 생성 (`AUTH_ADMIN_EMAIL`/`AUTH_ADMIN_PASSWORD`,
+  기본 admin@acos.local / admin1234 — 로컬 전용)
+
 ## SOP 실행 (TASK-0305)
 
 SOP는 회사의 표준 업무 절차를 저장하는 도메인(Company Brain)이고,

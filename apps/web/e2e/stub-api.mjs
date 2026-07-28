@@ -71,7 +71,7 @@ const server = http.createServer((req, res) => {
   // 브라우저(3100)에서의 클라이언트 호출 허용 (실제 API도 CORS 허용)
   res.setHeader("access-control-allow-origin", "*");
   res.setHeader("access-control-allow-methods", "GET,POST,PATCH,OPTIONS");
-  res.setHeader("access-control-allow-headers", "content-type");
+  res.setHeader("access-control-allow-headers", "content-type, authorization");
   if (req.method === "OPTIONS") {
     res.statusCode = 204;
     res.end();
@@ -87,6 +87,42 @@ const server = http.createServer((req, res) => {
       resetPublishing();
       res.end(JSON.stringify({ mode }));
     });
+    return;
+  }
+
+  // ── 인증 (TASK-0801) ──
+  if (req.method === "POST" && url.pathname === "/auth/login") {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      const { email, password } = JSON.parse(body);
+      res.setHeader("content-type", "application/json");
+      if (email === "admin@acos.local" && password === "admin1234") {
+        res.end(
+          JSON.stringify({
+            token: "stub-token",
+            expiresAt: "2027-01-01T00:00:00.000Z",
+            user: {
+              id: "u-1",
+              email: "admin@acos.local",
+              name: "관리자",
+              role: "ADMIN",
+              createdAt: "2026-07-28T00:00:00.000Z",
+            },
+          }),
+        );
+      } else {
+        res.statusCode = 401;
+        res.end(
+          JSON.stringify({ message: "이메일 또는 비밀번호가 올바르지 않습니다." }),
+        );
+      }
+    });
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/auth/logout") {
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ ok: true }));
     return;
   }
 
@@ -124,6 +160,17 @@ const server = http.createServer((req, res) => {
     req.method === "PATCH" &&
     url.pathname === `/projects/proj-pub/contents/${pubContent.id}/status`
   ) {
+    // TASK-0801: 전이는 인증 필요 (EDITOR 이상)
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = 401;
+      res.setHeader("content-type", "application/json");
+      res.end(
+        JSON.stringify({
+          message: "로그인이 필요합니다 (Authorization: Bearer <token>).",
+        }),
+      );
+      return;
+    }
     let body = "";
     req.on("data", (chunk) => (body += chunk));
     req.on("end", () => {

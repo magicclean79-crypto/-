@@ -1,9 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { allowedTransitions } from "@acos/core";
 import type { ContentStatus } from "@acos/shared";
+import { getAuthToken } from "../../../lib/auth-client";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
@@ -37,11 +39,16 @@ export function ContentStatusActions({
     setBusy(true);
     setError(null);
     try {
+      // TASK-0801: 전이는 EDITOR 이상 인증 필요 — 토큰을 Bearer로 첨부
+      const token = getAuthToken();
       const response = await fetch(
         `${API_URL}/projects/${projectId}/contents/${contentId}/status`,
         {
           method: "PATCH",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
           body: JSON.stringify({ status: target }),
         },
       );
@@ -84,7 +91,10 @@ export function ContentStatusActions({
       ))}
       {error ? (
         <span data-testid="content-status-error" className="text-xs text-red-600">
-          {error}
+          {error}{" "}
+          <Link href="/login" className="underline">
+            로그인
+          </Link>
         </span>
       ) : null}
     </div>

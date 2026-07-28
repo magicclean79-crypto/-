@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { AuthModule } from "../auth/auth.module";
 import { CompanyBrainModule } from "../company-brain/company-brain.module";
 import { LlmModule } from "../llm/llm.module";
 import { PromptModule } from "../prompt/prompt.module";
@@ -16,7 +17,7 @@ import { EngineContentGenerator } from "./engine-content.generator";
  * @deprecated 상태로 보존되어 있으나 더 이상 연결되지 않는다.)
  */
 @Module({
-  imports: [CompanyBrainModule, LlmModule, PromptModule],
+  imports: [AuthModule, CompanyBrainModule, LlmModule, PromptModule],
   controllers: [ContentsController],
   providers: [
     ContentsService,

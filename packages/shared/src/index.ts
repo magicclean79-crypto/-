@@ -43,7 +43,42 @@ export interface ContentStatusHistoryDto {
   contentId: string;
   fromStatus: ContentStatus;
   toStatus: ContentStatus;
+  /** 수행자 이메일 (TASK-0801 Actor Audit) — 인증 도입 전 기록은 null */
+  actor: string | null;
   createdAt: string;
+}
+
+// ── 인증/권한 (TASK-0801, Sprint 8) ────────────────────
+
+/** 역할 계층: ADMIN > EDITOR > VIEWER */
+export const USER_ROLES = ["ADMIN", "EDITOR", "VIEWER"] as const;
+
+export type UserRole = (typeof USER_ROLES)[number];
+
+export interface UserDto {
+  id: string;
+  email: string;
+  name: string;
+  role: UserRole;
+  createdAt: string;
+}
+
+export interface LoginRequest {
+  email: string;
+  password: string;
+}
+
+export interface LoginResponseDto {
+  token: string;
+  expiresAt: string;
+  user: UserDto;
+}
+
+export interface CreateUserRequest {
+  email: string;
+  name: string;
+  password: string;
+  role: UserRole;
 }
 
 export interface GenerateContentRequest {

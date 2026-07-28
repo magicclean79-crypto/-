@@ -1,10 +1,21 @@
-import { Body, Controller, Get, Param, Patch, Post } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Req,
+  UseGuards,
+} from "@nestjs/common";
 import type {
   ContentDto,
   ContentStatusHistoryDto,
   GenerateContentRequest,
   UpdateContentStatusRequest,
 } from "@acos/shared";
+import { AuthGuard, RequireRole } from "../auth/auth.guard";
+import type { AuthenticatedRequest } from "../auth/auth.guard";
 import { ContentGenerationService } from "./content-generation.service";
 import { ContentsService } from "./contents.service";
 
@@ -47,17 +58,24 @@ export class ContentsController {
     return { contents: await this.contentsService.list(projectId) };
   }
 
-  /** 발행 파이프라인 상태 전이 (TASK-0703) — DRAFT → REVIEW → PUBLISHED → ARCHIVED */
+  /**
+   * 발행 파이프라인 상태 전이 (TASK-0703) — DRAFT → REVIEW → PUBLISHED → ARCHIVED.
+   * TASK-0801: EDITOR 이상 인증 필요, 수행자가 감사 이력(actor)에 기록된다.
+   */
   @Patch(":contentId/status")
+  @UseGuards(AuthGuard)
+  @RequireRole("EDITOR")
   async updateStatus(
     @Param("projectId") projectId: string,
     @Param("contentId") contentId: string,
+    @Req() request: AuthenticatedRequest,
     @Body() body?: UpdateContentStatusRequest,
   ): Promise<ContentDto> {
     return this.contentsService.updateStatus(
       projectId,
       contentId,
       body?.status ?? "",
+      request.user?.email ?? null,
     );
   }
 

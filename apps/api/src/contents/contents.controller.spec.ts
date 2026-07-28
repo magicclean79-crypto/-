@@ -11,6 +11,8 @@ import {
   readyProductObject,
 } from "./contents.spec-helpers";
 import { EngineContentGenerator } from "./engine-content.generator";
+import { AuthGuard } from "../auth/auth.guard";
+import { AuthService } from "../auth/auth.service";
 
 describe("Contents API (API Test)", () => {
   let app: INestApplication;
@@ -42,6 +44,31 @@ describe("Contents API (API Test)", () => {
         {
           provide: ContentGenerationService,
           useValue: engineMock,
+        },
+        AuthGuard,
+        {
+          // TASK-0801: 전이는 EDITOR 이상 — 테스트용 토큰 매핑
+          provide: AuthService,
+          useValue: {
+            validateToken: async (token: string) =>
+              token === "editor-token"
+                ? {
+                    id: "u-editor",
+                    email: "editor@acos.local",
+                    name: "에디터",
+                    role: "EDITOR",
+                    createdAt: "",
+                  }
+                : token === "viewer-token"
+                  ? {
+                      id: "u-viewer",
+                      email: "viewer@acos.local",
+                      name: "뷰어",
+                      role: "VIEWER",
+                      createdAt: "",
+                    }
+                  : null,
+          },
         },
       ],
     }).compile();
@@ -103,21 +130,34 @@ describe("Contents API (API Test)", () => {
       .expect(404);
   });
 
-  it("PATCH /projects/:id/contents/:contentId/status — 발행 파이프라인 (TASK-0703)", async () => {
+  it("PATCH /projects/:id/contents/:contentId/status — 발행 파이프라인 (TASK-0703, 인증 필요)", async () => {
     const created = await request(app.getHttpServer())
       .post("/projects/proj-1/contents")
       .send({})
       .expect(201);
     const id = created.body.id;
 
+    // TASK-0801: 무토큰 401, VIEWER 403 (EDITOR 이상 요구)
+    await request(app.getHttpServer())
+      .patch(`/projects/proj-1/contents/${id}/status`)
+      .send({ status: "REVIEW" })
+      .expect(401);
+    await request(app.getHttpServer())
+      .patch(`/projects/proj-1/contents/${id}/status`)
+      .set("Authorization", "Bearer viewer-token")
+      .send({ status: "REVIEW" })
+      .expect(403);
+
     const review = await request(app.getHttpServer())
       .patch(`/projects/proj-1/contents/${id}/status`)
+      .set("Authorization", "Bearer editor-token")
       .send({ status: "REVIEW" })
       .expect(200);
     expect(review.body.status).toBe("REVIEW");
 
     const published = await request(app.getHttpServer())
       .patch(`/projects/proj-1/contents/${id}/status`)
+      .set("Authorization", "Bearer editor-token")
       .send({ status: "PUBLISHED" })
       .expect(200);
     expect(published.body.status).toBe("PUBLISHED");
@@ -126,19 +166,23 @@ describe("Contents API (API Test)", () => {
     // PUBLISHED → REVIEW 역행은 400
     await request(app.getHttpServer())
       .patch(`/projects/proj-1/contents/${id}/status`)
+      .set("Authorization", "Bearer editor-token")
       .send({ status: "REVIEW" })
       .expect(400);
 
-    // 감사 이력 조회 (TASK-0704) — 최신순
+    // 감사 이력 조회 (TASK-0704) — 최신순 + actor 기록 (TASK-0801)
     const history = await request(app.getHttpServer())
       .get(`/projects/proj-1/contents/${id}/history`)
       .expect(200);
     expect(
       history.body.history.map(
-        (item: { fromStatus: string; toStatus: string }) =>
-          `${item.fromStatus}→${item.toStatus}`,
+        (item: { fromStatus: string; toStatus: string; actor: string | null }) =>
+          `${item.fromStatus}→${item.toStatus}@${item.actor}`,
       ),
-    ).toEqual(["REVIEW→PUBLISHED", "DRAFT→REVIEW"]);
+    ).toEqual([
+      "REVIEW→PUBLISHED@editor@acos.local",
+      "DRAFT→REVIEW@editor@acos.local",
+    ]);
   });
 
   it("POST — 없는 프로젝트 404", async () => {

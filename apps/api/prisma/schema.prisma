@@ -168,10 +168,45 @@ model ContentStatusHistory {
   contentId  String
   fromStatus ContentStatus
   toStatus   ContentStatus
+  actor      String? // 수행자 이메일 (TASK-0801 Actor Audit) — 인증 도입 전 기록은 null
   createdAt  DateTime      @default(now())
 
   @@index([contentId, createdAt])
   @@map("content_status_history")
+}
+
+// ── 인증/권한 Foundation (TASK-0801, Sprint 8) ─────────
+
+enum UserRole {
+  ADMIN
+  EDITOR
+  VIEWER
+}
+
+model User {
+  id           String        @id @default(cuid())
+  email        String        @unique
+  name         String
+  passwordHash String
+  role         UserRole      @default(VIEWER)
+  sessions     AuthSession[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@map("users")
+}
+
+// DB 저장형 세션 — 토큰 1개당 1레코드, 만료 시각으로 무효화
+model AuthSession {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("auth_sessions")
 }
 
 enum ContentStatus {

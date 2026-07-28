@@ -14,3 +14,4 @@ export * from "./llm";
 export * from "./content-generation";
 export * from "./prompt";
 export * from "./execution";
+export * from "./auth";

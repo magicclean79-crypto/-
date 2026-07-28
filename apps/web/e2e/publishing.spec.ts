@@ -11,6 +11,13 @@ async function reset(): Promise<void> {
 }
 
 test.describe("발행 파이프라인 Web UI (TASK-0704)", () => {
+  // TASK-0801: 전이는 로그인 필요 — 각 테스트에 세션 토큰 주입
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem("acos_token", "stub-token");
+    });
+  });
+
   test("상태 변경 UI — DRAFT → REVIEW → PUBLISHED(publishedAt) → ARCHIVED(종결)", async ({
     page,
   }) => {

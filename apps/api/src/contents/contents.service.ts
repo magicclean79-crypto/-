@@ -126,6 +126,7 @@ export class ContentsService {
     projectId: string,
     contentId: string,
     status: string,
+    actor: string | null = null,
   ): Promise<ContentDto> {
     if (!(CONTENT_STATUSES as readonly string[]).includes(status)) {
       throw new BadRequestException(
@@ -174,6 +175,7 @@ export class ContentsService {
           contentId: record.id,
           fromStatus: record.status,
           toStatus: target,
+          actor, // 수행자 이메일 (TASK-0801 Actor Audit)
         },
       }),
     ]);
@@ -201,6 +203,7 @@ export class ContentsService {
       contentId: record.contentId,
       fromStatus: record.fromStatus,
       toStatus: record.toStatus,
+      actor: record.actor,
       createdAt: record.createdAt.toISOString(),
     }));
   }
