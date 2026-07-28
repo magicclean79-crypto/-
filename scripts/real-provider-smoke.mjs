@@ -14,9 +14,13 @@
  */
 const API_BASE = process.env.API_BASE ?? "http://localhost:4000";
 const ALLOW_MOCK = process.env.SMOKE_ALLOW_MOCK === "1";
+// TASK-0802: 모든 쓰기 API 인증 — 스모크는 EDITOR 이상 계정으로 로그인한다
+const SMOKE_EMAIL = process.env.SMOKE_EMAIL ?? "admin@acos.local";
+const SMOKE_PASSWORD = process.env.SMOKE_PASSWORD ?? "admin1234";
 
 const results = [];
 let failed = false;
+let authToken = "";
 
 function report(step, ok, detail) {
   results.push({ step, ok, detail });
@@ -28,8 +32,12 @@ function report(step, ok, detail) {
 
 async function api(path, init) {
   const response = await fetch(`${API_BASE}${path}`, {
-    headers: { "content-type": "application/json" },
     ...init,
+    headers: {
+      "content-type": "application/json",
+      ...(authToken ? { authorization: `Bearer ${authToken}` } : {}),
+      ...(init?.headers ?? {}),
+    },
   });
   const body = await response.json().catch(() => null);
   return { status: response.status, body };
@@ -61,7 +69,28 @@ async function main() {
     return finish();
   }
 
-  // 2. Health Check (실호출)
+  // 2. 로그인 (TASK-0802 — 쓰기 API 인증)
+  const auth = await api("/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ email: SMOKE_EMAIL, password: SMOKE_PASSWORD }),
+  });
+  if (auth.status === 200 && auth.body?.token) {
+    authToken = auth.body.token;
+    report(
+      "로그인 (POST /auth/login)",
+      true,
+      `${auth.body.user.email} (${auth.body.user.role})`,
+    );
+  } else {
+    report(
+      "로그인 (POST /auth/login)",
+      false,
+      auth.body?.message ?? `HTTP ${auth.status} — SMOKE_EMAIL/SMOKE_PASSWORD 확인`,
+    );
+    return finish();
+  }
+
+  // 3. Health Check (실호출)
   const health = await api("/llm/health");
   report(
     "Health Check (GET /llm/health)",

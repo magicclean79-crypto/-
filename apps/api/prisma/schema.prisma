@@ -189,11 +189,25 @@ model User {
   name         String
   passwordHash String
   role         UserRole      @default(VIEWER)
+  disabled     Boolean       @default(false) // 비활성화 시 로그인/세션 무효 (TASK-0802)
   sessions     AuthSession[]
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
 
   @@map("users")
+}
+
+// 사용자 관리 감사 로그 (TASK-0802) — 생성/역할 변경/비활성화 1건당 1레코드
+model UserAuditLog {
+  id          String   @id @default(cuid())
+  actor       String // 수행자 이메일
+  action      String // USER_CREATED | ROLE_CHANGED | USER_DISABLED | USER_ENABLED
+  targetEmail String
+  detail      String?
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("user_audit_log")
 }
 
 // DB 저장형 세션 — 토큰 1개당 1레코드, 만료 시각으로 무효화

@@ -60,6 +60,33 @@ export interface UserDto {
   email: string;
   name: string;
   role: UserRole;
+  /** 비활성화 여부 (TASK-0802) — true면 로그인/세션 무효 */
+  disabled: boolean;
+  createdAt: string;
+}
+
+/** 사용자 수정 요청 (TASK-0802, ADMIN 전용) — role/disabled 부분 수정 */
+export interface UpdateUserRequest {
+  role?: UserRole;
+  disabled?: boolean;
+}
+
+export const USER_AUDIT_ACTIONS = [
+  "USER_CREATED",
+  "ROLE_CHANGED",
+  "USER_DISABLED",
+  "USER_ENABLED",
+] as const;
+
+export type UserAuditAction = (typeof USER_AUDIT_ACTIONS)[number];
+
+/** 사용자 관리 감사 로그 (TASK-0802) */
+export interface UserAuditLogDto {
+  id: string;
+  actor: string;
+  action: UserAuditAction;
+  targetEmail: string;
+  detail: string | null;
   createdAt: string;
 }
 

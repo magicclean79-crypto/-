@@ -18,6 +18,9 @@ import type {
   CreateUserRequest,
   LoginRequest,
   LoginResponseDto,
+  UpdateUserRequest,
+  UserAuditAction,
+  UserAuditLogDto,
   UserDto,
 } from "@acos/shared";
 import type { User } from "@prisma/client";
@@ -29,6 +32,7 @@ function toDto(user: User): UserDto {
     email: user.email,
     name: user.name,
     role: user.role,
+    disabled: user.disabled,
     createdAt: user.createdAt.toISOString(),
   };
 }
@@ -91,6 +95,9 @@ export class AuthService implements OnModuleInit {
         "이메일 또는 비밀번호가 올바르지 않습니다.",
       );
     }
+    if (user.disabled) {
+      throw new UnauthorizedException("비활성화된 계정입니다.");
+    }
 
     const session = await this.prisma.authSession.create({
       data: {
@@ -119,14 +126,110 @@ export class AuthService implements OnModuleInit {
       where: { token },
       include: { user: true },
     });
-    if (!session || session.expiresAt < new Date()) {
+    if (!session || session.expiresAt < new Date() || session.user.disabled) {
       return null;
     }
     return toDto(session.user);
   }
 
+  /** 사용자 관리 감사 로그 기록 (TASK-0802) */
+  private async recordAudit(
+    action: UserAuditAction,
+    actor: string,
+    targetEmail: string,
+    detail: string | null = null,
+  ): Promise<void> {
+    await this.prisma.userAuditLog.create({
+      data: { action, actor, targetEmail, detail },
+    });
+  }
+
+  /** 사용자 목록 (ADMIN 전용) — 생성순 */
+  async listUsers(): Promise<UserDto[]> {
+    const users = await this.prisma.user.findMany({
+      orderBy: { createdAt: "asc" },
+    });
+    return users.map(toDto);
+  }
+
+  /**
+   * 사용자 수정 (ADMIN 전용, TASK-0802) — 역할 변경/비활성화.
+   * 자기 자신은 수정 불가(마지막 관리자 강등·자기 비활성화 방지),
+   * 비활성화 시 해당 사용자의 모든 세션을 즉시 폐기한다.
+   */
+  async updateUser(
+    id: string,
+    request: UpdateUserRequest,
+    actor: string,
+  ): Promise<UserDto> {
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) {
+      throw new BadRequestException(`사용자를 찾을 수 없습니다: ${id}`);
+    }
+    if (user.email === actor) {
+      throw new BadRequestException(
+        "자기 자신의 역할/활성 상태는 변경할 수 없습니다.",
+      );
+    }
+    if (request.role !== undefined && !USER_ROLES.includes(request.role)) {
+      throw new BadRequestException(
+        `role은 다음 중 하나여야 합니다: ${USER_ROLES.join(", ")}`,
+      );
+    }
+    if (request.role === undefined && request.disabled === undefined) {
+      throw new BadRequestException("role 또는 disabled를 지정해 주세요.");
+    }
+
+    const updated = await this.prisma.user.update({
+      where: { id },
+      data: {
+        ...(request.role !== undefined ? { role: request.role } : {}),
+        ...(request.disabled !== undefined
+          ? { disabled: request.disabled }
+          : {}),
+      },
+    });
+
+    if (request.role !== undefined && request.role !== user.role) {
+      await this.recordAudit(
+        "ROLE_CHANGED",
+        actor,
+        user.email,
+        `${user.role} → ${request.role}`,
+      );
+    }
+    if (request.disabled !== undefined && request.disabled !== user.disabled) {
+      await this.recordAudit(
+        request.disabled ? "USER_DISABLED" : "USER_ENABLED",
+        actor,
+        user.email,
+      );
+      if (request.disabled) {
+        // 비활성화 즉시 세션 전부 폐기
+        await this.prisma.authSession.deleteMany({ where: { userId: id } });
+      }
+    }
+    return toDto(updated);
+  }
+
+  /** 사용자 관리 감사 로그 (ADMIN 전용) — 최신순 */
+  async listAudit(): Promise<UserAuditLogDto[]> {
+    const records = await this.prisma.userAuditLog.findMany({
+      orderBy: { createdAt: "desc" },
+      take: 100,
+    });
+    return records.map((record) => ({
+      id: record.id,
+      actor: record.actor,
+      action: record.action as UserAuditAction,
+      targetEmail: record.targetEmail,
+      detail: record.detail,
+      createdAt: record.createdAt.toISOString(),
+    }));
+  }
+
   /** 사용자 생성 (ADMIN 전용 — 컨트롤러에서 RBAC 강제) */
-  async createUser(request: CreateUserRequest): Promise<UserDto> {
+  async createUser(request: CreateUserRequest, actor: string): Promise<UserDto> {
     const email = request.email?.trim().toLowerCase();
     if (!email || !request.name?.trim()) {
       throw new BadRequestException("email과 name은 필수입니다.");
@@ -153,6 +256,7 @@ export class AuthService implements OnModuleInit {
         role: request.role,
       },
     });
+    await this.recordAudit("USER_CREATED", actor, email, `role=${request.role}`);
     return toDto(user);
   }
 }

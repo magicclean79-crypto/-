@@ -42,6 +42,12 @@ export default function Home() {
           >
             🔐 로그인
           </Link>
+          <Link
+            href="/admin/users"
+            className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+          >
+            👥 사용자 관리
+          </Link>
         </div>
       </div>
 

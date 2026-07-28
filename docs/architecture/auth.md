@@ -1,9 +1,15 @@
-# 인증/권한 Foundation 아키텍처 (TASK-0801, Sprint 8)
+# 인증/권한 아키텍처 (TASK-0801 Foundation · TASK-0802 전면 쓰기 보호, Sprint 8)
 
-User Entity · DB 세션 · RBAC · Actor Audit · Login UI로 구성된 인증 기반이다.
-**적용 범위는 점진 확대 원칙** — 이번 TASK에서는 발행 파이프라인 전이(Actor
-Audit 연계)와 사용자 관리에 강제 적용했고, 전면 강제 범위는 CTO 결정 대기
-(CTO_REQUEST 참고).
+User Entity · DB 세션 · RBAC · Actor Audit · Login UI · 사용자 관리 UI로
+구성된 인증 체계다.
+
+**적용 범위 (TASK-0802 — CTO 지시 "모든 Write API 인증")**:
+- **모든 쓰기(POST/PATCH/PUT/DELETE)**: 전역 `WriteProtectionGuard`(APP_GUARD)
+  가 인증 강제 — 기본 **EDITOR 이상**, `@RequireRole`로 개별 지정
+  (사용자 관리 ADMIN · 로그아웃 VIEWER)
+- **예외(@Public)**: 로그인 · Company Brain 조회(POST지만 읽기) ·
+  READY 검증(판정만, 저장 없음)
+- **조회 GET**: 비보호 유지 (CTO 결정, 0801 승인 ①)
 
 ## 구성 요소
 
@@ -33,15 +39,27 @@ POST /auth/login { email, password }
   `AUTH_ADMIN_EMAIL`/`AUTH_ADMIN_PASSWORD` (미설정 시 admin@acos.local /
   admin1234 — **로컬 개발 전용**, 운영은 환경변수 필수)
 
-## RBAC
+## RBAC (TASK-0802 확장)
 
 | 역할 | 권한 |
 | --- | --- |
-| ADMIN | 전체 — 사용자 생성(`POST /auth/users`) 포함 |
-| EDITOR | 발행 파이프라인 전이(`PATCH …/contents/:id/status`) |
-| VIEWER | 보호 작업 불가 (조회 전용 — 현재 조회 API는 비보호) |
+| ADMIN | 전체 — **사용자 관리**(목록/생성/역할 변경/비활성화)·감사 로그 포함 |
+| EDITOR | **모든 쓰기 API** (업로드·상품·파이프라인·생성·발행 전이·개발용 LLM 호출 등) |
+| VIEWER | 조회 전용 (+ 로그아웃) — 쓰기 403 |
 
 역할 검사는 계층 비교(`roleAtLeast`) — 상위 역할은 하위 권한을 포함한다.
+
+## 사용자 관리 (TASK-0802, ADMIN 전용)
+
+- `GET /auth/users` — 목록 · `POST /auth/users` — 생성 ·
+  `PATCH /auth/users/:id` — **역할 변경/비활성화** (자기 자신 변경 불가 400)
+- **비활성화(disable)**: 로그인 401("비활성화된 계정") + 기존 세션 전부
+  즉시 폐기 + 토큰 검증 거부. 활성화로 복구 가능
+- **감사 확장**: `user_audit_log` — USER_CREATED / ROLE_CHANGED /
+  USER_DISABLED / USER_ENABLED 1건당 1레코드(actor·대상·상세),
+  `GET /auth/audit`(최신순 100건)
+- **Web UI**: `/admin/users` — 목록·생성 폼·역할 select·비활성화 토글·감사
+  로그. 미로그인/권한 부족 시 안내. Playwright 3종 포함
 
 ## Actor Audit (TASK-0704 감사 이력 확장)
 
@@ -53,11 +71,12 @@ POST /auth/login { email, password }
 
 | 메서드 | 경로 | 보호 |
 | --- | --- | --- |
-| `POST` | `/auth/login` | 공개 |
-| `POST` | `/auth/logout` | 인증 |
+| `POST` | `/auth/login` | 공개(@Public) |
+| `POST` | `/auth/logout` | 인증 (모든 역할) |
 | `GET` | `/auth/me` | 인증 |
-| `POST` | `/auth/users` | **ADMIN** |
-| `PATCH` | `/projects/:id/contents/:contentId/status` | **EDITOR 이상** + actor 기록 |
+| `GET/POST` | `/auth/users` · `PATCH /auth/users/:id` · `GET /auth/audit` | **ADMIN** |
+| 그 외 **모든 쓰기** | POST/PATCH/PUT/DELETE 전체 | **EDITOR 이상** (전역 가드) |
+| 예외 | `POST /company-brain/query` · `POST …/ready-validation` | 공개(@Public — 읽기 성격) |
 
 ## Web
 

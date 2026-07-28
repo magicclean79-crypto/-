@@ -8,3 +8,9 @@ export function getAuthToken(): string | null {
   }
   return localStorage.getItem(AUTH_TOKEN_KEY);
 }
+
+/** 보호 API 호출용 헤더 (TASK-0802 — 모든 쓰기 API 인증) */
+export function authHeaders(): Record<string, string> {
+  const token = getAuthToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}

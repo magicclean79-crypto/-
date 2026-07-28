@@ -45,6 +45,24 @@ const EMPTY_TOTALS = {
   maxLatencyMs: null,
 };
 
+// 사용자 관리 스텁 상태 (TASK-0802) — /__mode 전환 시 초기화
+let stubUsers;
+let stubAudit;
+function resetUsers() {
+  stubUsers = [
+    {
+      id: "u-admin",
+      email: "admin@acos.local",
+      name: "관리자",
+      role: "ADMIN",
+      disabled: false,
+      createdAt: "2026-07-28T00:00:00.000Z",
+    },
+  ];
+  stubAudit = [];
+}
+resetUsers();
+
 // 발행 파이프라인 스텁 상태 (TASK-0704) — /__mode 전환 시 초기화
 let pubContent;
 let pubHistory;
@@ -85,9 +103,101 @@ const server = http.createServer((req, res) => {
       mode = JSON.parse(body).mode;
       lastUrls = [];
       resetPublishing();
+      resetUsers();
       res.end(JSON.stringify({ mode }));
     });
     return;
+  }
+
+  // ── 사용자 관리 (TASK-0802) — stub-token(ADMIN)만 접근 가능 ──
+  if (url.pathname.startsWith("/auth/users") || url.pathname === "/auth/audit") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ message: "로그인이 필요합니다 (Authorization: Bearer <token>)." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    if (req.method === "GET" && url.pathname === "/auth/users") {
+      res.end(JSON.stringify({ users: stubUsers }));
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/auth/audit") {
+      res.end(JSON.stringify({ audit: [...stubAudit].reverse() }));
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/auth/users") {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        const data = JSON.parse(body);
+        const user = {
+          id: `u-${stubUsers.length + 1}`,
+          email: data.email,
+          name: data.name,
+          role: data.role,
+          disabled: false,
+          createdAt: new Date().toISOString(),
+        };
+        stubUsers.push(user);
+        stubAudit.push({
+          id: `a-${stubAudit.length + 1}`,
+          actor: "admin@acos.local",
+          action: "USER_CREATED",
+          targetEmail: data.email,
+          detail: `role=${data.role}`,
+          createdAt: new Date().toISOString(),
+        });
+        res.statusCode = 201;
+        res.end(JSON.stringify(user));
+      });
+      return;
+    }
+    if (req.method === "PATCH") {
+      const id = url.pathname.split("/").pop();
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        const data = JSON.parse(body);
+        const user = stubUsers.find((item) => item.id === id);
+        if (!user) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ message: "사용자를 찾을 수 없습니다." }));
+          return;
+        }
+        if (user.email === "admin@acos.local") {
+          res.statusCode = 400;
+          res.end(
+            JSON.stringify({ message: "자기 자신의 역할/활성 상태는 변경할 수 없습니다." }),
+          );
+          return;
+        }
+        if (data.role !== undefined) {
+          stubAudit.push({
+            id: `a-${stubAudit.length + 1}`,
+            actor: "admin@acos.local",
+            action: "ROLE_CHANGED",
+            targetEmail: user.email,
+            detail: `${user.role} → ${data.role}`,
+            createdAt: new Date().toISOString(),
+          });
+          user.role = data.role;
+        }
+        if (data.disabled !== undefined) {
+          stubAudit.push({
+            id: `a-${stubAudit.length + 1}`,
+            actor: "admin@acos.local",
+            action: data.disabled ? "USER_DISABLED" : "USER_ENABLED",
+            targetEmail: user.email,
+            detail: null,
+            createdAt: new Date().toISOString(),
+          });
+          user.disabled = data.disabled;
+        }
+        res.end(JSON.stringify(user));
+      });
+      return;
+    }
   }
 
   // ── 인증 (TASK-0801) ──

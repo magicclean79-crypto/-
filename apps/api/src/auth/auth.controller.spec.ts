@@ -12,18 +12,30 @@ function createPrismaMock() {
   const sessions = new Map<string, AuthSession>();
   let sequence = 0;
 
+  const auditLog: Record<string, unknown>[] = [];
+
   return {
     users,
     sessions,
+    auditLog,
     user: {
       count: jest.fn(async () => users.size),
-      findUnique: jest.fn(async ({ where }: { where: { email: string } }) =>
-        [...users.values()].find((user) => user.email === where.email) ?? null,
+      findUnique: jest.fn(
+        async ({ where }: { where: { email?: string; id?: string } }) => {
+          const found = where.id
+            ? users.get(where.id)
+            : [...users.values()].find((user) => user.email === where.email);
+          return found ? { ...found } : null; // 실제 Prisma처럼 스냅샷 반환
+        },
+      ),
+      findMany: jest.fn(async () =>
+        [...users.values()].map((user) => ({ ...user })),
       ),
       create: jest.fn(async ({ data }: { data: Partial<User> }) => {
         const now = new Date();
         const user = {
           id: `user-${++sequence}`,
+          disabled: false,
           createdAt: now,
           updatedAt: now,
           ...data,
@@ -31,6 +43,27 @@ function createPrismaMock() {
         users.set(user.id, user);
         return { ...user };
       }),
+      update: jest.fn(
+        async ({
+          where,
+          data,
+        }: {
+          where: { id: string };
+          data: Partial<User>;
+        }) => {
+          const user = users.get(where.id) as User;
+          Object.assign(user, data, { updatedAt: new Date() });
+          return { ...user };
+        },
+      ),
+    },
+    userAuditLog: {
+      create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => {
+        const row = { id: `audit-${auditLog.length + 1}`, createdAt: new Date(), ...data };
+        auditLog.push(row);
+        return { ...row };
+      }),
+      findMany: jest.fn(async () => [...auditLog].reverse()),
     },
     authSession: {
       create: jest.fn(async ({ data }: { data: Partial<AuthSession> }) => {
@@ -50,8 +83,17 @@ function createPrismaMock() {
         },
       ),
       deleteMany: jest.fn(
-        async ({ where }: { where: { token: string } }) => {
-          sessions.delete(where.token);
+        async ({ where }: { where: { token?: string; userId?: string } }) => {
+          if (where.token) {
+            sessions.delete(where.token);
+          }
+          if (where.userId) {
+            for (const [token, session] of sessions) {
+              if (session.userId === where.userId) {
+                sessions.delete(token);
+              }
+            }
+          }
           return { count: 1 };
         },
       ),
@@ -178,5 +220,71 @@ describe("Auth API (TASK-0801)", () => {
         role: "VIEWER",
       })
       .expect(403);
+  });
+
+  it("사용자 목록/역할 변경/비활성화 — ADMIN 전용 + 감사 기록 (TASK-0802)", async () => {
+    const admin = (await login("admin@acos.local", "admin1234")).body;
+
+    // 목록 (EDITOR는 403)
+    const list = await request(app.getHttpServer())
+      .get("/auth/users")
+      .set("Authorization", `Bearer ${admin.token}`)
+      .expect(200);
+    const editorRow = list.body.users.find(
+      (item: { email: string }) => item.email === "editor@acos.local",
+    );
+    expect(editorRow).toMatchObject({ role: "EDITOR", disabled: false });
+    const editorLogin = (await login("editor@acos.local", "editor-pass-1"))
+      .body;
+    await request(app.getHttpServer())
+      .get("/auth/users")
+      .set("Authorization", `Bearer ${editorLogin.token}`)
+      .expect(403);
+
+    // 역할 변경 EDITOR → VIEWER
+    const changed = await request(app.getHttpServer())
+      .patch(`/auth/users/${editorRow.id}`)
+      .set("Authorization", `Bearer ${admin.token}`)
+      .send({ role: "VIEWER" })
+      .expect(200);
+    expect(changed.body.role).toBe("VIEWER");
+
+    // 비활성화 → 기존 세션 즉시 무효 + 재로그인 401
+    await request(app.getHttpServer())
+      .patch(`/auth/users/${editorRow.id}`)
+      .set("Authorization", `Bearer ${admin.token}`)
+      .send({ disabled: true })
+      .expect(200);
+    await request(app.getHttpServer())
+      .get("/auth/me")
+      .set("Authorization", `Bearer ${editorLogin.token}`)
+      .expect(401);
+    expect(
+      (await login("editor@acos.local", "editor-pass-1")).status,
+    ).toBe(401); // 비활성화된 계정
+
+    // 자기 자신 변경은 400
+    const self = list.body.users.find(
+      (item: { email: string }) => item.email === "admin@acos.local",
+    );
+    await request(app.getHttpServer())
+      .patch(`/auth/users/${self.id}`)
+      .set("Authorization", `Bearer ${admin.token}`)
+      .send({ disabled: true })
+      .expect(400);
+
+    // 감사 로그 — 최신순으로 기록 확인
+    const audit = await request(app.getHttpServer())
+      .get("/auth/audit")
+      .set("Authorization", `Bearer ${admin.token}`)
+      .expect(200);
+    const actions = audit.body.audit.map(
+      (item: { action: string; targetEmail: string }) =>
+        `${item.action}:${item.targetEmail}`,
+    );
+    expect(actions[0]).toBe("USER_DISABLED:editor@acos.local");
+    expect(actions[1]).toBe("ROLE_CHANGED:editor@acos.local");
+    expect(actions).toContain("USER_CREATED:editor@acos.local");
+    expect(audit.body.audit[0].actor).toBe("admin@acos.local");
   });
 });
