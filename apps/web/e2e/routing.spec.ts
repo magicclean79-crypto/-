@@ -51,6 +51,46 @@ test.describe("Routing Dashboard (TASK-1001)", () => {
     await expect(page.getByTestId("routing-metrics-empty")).toBeVisible();
   });
 
+  test("Failover 우선순위·Provider 건강 상태·계측이 렌더링된다 (TASK-1002)", async ({
+    page,
+  }) => {
+    await setMode("data");
+    await page.goto("/routing");
+
+    const summary = page.getByTestId("failover-summary");
+    await expect(summary).toContainText("openai → anthropic → mock");
+    await expect(summary).toContainText("120000ms");
+    await expect(summary).toContainText("3회");
+
+    // 계측 4종 (시도/Failover/체인 소진/제외)
+    await expect(page.getByTestId("failover-metric")).toHaveCount(4);
+    const section = page.getByTestId("failover-section");
+    await expect(section).toContainText("Failover");
+    await expect(section).toContainText("제외(예산/검증)");
+
+    // Provider 건강 상태 — openai는 불건강 배지
+    await expect(page.getByTestId("failover-health-row")).toHaveCount(3);
+    const health = page.getByTestId("failover-health");
+    await expect(health).toContainText("불건강");
+    await expect(health).toContainText("건강");
+    // 성공/실패 누계
+    await expect(health).toContainText("4/3");
+  });
+
+  test("우선순위 미설정이면 Failover 비활성으로 표시된다 (TASK-1002)", async ({
+    page,
+  }) => {
+    await setMode("empty");
+    await page.goto("/routing");
+
+    await expect(page.getByTestId("failover-summary")).toContainText(
+      "Failover 비활성",
+    );
+    await expect(page.getByTestId("failover-summary")).toContainText(
+      "LLM_FAILOVER_PRIORITY",
+    );
+  });
+
   test("API 오류 시 오류 안내를 표시한다", async ({ page }) => {
     await setMode("error");
     await page.goto("/routing");

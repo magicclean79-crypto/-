@@ -534,6 +534,58 @@ const server = http.createServer((req, res) => {
     );
     return;
   }
+  // ── Provider Failover (TASK-1002) ──
+  if (url.pathname === "/llm/failover") {
+    const now = new Date().toISOString();
+    res.end(
+      JSON.stringify(
+        mode === "data"
+          ? {
+              enabled: true,
+              priority: ["openai", "anthropic", "mock"],
+              timeoutMs: 120000,
+              attemptsPerProvider: 3,
+              health: [
+                { provider: "mock", healthy: true, consecutiveFailures: 0, lastFailureAt: null, lastSuccessAt: now, cooldownUntil: null },
+                { provider: "openai", healthy: false, consecutiveFailures: 3, lastFailureAt: now, lastSuccessAt: null, cooldownUntil: now },
+                { provider: "anthropic", healthy: true, consecutiveFailures: 0, lastFailureAt: null, lastSuccessAt: now, cooldownUntil: null },
+              ],
+              metrics: {
+                attempts: 12,
+                failovers: 3,
+                exhausted: 1,
+                skipped: 2,
+                byProvider: [
+                  { provider: "openai", success: 4, failed: 3 },
+                  { provider: "anthropic", success: 3, failed: 0 },
+                  { provider: "mock", success: 2, failed: 0 },
+                ],
+                since: now,
+              },
+              checkedAt: now,
+            }
+          : {
+              enabled: false,
+              priority: [],
+              timeoutMs: 120000,
+              attemptsPerProvider: 3,
+              health: [
+                { provider: "mock", healthy: true, consecutiveFailures: 0, lastFailureAt: null, lastSuccessAt: null, cooldownUntil: null },
+              ],
+              metrics: {
+                attempts: 0,
+                failovers: 0,
+                exhausted: 0,
+                skipped: 0,
+                byProvider: [],
+                since: now,
+              },
+              checkedAt: now,
+            },
+      ),
+    );
+    return;
+  }
   if (url.pathname === "/llm/budget") {
     res.end(
       JSON.stringify(

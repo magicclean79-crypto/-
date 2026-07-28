@@ -42,6 +42,13 @@ export interface AnalysisRecognition {
   analysis: ProductAnalysis;
   /** Provider 원본 응답 (JSON 직렬화 가능해야 함) */
   raw: unknown;
+  /**
+   * 실제로 호출된 Provider 식별자 (TASK-1002, CTO 결정 1001-③).
+   * Cross-Provider Routing/Failover로 호출 시점에 결정되므로,
+   * 지정되면 이력(AnalysisRun.provider)을 이 값으로 갱신한다.
+   * Execution의 provider와 같은 의미를 갖게 통일하기 위한 필드다.
+   */
+  providerName?: string;
 }
 
 /** Analysis Domain 모델 — 저장소와 무관한 순수 표현 */

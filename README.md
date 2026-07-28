@@ -304,6 +304,15 @@ API 키가 없으면 항상 mock으로 동작합니다 —
   (`provider` 또는 `provider:model`) · **호출 시점 해석(재기동 불필요)** ·
   사용 불가 Provider는 기본으로 폴백 · `GET /llm/routing` ·
   Routing Metrics(`/executions/stats`의 `byRoute`) · 웹 **`/routing`** 대시보드
+- **Provider Failover (TASK-1002)**: 실행 중 실패 시 우선순위
+  `LLM_FAILOVER_PRIORITY`(미설정 = 비활성)에 따라 다음 Provider로 전환 ·
+  호출 제한 `LLM_TIMEOUT_MS`(기본 120000) · Provider별 재시도
+  `LLM_MAX_ATTEMPTS` 소진 후 전환 · **Health Check 연동**(연속 실패
+  `LLM_FAILOVER_HEALTH_THRESHOLD`회 → `LLM_FAILOVER_HEALTH_COOLDOWN_SEC`초 동안
+  체인 뒤로) · `GET /llm/failover` 계측 · 웹 `/routing` 하단 표시.
+  **예산 초과·요청 검증 오류는 Failover 대상이 아닙니다**(Provider를 바꿔도
+  결과가 같음). 이력 Provider 필드(`AnalysisRun.provider` 등)는 실제 호출된
+  Provider를 기록합니다
 
 ## Execution Domain (TASK-0601, Sprint 6)
 

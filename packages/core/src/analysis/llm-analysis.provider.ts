@@ -71,6 +71,9 @@ export class LlmAnalysisProvider implements AnalysisProvider {
 
     return {
       analysis,
+      // 실제 호출된 Provider (TASK-1002, CTO 결정 1001-③) — 라우팅/Failover로
+      // 결정되므로 생성 시점 이름이 아니라 응답의 provider를 쓴다
+      providerName: `llm:${completion.provider}`,
       raw: {
         provider: this.name,
         llm: { provider: completion.provider, model: completion.model },

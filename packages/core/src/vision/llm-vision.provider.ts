@@ -135,7 +135,12 @@ export class LlmVisionProvider implements VisionProvider {
       responseFormat: "json",
     });
     const draft = parseVisionSummaryResponse(completion.text);
-    const summary: VisionSummary = { source: this.name, ...draft };
+    // source는 실제 호출된 Provider 기준 (TASK-1002, CTO 결정 1001-③) —
+    // Cross-Provider Routing/Failover 결과를 이력에 그대로 반영한다
+    const summary: VisionSummary = {
+      source: `llm:${completion.provider}`,
+      ...draft,
+    };
 
     return {
       summary,

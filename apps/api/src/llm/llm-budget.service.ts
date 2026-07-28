@@ -2,6 +2,7 @@ import { HttpException, HttpStatus, Injectable, Logger } from "@nestjs/common";
 import {
   DEFAULT_BUDGET_ALERT_RATIO,
   evaluateBudgetWindow,
+  markNoFailover,
   utcDayStart,
   utcMonthStart,
 } from "@acos/core";
@@ -106,9 +107,13 @@ export class LlmBudgetService {
     if (state === "exceeded") {
       const which =
         status.daily.status === "exceeded" ? "일간" : "월간";
-      throw new HttpException(
-        `LLM ${which} 비용 예산을 초과했습니다 — 예산 상향(LLM_DAILY/MONTHLY_BUDGET_USD) 또는 기간 경과 후 다시 시도해 주세요.`,
-        HttpStatus.TOO_MANY_REQUESTS,
+      // 예산 초과는 Provider를 바꿔도 같으므로 Failover 대상이 아니다
+      // (CTO 지시, TASK-1002) — markNoFailover로 명시한다
+      throw markNoFailover(
+        new HttpException(
+          `LLM ${which} 비용 예산을 초과했습니다 — 예산 상향(LLM_DAILY/MONTHLY_BUDGET_USD) 또는 기간 경과 후 다시 시도해 주세요.`,
+          HttpStatus.TOO_MANY_REQUESTS,
+        ),
       );
     }
   }

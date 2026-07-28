@@ -58,6 +58,11 @@ export class PrismaAnalysisRunStore implements AnalysisRunStore {
         error: null,
         attempts,
         completedAt: new Date(),
+        // 실제 호출된 Provider로 이력 갱신 (TASK-1002, CTO 결정 1001-③) —
+        // 라우팅/Failover로 시작 시점과 다를 수 있다
+        ...(recognition.providerName
+          ? { provider: recognition.providerName }
+          : {}),
       },
     });
     return toAnalysisRun(record);

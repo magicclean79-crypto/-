@@ -5,37 +5,46 @@
 
 ## 결정 대기
 
-### 38. TASK-1001 "Cross-Provider Routing Engine" 세부 해석 확인
-- 현황: 지시 4항목(Feature별 Provider Mapping · Dynamic Routing ·
-  Routing Dashboard · Routing Metrics)을 다음과 같이 구현했다
-  (**Provider Failover는 지시대로 범위 제외**):
-  - **Feature별 매핑**: `LLM_ROUTE_CONTENT`/`LLM_ROUTE_ANALYSIS`/
-    `LLM_ROUTE_VISION` = `provider` 또는 `provider:model`.
-    라우팅 단위는 **기존 feature 3종**(dev는 항상 기본 Provider)
-  - **Dynamic**: 호출 시점마다 환경 해석 — 재기동 없이 다음 호출부터 반영
-  - **폴백**: 매핑된 Provider를 쓸 수 없으면(키 미설정) 기본 Provider로
-    내려가고 경고 로그 + 대시보드에 `fallback`·사유 표시.
-    **설정 해석 시점 폴백**이며 호출 실패 시 전환은 하지 않음
-  - **우선순위**: 호출자 `model` > 규칙의 `:model` > `LLM_MODEL_*`
-    (**같은 Provider일 때만** — 타 Provider 모델명 오적용 방지) >
-    Provider 기본 모델
-  - **Dashboard**: `GET /llm/routing` + 웹 `/routing`(결정 근거 배지 3종·
-    폴백 사유·환경변수명) · **Metrics**: `/executions/stats`의 `byRoute`
-    (`feature→provider`별 호출·성공률·지연·토큰·비용)
-  - 라이브: 분석→anthropic 실제 호출·Execution 기록, vision→gemini(키 없음)
-    폴백 확인
-- 하지 않은 것: Provider Failover(범위 제외), 라우팅 A/B·비율 분배,
-  라우팅 설정의 ADMIN 화면 관리(현재 환경변수 Code-first)
-- **발견된 정합 이슈**: `AnalysisRun.provider`(분석 이력)는 기동 시점의
-  기본 Provider 이름(`llm:mock`)으로 고정돼, 라우팅으로 실제 호출된
-  Provider와 다를 수 있습니다. **Execution에는 실제 경로가 정확히 기록**
-  되어 운영 관측에는 영향이 없으나, 이력 필드 의미 변경은 CTO 결정
-  사항이라 임의 변경하지 않았습니다.
-- 질문: ① 라우팅 단위를 **feature 3종**으로 유지할지 (프로젝트/사용자별
-  라우팅은 별도 스펙 필요) ② 폴백 정책 — 현재처럼 **기본 Provider로 조용히
-  내려가기**가 맞는지, 아니면 명시적 실패(400)가 맞는지 ③ 분석/Vision
-  이력의 `provider` 필드를 **실제 라우팅 Provider로 반영**할지 (이력 의미
-  변경) ④ 다음 TASK 지정 요청 (Provider Failover 도입 여부 포함).
+### 39. TASK-1002 "Provider Failover Engine" 세부 해석 확인
+- 현황: 지시 5항목과 **CTO 결정 1001-③**을 다음과 같이 구현했다.
+  **예산 초과·검증 오류는 지시대로 Failover 대상에서 제외**했다:
+  - **Provider Priority**: `LLM_FAILOVER_PRIORITY`(예: `openai,anthropic,mock`).
+    **라우팅이 정한 Provider가 항상 1순위**, 그 뒤에 우선순위를 붙여 체인
+    구성(중복 제거·사용 불가 제외). **미설정이면 Failover 비활성**으로
+    기존 동작을 그대로 보존
+  - **Retry Policy**: Provider 안에서 기존 지수 백오프(`LLM_MAX_ATTEMPTS`)를
+    **먼저 소진**하고, 그래도 실패할 때만 다음 Provider로 전환
+  - **Timeout Policy**: `LLM_TIMEOUT_MS`(기본 120000, `0`=무제한) — 초과 시
+    실패로 간주해 전환
+  - **Health Check Integration**: 연속 실패 `LLM_FAILOVER_HEALTH_THRESHOLD`
+    (기본 3)회 → `LLM_FAILOVER_HEALTH_COOLDOWN_SEC`(기본 60초) 동안
+    **체인 뒤로 강등**(제외가 아님 — 다른 후보가 모두 실패하면 여전히 시도).
+    쿨다운 후 half-open 재시도, 성공 시 즉시 회복
+  - **Failover Metrics**: `GET /llm/failover`(우선순위·타임아웃·Provider
+    건강 상태·`attempts`/`failovers`/`exhausted`/`skipped`·Provider별
+    성공·실패) + 웹 `/routing` 하단 섹션
+  - **전환 제외**: 예산 초과 429는 `markNoFailover()`로 명시(호출 시도 자체
+    없음·Execution 미기록), 검증 오류 400도 즉시 실패 — 둘 다 `skipped` 집계
+  - **모델 승계**: 2순위부터는 **호출자 지정 모델을 버리고** 각 Provider의
+    기본 모델로 호출(모델명은 Provider 간 비호환 — 승계하면 확정 실패)
+  - **결정 1001-③ 이행**: `AnalysisRun.provider`·`VisionSummary.source`가
+    **실제 라우팅·전환된 Provider**(`llm:<provider>`)를 기록 — Execution의
+    `provider`와 동일 의미. **과거 이력은 소급 변경하지 않았습니다**
+  - 라이브: openai(무효 키) → **mock 전환 성공**, 두 시도 모두 Execution
+    기록, `AnalysisRun.provider=llm:mock`, 2회 실패 후 불건강 → 다음 호출에서
+    체인 뒤로 밀려 openai 호출 없이 성공
+- 하지 않은 것: 전환 알림(현재 로그·대시보드만), 건강 상태·계측의 인스턴스 간
+  공유(현재 인메모리·프로세스 단위), 라우팅 A/B·비율 분배, Failover 설정의
+  ADMIN 화면 관리
+- 질문: ① **전환 조건** — 현재는 예산·검증을 제외한 **모든 실행 오류**에서
+  전환합니다. 인증 오류(401, 키 자체가 잘못됨)처럼 재시도해도 같은 결과인
+  오류도 전환 대상으로 둘지, 아니면 제외 목록에 추가할지
+  ② **모델 승계** — 2순위부터 각 Provider 기본 모델로 내리는 현재 방식이
+  맞는지(호출자가 특정 모델을 요구한 경우에도 전환할지, 아니면 그때는
+  전환하지 않고 실패시킬지) ③ **건강 판정 기본값** — 연속 3회/60초가
+  적절한지 ④ **계측 범위** — `GET /llm/health` 진단 호출도 현재
+  `attempts`·`exhausted`에 포함됩니다(단일 관문 일관성). 진단 호출을 계측에서
+  분리할지 ⑤ 다음 TASK 지정 요청.
 
 ### 2. tesseract Provider 유지 여부
 - 현황: OCR 기본 Provider는 mock이며, 로컬 오프라인 엔진(tesseract.js)이
@@ -58,6 +67,21 @@
 - 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
 
 ## 결정됨
+
+### 38. TASK-1001 해석 확인 → 승인 + Routing 단위·Fallback·이력 Provider 확정 (2026-07-28)
+- CTO 결정: ① **Routing 단위는 Feature 3종(Content / Analysis / Vision)을
+  공식 표준으로 확정** — 프로젝트별·사용자별 Routing은 후속 Sprint
+  ② **Fallback 정책은 설정 해석 시 기본 Provider 자동 전환을 유지** —
+  실행 중 오류는 Failover 대상이며 Fallback 범위에 포함하지 않음
+  ③ **이력 Provider 필드(`AnalysisRun.provider` 등)는 실제 Routing된
+  Provider를 기록하도록 변경** — Execution과 동일한 의미로 통일
+  ④ TASK-1002(Provider Failover Engine) 지시됨 — Provider Priority /
+  Retry Policy / Timeout Policy / Health Check Integration / Failover
+  Metrics, **Budget 초과와 Validation 오류는 Failover 대상 아님**.
+- 반영(TASK-1002): ①② 현행 구현과 일치 — 변경 없이 확정하고, 실행 중 전환은
+  Failover 계층으로 분리 구현. ③ `AnalysisRecognition.providerName` 신설로
+  실제 호출 Provider를 이력에 기록(과거 이력 소급 변경 없음). ④ 5항목 구현
+  완료 (#39 참고).
 
 ### 37. TASK-0903 해석 확인 → 승인 + JSON 방식·가격표 확정 + Sprint 9 종료 (2026-07-28)
 - CTO 결정: ① **Anthropic JSON은 System Prompt + JSON Parsing + Retry

@@ -6,13 +6,17 @@ import {
   Optional,
 } from "@nestjs/common";
 import {
+  buildFailoverChain,
   buildRoutingTable,
   ExecutionTracker,
+  isFailoverEligible,
   LLM_FEATURE_PROVIDER_ENV,
   LlmGateway,
   LlmValidationError,
+  ProviderHealthTracker,
   resolveRoute,
   validateLlmRequest,
+  withTimeout,
 } from "@acos/core";
 import type {
   ExecutionStore,
@@ -22,11 +26,17 @@ import type {
 import type {
   LlmCompleteRequest,
   LlmCompletionDto,
+  LlmFailoverDto,
   LlmGatewayInfoDto,
   LlmHealthDto,
   LlmRoutingDto,
 } from "@acos/shared";
 import { EXECUTION_STORE } from "../execution/execution.constants";
+import {
+  failoverPriority,
+  healthOptions,
+  providerTimeoutMs,
+} from "./failover-config";
 import { LlmBudgetService } from "./llm-budget.service";
 import { LLM_PROVIDER, LLM_PROVIDER_MAP } from "./llm.constants";
 import { routingModelOverrides, routingRules } from "./routing-config";
@@ -61,6 +71,17 @@ export class LlmService {
   /** 라우팅 대상 Provider 게이트웨이 (TASK-1001) — 키가 설정된 것만 */
   private readonly gateways = new Map<string, LlmGateway>();
   private readonly tracker: ExecutionTracker | null;
+  /** Provider 건강 상태 (TASK-1002 Health Check Integration) */
+  private readonly healthTracker = new ProviderHealthTracker(healthOptions());
+  /** Failover 계측 (인메모리 — 프로세스 시작 이후 누적) */
+  private readonly metrics = {
+    attempts: 0,
+    failovers: 0,
+    exhausted: 0,
+    skipped: 0,
+    byProvider: new Map<string, { success: number; failed: number }>(),
+    since: new Date().toISOString(),
+  };
 
   constructor(
     @Inject(LLM_PROVIDER) provider: LlmProvider,
@@ -125,7 +146,13 @@ export class LlmService {
 
   async complete(
     request: LlmCompleteRequest,
-    options: { feature?: string } = {},
+    options: {
+      feature?: string;
+      /** 특정 Provider로 강제 (Health Check 등) — 라우팅을 건너뛴다 */
+      provider?: string;
+      /** false면 Failover 없이 1순위만 시도 (기본 true) */
+      failover?: boolean;
+    } = {},
   ): Promise<LlmCompletionDto> {
     // 검증 오류는 LLM 호출 시도가 아니므로 Execution을 기록하지 않는다
     const errors = validateLlmRequest(request);
@@ -151,7 +178,6 @@ export class LlmService {
     // Cross-Provider Routing (TASK-1001): feature → Provider·모델 해석.
     // 호출자가 model을 명시하면 그 값이 최우선이다.
     const route = this.resolve(options.feature);
-    const gateway = this.gateways.get(route.provider) ?? this.gateway;
     if (route.source === "fallback") {
       this.logger.warn(`라우팅 폴백 (${route.feature}): ${route.reason}`);
     }
@@ -160,35 +186,125 @@ export class LlmService {
     }
 
     // Cost Governance (TASK-0902): 예산 초과 시 호출 전 차단 (429) —
-    // Execution 미기록 (호출 시도가 아님, 검증 오류와 동일 원칙)
+    // Execution 미기록 (호출 시도가 아님, 검증 오류와 동일 원칙).
+    // Budget 초과는 Failover 대상이 아니다 (CTO 지시).
     await this.budget?.assertWithinBudget();
 
-    try {
-      const run = (): ReturnType<LlmGateway["complete"]> =>
-        gateway.complete(request);
-      const result = this.tracker
-        ? await this.tracker.track(
-            options.feature ?? "dev",
-            {
-              provider: gateway.providerName,
-              model: request.model ?? gateway.defaultModel,
-            },
-            run,
-          )
-        : await run();
-      return {
-        provider: result.provider,
-        model: result.model,
-        text: result.text,
-        usage: result.usage,
-        createdAt: new Date().toISOString(),
-      };
-    } catch (error) {
-      if (error instanceof LlmValidationError) {
-        throw new BadRequestException(error.message);
+    // Provider Failover (TASK-1002): 라우팅 결과를 1순위로 하는 시도 체인.
+    // Provider 강제/Failover 비활성(Health Check 등)이면 단일 Provider만.
+    const primary = options.provider ?? route.provider;
+    const chain =
+      options.failover === false
+        ? [this.gateways.has(primary) ? primary : this.gateway.providerName]
+        : buildFailoverChain({
+            primary,
+            priority: failoverPriority(),
+            available: [...this.gateways.keys()],
+            isHealthy: (provider) => this.healthTracker.isHealthy(provider),
+          });
+    const timeoutMs = providerTimeoutMs();
+
+    let lastError: unknown = null;
+    for (const [index, providerName] of chain.entries()) {
+      const gateway = this.gateways.get(providerName) ?? this.gateway;
+      // 모델은 Provider마다 다르므로, 넘어간 Provider에는 그 Provider의
+      // 기본 모델을 쓴다 (1순위에만 라우팅/호출자 모델 적용)
+      const attemptRequest =
+        index === 0 ? request : { ...request, model: undefined };
+      this.metrics.attempts += 1;
+
+      try {
+        const run = (): ReturnType<LlmGateway["complete"]> =>
+          withTimeout(() => gateway.complete(attemptRequest), {
+            timeoutMs,
+            provider: providerName,
+          });
+        const result = this.tracker
+          ? await this.tracker.track(
+              options.feature ?? "dev",
+              {
+                provider: gateway.providerName,
+                model: attemptRequest.model ?? gateway.defaultModel,
+              },
+              run,
+            )
+          : await run();
+
+        this.healthTracker.recordSuccess(providerName);
+        this.countProvider(providerName, "success");
+        return {
+          provider: result.provider,
+          model: result.model,
+          text: result.text,
+          usage: result.usage,
+          createdAt: new Date().toISOString(),
+        };
+      } catch (error) {
+        lastError = error;
+        if (error instanceof LlmValidationError) {
+          // 요청 자체가 잘못됨 — Provider를 바꿔도 같다 (Failover 제외)
+          this.metrics.skipped += 1;
+          throw new BadRequestException(error.message);
+        }
+        this.healthTracker.recordFailure(providerName);
+        this.countProvider(providerName, "failed");
+
+        if (!isFailoverEligible(error)) {
+          this.metrics.skipped += 1;
+          throw error;
+        }
+        const next = chain[index + 1];
+        if (!next) {
+          this.metrics.exhausted += 1;
+          break;
+        }
+        this.metrics.failovers += 1;
+        this.logger.warn(
+          `Provider "${providerName}" 실패 — "${next}"로 Failover합니다: ` +
+            `${error instanceof Error ? error.message : String(error)}`,
+        );
       }
-      throw error;
     }
+
+    if (lastError instanceof LlmValidationError) {
+      throw new BadRequestException(lastError.message);
+    }
+    throw lastError ?? new Error("LLM 호출에 실패했습니다.");
+  }
+
+  private countProvider(provider: string, outcome: "success" | "failed"): void {
+    const entry = this.metrics.byProvider.get(provider) ?? {
+      success: 0,
+      failed: 0,
+    };
+    entry[outcome] += 1;
+    this.metrics.byProvider.set(provider, entry);
+  }
+
+  /** Provider Failover 현황 (GET /llm/failover) */
+  failover(): LlmFailoverDto {
+    const priority = failoverPriority();
+    return {
+      enabled: priority.length > 0,
+      priority,
+      timeoutMs: providerTimeoutMs(),
+      attemptsPerProvider: Math.max(
+        1,
+        Number(process.env.LLM_MAX_ATTEMPTS ?? 3),
+      ),
+      health: this.healthTracker.snapshot([...this.gateways.keys()]),
+      metrics: {
+        attempts: this.metrics.attempts,
+        failovers: this.metrics.failovers,
+        exhausted: this.metrics.exhausted,
+        skipped: this.metrics.skipped,
+        byProvider: [...this.metrics.byProvider.entries()].map(
+          ([provider, counts]) => ({ provider, ...counts }),
+        ),
+        since: this.metrics.since,
+      },
+      checkedAt: new Date().toISOString(),
+    };
   }
 
   info(): LlmGatewayInfoDto {
@@ -202,14 +318,22 @@ export class LlmService {
    * Provider 상태 점검 (TASK-0603) — 실제 최소 완성 호출("ping", 소량 토큰)로
    * 키·네트워크·모델 접근을 확인한다. 이 호출도 Execution으로 기록된다
    * (feature "dev" — CTO 결정의 4종 유지). 실패해도 예외 대신 error 상태를 반환.
+   *
+   * TASK-1002 (Health Check Integration): **Failover를 쓰지 않는다** —
+   * 점검 대상 Provider의 실제 상태를 봐야 하기 때문이다. 결과는 Health
+   * Tracker에 반영되어 이후 Failover 체인 순서에 영향을 준다.
+   * `provider`를 지정하면 해당 Provider를 점검한다(불건강 상태 회복 확인용).
    */
-  async health(): Promise<LlmHealthDto> {
+  async health(provider?: string): Promise<LlmHealthDto> {
     const startedAt = Date.now();
+    const target = provider?.trim().toLowerCase();
+    const gateway =
+      (target ? this.gateways.get(target) : undefined) ?? this.gateway;
     try {
-      const completion = await this.complete({
-        messages: [{ role: "user", content: "ping" }],
-        maxTokens: 16,
-      });
+      const completion = await this.complete(
+        { messages: [{ role: "user", content: "ping" }], maxTokens: 16 },
+        { provider: target ?? gateway.providerName, failover: false },
+      );
       return {
         provider: completion.provider,
         model: completion.model,
@@ -220,8 +344,8 @@ export class LlmService {
       };
     } catch (error) {
       return {
-        provider: this.gateway.providerName,
-        model: this.gateway.defaultModel,
+        provider: gateway.providerName,
+        model: gateway.defaultModel,
         status: "error",
         latencyMs: Date.now() - startedAt,
         error: error instanceof Error ? error.message : String(error),

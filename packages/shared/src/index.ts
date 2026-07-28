@@ -712,6 +712,52 @@ export interface LlmRoutingDto {
   checkedAt: string;
 }
 
+// ── Provider Failover Engine (TASK-1002, Sprint 10) ──
+
+export interface ProviderHealthStateDto {
+  provider: string;
+  healthy: boolean;
+  consecutiveFailures: number;
+  lastFailureAt: string | null;
+  lastSuccessAt: string | null;
+  /** 불건강 상태가 풀리는 시각 (건강하면 null) */
+  cooldownUntil: string | null;
+}
+
+/** Failover 계측 (프로세스 시작 이후 누적 — 인메모리) */
+export interface FailoverMetricsDto {
+  /** Provider 호출 시도 총합 (Failover 재시도 포함) */
+  attempts: number;
+  /** 다음 Provider로 넘어간 횟수 */
+  failovers: number;
+  /** 체인을 모두 소진해 최종 실패한 횟수 */
+  exhausted: number;
+  /** Failover 제외 대상(Budget/Validation)이라 즉시 실패한 횟수 */
+  skipped: number;
+  /** Provider별 성공/실패 횟수 */
+  byProvider: {
+    provider: string;
+    success: number;
+    failed: number;
+  }[];
+  since: string;
+}
+
+/** Provider Failover 현황 (TASK-1002) */
+export interface LlmFailoverDto {
+  /** 우선순위가 설정되어 Failover가 활성인지 */
+  enabled: boolean;
+  /** 시도 우선순위 (LLM_FAILOVER_PRIORITY) */
+  priority: string[];
+  /** Provider 1회 호출 제한 시간(ms) — 0이면 무제한 */
+  timeoutMs: number;
+  /** Provider별 게이트웨이 재시도 횟수 */
+  attemptsPerProvider: number;
+  health: ProviderHealthStateDto[];
+  metrics: FailoverMetricsDto;
+  checkedAt: string;
+}
+
 /** LLM Provider 상태 점검 결과 (TASK-0603) — 최소 완성 호출로 확인 */
 export interface LlmHealthDto {
   provider: string;

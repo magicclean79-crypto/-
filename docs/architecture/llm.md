@@ -78,7 +78,7 @@ feature별로 **Provider 자체를 분리**한다 (0902의 "Provider 내부 모�
 | --- | --- | --- |
 | **Feature별 Provider Mapping** | `provider` 또는 `provider:model` 값으로 feature → Provider 지정 | `LLM_ROUTE_CONTENT` / `LLM_ROUTE_ANALYSIS` / `LLM_ROUTE_VISION` |
 | **Dynamic Routing** | **호출 시점마다 해석** — 환경 변경이 재기동 없이 다음 호출부터 반영 | — |
-| **Graceful degradation** | 매핑된 Provider를 쓸 수 없으면(키 미설정) 기본 Provider로 내려가고 경고 로그 (`source: "fallback"`). **호출 실패 시 전환(Failover)은 범위 밖** — CTO 지시 | — |
+| **Graceful degradation** | 매핑된 Provider를 쓸 수 없으면(키 미설정) 기본 Provider로 내려가고 경고 로그 (`source: "fallback"`). 호출 실패 시 전환은 **Failover**가 담당 (TASK-1002) | — |
 | **Routing Dashboard** | 웹 `/routing` — feature별 Provider·모델·결정 근거(feature/default/fallback)·환경변수명. `GET /llm/routing` | — |
 | **Routing Metrics** | `GET /executions/stats`의 **`byRoute`** — 실제 실행된 경로(`feature→provider`)별 호출·성공률·지연·토큰·비용 | — |
 
@@ -89,6 +89,43 @@ feature별로 **Provider 자체를 분리**한다 (0902의 "Provider 내부 모�
 **구조**: 해석은 core 순수 로직(`resolveRoute`/`buildRoutingTable`),
 Provider 인스턴스는 `createLlmProviderMap()`(키가 설정된 것 전부),
 선택·호출은 `LlmService`(Execution 기록과 동일 단일 관문).
+
+## Provider Failover Engine (TASK-1002, Sprint 10)
+
+라우팅으로 정해진 Provider가 **실행 중 실패**하면 우선순위에 따라 다음
+Provider로 넘긴다 (1001의 설정 단계 Fallback과 구분 — CTO 결정 1001-②).
+
+| 항목 | 동작 | 환경변수 |
+| --- | --- | --- |
+| **Provider Priority** | 넘어갈 Provider 순서. **미설정이면 Failover 비활성**(기존 동작 그대로) | `LLM_FAILOVER_PRIORITY` (예: `openai,anthropic,mock`) |
+| **Retry Policy** | Provider별 게이트웨이 지수 백오프 재시도를 먼저 소진하고, 그래도 실패하면 다음 Provider로 전환 | `LLM_MAX_ATTEMPTS` (기본 3) |
+| **Timeout Policy** | Provider 1회 호출 제한 시간. 초과 시 실패로 간주해 다음 Provider로 전환 | `LLM_TIMEOUT_MS` (기본 120000, `0`=무제한) |
+| **Health Check Integration** | 연속 실패가 임계에 닿은 Provider는 쿨다운 동안 **체인 뒤로 밀린다**(제외가 아님 — 다른 후보가 모두 실패하면 여전히 시도). 쿨다운 경과 시 half-open으로 재시도하고 성공하면 즉시 회복 | `LLM_FAILOVER_HEALTH_THRESHOLD` (기본 3) · `LLM_FAILOVER_HEALTH_COOLDOWN_SEC` (기본 60) |
+| **Failover Metrics** | `GET /llm/failover` — 우선순위·타임아웃·Provider 건강 상태·시도/전환/소진/제외 누계와 Provider별 성공·실패. 웹 `/routing` 하단에 표시 | — |
+
+**Failover 대상이 아닌 오류** (CTO 지시):
+
+- **예산 초과(429)** — Provider를 바꿔도 결과가 같다. 호출 전 검사이므로
+  Execution도 남지 않는다. `markNoFailover()`로 명시한다.
+- **요청 검증 오류(400)** — 요청 자체가 잘못됐으므로 재시도·전환 모두 무의미.
+
+이 둘은 계측의 `skipped`로 집계한다.
+
+**체인 구성**: 라우팅이 정한 Provider가 항상 1순위, 그 뒤에
+`LLM_FAILOVER_PRIORITY` 순서(중복 제거, 사용 불가 Provider 제외, 불건강
+Provider는 뒤로). 2순위부터는 **호출자가 지정한 모델을 버리고** 각 Provider의
+기본 모델로 호출한다 (모델명은 Provider 간 호환되지 않는다).
+
+**관측**: 각 시도가 Execution 1건으로 남는다 — 실패한 1순위와 성공한 2순위가
+모두 기록되므로 대시보드의 경로별 성공률이 실제 전환 이력을 보여준다.
+`GET /llm/health?provider=`로 특정 Provider를 점검할 때는 **Failover를 쓰지
+않고** 대상 Provider만 호출한다(진단 목적). 다만 그 결과는 Health Tracker와
+계측에 함께 반영된다.
+
+**이력 Provider 일치 (CTO 결정 1001-③)**: `AnalysisRun.provider`,
+`VisionSummary.source` 등 이력 Provider 필드는 정적 기본값이 아니라
+**실제 라우팅·Failover로 호출된 Provider**를 기록한다 (`llm:<provider>`) —
+Execution의 `provider`와 같은 의미를 갖는다.
 
 ## 구조
 
@@ -140,7 +177,9 @@ Provider 인스턴스는 `createLlmProviderMap()`(키가 설정된 것 전부),
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
 | `GET` | `/llm` | 선택된 Provider 확인 — `{ provider, defaultModel }` |
-| `GET` | `/llm/health` | **Provider 상태 점검 (TASK-0603)** — 최소 실호출 기반 |
+| `GET` | `/llm/health` | **Provider 상태 점검 (TASK-0603)** — 최소 실호출 기반. `?provider=`로 특정 Provider 점검 (TASK-1002, Failover 미사용) |
+| `GET` | `/llm/routing` | **Routing 현황 (TASK-1001)** — feature별 Provider·모델·결정 근거 |
+| `GET` | `/llm/failover` | **Failover 현황 (TASK-1002)** — 우선순위·타임아웃·Provider 건강 상태·계측 |
 | `POST` | `/llm/complete` | `{ messages, model?, maxTokens? }` → `{ provider, model, text, usage }` (200) |
 
 오류: `400` 빈 메시지·잘못된 role·공백 content·잘못된 maxTokens.
