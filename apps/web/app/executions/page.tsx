@@ -94,25 +94,90 @@ function StatsTable({
   );
 }
 
+interface DashboardQuery {
+  interval: ExecutionTimelineInterval;
+  feature: string;
+  provider: string;
+  model: string;
+  from: string;
+  to: string;
+}
+
+/** datetime-local 입력값("YYYY-MM-DDTHH:mm") → API용 ISO(UTC 해석) */
+function toApiDate(value: string): string {
+  if (!value) {
+    return "";
+  }
+  // 타임존 표기가 없으면 UTC로 해석한다 (Timeline 표준: UTC)
+  const iso = /Z|[+-]\d{2}:\d{2}$/.test(value) ? value : `${value}:00Z`;
+  const parsed = new Date(iso);
+  return Number.isNaN(parsed.getTime()) ? "" : parsed.toISOString();
+}
+
+function buildApiQuery(query: DashboardQuery): string {
+  const params = new URLSearchParams();
+  if (query.feature) params.set("feature", query.feature);
+  if (query.provider) params.set("provider", query.provider);
+  if (query.model) params.set("model", query.model);
+  const from = toApiDate(query.from);
+  const to = toApiDate(query.to);
+  if (from) params.set("from", from);
+  if (to) params.set("to", to);
+  return params.toString();
+}
+
+/** interval 전환 링크 — 현재 필터를 유지한다 */
+function intervalHref(query: DashboardQuery, interval: string): string {
+  const params = new URLSearchParams();
+  params.set("interval", interval);
+  if (query.feature) params.set("feature", query.feature);
+  if (query.provider) params.set("provider", query.provider);
+  if (query.model) params.set("model", query.model);
+  if (query.from) params.set("from", query.from);
+  if (query.to) params.set("to", query.to);
+  return `/executions?${params.toString()}`;
+}
+
 /**
- * Execution Dashboard (TASK-0701, Sprint 7) — Stats API(합계·차원별) +
- * Timeline API(시간 축)를 소비하는 운영 대시보드.
+ * Execution Dashboard (TASK-0701 · 필터 TASK-0702, Sprint 7) —
+ * Stats API(합계·차원별) + Timeline API(시간 축)를 소비하는 운영 대시보드.
  */
 export default async function ExecutionsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ interval?: string }>;
+  searchParams: Promise<{
+    interval?: string;
+    feature?: string;
+    provider?: string;
+    model?: string;
+    from?: string;
+    to?: string;
+  }>;
 }) {
-  const { interval: rawInterval } = await searchParams;
-  const interval: ExecutionTimelineInterval = (
-    EXECUTION_TIMELINE_INTERVALS as readonly string[]
-  ).includes(rawInterval ?? "")
-    ? (rawInterval as ExecutionTimelineInterval)
-    : "day";
+  const raw = await searchParams;
+  const query: DashboardQuery = {
+    interval: (EXECUTION_TIMELINE_INTERVALS as readonly string[]).includes(
+      raw.interval ?? "",
+    )
+      ? (raw.interval as ExecutionTimelineInterval)
+      : "day",
+    feature: raw.feature ?? "",
+    provider: raw.provider ?? "",
+    model: raw.model ?? "",
+    from: raw.from ?? "",
+    to: raw.to ?? "",
+  };
+  const interval = query.interval;
+  const filterQuery = buildApiQuery(query);
+  const suffix = filterQuery ? `&${filterQuery}` : "";
 
   const [stats, timeline] = await Promise.all([
-    fetchJson<ExecutionDashboardDto>("/executions/stats"),
-    fetchJson<ExecutionTimelineDto>(`/executions/timeline?interval=${interval}`),
+    fetchJson<ExecutionDashboardDto>(
+      `/executions/stats?${filterQuery}`,
+    ),
+    fetchJson<ExecutionTimelineDto>(
+      `/executions/timeline?interval=${interval}${suffix}`,
+    ),
   ]);
 
   return (
@@ -130,13 +195,91 @@ export default async function ExecutionsPage({
         </p>
       </div>
 
+      {/* Dashboard Filter (TASK-0702) — GET 폼, 서버 컴포넌트 유지 */}
+      <form
+        method="GET"
+        action="/executions"
+        data-testid="dashboard-filter"
+        className="flex flex-wrap items-end gap-3 rounded-xl border border-zinc-200 p-4 text-sm dark:border-zinc-800"
+      >
+        <input type="hidden" name="interval" value={interval} />
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-zinc-500">Feature</span>
+          <select
+            name="feature"
+            defaultValue={query.feature}
+            className="rounded-md border border-zinc-300 bg-transparent px-2 py-1.5 dark:border-zinc-700"
+          >
+            <option value="">전체</option>
+            <option value="content-generation">content-generation</option>
+            <option value="product-analysis">product-analysis</option>
+            <option value="vision-analysis">vision-analysis</option>
+            <option value="dev">dev</option>
+          </select>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-zinc-500">Provider</span>
+          <input
+            name="provider"
+            defaultValue={query.provider}
+            placeholder="예: mock, openai"
+            className="w-36 rounded-md border border-zinc-300 bg-transparent px-2 py-1.5 dark:border-zinc-700"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-zinc-500">Model</span>
+          <input
+            name="model"
+            defaultValue={query.model}
+            placeholder="예: gpt-4o"
+            className="w-36 rounded-md border border-zinc-300 bg-transparent px-2 py-1.5 dark:border-zinc-700"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-zinc-500">From (UTC)</span>
+          <input
+            type="datetime-local"
+            name="from"
+            defaultValue={query.from}
+            className="rounded-md border border-zinc-300 bg-transparent px-2 py-1.5 dark:border-zinc-700"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-zinc-500">To (UTC)</span>
+          <input
+            type="datetime-local"
+            name="to"
+            defaultValue={query.to}
+            className="rounded-md border border-zinc-300 bg-transparent px-2 py-1.5 dark:border-zinc-700"
+          />
+        </label>
+        <button
+          type="submit"
+          className="rounded-md bg-zinc-900 px-3 py-1.5 font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
+        >
+          필터 적용
+        </button>
+        <Link
+          href="/executions"
+          className="rounded-md border border-zinc-300 px-3 py-1.5 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+        >
+          초기화
+        </Link>
+      </form>
+
       {stats === null ? (
-        <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
+        <div
+          data-testid="dashboard-error"
+          className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300"
+        >
           API에 연결할 수 없습니다. API 서버(4000)와 DB 상태를 확인해 주세요.
         </div>
       ) : (
         <>
-          <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <section
+            data-testid="kpi-cards"
+            className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"
+          >
             <KpiCard
               label="호출 수"
               value={formatCount(stats.totals.count)}
@@ -166,7 +309,7 @@ export default async function ExecutionsPage({
                 {EXECUTION_TIMELINE_INTERVALS.map((item) => (
                   <Link
                     key={item}
-                    href={`/executions?interval=${item}`}
+                    href={intervalHref(query, item)}
                     className={
                       item === interval
                         ? "rounded-md bg-zinc-900 px-2.5 py-1 font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"

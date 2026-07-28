@@ -26,4 +26,15 @@ export default tseslint.config(
       },
     },
   },
+  {
+    // Node 스크립트 (Playwright 스텁 서버 등, TASK-0702)
+    files: ["**/e2e/**/*.mjs"],
+    languageOptions: {
+      globals: {
+        process: "readonly",
+        console: "readonly",
+        URL: "readonly",
+      },
+    },
+  },
 );

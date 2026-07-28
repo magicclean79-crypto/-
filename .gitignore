@@ -36,3 +36,7 @@ coverage/
 # TypeScript
 *.tsbuildinfo
 next-env.d.ts
+
+# Playwright (TASK-0702)
+apps/web/test-results/
+apps/web/playwright-report/

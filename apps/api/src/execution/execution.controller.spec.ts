@@ -276,4 +276,44 @@ describe("Execution API (API Test)", () => {
       .get("/executions/timeline?interval=month")
       .expect(400);
   });
+
+  it("GET /executions/stats — feature/provider/model 필터가 where에 적용된다 (TASK-0702)", async () => {
+    groupByCalls.length = 0;
+    await request(app.getHttpServer())
+      .get("/executions/stats?feature=dev&provider=mock&model=mock-llm-1")
+      .expect(200);
+
+    expect(groupByCalls[0].where).toEqual({
+      feature: "dev",
+      provider: "mock",
+      model: "mock-llm-1",
+    });
+  });
+
+  it("GET /executions/timeline — hour는 31일 제한 (기본 최근 31일 창, 초과 400) (TASK-0702)", async () => {
+    // 명시 범위 31일 초과 → 400
+    await request(app.getHttpServer())
+      .get(
+        "/executions/timeline?interval=hour&from=2026-06-01T00:00:00Z&to=2026-07-28T00:00:00Z",
+      )
+      .expect(400);
+
+    // from 미지정 → 최근 31일 창이 기본 적용 (createdAt >= 바인딩 존재)
+    rawQueries.length = 0;
+    await request(app.getHttpServer())
+      .get("/executions/timeline?interval=hour")
+      .expect(200);
+    expect(
+      rawQueries[0].values.some((value) => value instanceof Date),
+    ).toBe(true);
+
+    // day/week에는 제한이 없다 (전체 기간 조회 허용)
+    rawQueries.length = 0;
+    await request(app.getHttpServer())
+      .get("/executions/timeline?interval=day")
+      .expect(200);
+    expect(
+      rawQueries[0].values.some((value) => value instanceof Date),
+    ).toBe(false);
+  });
 });

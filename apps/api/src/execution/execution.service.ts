@@ -72,26 +72,36 @@ export class ExecutionService {
   }
 
   /**
-   * Execution Dashboard (TASK-0602) — 호출 수·성공/실패율·토큰·비용·지연을
-   * 전체 + feature/provider/model별로 집계한다.
+   * Execution Dashboard (TASK-0602 · 필터 확장 TASK-0702) — 호출 수·성공/
+   * 실패율·토큰·비용·지연을 전체 + feature/provider/model별로 집계한다.
+   * feature/provider/model 필터(정확 일치)는 totals와 차원별 표 전부에 적용.
    * DB에서 (차원, status) 단위 groupBy 후 @acos/core의 순수 로직으로 병합.
    */
   async dashboard(options: {
     from?: Date;
     to?: Date;
+    feature?: string;
+    provider?: string;
+    model?: string;
   }): Promise<ExecutionDashboardDto> {
     if (options.from && options.to && options.from > options.to) {
       throw new BadRequestException("from은 to보다 이후일 수 없습니다.");
     }
-    const where: Prisma.ExecutionWhereInput | undefined =
-      options.from || options.to
+    const conditions: Prisma.ExecutionWhereInput = {
+      ...(options.from || options.to
         ? {
             createdAt: {
               ...(options.from ? { gte: options.from } : {}),
               ...(options.to ? { lte: options.to } : {}),
             },
           }
-        : undefined;
+        : {}),
+      ...(options.feature ? { feature: options.feature } : {}),
+      ...(options.provider ? { provider: options.provider } : {}),
+      ...(options.model ? { model: options.model } : {}),
+    };
+    const where: Prisma.ExecutionWhereInput | undefined =
+      Object.keys(conditions).length > 0 ? conditions : undefined;
 
     const [statusRows, featureRows, providerRows, modelRows] =
       await Promise.all([
@@ -134,6 +144,21 @@ export class ExecutionService {
     }
     if (options.from && options.to && options.from > options.to) {
       throw new BadRequestException("from은 to보다 이후일 수 없습니다.");
+    }
+
+    // CTO 결정(TASK-0701 승인 ③): hour 조회는 최대 31일 —
+    // from 미지정 시 최근 31일 창을 기본 적용, 명시 범위가 31일 초과면 400
+    if (interval === "hour") {
+      const HOUR_MAX_RANGE_MS = 31 * 24 * 60 * 60 * 1000;
+      const effectiveTo = options.to ?? new Date();
+      const effectiveFrom =
+        options.from ?? new Date(effectiveTo.getTime() - HOUR_MAX_RANGE_MS);
+      if (effectiveTo.getTime() - effectiveFrom.getTime() > HOUR_MAX_RANGE_MS) {
+        throw new BadRequestException(
+          "interval=hour 조회 기간은 최대 31일입니다. from/to를 좁혀 주세요.",
+        );
+      }
+      options = { ...options, from: effectiveFrom };
     }
 
     const conditions: Prisma.Sql[] = [];

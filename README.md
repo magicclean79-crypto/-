@@ -259,8 +259,11 @@ SOP와 나란히 회사 지식을 축적합니다 — [docs/architecture/decisio
 | `GET` | `/executions/stats?from=&to=` | **Dashboard 집계 (TASK-0602)** — 호출 수·성공/실패율·토큰·비용·지연을 전체 + feature/provider/model별 제공 |
 | `GET` | `/executions/timeline?interval=hour\|day\|week&…` | **시간 축 집계 (TASK-0605)** — 같은 지표를 시간 버킷으로, feature/provider/model 필터 지원 |
 
-웹: **`/executions` 실행 대시보드 (TASK-0701)** — KPI 카드(성공률은 UI에서 %) ·
-Timeline Chart(hour/day/week, 빈 버킷 UI 보간) · Feature/Provider/Model 통계 테이블
+웹: **`/executions` 실행 대시보드 (TASK-0701 · 필터 TASK-0702)** — KPI 카드(성공률은
+UI에서 %) · Timeline Chart(hour/day/week, 빈 버킷 UI 보간) · **Dashboard Filter**
+(Feature/Provider/Model/From/To) · Feature/Provider/Model 통계 테이블.
+hour 조회는 최대 31일(CTO 결정). 웹 스모크 테스트(Playwright)가 `pnpm test`
+품질 게이트에 포함됨.
 
 ## Memory — 표준 Structured Memory (TASK-0402)
 

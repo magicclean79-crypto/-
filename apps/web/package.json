@@ -6,6 +6,7 @@
     "dev": "next dev --port 3000",
     "build": "next build",
     "start": "next start --port 3000",
+    "test": "playwright test",
     "clean": "rm -rf .next"
   },
   "dependencies": {
@@ -16,6 +17,7 @@
     "react-dom": "19.2.8"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.0",
     "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^26.1.1",
     "@types/react": "^19.2.17",

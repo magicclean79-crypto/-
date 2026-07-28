@@ -47,15 +47,24 @@ export class ExecutionController {
     });
   }
 
-  /** Execution Dashboard (TASK-0602) — ?from=&to= (ISO, 미지정 시 전체 기간) */
+  /**
+   * Execution Dashboard (TASK-0602 · 필터 확장 TASK-0702) —
+   * ?from=&to=&feature=&provider=&model= (전부 선택)
+   */
   @Get("stats")
   async stats(
     @Query("from") from?: string,
     @Query("to") to?: string,
+    @Query("feature") feature?: string,
+    @Query("provider") provider?: string,
+    @Query("model") model?: string,
   ): Promise<ExecutionDashboardDto> {
     return this.executionService.dashboard({
       from: parseDate("from", from),
       to: parseDate("to", to),
+      feature: feature || undefined,
+      provider: provider || undefined,
+      model: model || undefined,
     });
   }
 

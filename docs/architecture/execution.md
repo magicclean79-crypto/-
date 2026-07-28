@@ -78,7 +78,8 @@ USD / 1M 토큰) 기준.
   `avgLatencyMs`(호출 수 가중 평균) · `maxLatencyMs`
 - 집계 경로: DB에서 (차원, status) 단위 `groupBy` → @acos/core의 순수 병합
   로직(`buildExecutionStats`) — 병합 규칙은 DB 없이 단위 테스트된다
-- `from`/`to`(ISO)로 기간 필터 (미지정 시 전체 기간). 잘못된 날짜·역전 기간은 400
+- 필터: `from`/`to`(ISO) 기간 + **`feature`/`provider`/`model` 정확 일치
+  (TASK-0702)** — totals와 차원별 표 전부에 적용. 잘못된 날짜·역전 기간은 400
 - 그룹 정렬: 호출 수 내림차순
 
 ## Timeline (TASK-0605)
@@ -88,6 +89,8 @@ USD / 1M 토큰) 기준.
 
 - `interval`: `hour` / `day` / `week` (기본 day, 그 외 400) — DB
   `date_trunc`(UTC) 기준. week는 ISO 주(월요일 시작)
+- **hour 제한 (TASK-0702, CTO 결정)**: 조회 기간 최대 31일 — from 미지정 시
+  최근 31일 창이 기본 적용, 명시 범위가 31일 초과면 400 (day/week는 제한 없음)
 - 필터: `feature` · `provider` · `model` (정확 일치) + `from`/`to` 기간
 - 버킷은 시간 오름차순, **데이터가 있는 버킷만 포함** (빈 버킷 0 채움 없음)
 - 집계 경로: DB에서 (버킷, status) 단위 집계($queryRaw, 값 전부 파라미터
@@ -111,8 +114,20 @@ USD / 1M 토큰) 기준.
   CTO 결정: API는 0~1) · 토큰(입력/출력) · 비용/지연(평균·최대)
 - **Timeline Chart**: hour/day/week 전환(쿼리 파라미터), 성공/실패 스택 막대,
   UTC 축 — **빈 버킷은 UI에서 보간**(CTO 결정, `fillTimelineBuckets`)
+- **Dashboard Filter (TASK-0702)**: Feature(선택)·Provider·Model·From/To(UTC,
+  datetime-local → ISO 변환) — GET 폼(서버 컴포넌트 유지), stats+timeline
+  양쪽에 적용, interval 전환 시 필터 유지
 - **Feature/Provider/Model 통계 테이블**: 호출·성공률·실패·토큰·비용·평균 지연
 - 서버 컴포넌트 + CSS 막대(외부 차트 라이브러리 없음), API 미연결 시 안내 표시
+
+### 웹 스모크 테스트 (TASK-0702 — CI 품질 게이트)
+
+`apps/web`의 `pnpm test` = **Playwright** (`e2e/dashboard.spec.ts`) — 루트
+`pnpm test`(turbo)에 포함되어 품질 게이트가 됨. 실제 API 대신 스텁 API
+(`e2e/stub-api.mjs`, 모드 전환형)로 상태를 결정적으로 재현한다:
+① Dashboard(데이터 렌더링·% 변환·테이블) ② Filter(쿼리 전달 검증)
+③ Empty(빈 상태 안내) ④ Error(API 실패 안내). 브라우저는 사전 설치된
+chromium(`/opt/pw-browsers`) 사용 — 다운로드 불필요.
 
 ## 테스트
 
