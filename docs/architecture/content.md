@@ -53,8 +53,26 @@ DRAFT → REVIEW → PUBLISHED → ARCHIVED
 - 전이 규칙은 @acos/core `canTransition`(Sprint 1 선언을 공식 사용) —
   위반 시 400에 가능한 전이 목록 안내, ARCHIVED는 종결(전이 불가)
 - **PUBLISHED 전이는 발행 조건(`isPublishable`) 추가 검증**: REVIEW 상태 +
-  제목/본문 비어 있지 않음. 전이 시 `publishedAt` 기록(이후 ARCHIVED에도 보존)
+  제목/본문 비어 있지 않음. **`publishedAt`은 최초 발행 시점을 보존**
+  (재발행·ARCHIVED에도 불변 — CTO 결정, TASK-0703 승인 ②)
 - 채널별 포맷/배포는 스펙 없음 (후속)
+
+### 감사 이력 (Audit History, TASK-0704)
+
+- 상태 전이 1건당 `content_status_history` 1레코드(from→to·시각) —
+  전이와 **한 트랜잭션**으로 기록 (콘텐츠 삭제 시 Cascade)
+- `GET /projects/:projectId/contents/:contentId/history` — 최신순 조회
+
+### 발행 Web UI (TASK-0704)
+
+프로젝트 상세(`/projects/[id]`)의 상세페이지 목록에서:
+- **Status Badge** — 상태별 색상 고정 (DRAFT 황색 · REVIEW 청색 ·
+  PUBLISHED 녹색 · ARCHIVED 회색)
+- **상태 변경 버튼** — 현재 상태에서 가능한 전이(@acos/core
+  `allowedTransitions`)만 노출, 최종 검증은 API. ARCHIVED는 "종결됨" 표시
+- **publishedAt 표기**(UTC) + **감사 이력 목록**(최신순)
+- Playwright e2e 2종(`e2e/publishing.spec.ts`)이 품질 게이트에 포함
+  (전 구간 전이·되돌리기 시나리오)
 
 ## 생성 로직 변경 방법
 

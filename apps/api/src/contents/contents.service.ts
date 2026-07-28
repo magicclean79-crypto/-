@@ -14,6 +14,7 @@ import { CONTENT_STATUSES } from "@acos/shared";
 import type {
   ContentDto,
   ContentStatus,
+  ContentStatusHistoryDto,
   GenerateContentRequest,
   OcrSummary,
   VisionSummary,
@@ -155,15 +156,53 @@ export class ContentsService {
       );
     }
 
-    const updated = await this.prisma.content.update({
-      where: { id: record.id },
-      data: {
-        status: target,
-        ...(target === "PUBLISHED" ? { publishedAt: new Date() } : {}),
-      },
-      include: { productObject: { select: { version: true } } },
+    // 전이 + 감사 이력(TASK-0704)을 한 트랜잭션으로 기록한다
+    const [updated] = await this.prisma.$transaction([
+      this.prisma.content.update({
+        where: { id: record.id },
+        data: {
+          status: target,
+          // publishedAt은 최초 발행 시점 보존 (CTO 결정, TASK-0703 승인 ②)
+          ...(target === "PUBLISHED" && !record.publishedAt
+            ? { publishedAt: new Date() }
+            : {}),
+        },
+        include: { productObject: { select: { version: true } } },
+      }),
+      this.prisma.contentStatusHistory.create({
+        data: {
+          contentId: record.id,
+          fromStatus: record.status,
+          toStatus: target,
+        },
+      }),
+    ]);
+    return toDto(updated as ContentWithVersion);
+  }
+
+  /** 발행 파이프라인 감사 이력 조회 (TASK-0704) — 최신순 */
+  async getStatusHistory(
+    projectId: string,
+    contentId: string,
+  ): Promise<ContentStatusHistoryDto[]> {
+    const content = await this.prisma.content.findFirst({
+      where: { id: contentId, projectId },
+      select: { id: true },
     });
-    return toDto(updated);
+    if (!content) {
+      throw new NotFoundException(`콘텐츠를 찾을 수 없습니다: ${contentId}`);
+    }
+    const records = await this.prisma.contentStatusHistory.findMany({
+      where: { contentId },
+      orderBy: { createdAt: "desc" },
+    });
+    return records.map((record) => ({
+      id: record.id,
+      contentId: record.contentId,
+      fromStatus: record.fromStatus,
+      toStatus: record.toStatus,
+      createdAt: record.createdAt.toISOString(),
+    }));
   }
 
   async getById(projectId: string, contentId: string): Promise<ContentDto> {

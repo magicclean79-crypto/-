@@ -45,8 +45,38 @@ const EMPTY_TOTALS = {
   maxLatencyMs: null,
 };
 
+// 발행 파이프라인 스텁 상태 (TASK-0704) — /__mode 전환 시 초기화
+let pubContent;
+let pubHistory;
+function resetPublishing() {
+  pubContent = {
+    id: "content-pub-1",
+    projectId: "proj-pub",
+    productObjectId: null,
+    productObjectVersion: 3,
+    title: "발행 테스트 상세페이지",
+    body: "# 발행 테스트\n\n본문",
+    status: "DRAFT",
+    publishedAt: null,
+    createdAt: "2026-07-28T09:00:00.000Z",
+    updatedAt: "2026-07-28T09:00:00.000Z",
+  };
+  pubHistory = [];
+}
+resetPublishing();
+
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
+
+  // 브라우저(3100)에서의 클라이언트 호출 허용 (실제 API도 CORS 허용)
+  res.setHeader("access-control-allow-origin", "*");
+  res.setHeader("access-control-allow-methods", "GET,POST,PATCH,OPTIONS");
+  res.setHeader("access-control-allow-headers", "content-type");
+  if (req.method === "OPTIONS") {
+    res.statusCode = 204;
+    res.end();
+    return;
+  }
 
   if (req.method === "POST" && url.pathname === "/__mode") {
     let body = "";
@@ -54,7 +84,64 @@ const server = http.createServer((req, res) => {
     req.on("end", () => {
       mode = JSON.parse(body).mode;
       lastUrls = [];
+      resetPublishing();
       res.end(JSON.stringify({ mode }));
+    });
+    return;
+  }
+
+  // ── 발행 파이프라인 (프로젝트 상세 화면용, mode 무관 동작) ──
+  if (url.pathname === "/projects/proj-pub") {
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify({
+        id: "proj-pub",
+        name: "발행 테스트 프로젝트",
+        description: null,
+        createdAt: "2026-07-28T00:00:00.000Z",
+        products: [],
+        latestProductObjectVersion: 3,
+      }),
+    );
+    return;
+  }
+  if (url.pathname === "/projects/proj-pub/product-object") {
+    res.statusCode = 404;
+    res.end("{}");
+    return;
+  }
+  if (url.pathname === "/projects/proj-pub/contents") {
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ contents: [pubContent] }));
+    return;
+  }
+  if (url.pathname === `/projects/proj-pub/contents/${pubContent.id}/history`) {
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ history: [...pubHistory].reverse() }));
+    return;
+  }
+  if (
+    req.method === "PATCH" &&
+    url.pathname === `/projects/proj-pub/contents/${pubContent.id}/status`
+  ) {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      const { status } = JSON.parse(body);
+      const now = new Date().toISOString();
+      pubHistory.push({
+        id: `hist-${pubHistory.length + 1}`,
+        contentId: pubContent.id,
+        fromStatus: pubContent.status,
+        toStatus: status,
+        createdAt: now,
+      });
+      pubContent.status = status;
+      if (status === "PUBLISHED" && !pubContent.publishedAt) {
+        pubContent.publishedAt = now;
+      }
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify(pubContent));
     });
     return;
   }

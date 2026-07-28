@@ -120,6 +120,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@acos/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@acos/shared':
         specifier: workspace:*
         version: link:../../packages/shared

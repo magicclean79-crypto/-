@@ -1,14 +1,43 @@
-import type { Content, ProductObject } from "@prisma/client";
+import type {
+  Content,
+  ContentStatusHistory,
+  ProductObject,
+} from "@prisma/client";
 
 /** contents/product_objects를 흉내 내는 인메모리 Prisma 목업 (테스트 전용) */
 export function createPrismaMock() {
   const contents = new Map<string, Content>();
   const productObjects: Partial<ProductObject>[] = [];
+  const statusHistory: ContentStatusHistory[] = [];
   let sequence = 0;
 
   const prisma = {
     contents,
     productObjects,
+    statusHistory,
+    $transaction: jest.fn(async (operations: Promise<unknown>[]) =>
+      Promise.all(operations),
+    ),
+    contentStatusHistory: {
+      create: jest.fn(
+        async ({ data }: { data: Partial<ContentStatusHistory> }) => {
+          const row = {
+            id: `hist-${statusHistory.length + 1}`,
+            createdAt: new Date(),
+            ...data,
+          } as ContentStatusHistory;
+          statusHistory.push(row);
+          return { ...row };
+        },
+      ),
+      findMany: jest.fn(
+        async ({ where }: { where: { contentId: string } }) =>
+          statusHistory
+            .filter((row) => row.contentId === where.contentId)
+            .slice()
+            .reverse(),
+      ),
+    },
     project: {
       findUnique: jest.fn(async ({ where }: { where: { id: string } }) =>
         where.id === "proj-1"

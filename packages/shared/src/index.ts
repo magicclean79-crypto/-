@@ -37,6 +37,15 @@ export interface UpdateContentStatusRequest {
   status: ContentStatus;
 }
 
+/** 발행 파이프라인 감사 이력 (TASK-0704) — 상태 전이 1건당 1레코드 */
+export interface ContentStatusHistoryDto {
+  id: string;
+  contentId: string;
+  fromStatus: ContentStatus;
+  toStatus: ContentStatus;
+  createdAt: string;
+}
+
 export interface GenerateContentRequest {
   /** 사용할 Product Object 버전. 미지정 시 최신 READY 버전 사용 */
   productObjectVersion?: number;

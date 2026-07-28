@@ -10,6 +10,7 @@
     "clean": "rm -rf .next"
   },
   "dependencies": {
+    "@acos/core": "workspace:*",
     "@acos/shared": "workspace:*",
     "@acos/ui": "workspace:*",
     "next": "16.2.12",

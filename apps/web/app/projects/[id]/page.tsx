@@ -3,10 +3,13 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import type {
   ContentDto,
+  ContentStatusHistoryDto,
   ProductObjectDto,
   ProjectDetailDto,
 } from "@acos/shared";
 import { Badge } from "@acos/ui";
+import { ContentStatusActions } from "./content-status-actions";
+import { ContentStatusBadge } from "./content-status";
 import { PipelineActions } from "./pipeline-actions";
 
 export const metadata: Metadata = {
@@ -42,6 +45,22 @@ export default async function ProjectDetailPage({
     fetchJson<{ contents: ContentDto[] }>(`/projects/${id}/contents`),
   ]);
   const contents = contentsBody?.contents ?? [];
+  // 발행 감사 이력 (TASK-0704) — 콘텐츠별 병렬 조회
+  const histories = new Map(
+    await Promise.all(
+      contents.map(
+        async (content) =>
+          [
+            content.id,
+            (
+              await fetchJson<{ history: ContentStatusHistoryDto[] }>(
+                `/projects/${id}/contents/${content.id}/history`,
+              )
+            )?.history ?? [],
+          ] as const,
+      ),
+    ),
+  );
 
   return (
     <main className="mx-auto flex min-h-screen max-w-4xl flex-col gap-8 px-6 py-16">
@@ -141,26 +160,64 @@ export default async function ProjectDetailPage({
           </p>
         ) : (
           <ul className="flex flex-col gap-3">
-            {contents.map((content) => (
-              <li
-                key={content.id}
-                className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900"
-              >
-                <details>
-                  <summary className="flex cursor-pointer items-center gap-2">
-                    <span className="font-medium">{content.title}</span>
-                    <Badge tone="warn">{content.status}</Badge>
-                    <span className="text-xs text-zinc-400">
-                      PO v{content.productObjectVersion ?? "-"} ·{" "}
-                      {content.createdAt.slice(0, 16).replace("T", " ")}
-                    </span>
-                  </summary>
-                  <pre className="mt-3 overflow-x-auto whitespace-pre-wrap rounded-lg bg-zinc-50 p-4 text-xs text-zinc-700 dark:bg-zinc-950 dark:text-zinc-300">
-                    {content.body}
-                  </pre>
-                </details>
-              </li>
-            ))}
+            {contents.map((content) => {
+              const history = histories.get(content.id) ?? [];
+              return (
+                <li
+                  key={content.id}
+                  data-testid="content-item"
+                  className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900"
+                >
+                  <details>
+                    <summary className="flex cursor-pointer flex-wrap items-center gap-2">
+                      <span className="font-medium">{content.title}</span>
+                      <ContentStatusBadge status={content.status} />
+                      <span className="text-xs text-zinc-400">
+                        PO v{content.productObjectVersion ?? "-"} ·{" "}
+                        {content.createdAt.slice(0, 16).replace("T", " ")}
+                      </span>
+                      {content.publishedAt ? (
+                        <span
+                          data-testid="content-published-at"
+                          className="text-xs text-emerald-600 dark:text-emerald-400"
+                        >
+                          발행: {content.publishedAt.slice(0, 16).replace("T", " ")}{" "}
+                          (UTC)
+                        </span>
+                      ) : null}
+                    </summary>
+                    <pre className="mt-3 overflow-x-auto whitespace-pre-wrap rounded-lg bg-zinc-50 p-4 text-xs text-zinc-700 dark:bg-zinc-950 dark:text-zinc-300">
+                      {content.body}
+                    </pre>
+                  </details>
+                  <div className="mt-3">
+                    <ContentStatusActions
+                      projectId={project.id}
+                      contentId={content.id}
+                      status={content.status}
+                    />
+                  </div>
+                  {history.length > 0 ? (
+                    <div
+                      data-testid="content-history"
+                      className="mt-3 border-t border-zinc-100 pt-2 text-xs text-zinc-500 dark:border-zinc-800"
+                    >
+                      <p className="mb-1 font-medium text-zinc-600 dark:text-zinc-400">
+                        감사 이력
+                      </p>
+                      <ul className="flex flex-col gap-0.5">
+                        {history.map((item) => (
+                          <li key={item.id}>
+                            {item.createdAt.slice(0, 19).replace("T", " ")} (UTC) —{" "}
+                            {item.fromStatus} → {item.toStatus}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>

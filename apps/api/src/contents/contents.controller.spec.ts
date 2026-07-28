@@ -128,6 +128,17 @@ describe("Contents API (API Test)", () => {
       .patch(`/projects/proj-1/contents/${id}/status`)
       .send({ status: "REVIEW" })
       .expect(400);
+
+    // 감사 이력 조회 (TASK-0704) — 최신순
+    const history = await request(app.getHttpServer())
+      .get(`/projects/proj-1/contents/${id}/history`)
+      .expect(200);
+    expect(
+      history.body.history.map(
+        (item: { fromStatus: string; toStatus: string }) =>
+          `${item.fromStatus}→${item.toStatus}`,
+      ),
+    ).toEqual(["REVIEW→PUBLISHED", "DRAFT→REVIEW"]);
   });
 
   it("POST — 없는 프로젝트 404", async () => {

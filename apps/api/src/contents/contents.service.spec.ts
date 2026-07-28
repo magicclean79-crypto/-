@@ -182,6 +182,41 @@ describe("ContentsService (Service Test)", () => {
         service.updateStatus("proj-1", "nope", "REVIEW"),
       ).rejects.toThrow(NotFoundException);
     });
+
+    it("전이마다 감사 이력(from→to)이 기록되고 최신순으로 조회된다 (TASK-0704)", async () => {
+      const { service, content } = await setup();
+      await service.updateStatus("proj-1", content.id, "REVIEW");
+      await service.updateStatus("proj-1", content.id, "PUBLISHED");
+      await service.updateStatus("proj-1", content.id, "ARCHIVED");
+
+      const history = await service.getStatusHistory("proj-1", content.id);
+
+      expect(
+        history.map((item) => `${item.fromStatus}→${item.toStatus}`),
+      ).toEqual(["PUBLISHED→ARCHIVED", "REVIEW→PUBLISHED", "DRAFT→REVIEW"]);
+      expect(history[0].contentId).toBe(content.id);
+      expect(history[0].createdAt).toBeTruthy();
+    });
+
+    it("재발행 시 publishedAt은 최초 발행 시점을 보존한다 (CTO 결정)", async () => {
+      const { service, content } = await setup();
+      await service.updateStatus("proj-1", content.id, "REVIEW");
+      const first = await service.updateStatus("proj-1", content.id, "PUBLISHED");
+      // PUBLISHED → ARCHIVED 후 이력만 남고 publishedAt은 변하지 않는다
+      const archived = await service.updateStatus(
+        "proj-1",
+        content.id,
+        "ARCHIVED",
+      );
+      expect(archived.publishedAt).toBe(first.publishedAt);
+    });
+
+    it("없는 콘텐츠의 이력 조회는 404", async () => {
+      const { service } = await setup();
+      await expect(
+        service.getStatusHistory("proj-1", "nope"),
+      ).rejects.toThrow(NotFoundException);
+    });
   });
 
   it("없는 프로젝트는 404, 목록/단건 조회 동작", async () => {

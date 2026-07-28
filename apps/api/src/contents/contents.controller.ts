@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Param, Patch, Post } from "@nestjs/common";
 import type {
   ContentDto,
+  ContentStatusHistoryDto,
   GenerateContentRequest,
   UpdateContentStatusRequest,
 } from "@acos/shared";
@@ -58,6 +59,20 @@ export class ContentsController {
       contentId,
       body?.status ?? "",
     );
+  }
+
+  /** 발행 파이프라인 감사 이력 (TASK-0704) — 최신순 */
+  @Get(":contentId/history")
+  async getStatusHistory(
+    @Param("projectId") projectId: string,
+    @Param("contentId") contentId: string,
+  ): Promise<{ history: ContentStatusHistoryDto[] }> {
+    return {
+      history: await this.contentsService.getStatusHistory(
+        projectId,
+        contentId,
+      ),
+    };
   }
 
   @Get(":contentId")
