@@ -1,4 +1,4 @@
-import type { LlmMessageDto } from "@acos/shared";
+import type { LlmMessageDto, LlmResponseFormat } from "@acos/shared";
 
 /**
  * LLM Provider 추상화 (Port). (TASK-0501, Sprint 5 — AI Execution)
@@ -23,6 +23,12 @@ export interface LlmRequest {
   model?: string;
   /** 최대 출력 토큰 */
   maxTokens?: number;
+  /**
+   * 기대 응답 형식 (기본 "text"). "json"이면 Provider는 JSON 객체 하나만
+   * 출력해야 한다 — 프롬프트 지침이 1차 강제이며, Provider별 구조화 출력
+   * 옵션(예: OpenAI response_format)은 어댑터에서 선택적으로 매핑한다.
+   */
+  responseFormat?: LlmResponseFormat;
 }
 
 export interface LlmResult {

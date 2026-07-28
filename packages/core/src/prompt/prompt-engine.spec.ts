@@ -61,6 +61,11 @@ describe("PromptEngine", () => {
         name: "상세페이지 생성",
         description: expect.stringContaining("Company Brain"),
       },
+      {
+        key: "product-analysis",
+        name: "상품 분석",
+        description: expect.stringContaining("ProductAnalysis"),
+      },
     ]);
   });
 });

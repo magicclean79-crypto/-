@@ -1,10 +1,18 @@
 # AI 분석(Analysis) 아키텍처
 
-상품 이미지 + OCR 텍스트로부터 **구조화된 상품 정보**(이름, 카테고리, 키워드,
-설명, 속성, 신뢰도)를 추출하는 기능이다. OCR과 동일한 Port/Adapter 패턴을
-사용하며, **실제 AI API는 연결되어 있지 않다** — 기본 Provider는
-`MockAnalysisProvider`이고, Claude/OpenAI/Gemini 등은 아래 절차로 교체해
-연결한다.
+상품 이미지의 OCR 텍스트 + Company Brain 컨텍스트로부터 **구조화된 상품
+정보**(이름, 카테고리, 키워드, 설명, 속성, 신뢰도)를 추출하는 기능이다.
+
+**TASK-0504(Sprint 5 — AI Execution)에서 공식 분석 엔진이 LLM 기반으로
+교체되었다.** 구 `MockAnalysisProvider`(규칙 기반 단독 mock)는 제거되었고,
+공식 엔진 `LlmAnalysisProvider`가 CTO 지시대로 세 계층을 사용한다:
+
+1. **Prompt Engine** — `product-analysis` 템플릿 렌더링 (TASK-0503)
+2. **LLM Gateway** — `responseFormat: "json"` 호출, Provider 교체 구조 (TASK-0501)
+3. **Company Brain** — 상품 이름 기준 지식/결정/설정 컨텍스트 (Sprint 4)
+
+모델 선택은 이제 **`LLM_PROVIDER` 환경 변수 하나**로 관리된다(기본 mock —
+실제 API 미호출). `ANALYSIS_PROVIDER` 환경 변수는 제거되었다.
 
 ## 구성 요소
 
@@ -12,9 +20,12 @@
 | --- | --- | --- |
 | Domain (Port) | `AnalysisProvider`, `AnalysisInput`, `ProductAnalysis`, `AnalysisRun`, `AnalysisRunStore` | `packages/core/src/analysis/analysis-provider.ts` |
 | Domain (Service) | `AnalysisExecutionService` — 상태 전이 + 재시도 | `packages/core/src/analysis/analysis-execution.service.ts` |
-| Adapter (Provider) | `MockAnalysisProvider`(기본) | `packages/core/src/analysis/providers/mock.provider.ts` |
+| Domain (공식 엔진) | `LlmAnalysisProvider` — Prompt Engine + LLM Gateway + Company Brain | `packages/core/src/analysis/llm-analysis.provider.ts` |
+| Domain (계약) | `ProductAnalysisContext` · `buildDraftProductAnalysis` · `parseProductAnalysisResponse` | `packages/core/src/analysis/product-analysis.ts` |
+| Prompt 템플릿 | `product-analysis` (초안 JSON 포함) | `packages/core/src/prompt/templates/product-analysis.template.ts` |
+| Adapter (Company Brain) | `createAnalysisCompanyBrainSource` — CompanyBrainService 연결 | `apps/api/src/analysis/analysis-company-brain.ts` |
 | Adapter (저장소) | `PrismaAnalysisRunStore` — `analysis_results` 테이블 | `apps/api/src/analysis/prisma-analysis-run.store.ts` |
-| API | `AnalysisController`, `AnalysisService` | `apps/api/src/analysis/` |
+| API | `AnalysisController`, `AnalysisService`, DI 조립(`AnalysisModule`) | `apps/api/src/analysis/` |
 
 ## 분석 흐름
 
@@ -24,12 +35,17 @@ POST /products/:productId/analysis   { apply?: boolean }
         ▼
 AnalysisService (apps/api)
   1. 상품 + 이미지 + 이미지별 최신 OCR SUCCESS 텍스트 조회
-  2. AnalysisInput 구성 (이미지 바이트는 lazy 로더로 전달 — mock은 읽지 않음)
+  2. AnalysisInput 구성 (product.projectId 포함 — Company Brain 조회용)
         │
         ▼
-AnalysisExecutionService (@acos/core)     ← 도메인 로직, 프레임워크 무관
+AnalysisExecutionService (@acos/core)     ← 상태 전이·재시도, 프레임워크 무관
   3. AnalysisRunStore.start()             → analysis_results에 RUNNING 레코드
-  4. AnalysisProvider.analyze() 호출
+  4. LlmAnalysisProvider.analyze()        ← 공식 엔진 (TASK-0504)
+       4-a. Company Brain 조회 — 상품 이름 질의, PROJECT 스코프
+       4-b. PromptEngine.render("product-analysis", context)
+            → 규칙 기반 초안 JSON을 포함한 system+user 메시지
+       4-c. LLM Gateway complete({ messages, responseFormat: "json" })
+       4-d. parseProductAnalysisResponse() — 엄격 파싱 (실패 시 reject)
        실패 → 지수 백오프 재시도 (ANALYSIS_MAX_ATTEMPTS, 기본 3회)
   5-a. 성공 → markSuccess()               → SUCCESS + result/rawJson/completedAt
   5-b. 최종 실패 → markFailed()           → FAILED + error
@@ -43,124 +59,48 @@ AnalysisResultDto 응답
 
 - 상태 전이: `PENDING → RUNNING → SUCCESS | FAILED`
 - **실행할 때마다 새 레코드**가 생성되어 Product당 이력이 1:N으로 쌓인다.
+  구 mock 이력(`provider: "mock"`)은 그대로 보존된다 — 새 실행은
+  `provider: "llm:<LLM Provider>"`(예: `llm:mock`, `llm:openai`)로 기록된다.
+- **AnalysisResult 모델은 변경 없음** (CTO 지시).
 
-## Provider 교체 방법
+## 초안(Draft) + 검증·보강 설계
 
-`ANALYSIS_PROVIDER` 환경 변수 하나로 선택하며, 선택 로직은
-`apps/api/src/analysis/analysis.module.ts`의 팩토리 한 곳에만 있다.
+프롬프트에는 `buildDraftProductAnalysis()`가 만든 **규칙 기반 초안 JSON**
+(OCR 첫 줄 → 이름, category "미분류", confidence 0.3)이 포함된다.
 
-새 모델 추가 절차 (공통):
+- **실제 모델**: 초안을 OCR·Company Brain에 근거해 검증·보강한 최종 JSON을 출력
+- **mock LLM**: `responseFormat: "json"`이면 프롬프트의 마지막 ```json 블록
+  (= 초안)을 그대로 반환 — **키 없는 오프라인 환경에서도 전체 파이프라인이
+  결정적으로 동작**한다 (Company Brain 조회 → 렌더링 → Gateway 호출 → 파싱)
 
-1. `@acos/core`의 `AnalysisProvider`를 구현한다 — 입력(`AnalysisInput`)을 받아
-   `ProductAnalysis`로 정규화해 반환하면 된다. 상태 관리·재시도·저장·상품
-   반영은 전부 도메인/서비스가 처리한다.
-2. `createAnalysisProvider()`에 case를 추가한다.
-3. `.env`의 `ANALYSIS_PROVIDER`를 새 이름으로 바꾼다.
+응답 파싱(`parseProductAnalysisResponse`)은 엄격하다:
 
-## 향후 Claude 연결 방법
+- JSON 객체를 찾지 못하거나 `name`이 없으면 오류 → 재시도 → FAILED 기록
+- 나머지 필드는 타입 검증 후 보정 (category "미분류" · keywords [] ·
+  description "" · confidence 0~1 클램프, 누락 시 0.5)
 
-Claude API의 structured outputs를 사용하면 `ProductAnalysis` 스키마를
-그대로 강제할 수 있어 파싱 코드가 필요 없다.
+## 모델 교체 방법
 
-```ts
-// apps/api/src/analysis/providers/claude.provider.ts
-import Anthropic from "@anthropic-ai/sdk";
-import type { AnalysisInput, AnalysisProvider, AnalysisRecognition } from "@acos/core";
+분석용 모델 선택은 LLM Gateway에 위임되었다 — `LLM_PROVIDER` 환경 변수로
+openai/anthropic/gemini를 선택하면 분석도 해당 모델을 사용한다
+(docs/architecture/llm.md 참고). 분석 전용 절차가 더는 필요 없다.
 
-const ANALYSIS_SCHEMA = {
-  type: "object",
-  properties: {
-    name: { type: "string" },
-    category: { type: "string" },
-    keywords: { type: "array", items: { type: "string" } },
-    description: { type: "string" },
-    attributes: { type: "object", additionalProperties: false, properties: {} },
-    confidence: { type: "number" },
-  },
-  required: ["name", "category", "keywords", "description", "attributes", "confidence"],
-  additionalProperties: false,
-} as const;
+프롬프트를 바꾸려면 `product-analysis` 템플릿을 수정하면 되고(코드 선언,
+렌더링은 결정적으로 단위 테스트됨), Vision 입력(이미지 바이트) 활용·Provider별
+구조화 출력 옵션(response_format 등) 매핑은 향후 확장 지점이다 —
+`AnalysisInput.images[].getBytes()` 로더와 `LlmRequest.responseFormat`이
+그 자리를 잡아 두었다.
 
-export class ClaudeAnalysisProvider implements AnalysisProvider {
-  readonly name = "claude";
-  private readonly client = new Anthropic(); // ANTHROPIC_API_KEY 사용
-
-  async analyze(input: AnalysisInput): Promise<AnalysisRecognition> {
-    const imageBlocks = await Promise.all(
-      input.images.slice(0, 5).map(async (image) => ({
-        type: "image" as const,
-        source: {
-          type: "base64" as const,
-          media_type: image.mimeType as "image/png",
-          data: Buffer.from(await image.getBytes()).toString("base64"),
-        },
-      })),
-    );
-
-    const response = await this.client.messages.create({
-      model: "claude-opus-5",
-      max_tokens: 16000,
-      output_config: { format: { type: "json_schema", schema: ANALYSIS_SCHEMA } },
-      messages: [
-        {
-          role: "user",
-          content: [
-            ...imageBlocks,
-            {
-              type: "text",
-              text: [
-                "다음 상품 사진과 OCR 텍스트를 바탕으로 상품 정보를 추출해 주세요.",
-                `기존 상품명: ${input.product.name}`,
-                `OCR 텍스트:\n${input.ocrTexts.join("\n---\n")}`,
-              ].join("\n\n"),
-            },
-          ],
-        },
-      ],
-    });
-
-    if (response.stop_reason === "refusal") {
-      throw new Error("Claude가 요청을 거부했습니다.");
-    }
-    const text = response.content.find((block) => block.type === "text");
-    if (!text || text.type !== "text") {
-      throw new Error("Claude 응답에 텍스트가 없습니다.");
-    }
-    return {
-      analysis: JSON.parse(text.text),
-      raw: JSON.parse(JSON.stringify(response)),
-    };
-  }
-}
-```
-
-1. `pnpm --filter api add @anthropic-ai/sdk`
-2. `ANTHROPIC_API_KEY` 환경 변수 설정
-3. `createAnalysisProvider()`에 `case "claude"` 추가 → `ANALYSIS_PROVIDER=claude`
-
-## 향후 OpenAI 연결 방법
-
-```ts
-// apps/api/src/analysis/providers/openai.provider.ts — 개요
-// 1. pnpm --filter api add openai
-// 2. chat.completions(또는 responses API) + response_format: { type: "json_schema", ... }
-//    으로 동일한 ANALYSIS_SCHEMA를 강제하고, 이미지 URL/base64를 content로 전달
-// 3. createAnalysisProvider()에 case "openai" 추가 → ANALYSIS_PROVIDER=openai
-```
-
-Gemini 등 다른 모델도 동일하다 — **Provider는 "입력 → ProductAnalysis 변환"만
-구현하면 되고**, 나머지는 아키텍처가 처리한다.
-
-## 데이터 모델 (analysis_results)
+## 데이터 모델 (analysis_results — 변경 없음)
 
 | 필드 | 타입 | 설명 |
 | --- | --- | --- |
 | id | String (cuid) | PK |
 | productId | String (FK → products, Cascade) | **1:N** — 상품당 실행 이력 다건 |
-| provider | String | `mock`, (향후) `claude`, `openai`, … |
+| provider | String | `llm:mock`, `llm:openai`, … (구 이력: `mock`) |
 | status | enum | `PENDING` `RUNNING` `SUCCESS` `FAILED` |
 | result | Json? | 구조화된 `ProductAnalysis` |
-| rawJson | Json? | Provider 원본 응답 |
+| rawJson | Json? | LLM Provider/모델·응답 텍스트·Company Brain 컨텍스트 요약 |
 | error | String? | 실패 사유 |
 | attempts | Int | Provider 호출 시도 횟수 |
 | applied | Boolean | 결과가 상품 name/description에 반영되었는지 |
@@ -169,8 +109,9 @@ Gemini 등 다른 모델도 동일하다 — **Provider는 "입력 → ProductAn
 
 ## 테스트
 
-- Unit: `packages/core/src/analysis/analysis.spec.ts` — Mock Provider, 상태 전이, 재시도
-- Service: `apps/api/src/analysis/analysis.service.spec.ts` — OCR 텍스트 입력, apply 반영
+- Unit: `packages/core/src/analysis/analysis.spec.ts` — LlmAnalysisProvider(mock LLM 경로·Company Brain 반영·파싱 실패), 상태 전이, 재시도
+- Unit: `packages/core/src/analysis/product-analysis.spec.ts` — 초안 규칙, 응답 파서, `product-analysis` 템플릿 렌더링
+- Service: `apps/api/src/analysis/analysis.service.spec.ts` — OCR 텍스트 입력, Company Brain 로드, apply 반영
 - API: `apps/api/src/analysis/analysis.controller.spec.ts` — supertest HTTP 계약
 
 ```bash

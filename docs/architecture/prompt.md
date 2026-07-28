@@ -9,7 +9,8 @@ AI 기능 (Content Generation, 향후 Analysis/Vision/…)
    └─▶ PromptEngine.render(key, context) ─▶ LlmMessageDto[] ─▶ LLM Gateway
             │
             └─ PromptTemplate 레지스트리 (@acos/core, 프레임워크 무관)
-                 └── "content-generation" — 상세페이지 생성 (TASK-0502에서 분리)
+                 ├── "content-generation" — 상세페이지 생성 (TASK-0502에서 분리)
+                 └── "product-analysis"   — 상품 분석 (TASK-0504)
 ```
 
 ## 구조 (`packages/core/src/prompt/`)
@@ -35,6 +36,7 @@ AI 기능 (Content Generation, 향후 Analysis/Vision/…)
 | key | 이름 | 입력 | 소비처 |
 | --- | --- | --- | --- |
 | `content-generation` | 상세페이지 생성 | `ContentGenerationContext` (READY PO + Company Brain) | ContentGenerationService (TASK-0502) |
+| `product-analysis` | 상품 분석 | `ProductAnalysisContext` (상품/OCR + Company Brain) | LlmAnalysisProvider (TASK-0504) — `responseFormat: "json"` 호출·엄격 파싱 |
 
 ## API
 

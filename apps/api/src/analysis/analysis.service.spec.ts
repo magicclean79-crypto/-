@@ -1,6 +1,11 @@
 import { NotFoundException } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
-import { MockAnalysisProvider } from "@acos/core";
+import {
+  createDefaultPromptEngine,
+  LlmAnalysisProvider,
+  MockLlmProvider,
+} from "@acos/core";
+import type { AnalysisCompanyBrainSource } from "@acos/core";
 import type { AnalysisResult } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
@@ -70,6 +75,7 @@ function createPrismaMock() {
 
 const productWithOcr = {
   id: "prod-1",
+  projectId: "proj-1",
   name: "원래 이름",
   description: null,
   images: [
@@ -82,8 +88,33 @@ const productWithOcr = {
   ],
 };
 
+const emptyCompanyBrain: AnalysisCompanyBrainSource = async () => ({
+  knowledge: [],
+  decisions: [],
+  memories: [],
+});
+
+/** 공식 엔진(LLM 기반)을 mock LLM으로 구성 — 운영 기본 구성과 동일한 경로 */
+function createTestAnalysisProvider(
+  loadCompanyBrain: AnalysisCompanyBrainSource = emptyCompanyBrain,
+): LlmAnalysisProvider {
+  const llm = new MockLlmProvider();
+  return new LlmAnalysisProvider({
+    promptEngine: createDefaultPromptEngine(),
+    llmProviderName: llm.name,
+    complete: async (request) => {
+      const result = await llm.complete(request);
+      return { provider: result.provider, model: result.model, text: result.text };
+    },
+    loadCompanyBrain,
+  });
+}
+
 describe("AnalysisService (Service Test)", () => {
-  async function createService(prisma: ReturnType<typeof createPrismaMock>) {
+  async function createService(
+    prisma: ReturnType<typeof createPrismaMock>,
+    loadCompanyBrain?: AnalysisCompanyBrainSource,
+  ) {
     const moduleRef = await Test.createTestingModule({
       providers: [
         AnalysisService,
@@ -93,13 +124,16 @@ describe("AnalysisService (Service Test)", () => {
           provide: StorageService,
           useValue: { getObject: jest.fn(async () => Buffer.from("img")) },
         },
-        { provide: ANALYSIS_PROVIDER, useValue: new MockAnalysisProvider() },
+        {
+          provide: ANALYSIS_PROVIDER,
+          useValue: createTestAnalysisProvider(loadCompanyBrain),
+        },
       ],
     }).compile();
     return moduleRef.get(AnalysisService);
   }
 
-  it("OCR 텍스트를 입력으로 SUCCESS 결과를 저장한다", async () => {
+  it("OCR 텍스트를 입력으로 SUCCESS 결과를 저장한다 (LLM 기반 공식 엔진)", async () => {
     const prisma = createPrismaMock();
     prisma.product.findUnique.mockResolvedValue(productWithOcr);
     const service = await createService(prisma);
@@ -107,11 +141,28 @@ describe("AnalysisService (Service Test)", () => {
     const result = await service.runAnalysis("prod-1", false);
 
     expect(result.status).toBe("SUCCESS");
-    expect(result.provider).toBe("mock");
+    expect(result.provider).toBe("llm:mock");
     expect(result.result?.name).toBe("Magic Clean PVC Mat");
-    expect(result.result?.confidence).toBe(0.95);
+    expect(result.result?.confidence).toBe(0.3);
+    expect(result.rawJson).toMatchObject({ llm: { provider: "mock" } });
     expect(result.applied).toBe(false);
     expect(prisma.productUpdates).toHaveLength(0);
+  });
+
+  it("Company Brain 컨텍스트를 상품 기준으로 로드해 분석에 사용한다", async () => {
+    const prisma = createPrismaMock();
+    prisma.product.findUnique.mockResolvedValue(productWithOcr);
+    const loader = jest.fn(emptyCompanyBrain);
+    const service = await createService(prisma, loader);
+
+    await service.runAnalysis("prod-1", false);
+
+    expect(loader).toHaveBeenCalledTimes(1);
+    expect(loader.mock.calls[0][0].product).toMatchObject({
+      id: "prod-1",
+      projectId: "proj-1",
+      name: "원래 이름",
+    });
   });
 
   it("apply=true면 결과를 상품에 반영하고 applied를 기록한다", async () => {

@@ -29,6 +29,30 @@ describe("MockLlmProvider", () => {
     const result = await provider.complete({ ...request, model: "my-model" });
     expect(result.model).toBe("my-model");
   });
+
+  it('responseFormat="json"이면 프롬프트의 마지막 ```json 블록을 그대로 반환한다', async () => {
+    const provider = new MockLlmProvider();
+    const result = await provider.complete({
+      messages: [
+        {
+          role: "user",
+          content:
+            '초안:\n```json\n{"name": "이전"}\n```\n최종:\n```json\n{"name": "매트"}\n```\n검증해줘.',
+        },
+      ],
+      responseFormat: "json",
+    });
+    expect(JSON.parse(result.text)).toEqual({ name: "매트" });
+  });
+
+  it('responseFormat="json"인데 json 블록이 없으면 "{}"를 반환한다', async () => {
+    const provider = new MockLlmProvider();
+    const result = await provider.complete({
+      ...request,
+      responseFormat: "json",
+    });
+    expect(result.text).toBe("{}");
+  });
 });
 
 describe("LlmGateway", () => {

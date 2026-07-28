@@ -85,6 +85,7 @@ export class AnalysisService {
     const run = await this.execution.execute({
       product: {
         id: product.id,
+        projectId: product.projectId,
         name: product.name,
         description: product.description,
       },

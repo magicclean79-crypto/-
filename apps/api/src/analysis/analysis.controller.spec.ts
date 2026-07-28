@@ -1,6 +1,10 @@
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
-import { MockAnalysisProvider } from "@acos/core";
+import {
+  createDefaultPromptEngine,
+  LlmAnalysisProvider,
+  MockLlmProvider,
+} from "@acos/core";
 import request from "supertest";
 import type { AnalysisResult } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
@@ -21,6 +25,7 @@ describe("Analysis API (API Test)", () => {
         where.id === "prod-1"
           ? {
               id: "prod-1",
+              projectId: "proj-1",
               name: "테스트 상품",
               description: null,
               images: [
@@ -103,7 +108,30 @@ describe("Analysis API (API Test)", () => {
           provide: StorageService,
           useValue: { getObject: jest.fn(async () => Buffer.from("img")) },
         },
-        { provide: ANALYSIS_PROVIDER, useValue: new MockAnalysisProvider() },
+        {
+          // 공식 엔진(LLM 기반)을 mock LLM으로 구성 — 운영 기본 구성과 동일한 경로
+          provide: ANALYSIS_PROVIDER,
+          useValue: (() => {
+            const llm = new MockLlmProvider();
+            return new LlmAnalysisProvider({
+              promptEngine: createDefaultPromptEngine(),
+              llmProviderName: llm.name,
+              complete: async (req) => {
+                const result = await llm.complete(req);
+                return {
+                  provider: result.provider,
+                  model: result.model,
+                  text: result.text,
+                };
+              },
+              loadCompanyBrain: async () => ({
+                knowledge: [],
+                decisions: [],
+                memories: [],
+              }),
+            });
+          })(),
+        },
       ],
     }).compile();
 
@@ -115,7 +143,7 @@ describe("Analysis API (API Test)", () => {
     await app.close();
   });
 
-  it("POST /products/:id/analysis — 구조화된 Mock 결과를 반환한다", async () => {
+  it("POST /products/:id/analysis — LLM 기반 구조화 결과를 반환한다", async () => {
     const response = await request(app.getHttpServer())
       .post("/products/prod-1/analysis")
       .send({})
@@ -123,14 +151,14 @@ describe("Analysis API (API Test)", () => {
 
     expect(response.body).toMatchObject({
       productId: "prod-1",
-      provider: "mock",
+      provider: "llm:mock",
       status: "SUCCESS",
       applied: false,
     });
     expect(response.body.result).toMatchObject({
       name: "Magic Clean PVC Mat",
-      category: "생활용품",
-      confidence: 0.95,
+      category: "미분류",
+      confidence: 0.3,
     });
     expect(Array.isArray(response.body.result.keywords)).toBe(true);
   });

@@ -134,11 +134,13 @@ OCR·Vision 결과를 조립한 **핵심 데이터 모델**입니다. 프로젝�
 - Vision: `VISION_PROVIDER`로 교체 가능한 Provider가 visionSummary 공급 (기본 mock,
   실패 시 null 폴백) — [docs/architecture/vision.md](docs/architecture/vision.md)
 
-## AI 분석 (TASK-0204)
+## AI 분석 (TASK-0204 · TASK-0504에서 LLM 기반 엔진으로 교체)
 
-상품 이미지 + OCR 텍스트에서 구조화된 상품 정보(이름·카테고리·키워드·설명·속성·신뢰도)를
-추출합니다. Provider 교체 아키텍처는 [docs/architecture/analysis.md](docs/architecture/analysis.md) 참고
-(`ANALYSIS_PROVIDER=mock` 기본, 실제 AI 미연결 — Claude/OpenAI 연결 가이드 포함).
+상품 이미지의 OCR 텍스트 + Company Brain에서 구조화된 상품 정보(이름·카테고리·키워드·
+설명·속성·신뢰도)를 추출합니다. 공식 엔진은 **Prompt Engine(`product-analysis` 템플릿) +
+LLM Gateway + Company Brain**을 사용하는 `LlmAnalysisProvider`입니다 — 모델 선택은
+`LLM_PROVIDER` 환경 변수 하나로 관리(기본 mock, 실제 API 미호출).
+자세한 구조: [docs/architecture/analysis.md](docs/architecture/analysis.md)
 
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
@@ -222,7 +224,7 @@ SOP와 나란히 회사 지식을 축적합니다 — [docs/architecture/decisio
 
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
-| `GET` | `/prompt/templates` | 등록된 템플릿 목록 (현재: `content-generation`) |
+| `GET` | `/prompt/templates` | 등록된 템플릿 목록 (현재: `content-generation`, `product-analysis`) |
 
 ## LLM Gateway (TASK-0501)
 

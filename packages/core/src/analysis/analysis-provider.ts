@@ -21,6 +21,8 @@ export interface AnalysisProvider {
 export interface AnalysisInput {
   product: {
     id: string;
+    /** 소속 프로젝트 — Company Brain PROJECT 스코프 조회에 사용 (TASK-0504) */
+    projectId: string;
     name: string;
     description: string | null;
   };

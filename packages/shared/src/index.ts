@@ -498,12 +498,17 @@ export interface LlmMessageDto {
   content: string;
 }
 
+/** 기대 응답 형식 — "json"이면 Provider에 JSON 객체 하나만 출력하도록 요구한다 */
+export type LlmResponseFormat = "text" | "json";
+
 export interface LlmCompleteRequest {
   messages: LlmMessageDto[];
   /** Provider 기본 모델을 덮어쓸 모델 ID (선택) */
   model?: string;
   /** 최대 출력 토큰 (선택, Provider 기본값 사용) */
   maxTokens?: number;
+  /** 기대 응답 형식 (선택, 기본 "text") — 구조화 출력이 필요한 기능이 사용 */
+  responseFormat?: LlmResponseFormat;
 }
 
 export interface LlmUsageDto {
