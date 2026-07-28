@@ -5,27 +5,27 @@
 
 ## 결정 대기
 
-### 30. TASK-0704 "Publishing Web UI & Audit History" 세부 해석 확인
-- 현황: 지시된 4개 구성 요소 + Playwright를 다음과 같이 구현했다:
-  - **Audit History**: `content_status_history` 테이블 — 전이 1건당
-    1레코드(from→to·시각), **전이와 한 트랜잭션** 기록,
-    `GET …/contents/:id/history`(최신순). 화면에 감사 이력 목록 표시
-  - **상태 변경 UI**: 가능한 전이만 버튼 노출(@acos/core
-    `allowedTransitions` — API 검증과 규칙 원천 단일화), 실패 오류 표시,
-    ARCHIVED는 "종결됨" 표기
-  - **Status Badge**: 상태별 색상 고정 (DRAFT 황·REVIEW 청·PUBLISHED 녹·
-    ARCHIVED 회)
-  - **PublishedAt**: UTC 표기, 최초 발행 시점 보존(승인 ② 반영 —
-    재발행에도 불변 코드 반영)
-  - **Playwright**: 발행 e2e 2종(전 구간·되돌리기) — 루트 pnpm test 게이트
-    포함 (웹 e2e 총 6종)
-- 하지 않은 것(스펙 없음): 감사 이력의 actor(수행자) 기록 — 인증/권한이
-  없어 기록 불가, 콘텐츠 생성 이벤트 기록(전이만 기록), 발행 UI의 별도
-  페이지 분리(프로젝트 상세에 통합)
-- 질문: ① 감사 이력 범위(전이만·actor 없음)가 현 단계에 적절한지
-  (actor는 인증 도입 시 확장) ② 발행 UI의 프로젝트 상세 통합 위치가
-  적절한지 ③ Sprint 7 예고분이 모두 완료된 상태 — Sprint 종료 여부와
-  다음 TASK 지정 요청.
+### 31. TASK-0801 "Authentication & Authorization Foundation" 세부 해석 확인
+- 현황: 지시 5요소를 다음과 같이 구현했다:
+  - **User Entity**: email 유니크·역할 3종(ADMIN/EDITOR/VIEWER), 관리자
+    부트스트랩(사용자 0명 시 AUTH_ADMIN_* 로 생성), 사용자 생성 API는
+    ADMIN 전용
+  - **Session**: DB 저장형 256비트 Bearer 토큰(기본 7일) — 로그아웃·만료 시
+    즉시 무효화(JWT 미사용). 비밀번호는 Node scrypt(외부 의존성 없음)
+  - **RBAC**: AuthGuard + @RequireRole — 역할 계층 비교(ADMIN>EDITOR>VIEWER)
+  - **Actor Audit**: 발행 전이가 EDITOR 이상 인증 필수가 되고 수행자
+    이메일이 감사 이력 actor에 기록됨(기존 이력 null 보존) — 0704 승인 ①의
+    "인증 도입 이후 추가" 이행
+  - **Login UI**: /login(localStorage 토큰·오류 표시·로그아웃) +
+    Playwright 3종(공식 게이트 준수)
+  - **적용 범위(해석)**: Foundation 단계로 **발행 전이·사용자 관리에만
+    강제** — 기존 파이프라인/조회 API는 무변경(SOP·스모크·기존 테스트 호환)
+- 하지 않은 것(스펙 없음): 인증 전면 강제(쓰기 API 전체), 사용자 관리 UI,
+  비밀번호 변경/재설정, httpOnly 쿠키 세션(도메인 구성 필요), 토큰 갱신
+- 질문: ① 적용 범위(발행 전이·사용자 관리 우선)가 의도에 부합하는지 —
+  **전면 강제 범위/시점** 지정 요청 ② 역할 3종·역할별 권한(전이 EDITOR+,
+  사용자 관리 ADMIN)이 적절한지 ③ localStorage 토큰 보관(개발 단계) 유지
+  여부 — httpOnly 쿠키 전환 시점 ④ 다음 TASK 지정 요청.
 
 ### 2. tesseract Provider 유지 여부
 - 현황: OCR 기본 Provider는 mock이며, 로컬 오프라인 엔진(tesseract.js)이
@@ -48,6 +48,14 @@
 - 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
 
 ## 결정됨
+
+### 30. TASK-0704 해석 확인 → 승인 + Audit 표준 확정 + Sprint 7 종료 (2026-07-28)
+- CTO 결정: ① **Audit History는 From/To/Timestamp만 기록하는 현 구조를
+  공식 표준으로 유지 — Actor는 인증 시스템 도입 이후 추가**
+  ② **Publishing UI는 프로젝트 상세 화면에 유지** ③ **Sprint 7 공식 종료**
+  ④ Sprint 8 시작 — TASK-0801(Authentication & Authorization Foundation)
+  지시됨.
+- 반영(`400b4ae`): 인증 도입과 함께 Actor Audit 이행 (#31 참고).
 
 ### 29. TASK-0703 해석 확인 → 승인 + 발행 표준 확정 (2026-07-28)
 - CTO 결정: ① **발행 상태 전이를 공식 표준으로 유지** — DRAFT→REVIEW,
