@@ -193,22 +193,28 @@ READY 상태의 Product Object를 단일 입력으로 상세페이지(Markdown)�
 운영: **실제 Provider 스모크 테스트 (TASK-0703)** — `node scripts/real-provider-smoke.mjs`
 (운영/스테이징 실키 환경 절차: [docs/operations/real-provider-smoke.md](docs/operations/real-provider-smoke.md))
 
-## 인증/권한 (TASK-0801 Foundation · TASK-0802 전면 쓰기 보호)
+## 인증/권한 (TASK-0801 Foundation · 0802 전면 쓰기 보호 · 0803 비밀번호/운영 보안)
 
-User Entity(역할 ADMIN/EDITOR/VIEWER) · DB 세션(Bearer, 7일) · RBAC ·
-Actor Audit · **Login UI**(`/login`) · **사용자 관리 UI**(`/admin/users`) —
-[docs/architecture/auth.md](docs/architecture/auth.md)
+User Entity(역할 ADMIN/EDITOR/VIEWER) · DB 세션(Bearer+httpOnly 쿠키, 7일) ·
+RBAC · Actor Audit · **Login UI**(`/login`) · **사용자 관리 UI**(`/admin/users`) ·
+**내 계정**(`/account`) — [docs/architecture/auth.md](docs/architecture/auth.md)
 
 | 메서드 | 경로 | 보호 |
 | --- | --- | --- |
-| `POST` | `/auth/login` | 공개 — `{ email, password }` → 세션 토큰 |
+| `POST` | `/auth/login` | 공개 — `{ email, password }` → 세션 토큰 + httpOnly 쿠키 |
 | `POST` | `/auth/logout` · `GET /auth/me` | 인증 |
-| `GET/POST` | `/auth/users` · `PATCH /auth/users/:id` · `GET /auth/audit` | **ADMIN** — 목록/생성/역할 변경/비활성화 + 감사 로그 |
+| `PATCH` | `/auth/password` | 인증(모든 역할) — 본인 비밀번호 변경, 다른 세션 폐기 |
+| `GET/POST` | `/auth/users` · `PATCH /auth/users/:id` · `POST /auth/users/:id/password-reset` · `GET /auth/audit` | **ADMIN** — 목록/생성/역할 변경/비활성화/비밀번호 재설정 + 감사 로그 |
 
 - **모든 쓰기 API(POST/PATCH/PUT/DELETE)는 EDITOR 이상 인증 필요** (TASK-0802,
-  전역 가드). 예외: 로그인·Company Brain 조회·READY 검증(읽기 성격 @Public).
-  조회 GET은 비보호(CTO 결정)
-- 발행 전이 수행자는 감사 이력 actor에, 사용자 관리는 user_audit_log에 기록
+  전역 가드). 예외: 로그인·Company Brain 조회·READY 검증(읽기 성격 @Public —
+  CTO 확정, 이 3종만 유지). 조회 GET은 비보호(CTO 결정)
+- **`/llm/health`는 운영/스테이징(NODE_ENV 또는 `AUTH_PROTECT_HEALTH=1`)에서
+  EDITOR 이상** — 개발은 비보호 (CTO 결정 0802-③)
+- **쿠키 세션(운영)**: Bearer 우선, 없으면 `acos_session` httpOnly 쿠키 인식.
+  `AUTH_COOKIE_SECURE=1`(운영 필수) · `AUTH_COOKIE_SAMESITE=lax|strict|none`
+- 발행 전이 수행자는 감사 이력 actor에, 사용자 관리·비밀번호
+  변경/재설정은 user_audit_log에 기록
 - 최초 기동 시 사용자 0명이면 관리자 자동 생성 (`AUTH_ADMIN_EMAIL`/`AUTH_ADMIN_PASSWORD`,
   기본 admin@acos.local / admin1234 — 로컬 전용)
 - 스모크 스크립트는 `SMOKE_EMAIL`/`SMOKE_PASSWORD`로 로그인 후 실행

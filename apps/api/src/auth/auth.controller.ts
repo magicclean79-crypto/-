@@ -7,12 +7,17 @@ import {
   Patch,
   Post,
   Req,
+  Res,
   UseGuards,
 } from "@nestjs/common";
+import type { Response } from "express";
+import { buildSessionClearCookie, buildSessionCookie } from "@acos/core";
 import type {
+  ChangePasswordRequest,
   CreateUserRequest,
   LoginRequest,
   LoginResponseDto,
+  ResetPasswordRequest,
   UpdateUserRequest,
   UserAuditLogDto,
   UserDto,
@@ -20,29 +25,48 @@ import type {
 import { AuthGuard, RequireRole } from "./auth.guard";
 import type { AuthenticatedRequest } from "./auth.guard";
 import { AuthService } from "./auth.service";
+import { extractRequestToken, sessionCookieOptions } from "./session-config";
 import { Public } from "./write-protection.guard";
 
 @Controller("auth")
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
-  /** 로그인 — 세션 토큰 발급 (기본 7일) */
+  /**
+   * 로그인 — 세션 토큰 발급 (기본 7일).
+   * 응답 본문 토큰(개발 localStorage)과 함께 httpOnly 쿠키도 발급한다
+   * (TASK-0803 — 운영은 쿠키 사용: AUTH_COOKIE_SECURE/AUTH_COOKIE_SAMESITE)
+   */
   @Post("login")
   @HttpCode(200)
   @Public()
-  async login(@Body() body: LoginRequest): Promise<LoginResponseDto> {
-    return this.authService.login(body ?? ({} as LoginRequest));
+  async login(
+    @Body() body: LoginRequest,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<LoginResponseDto> {
+    const result = await this.authService.login(
+      body ?? ({} as LoginRequest),
+    );
+    response.setHeader(
+      "Set-Cookie",
+      buildSessionCookie(result.token, sessionCookieOptions()),
+    );
+    return result;
   }
 
-  /** 로그아웃 — 현재 토큰의 세션 폐기 (모든 역할 가능) */
+  /** 로그아웃 — 현재 토큰의 세션 폐기 + 쿠키 만료 (모든 역할 가능) */
   @Post("logout")
   @HttpCode(200)
   @UseGuards(AuthGuard)
   @RequireRole("VIEWER")
-  async logout(@Req() request: AuthenticatedRequest): Promise<{ ok: true }> {
-    const header = request.headers["authorization"] ?? "";
-    await this.authService.logout(
-      header.startsWith("Bearer ") ? header.slice(7) : "",
+  async logout(
+    @Req() request: AuthenticatedRequest,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<{ ok: true }> {
+    await this.authService.logout(extractRequestToken(request.headers));
+    response.setHeader(
+      "Set-Cookie",
+      buildSessionClearCookie(sessionCookieOptions()),
     );
     return { ok: true };
   }
@@ -52,6 +76,22 @@ export class AuthController {
   @UseGuards(AuthGuard)
   me(@Req() request: AuthenticatedRequest): UserDto {
     return request.user as UserDto;
+  }
+
+  /** 비밀번호 변경 — 본인 셀프 서비스, 모든 역할 (TASK-0803, 감사 기록) */
+  @Patch("password")
+  @UseGuards(AuthGuard)
+  @RequireRole("VIEWER")
+  async changePassword(
+    @Req() request: AuthenticatedRequest,
+    @Body() body?: ChangePasswordRequest,
+  ): Promise<{ ok: true }> {
+    await this.authService.changePassword(
+      (request.user as UserDto).id,
+      body ?? ({} as ChangePasswordRequest),
+      extractRequestToken(request.headers),
+    );
+    return { ok: true };
   }
 
   /** 사용자 목록 — ADMIN 전용 (TASK-0802) */
@@ -90,6 +130,24 @@ export class AuthController {
       body ?? {},
       request.user?.email ?? "unknown",
     );
+  }
+
+  /** 비밀번호 재설정 — ADMIN 전용 (TASK-0803, 대상 세션 전부 폐기·감사 기록) */
+  @Post("users/:id/password-reset")
+  @HttpCode(200)
+  @UseGuards(AuthGuard)
+  @RequireRole("ADMIN")
+  async resetPassword(
+    @Param("id") id: string,
+    @Req() request: AuthenticatedRequest,
+    @Body() body?: ResetPasswordRequest,
+  ): Promise<{ ok: true }> {
+    await this.authService.resetPassword(
+      id,
+      body?.newPassword ?? "",
+      request.user?.email ?? "unknown",
+    );
+    return { ok: true };
   }
 
   /** 사용자 관리 감사 로그 — ADMIN 전용 (TASK-0802, 최신순) */

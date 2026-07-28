@@ -76,6 +76,8 @@ export const USER_AUDIT_ACTIONS = [
   "ROLE_CHANGED",
   "USER_DISABLED",
   "USER_ENABLED",
+  "PASSWORD_CHANGED",
+  "PASSWORD_RESET",
 ] as const;
 
 export type UserAuditAction = (typeof USER_AUDIT_ACTIONS)[number];
@@ -106,6 +108,17 @@ export interface CreateUserRequest {
   name: string;
   password: string;
   role: UserRole;
+}
+
+/** 비밀번호 변경 (TASK-0803) — 본인 셀프 서비스, 모든 역할 가능 */
+export interface ChangePasswordRequest {
+  currentPassword: string;
+  newPassword: string;
+}
+
+/** 비밀번호 재설정 (TASK-0803) — ADMIN이 다른 사용자에게 새 비밀번호 지정 */
+export interface ResetPasswordRequest {
+  newPassword: string;
 }
 
 export interface GenerateContentRequest {

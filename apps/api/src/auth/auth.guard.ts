@@ -9,6 +9,7 @@ import { Reflector } from "@nestjs/core";
 import { roleAtLeast } from "@acos/core";
 import type { UserDto, UserRole } from "@acos/shared";
 import { AuthService } from "./auth.service";
+import { extractRequestToken } from "./session-config";
 
 export const REQUIRED_ROLE_KEY = "acos:required-role";
 
@@ -35,8 +36,8 @@ export class AuthGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
-    const header = request.headers["authorization"] ?? "";
-    const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+    // Bearer 헤더 우선, 없으면 httpOnly 쿠키 (TASK-0803 운영 쿠키 세션)
+    const token = extractRequestToken(request.headers);
 
     const user = await this.authService.validateToken(token);
     if (!user) {

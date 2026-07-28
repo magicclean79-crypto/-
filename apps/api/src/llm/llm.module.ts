@@ -1,5 +1,6 @@
 import { Logger, Module } from "@nestjs/common";
 import { MockLlmProvider, type LlmProvider } from "@acos/core";
+import { AuthModule } from "../auth/auth.module";
 import { ExecutionModule } from "../execution/execution.module";
 import { LLM_PROVIDER } from "./llm.constants";
 import { LlmController } from "./llm.controller";
@@ -67,7 +68,7 @@ export function createLlmProvider(): LlmProvider {
 }
 
 @Module({
-  imports: [ExecutionModule],
+  imports: [ExecutionModule, AuthModule],
   controllers: [LlmController],
   providers: [
     LlmService,

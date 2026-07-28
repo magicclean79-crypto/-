@@ -3,6 +3,7 @@ import { APP_GUARD } from "@nestjs/core";
 import { AuthController } from "./auth.controller";
 import { AuthGuard } from "./auth.guard";
 import { AuthService } from "./auth.service";
+import { HealthProtectionGuard } from "./health-protection.guard";
 import { WriteProtectionGuard } from "./write-protection.guard";
 
 /**
@@ -18,8 +19,9 @@ import { WriteProtectionGuard } from "./write-protection.guard";
   providers: [
     AuthService,
     AuthGuard,
+    HealthProtectionGuard,
     { provide: APP_GUARD, useClass: WriteProtectionGuard },
   ],
-  exports: [AuthService, AuthGuard],
+  exports: [AuthService, AuthGuard, HealthProtectionGuard],
 })
 export class AuthModule {}

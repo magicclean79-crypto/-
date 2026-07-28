@@ -2,6 +2,8 @@ import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { MockLlmProvider } from "@acos/core";
 import request from "supertest";
+import { AuthService } from "../auth/auth.service";
+import { HealthProtectionGuard } from "../auth/health-protection.guard";
 import { LLM_PROVIDER } from "./llm.constants";
 import { LlmController } from "./llm.controller";
 import { LlmService } from "./llm.service";
@@ -15,6 +17,19 @@ describe("LLM API (API Test)", () => {
       providers: [
         LlmService,
         { provide: LLM_PROVIDER, useValue: new MockLlmProvider() },
+        HealthProtectionGuard,
+        {
+          // 가드 검증용 스텁 — 실제 세션 조회는 auth.controller.spec에서 검증
+          provide: AuthService,
+          useValue: {
+            validateToken: async (token: string) =>
+              token === "tok-editor"
+                ? { id: "u-e", email: "e@acos.local", role: "EDITOR" }
+                : token === "tok-viewer"
+                  ? { id: "u-v", email: "v@acos.local", role: "VIEWER" }
+                  : null,
+          },
+        },
       ],
     }).compile();
 
@@ -24,6 +39,7 @@ describe("LLM API (API Test)", () => {
 
   afterAll(async () => {
     await app.close();
+    delete process.env.AUTH_PROTECT_HEALTH;
   });
 
   it("GET /llm — 선택된 Provider 확인 (기본 mock)", async () => {
@@ -55,5 +71,25 @@ describe("LLM API (API Test)", () => {
       .post("/llm/complete")
       .send({})
       .expect(400);
+  });
+
+  it("GET /llm/health — 개발 환경(기본)은 비보호 (TASK-0803)", async () => {
+    delete process.env.AUTH_PROTECT_HEALTH;
+    await request(app.getHttpServer()).get("/llm/health").expect(200);
+  });
+
+  it("GET /llm/health — 운영/스테이징(AUTH_PROTECT_HEALTH=1)은 EDITOR 이상 (CTO 결정 0802-③)", async () => {
+    process.env.AUTH_PROTECT_HEALTH = "1";
+    await request(app.getHttpServer()).get("/llm/health").expect(401);
+    await request(app.getHttpServer())
+      .get("/llm/health")
+      .set("Authorization", "Bearer tok-viewer")
+      .expect(403);
+    const response = await request(app.getHttpServer())
+      .get("/llm/health")
+      .set("Authorization", "Bearer tok-editor")
+      .expect(200);
+    expect(response.body.provider).toBe("mock");
+    delete process.env.AUTH_PROTECT_HEALTH;
   });
 });

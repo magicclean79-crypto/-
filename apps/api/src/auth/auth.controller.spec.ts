@@ -83,13 +83,21 @@ function createPrismaMock() {
         },
       ),
       deleteMany: jest.fn(
-        async ({ where }: { where: { token?: string; userId?: string } }) => {
-          if (where.token) {
+        async ({
+          where,
+        }: {
+          where: { token?: string | { not: string }; userId?: string };
+        }) => {
+          if (typeof where.token === "string") {
             sessions.delete(where.token);
+            return { count: 1 };
           }
+          // { userId, token: { not } } — 현재 세션만 남기고 폐기 (TASK-0803)
+          const keep =
+            typeof where.token === "object" ? where.token.not : null;
           if (where.userId) {
             for (const [token, session] of sessions) {
-              if (session.userId === where.userId) {
+              if (session.userId === where.userId && token !== keep) {
                 sessions.delete(token);
               }
             }
@@ -286,5 +294,160 @@ describe("Auth API (TASK-0801)", () => {
     expect(actions[1]).toBe("ROLE_CHANGED:editor@acos.local");
     expect(actions).toContain("USER_CREATED:editor@acos.local");
     expect(audit.body.audit[0].actor).toBe("admin@acos.local");
+  });
+
+  it("비밀번호 변경 — 본인 확인·다른 세션 폐기·감사 기록 (TASK-0803)", async () => {
+    const admin = (await login("admin@acos.local", "admin1234")).body;
+    await request(app.getHttpServer())
+      .post("/auth/users")
+      .set("Authorization", `Bearer ${admin.token}`)
+      .send({
+        email: "pw@acos.local",
+        name: "비번",
+        password: "pw-pass-11",
+        role: "EDITOR",
+      })
+      .expect(201);
+
+    const sessA = (await login("pw@acos.local", "pw-pass-11")).body;
+    const sessB = (await login("pw@acos.local", "pw-pass-11")).body;
+
+    const change = (body: object, token: string) =>
+      request(app.getHttpServer())
+        .patch("/auth/password")
+        .set("Authorization", `Bearer ${token}`)
+        .send(body);
+
+    // 현재 비밀번호 오류·짧은 새 비밀번호·동일 비밀번호 → 400
+    await change(
+      { currentPassword: "wrong", newPassword: "new-pass-11" },
+      sessA.token,
+    ).expect(400);
+    await change(
+      { currentPassword: "pw-pass-11", newPassword: "short" },
+      sessA.token,
+    ).expect(400);
+    await change(
+      { currentPassword: "pw-pass-11", newPassword: "pw-pass-11" },
+      sessA.token,
+    ).expect(400);
+    // 무토큰 401
+    await request(app.getHttpServer())
+      .patch("/auth/password")
+      .send({ currentPassword: "pw-pass-11", newPassword: "new-pass-11" })
+      .expect(401);
+
+    await change(
+      { currentPassword: "pw-pass-11", newPassword: "new-pass-11" },
+      sessA.token,
+    ).expect(200);
+
+    // 현재 세션은 유지, 다른 세션은 폐기
+    await request(app.getHttpServer())
+      .get("/auth/me")
+      .set("Authorization", `Bearer ${sessA.token}`)
+      .expect(200);
+    await request(app.getHttpServer())
+      .get("/auth/me")
+      .set("Authorization", `Bearer ${sessB.token}`)
+      .expect(401);
+
+    // 이전 비밀번호 401 · 새 비밀번호 200
+    expect((await login("pw@acos.local", "pw-pass-11")).status).toBe(401);
+    expect((await login("pw@acos.local", "new-pass-11")).status).toBe(200);
+
+    const audit = await request(app.getHttpServer())
+      .get("/auth/audit")
+      .set("Authorization", `Bearer ${admin.token}`)
+      .expect(200);
+    expect(audit.body.audit[0]).toMatchObject({
+      action: "PASSWORD_CHANGED",
+      actor: "pw@acos.local",
+      targetEmail: "pw@acos.local",
+    });
+  });
+
+  it("비밀번호 재설정 — ADMIN 전용·전 세션 폐기·자기 자신 불가 (TASK-0803)", async () => {
+    const admin = (await login("admin@acos.local", "admin1234")).body;
+    const list = await request(app.getHttpServer())
+      .get("/auth/users")
+      .set("Authorization", `Bearer ${admin.token}`)
+      .expect(200);
+    const target = list.body.users.find(
+      (item: { email: string }) => item.email === "pw@acos.local",
+    );
+    const self = list.body.users.find(
+      (item: { email: string }) => item.email === "admin@acos.local",
+    );
+
+    // EDITOR는 403 (ADMIN 전용)
+    const editor = (await login("pw@acos.local", "new-pass-11")).body;
+    await request(app.getHttpServer())
+      .post(`/auth/users/${target.id}/password-reset`)
+      .set("Authorization", `Bearer ${editor.token}`)
+      .send({ newPassword: "reset-pass-11" })
+      .expect(403);
+
+    // 짧은 비밀번호 400 · 자기 자신 400
+    await request(app.getHttpServer())
+      .post(`/auth/users/${target.id}/password-reset`)
+      .set("Authorization", `Bearer ${admin.token}`)
+      .send({ newPassword: "short" })
+      .expect(400);
+    await request(app.getHttpServer())
+      .post(`/auth/users/${self.id}/password-reset`)
+      .set("Authorization", `Bearer ${admin.token}`)
+      .send({ newPassword: "reset-pass-11" })
+      .expect(400);
+
+    // 재설정 성공 → 대상의 모든 세션 폐기 + 새 비밀번호로만 로그인
+    await request(app.getHttpServer())
+      .post(`/auth/users/${target.id}/password-reset`)
+      .set("Authorization", `Bearer ${admin.token}`)
+      .send({ newPassword: "reset-pass-11" })
+      .expect(200);
+    await request(app.getHttpServer())
+      .get("/auth/me")
+      .set("Authorization", `Bearer ${editor.token}`)
+      .expect(401);
+    expect((await login("pw@acos.local", "new-pass-11")).status).toBe(401);
+    expect((await login("pw@acos.local", "reset-pass-11")).status).toBe(200);
+
+    const audit = await request(app.getHttpServer())
+      .get("/auth/audit")
+      .set("Authorization", `Bearer ${admin.token}`)
+      .expect(200);
+    expect(audit.body.audit[0]).toMatchObject({
+      action: "PASSWORD_RESET",
+      actor: "admin@acos.local",
+      targetEmail: "pw@acos.local",
+    });
+  });
+
+  it("쿠키 세션 — httpOnly 발급·쿠키 인증·로그아웃 시 만료 (TASK-0803)", async () => {
+    const response = await login("admin@acos.local", "admin1234");
+    const setCookie = String(response.headers["set-cookie"]?.[0] ?? "");
+    expect(setCookie).toContain(`acos_session=${response.body.token}`);
+    expect(setCookie).toContain("HttpOnly");
+    expect(setCookie).toContain("SameSite=Lax"); // 기본값 (개발)
+
+    // Bearer 없이 쿠키만으로 인증
+    await request(app.getHttpServer())
+      .get("/auth/me")
+      .set("Cookie", `acos_session=${response.body.token}`)
+      .expect(200);
+
+    // 로그아웃 → 세션 폐기 + 쿠키 즉시 만료(Max-Age=0)
+    const logout = await request(app.getHttpServer())
+      .post("/auth/logout")
+      .set("Cookie", `acos_session=${response.body.token}`)
+      .expect(200);
+    expect(String(logout.headers["set-cookie"]?.[0] ?? "")).toContain(
+      "Max-Age=0",
+    );
+    await request(app.getHttpServer())
+      .get("/auth/me")
+      .set("Cookie", `acos_session=${response.body.token}`)
+      .expect(401);
   });
 });

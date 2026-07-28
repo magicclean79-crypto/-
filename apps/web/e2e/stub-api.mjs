@@ -48,6 +48,7 @@ const EMPTY_TOTALS = {
 // 사용자 관리 스텁 상태 (TASK-0802) — /__mode 전환 시 초기화
 let stubUsers;
 let stubAudit;
+let stubPassword; // 관리자 비밀번호 (TASK-0803 변경 흐름 검증용)
 function resetUsers() {
   stubUsers = [
     {
@@ -60,6 +61,7 @@ function resetUsers() {
     },
   ];
   stubAudit = [];
+  stubPassword = "admin1234";
 }
 resetUsers();
 
@@ -153,6 +155,48 @@ const server = http.createServer((req, res) => {
       });
       return;
     }
+    // 비밀번호 재설정 (TASK-0803) — ADMIN 전용, 자기 자신 불가
+    if (req.method === "POST" && url.pathname.endsWith("/password-reset")) {
+      const id = url.pathname.split("/").at(-2);
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        const { newPassword } = JSON.parse(body);
+        const user = stubUsers.find((item) => item.id === id);
+        if (!user) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ message: "사용자를 찾을 수 없습니다." }));
+          return;
+        }
+        if (user.email === "admin@acos.local") {
+          res.statusCode = 400;
+          res.end(
+            JSON.stringify({
+              message:
+                "자기 자신은 비밀번호 변경(현재 비밀번호 확인)을 사용해 주세요.",
+            }),
+          );
+          return;
+        }
+        if ((newPassword ?? "").length < 8) {
+          res.statusCode = 400;
+          res.end(
+            JSON.stringify({ message: "새 비밀번호는 최소 8자여야 합니다." }),
+          );
+          return;
+        }
+        stubAudit.push({
+          id: `a-${stubAudit.length + 1}`,
+          actor: "admin@acos.local",
+          action: "PASSWORD_RESET",
+          targetEmail: user.email,
+          detail: null,
+          createdAt: new Date().toISOString(),
+        });
+        res.end(JSON.stringify({ ok: true }));
+      });
+      return;
+    }
     if (req.method === "PATCH") {
       const id = url.pathname.split("/").pop();
       let body = "";
@@ -200,6 +244,47 @@ const server = http.createServer((req, res) => {
     }
   }
 
+  // ── 비밀번호 변경 (TASK-0803) — 본인 셀프 서비스 ──
+  if (req.method === "PATCH" && url.pathname === "/auth/password") {
+    res.setHeader("content-type", "application/json");
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = 401;
+      res.end(JSON.stringify({ message: "로그인이 필요합니다 (Authorization: Bearer <token>)." }));
+      return;
+    }
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      const { currentPassword, newPassword } = JSON.parse(body);
+      if (currentPassword !== stubPassword) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ message: "현재 비밀번호가 올바르지 않습니다." }));
+        return;
+      }
+      if ((newPassword ?? "").length < 8) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ message: "새 비밀번호는 최소 8자여야 합니다." }));
+        return;
+      }
+      if (newPassword === currentPassword) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ message: "새 비밀번호가 현재 비밀번호와 동일합니다." }));
+        return;
+      }
+      stubPassword = newPassword;
+      stubAudit.push({
+        id: `a-${stubAudit.length + 1}`,
+        actor: "admin@acos.local",
+        action: "PASSWORD_CHANGED",
+        targetEmail: "admin@acos.local",
+        detail: null,
+        createdAt: new Date().toISOString(),
+      });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    return;
+  }
+
   // ── 인증 (TASK-0801) ──
   if (req.method === "POST" && url.pathname === "/auth/login") {
     let body = "";
@@ -207,7 +292,7 @@ const server = http.createServer((req, res) => {
     req.on("end", () => {
       const { email, password } = JSON.parse(body);
       res.setHeader("content-type", "application/json");
-      if (email === "admin@acos.local" && password === "admin1234") {
+      if (email === "admin@acos.local" && password === stubPassword) {
         res.end(
           JSON.stringify({
             token: "stub-token",

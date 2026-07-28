@@ -15,6 +15,7 @@ import {
 } from "@acos/core";
 import { USER_ROLES } from "@acos/shared";
 import type {
+  ChangePasswordRequest,
   CreateUserRequest,
   LoginRequest,
   LoginResponseDto,
@@ -210,6 +211,82 @@ export class AuthService implements OnModuleInit {
       }
     }
     return toDto(updated);
+  }
+
+  /**
+   * 비밀번호 변경 (TASK-0803) — 본인 셀프 서비스, 모든 역할 가능.
+   * 현재 비밀번호 확인 후 변경하고, 현재 세션만 남기고 나머지 세션을
+   * 전부 폐기한다 (탈취된 다른 기기 세션 차단 — 운영 보안).
+   */
+  async changePassword(
+    userId: string,
+    request: ChangePasswordRequest,
+    currentToken: string,
+  ): Promise<void> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new UnauthorizedException("로그인이 필요합니다.");
+    }
+    if (
+      !request.currentPassword ||
+      !(await verifyPassword(request.currentPassword, user.passwordHash))
+    ) {
+      throw new BadRequestException("현재 비밀번호가 올바르지 않습니다.");
+    }
+    this.assertNewPassword(request.newPassword, request.currentPassword);
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash: await hashPassword(request.newPassword) },
+    });
+    await this.prisma.authSession.deleteMany({
+      where: { userId, token: { not: currentToken } },
+    });
+    await this.recordAudit("PASSWORD_CHANGED", user.email, user.email);
+  }
+
+  /**
+   * 비밀번호 재설정 (TASK-0803, ADMIN 전용) — 대상 사용자에게 새 비밀번호를
+   * 지정한다. 자기 자신은 불가(변경 기능 사용), 대상의 모든 세션을 폐기한다.
+   */
+  async resetPassword(
+    id: string,
+    newPassword: string,
+    actor: string,
+  ): Promise<void> {
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) {
+      throw new BadRequestException(`사용자를 찾을 수 없습니다: ${id}`);
+    }
+    if (user.email === actor) {
+      throw new BadRequestException(
+        "자기 자신은 비밀번호 변경(현재 비밀번호 확인)을 사용해 주세요.",
+      );
+    }
+    this.assertNewPassword(newPassword);
+
+    await this.prisma.user.update({
+      where: { id },
+      data: { passwordHash: await hashPassword(newPassword) },
+    });
+    await this.prisma.authSession.deleteMany({ where: { userId: id } });
+    await this.recordAudit("PASSWORD_RESET", actor, user.email);
+  }
+
+  private assertNewPassword(
+    newPassword: string | undefined,
+    currentPassword?: string,
+  ): void {
+    if ((newPassword ?? "").length < PASSWORD_MIN_LENGTH) {
+      throw new BadRequestException(
+        `새 비밀번호는 최소 ${PASSWORD_MIN_LENGTH}자여야 합니다.`,
+      );
+    }
+    if (currentPassword !== undefined && newPassword === currentPassword) {
+      throw new BadRequestException(
+        "새 비밀번호가 현재 비밀번호와 동일합니다.",
+      );
+    }
   }
 
   /** 사용자 관리 감사 로그 (ADMIN 전용) — 최신순 */

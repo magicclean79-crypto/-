@@ -11,6 +11,7 @@ import type { UserRole } from "@acos/shared";
 import { REQUIRED_ROLE_KEY } from "./auth.guard";
 import type { AuthenticatedRequest } from "./auth.guard";
 import { AuthService } from "./auth.service";
+import { extractRequestToken } from "./session-config";
 
 export const PUBLIC_KEY = "acos:public";
 
@@ -53,9 +54,10 @@ export class WriteProtectionGuard implements CanActivate {
       return true;
     }
 
-    const header = request.headers["authorization"] ?? "";
-    const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-    const user = await this.authService.validateToken(token);
+    // Bearer 헤더 우선, 없으면 httpOnly 쿠키 (TASK-0803 운영 쿠키 세션)
+    const user = await this.authService.validateToken(
+      extractRequestToken(request.headers),
+    );
     if (!user) {
       throw new UnauthorizedException(
         "로그인이 필요합니다 (Authorization: Bearer <token>).",

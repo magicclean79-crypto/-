@@ -24,6 +24,9 @@ export default function AdminUsersPage() {
     password: "",
     role: "VIEWER" as UserRole,
   });
+  // 비밀번호 재설정 (TASK-0803) — 행별 인라인 입력
+  const [resetTarget, setResetTarget] = useState<string | null>(null);
+  const [resetValue, setResetValue] = useState("");
 
   const load = useCallback(async () => {
     if (!getAuthToken()) {
@@ -166,18 +169,63 @@ export default function AdminUsersPage() {
                         )}
                       </td>
                       <td className="py-1.5 pr-3">
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() =>
-                            void mutate(`/auth/users/${user.id}`, "PATCH", {
-                              disabled: !user.disabled,
-                            })
-                          }
-                          className="rounded-md border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                        >
-                          {user.disabled ? "활성화" : "비활성화"}
-                        </button>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() =>
+                              void mutate(`/auth/users/${user.id}`, "PATCH", {
+                                disabled: !user.disabled,
+                              })
+                            }
+                            className="rounded-md border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                          >
+                            {user.disabled ? "활성화" : "비활성화"}
+                          </button>
+                          {resetTarget === user.id ? (
+                            <>
+                              <input
+                                type="password"
+                                aria-label={`${user.email} 새 비밀번호`}
+                                placeholder="새 비밀번호 (8자+)"
+                                minLength={8}
+                                value={resetValue}
+                                onChange={(event) =>
+                                  setResetValue(event.target.value)
+                                }
+                                className="w-32 rounded-md border border-zinc-300 bg-transparent px-2 py-1 text-xs dark:border-zinc-700"
+                              />
+                              <button
+                                type="button"
+                                disabled={busy || resetValue.length < 8}
+                                onClick={async () => {
+                                  await mutate(
+                                    `/auth/users/${user.id}/password-reset`,
+                                    "POST",
+                                    { newPassword: resetValue },
+                                  );
+                                  setResetTarget(null);
+                                  setResetValue("");
+                                }}
+                                className="rounded-md bg-zinc-900 px-2 py-1 text-xs font-medium text-white disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
+                              >
+                                확인
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => {
+                                setResetTarget(user.id);
+                                setResetValue("");
+                              }}
+                              className="rounded-md border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                            >
+                              비밀번호 재설정
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
