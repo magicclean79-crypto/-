@@ -8,11 +8,12 @@
 
 ## 미완료 (스펙 확정, 구현 대기)
 
-- (없음 — TASK-0504 완료. CTO 리뷰/승인 대기 중이며 승인 전 다음 TASK를 시작하지 않는다)
+- (없음 — TASK-0505 완료. CTO 리뷰/승인 대기 중이며 승인 전 다음 TASK를 시작하지 않는다)
 
 ## 완료 — Sprint 5 (Goal: AI Execution)
 
-- [x] **TASK-0504 — Analysis Engine Integration** (`74e9fbb`): 구 MockAnalysisProvider를 LLM 기반 공식 엔진(LlmAnalysisProvider)으로 교체 — Prompt Engine("product-analysis" 템플릿, 규칙 기반 초안 JSON 포함) + LLM Gateway(responseFormat "json") + Company Brain(상품 이름 기준 PROJECT 스코프) 사용, 응답 엄격 파싱(실패 시 재시도→FAILED), AnalysisResult 모델·API·1:N 이력 변경 없음, ANALYSIS_PROVIDER 환경 변수 제거(LLM_PROVIDER로 일원화) — 해석 확인 CTO_REQUEST #19
+- [x] **TASK-0505 — Vision Multimodal Integration** (`d63a975`): 구 MockVisionProvider를 LLM 기반 멀티모달 공식 엔진(LlmVisionProvider)으로 교체 — Image Bytes(base64, 최대 5장) + Prompt Engine("vision-analysis" 템플릿) + LLM Gateway(images 멀티모달 확장 + 어댑터 3종 이미지 매핑) + Company Brain 사용, 응답 엄격 파싱(실패 시 재시도→null 폴백 유지), VisionSummary 모델·저장 위치 변경 없음, VISION_PROVIDER 환경 변수 제거(LLM_PROVIDER로 일원화) — 해석 확인 CTO_REQUEST #20
+- [x] **TASK-0504 — Analysis Engine Integration** (`74e9fbb`, CTO 승인 — Mock JSON Echo 공식 전략·responseFormat 유지·ANALYSIS_PROVIDER 제거 유지 확정): 구 MockAnalysisProvider를 LLM 기반 공식 엔진(LlmAnalysisProvider)으로 교체 — Prompt Engine("product-analysis" 템플릿, 규칙 기반 초안 JSON 포함) + LLM Gateway(responseFormat "json") + Company Brain(상품 이름 기준 PROJECT 스코프) 사용, 응답 엄격 파싱(실패 시 재시도→FAILED), AnalysisResult 모델·API·1:N 이력 변경 없음, ANALYSIS_PROVIDER 환경 변수 제거(LLM_PROVIDER로 일원화) — 해석 확인 CTO_REQUEST #19
 - [x] **TASK-0503 — Prompt Engine** (`9f44b87`): PromptTemplate+PromptEngine(@acos/core, 선언적 템플릿 레지스트리·결정적 렌더링), 상세페이지 프롬프트를 content-generation 템플릿으로 분리, 모든 AI 기능 공용 설계(등록→render→LLM Gateway), GET /prompt/templates — 0502 승인 결정 반영(웹 버튼 엔진 전환, 구 경로 Deprecated), 해석 확인 CTO_REQUEST #18
 - [x] **TASK-0502 — Content Generation Engine** (`e147aef`): READY ProductObject + Company Brain(지식/결정/설정/금지어) + LLM Gateway로 Markdown 상세페이지 생성 → Content 저장, POST /projects/:id/contents/generate (구 mock 경로는 보존) — 해석 확인 CTO_REQUEST #17
 - [x] **TASK-0501 — LLM Gateway Foundation** (`9a5a3e2`): LlmProvider Port + LlmGateway(검증·재시도, @acos/core) + MockLlmProvider 기본, Provider 어댑터 3종(OpenAI·Anthropic·Gemini, 공식 SDK), LLM_PROVIDER 환경변수 교체(키 미설정 시 mock 폴백), GET /llm · POST /llm/complete — 해석 확인 CTO_REQUEST #16

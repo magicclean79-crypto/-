@@ -5,29 +5,29 @@
 
 ## 결정 대기
 
-### 19. TASK-0504 "Analysis Engine Integration" 세부 해석 확인
-- 현황: 지시 사항(Prompt Engine/LLM Gateway/Company Brain으로 기존 Mock
-  Analysis 교체, AnalysisResult 모델 유지)을 다음과 같이 구현했다:
-  - **공식 엔진 = LlmAnalysisProvider** — 구 MockAnalysisProvider는 제거.
-    `product-analysis` 템플릿 렌더링 → LLM Gateway 호출(responseFormat
-    "json") → 응답 엄격 파싱(name 필수, 실패 시 재시도 후 FAILED)
-  - **Company Brain**: 상품 이름 질의·PROJECT 스코프 조회 — 0502 결정
-    (상품 제목 기준 검색)과 동일 기준을 분석에도 적용
-  - **초안(Draft) 설계**: 프롬프트에 규칙 기반 초안 JSON(OCR 첫 줄→이름,
-    category "미분류", confidence 0.3)을 포함해 "검증·보강"을 지시.
-    mock LLM은 json 모드에서 이 초안을 그대로 반환 — 키 없는 오프라인
-    환경에서도 전체 파이프라인이 결정적으로 동작
-  - **LlmRequest.responseFormat("text"|"json") 추가** — 구조화 출력 계약.
-    실제 어댑터 3종은 아직 프롬프트 지침으로만 강제(옵션 매핑은 실연결 시)
-  - **ANALYSIS_PROVIDER 환경 변수 제거** — 분석 모델 선택을 LLM Gateway의
-    LLM_PROVIDER 하나로 일원화
-  - AnalysisResult 모델·분석 API 3종·1:N 이력·apply 동작은 변경 없음.
-    새 실행은 provider `llm:<provider>`(예: llm:mock)로 기록, 구 mock 이력 보존
-- 하지 않은 것(스펙 없음): 이미지 바이트(Vision) 멀티모달 입력, Provider별
-  구조화 출력 옵션(json_schema) 매핑, 분석 결과의 Product Object 자동 반영
-- 질문: ① 초안 에코 방식의 mock 설계·responseFormat 추가·ANALYSIS_PROVIDER
-  제거가 의도에 부합하는지 ② Vision(이미지) 입력을 분석 프롬프트에 포함할
-  시점 ③ 다음 TASK 지정 요청.
+### 20. TASK-0505 "Vision Multimodal Integration" 세부 해석 확인
+- 현황: 지시 사항(Image Bytes/Prompt Engine/LLM Gateway/Company Brain으로
+  VisionResult 생성, 기존 모델 유지)을 다음과 같이 구현했다:
+  - **공식 엔진 = LlmVisionProvider** — 구 MockVisionProvider는 제거.
+    이미지 바이트를 base64로 LLM 요청에 첨부(**최대 5장**, 초과분은 raw에
+    기록) → `vision-analysis` 템플릿 렌더링 → LLM Gateway 호출 → 응답 엄격
+    파싱(labels 필수, 실패 시 재시도 후 **null 폴백** — 기존 graceful
+    degradation 유지)
+  - **LLM Gateway 멀티모달 확장**: `LlmRequest.images` 추가 + 어댑터 3종
+    이미지 매핑(Anthropic image block · OpenAI image_url · Gemini inlineData)
+    구현 — 단, API 키가 없어 실모델 호출은 미검증
+  - **Company Brain**: 프로젝트 이름 질의·PROJECT 스코프 (0504와 같은 결)
+  - **초안 설계**: 0504 승인된 Mock JSON Echo 전략을 동일 적용 — 초안은
+    OCR 첫 줄 기반(labels/suggestedTitle, category "미분류", confidence 0.3)
+  - **VISION_PROVIDER 환경 변수 제거** — LLM_PROVIDER 하나로 일원화 (0504
+    승인 결정 #3과 동일 원칙 적용)
+  - VisionSummary 모델·저장 위치(ProductObject.visionSummary)·API·null 폴백
+    구조는 변경 없음. 새 결과는 source `llm:<provider>`, 구 "mock" 이력 보존
+- 하지 않은 것(스펙 없음): 이미지 바이트 크기 상한/리사이즈 전처리,
+  Vision 실행 이력 별도 테이블(현행대로 PO 버전에 내장), 실모델 스모크 테스트
+- 질문: ① 이미지 첨부 상한 5장·초안 설계·VISION_PROVIDER 제거가 의도에
+  부합하는지 ② 이미지 용량 가드(크기 상한/리사이즈) 도입 여부
+  ③ 다음 TASK 지정 요청 (후보: 구 mock Generator 내부 통합 — 0502 승인 시 예고).
 
 ### 2. tesseract Provider 유지 여부
 - 현황: OCR 기본 Provider는 mock이며, 로컬 오프라인 엔진(tesseract.js)이
@@ -50,6 +50,15 @@
 - 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
 
 ## 결정됨
+
+### 19. TASK-0504 해석 확인 → 승인 + Mock 전략 확정 (2026-07-28)
+- CTO 결정: ① **Mock JSON Echo(초안 반환)를 공식 Mock 전략으로 유지**
+  ② **responseFormat(text/json) 유지** — 실제 Provider 연결 시 Provider별
+  구조화 출력으로 매핑 ③ **ANALYSIS_PROVIDER 제거 상태 유지** —
+  LLM_PROVIDER 하나만 사용 ④ Vision(이미지) 입력은 TASK-0505(Vision
+  Multimodal Integration)로 지시됨.
+- 반영(`d63a975`): 결정 사항 docs/architecture/llm.md에 명문화, Vision에
+  동일 Mock 전략 적용 (#20 참고).
 
 ### 18. TASK-0503 해석 확인 → 승인 + Code-first 확정 (2026-07-28)
 - CTO 결정: ① Prompt Template은 **Code-first 유지** — DB 관리 기능 미구현
