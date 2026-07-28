@@ -13,53 +13,47 @@
 
 | 항목 | 값 |
 | --- | --- |
-| 보고 기준 TASK | **TASK-0505 — Vision Multimodal Integration** |
+| 보고 기준 TASK | **TASK-0506 — Legacy Generator Integration** (+ TASK-0505 승인 결정 반영) |
 | 보고일 | 2026-07-28 |
-| 브랜치 / 기준 커밋 | `claude/ai-product-content-os-setup-jb5oai` / `d63a975` |
-| 핵심 성과 | Vision이 **LLM 기반 멀티모달 공식 엔진**으로 교체 — LLM Gateway가 이미지 입력을 지원하게 되어 AI Execution 3계층이 텍스트+이미지를 모두 처리 |
-| 구현 중단 상태 | **TASK-0505 완료 후 즉시 중단** — CTO 승인 전 다음 TASK 미착수 |
-| 스펙 확인 필요 | 이미지 첨부 상한·초안 설계 등 → **CTO_REQUEST #20 확인 요청** |
+| 브랜치 / 기준 커밋 | `claude/ai-product-content-os-setup-jb5oai` / `574523a` |
+| 핵심 성과 | 상세페이지 **생성 코어 단일화** — 구 경로·공식 경로·SOP 전부 하나의 공식 엔진으로 생성 (API 계약 무변경) |
+| 구현 중단 상태 | **TASK-0506 완료 후 즉시 중단** — CTO 승인 전 다음 TASK 미착수 |
+| 스펙 확인 필요 | Wrapper 구현 방식·env 제거 등 → **CTO_REQUEST #21 확인 요청** |
 
 ## 2. 품질 게이트
 
 | 게이트 | 명령 | 결과 |
 | --- | --- | --- |
 | Build | `pnpm build` | ✅ 6/6 워크스페이스 성공 |
-| Test | `pnpm test` | ✅ 229/229 통과 (core 101 · api 128) — 이번 주기 +14 |
+| Test | `pnpm test` | ✅ 231/231 통과 (core 102 · api 129) — 이번 주기 +2 |
 | TypeScript | (빌드 포함) | ✅ 오류 0 |
 | ESLint | `pnpm lint` | ✅ 오류 0, 경고 0 |
 
 ## 3. 변경 사항 (이번 보고 주기)
 
-### TASK-0504 승인 결정 반영
+### TASK-0505 승인 결정 반영 (`574523a`에 포함)
 
-- Mock JSON Echo(프롬프트 초안 블록 반환)를 **공식 Mock 전략**으로 유지
-- `responseFormat`(text/json) 유지 — Provider별 구조화 출력 매핑은 실제
-  Provider 연결 시 적용 (docs/architecture/llm.md에 CTO 결정으로 명문화)
-- `ANALYSIS_PROVIDER` 제거 상태 유지 — `LLM_PROVIDER` 하나만 사용
+- **이미지 상한 환경변수화 (결정 ①)**: `VISION_MAX_IMAGES` 환경 변수로 조정
+  가능 (기본 5장 유지, 최소 1 보정) — .env.example·vision.md 갱신
+- Mock JSON Echo 공식 전략(②)·VISION_PROVIDER 제거 유지(③)는 현행 그대로 확정
+- 이미지 용량 제한·리사이즈(④)는 **실제 Provider 연결 전 구현**으로 백로그 기록
 
-### TASK-0505 — Vision Multimodal Integration (`d63a975`)
+### TASK-0506 — Legacy Generator Integration (`574523a`)
 
-- **공식 Vision 엔진 = `LlmVisionProvider`** (@acos/core, 구 MockVisionProvider
-  제거). CTO 지시대로 네 가지를 사용:
-  - ① **Image Bytes**: `getBytes()`로 원본을 읽어 base64로 LLM 요청에 첨부
-    (최대 5장 — 초과분은 raw.omittedImageCount 기록)
-  - ② **Prompt Engine**: 신규 `vision-analysis` 템플릿 — 프로젝트/OCR/
-    Company Brain 컨텍스트 + 규칙 기반 초안 JSON(0504와 동일 패턴)
-  - ③ **LLM Gateway**: `images` + `responseFormat: "json"` 호출
-  - ④ **Company Brain**: 프로젝트 이름 질의·PROJECT 스코프 조회
-- **LLM Gateway 멀티모달 확장**: `LlmRequest.images`(`{mimeType, base64}[]`)
-  추가 + 검증(image/* · base64 비어있지 않음). **어댑터 3종 이미지 매핑 구현**:
-  Anthropic image content block · OpenAI image_url(data URL) · Gemini
-  inlineData — 마지막 user 메시지에 첨부. mock LLM은 이미지를 해석하지 않고
-  개수만 raw에 기록(결정성 유지)
-- **유지된 것 (CTO 지시)**: `VisionSummary` 모델(source/labels/brand/category/
-  suggestedTitle/confidence)·저장 위치(ProductObject.visionSummary)·API·
-  **실패 시 null 폴백**(Vision 실패는 조립을 막지 않음) 모두 변경 없음.
-  새 결과는 source `llm:<provider>`(예: llm:mock), 기존 버전의 "mock" 이력 보존
-- `VISION_PROVIDER` 환경 변수 제거 — 모델 선택은 `LLM_PROVIDER` 하나 (0504
-  승인 결정과 동일 원칙)
-- DB 변경 없음. 문서: vision.md 재작성, llm.md/prompt.md/README/.env.example 갱신
+- **Wrapper 통합 (지시 사항)**: 신규 `EngineContentGenerator`(apps/api)가
+  Deprecated `ContentGenerator` Port를 구현하고 내부에서 공식 엔진을 호출 —
+  구 경로의 흐름(READY 검증 → generate → 저장)과 **API 계약(요청/응답/오류)은
+  변경 없음**, DI(CONTENT_GENERATOR 토큰)만 Wrapper로 교체
+- **생성 코어 공용화**: `ContentGenerationService.generateMarkdown()` 분리 —
+  Company Brain 조회 + `content-generation` 템플릿 렌더링 + LLM Gateway 호출을
+  저장 없이 수행. 공식 경로 `generate()`와 Wrapper가 같은 코어 사용 →
+  **구 경로와 공식 경로가 같은 PO에 대해 동일한 본문을 생성** (테스트로 검증)
+- **부수 통합**: SOP `product-content`의 상세페이지 단계(ContentsService 사용)도
+  자동으로 공식 엔진 경유 — 시스템 내 모든 생성 진입점이 단일 코어로 수렴
+- **보존 (지시 사항)**: 구 `MockContentGenerator`는 @deprecated로 보존(미연결),
+  ContentGenerator Port·구 라우트 유지. `CONTENT_GENERATOR` 환경 변수는 제거 —
+  모델 선택은 `LLM_PROVIDER` 하나 (0504·0505 승인 원칙 적용)
+- DB 변경 없음. 문서: content.md 재작성, content-generation.md/README/.env.example 갱신
 
 ### 누적 완료 TASK (Sprint 5)
 
@@ -69,7 +63,8 @@
 | TASK-0502 | Content Generation Engine — 승인·공식 엔진 확정 | `e147aef` |
 | TASK-0503 | Prompt Engine — 승인 (Code-first 확정) | `9f44b87` |
 | TASK-0504 | Analysis Engine Integration — 승인 (Mock Echo 공식 전략) | `74e9fbb` |
-| **TASK-0505** | **Vision Multimodal Integration** | **`d63a975`** |
+| TASK-0505 | Vision Multimodal Integration — 승인 (상한 env화 지시 반영) | `d63a975` |
+| **TASK-0506** | **Legacy Generator Integration** | **`574523a`** |
 
 (Sprint 1~4는 최종 승인·공식 종료 — 상세는 TASKS.md)
 
@@ -77,58 +72,54 @@
 
 | 위치 | 종류 | 수 | 결과 |
 | --- | --- | --- | --- |
-| `packages/core` | Unit — 기존 87 · **Vision 12 신규/개편** (LlmVisionProvider 6 · 초안/파서/템플릿 9 중 신규, 구 mock 3 대체) · **LLM 멀티모달 2** | 101 | ✅ |
-| `apps/api` | Service+API — 기존 128 유지 (Product Object 스펙을 신 엔진 기준 개편) | 128 | ✅ |
-| **합계** | | **229** | **전체 통과** |
+| `packages/core` | Unit — 기존 101 · **Vision maxImages 옵션 1** (MockContentGenerator 테스트는 보존) | 102 | ✅ |
+| `apps/api` | Service+API — 기존 128 · **경로 동일성(통합 검증) 1** (contents 스펙 Wrapper 기준 개편) | 129 | ✅ |
+| **합계** | | **231** | **전체 통과** |
 
 신규·개편 테스트가 검증하는 것:
-- LlmVisionProvider: mock LLM 경로 성공(source `llm:mock`), **이미지 바이트
-  →base64 첨부 확인**, 최대 5장 제한(초과분 미로드), Company Brain 로드·raw
-  반영, 파싱 불가 응답 reject
-- 초안/파서: OCR 첫 줄 → labels/제안 제목 규칙, labels 누락 오류, 필드 보정
-- LLM Gateway: images 검증(mimeType/base64), mock의 imageCount 기록
-- ProductObjectService: 신 엔진 주입 후 조립·버전 이력·**실패 시 null 폴백 +
-  제목 폴백** 기존 테스트 전부 통과 (구조 불변)
+- **구 경로 = 공식 경로 본문 동일성** — 같은 READY PO에 대해 두 경로가 같은
+  title/body 생성 (생성 코어 단일화의 직접 증명)
+- 구 경로 API 계약 유지 + **Wrapper가 공식 엔진(generateMarkdown)을 정확한
+  입력(프로젝트/PO 스냅샷/OCR 텍스트)으로 호출**하는지
+- READY 규칙·버전 지정·404/400 등 구 경로 기존 계약 전부 통과 (동작 불변)
+- Vision maxImages 옵션(환경변수 주입 지점) 동작
 
 라이브 검증 (실 PostgreSQL + S3 mock + mock LLM):
-- 조립 실행 → visionSummary `{source: "llm:mock", labels: [...], suggestedTitle:
-  OCR 첫 줄, ...}` 저장 확인 — **실제 이미지 바이트를 스토리지에서 읽어 첨부**
-- 스토리지 중단 상태에서 실행 → Vision 3회 재시도 후 **null 폴백으로 조립 성공**
-  (graceful degradation 실증)
-- 회귀: `GET /prompt/templates` 3건 · 분석(llm:mock SUCCESS) · READY 전이 200 ·
-  상세페이지 생성 201 전부 정상
+- 구 경로 `POST …/contents` → 201, **본문이 공식 엔진 출력과 완전 동일** (동일
+  PO 기준 문자열 비교)
+- 공식 경로 `POST …/contents/generate` → 201 정상
+- **SOP 실행** `POST …/sop-runs` → 4단계(OCR→조립→READY→상세페이지) 전부 DONE —
+  상세페이지 단계가 공식 엔진 경유로 정상 동작
+- 회귀: 콘텐츠 목록/단건 200 · 조립·분석 경로 정상
 
 ## 5. 아키텍처 변경 및 현황
 
-**이번 주기 변경 — AI Execution 계층의 멀티모달 완성**:
+**이번 주기 변경 — 생성 진입점의 단일 코어 수렴 (Sprint 5 예고분 완결)**:
 
 ```
-AI 기능
- ├─ Content Generation (0502) ─┐
- ├─ Analysis (0504)           ├→ Prompt Engine (0503) : 템플릿 3종
- └─ Vision (0505) ← 교체 완료  ┤→ LLM Gateway (0501)   : responseFormat + images ← 확장
-                              └→ Company Brain (S4)   : 컨텍스트 원천
+POST …/contents/generate (공식) ──┐
+POST …/contents (구, Deprecated) ─┤→ ContentGenerationService.generateMarkdown()
+   └─ EngineContentGenerator      │     = Company Brain + Prompt Engine + LLM Gateway
+SOP product-content "content" ────┘        (생성 코어 하나)
 ```
 
-① 세 번째 AI 기능이 같은 3계층으로 합류 — 공용 설계가 **텍스트·구조화 출력·
-이미지 입력** 전 유형에서 실증됨. ② LLM Gateway가 멀티모달 게이트웨이로 확장:
-이미지 매핑은 어댑터에 캡슐화되어 기능 코드는 Provider를 모름. ③ 파이프라인
-전 단계(OCR 제외)가 LLM 기반 공식 엔진: Vision→Analysis→Content 모두
-`LLM_PROVIDER` 하나로 모델 교체. ④ mock 전략 통일: 초안 에코(0504 승인)를
-Vision에도 적용.
+① 0502 승인 시 예고된 "구 경로 내부 통합"이 완결 — 이제 어떤 진입점으로
+생성해도 같은 규칙(Company Brain 금지어·지식 반영)이 적용됨. ② Port/Adapter
+원칙 유지: 구 Port는 그대로, Adapter만 mock→Wrapper 교체 (호출자 무수정).
+③ 환경 변수 표면 축소 완료: AI 실행 관련 선택은 `LLM_PROVIDER` 하나
+(OCR 제외 — OCR_PROVIDER는 별도, CTO_REQUEST #2 대기).
 
-**유지되는 핵심 결정**: Port/Adapter 계층 · mock 기본 원칙 · 이력 보존 모델 · Advisory 검증 · Vision null 폴백
+**유지되는 핵심 결정**: Port/Adapter 계층 · mock 기본 원칙(Mock Echo 공식 전략) · 이력 보존 모델 · Advisory 검증 · Vision null 폴백
 
 **현황**: 모노레포(web·api·core/shared/agents/ui), 마이그레이션 15건(변경 없음), drift 없음
 
 ## 6. 데이터 모델
 
-(TASK-0505는 스키마 변경 없음 — VisionSummary는 ProductObject.visionSummary(Json)에 저장, CTO 지시로 유지)
+(TASK-0506은 스키마 변경 없음 — 두 경로 모두 기존 Content 테이블에 동일하게 저장)
 
 ```
 Project ──< Product ──< AnalysisResult (llm:<llm>)
-        ──< ProductObject (visionSummary: source "llm:<llm>" — 구 "mock" 이력 보존)
-                └──▶ Content
+        ──< ProductObject (visionSummary: llm:<llm>) ──▶ Content (모든 생성 경로 공용 저장)
         ──< SopRun · Decision · ProjectMemory
 Memory · Knowledge — Company Brain (생성·분석·Vision 공용 컨텍스트 원천)
 ```
@@ -138,30 +129,31 @@ Memory · Knowledge — Company Brain (생성·분석·Vision 공용 컨텍스�
 | 영역 | 엔드포인트 |
 | --- | --- |
 | 기존 전체 | (유지 — 이전 보고 참조) |
-| Product Object | `POST /projects/:id/product-object` (조립 — **내부 Vision 엔진만 교체, 계약 변경 없음**) 외 3종 유지 |
-| AI 분석 | `POST /products/:id/analysis` 외 2종 — 변경 없음 |
-| 상세페이지 생성 | `POST /projects/:id/contents/generate` (공식) · `POST …/contents` (⚠️ Deprecated) |
-| LLM Gateway | `GET /llm` · `POST /llm/complete` (개발용 — responseFormat·images 지원) |
-| Prompt Engine | `GET /prompt/templates` — `content-generation` · `product-analysis` · **`vision-analysis`** |
+| 상세페이지 생성 | `POST /projects/:id/contents/generate` (**공식**) · `POST …/contents` (⚠️ Deprecated — **계약 동일, 내부는 공식 엔진**) |
+| 콘텐츠 조회 | `GET …/contents` · `GET …/contents/:contentId` — 변경 없음 |
+| LLM Gateway | `GET /llm` · `POST /llm/complete` (개발용) |
+| Prompt Engine | `GET /prompt/templates` — 템플릿 3종 |
 
-웹: `/` · `/upload` · `/products`(+상세) · `/projects`(목록/파이프라인) — 변경 없음
+웹: `/` · `/upload` · `/products`(+상세) · `/projects`(목록/파이프라인 — 버튼은 공식 경로 사용) — 변경 없음
 
 ## 8. 리스크·기술 부채
 
-1. **0505 해석 미확인** — 이미지 5장 상한·초안 설계·VISION_PROVIDER 제거 등
-   (CTO_REQUEST #20)
-2. **실모델 멀티모달 미검증** — 어댑터 3종 이미지 매핑은 구현·단위 검증됐으나
-   API 키가 없어 실호출 미검증 (키 확보 시 스모크 테스트 필요)
-3. **실모델 구조화 출력 매핑 대기** — CTO 결정대로 실제 Provider 연결 시 적용
-4. **이미지 용량 가드 부재** — 장수 상한(5장)만 있고 바이트 크기 상한은 없음
-   (대용량 이미지 시 토큰/요청 한도 초과 가능)
-5. **구 mock 경로 통합 대기 · 생성물 사후 검증 부재 · 인증/권한 없음** — 이전 보고와 동일
+1. **0506 해석 미확인** — Wrapper 위치(apps/api)·CONTENT_GENERATOR env 제거·
+   mock Generator 보존 범위 (CTO_REQUEST #21)
+2. **구 경로 제거 시점 미정** — 통합은 완료됐으나 Deprecated 라우트·Port·mock
+   구현의 최종 제거 일정은 CTO 결정 대기
+3. **실모델 미검증** — 멀티모달·구조화 출력 매핑 포함, API 키 확보 시 스모크
+   테스트 필요 (구조화 출력 매핑은 실연결 시 — CTO 결정)
+4. **이미지 용량 제한·리사이즈** — CTO 결정대로 실제 Provider 연결 전 구현 예정
+5. **생성물 사후 검증 부재 · 인증/권한 없음** — 이전 보고와 동일
 
 ## 9. 다음 권장 사항 (Sprint 5 후속 후보)
 
-1. **CTO_REQUEST #20 확인** — TASK-0505 해석 확인 및 다음 지시
-2. **구 mock Generator 내부 통합** — CTO 예고 사항: POST /contents가 내부적으로
-   공식 엔진 호출 (Sprint 5 예고분 중 미지시 항목)
-3. **실모델 스모크 테스트** — API 키 확보 시 멀티모달 + 구조화 출력 매핑 검증
-4. **이미지 전처리 가드** — 크기 상한·리사이즈(대용량 업로드 대비)
-5. **Execution 도메인** — LLM 호출 이력·비용 (CTO 결정 사항의 후속 스펙)
+1. **CTO_REQUEST #21 확인** — TASK-0506 해석 확인 및 다음 지시
+2. **Sprint 5 종료 검토** — 예고된 백로그(0501~0506) 전부 구현 완료 상태.
+   Sprint 회고/종료 선언 또는 잔여 지시 요청
+3. **Execution 도메인** — LLM 호출 이력·비용 (CTO 결정 사항의 후속 스펙 —
+   이제 모든 호출이 LlmService 한 지점을 지나므로 계측 지점이 명확)
+4. **실모델 연결 준비** — 이미지 용량 가드 + 구조화 출력 매핑 + 스모크 테스트
+   (API 키 스펙 필요, CTO_REQUEST #6)
+5. **Content 발행 파이프라인** — DRAFT → REVIEW → PUBLISHED (제안 백로그)

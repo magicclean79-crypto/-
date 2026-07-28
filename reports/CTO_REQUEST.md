@@ -5,29 +5,26 @@
 
 ## 결정 대기
 
-### 20. TASK-0505 "Vision Multimodal Integration" 세부 해석 확인
-- 현황: 지시 사항(Image Bytes/Prompt Engine/LLM Gateway/Company Brain으로
-  VisionResult 생성, 기존 모델 유지)을 다음과 같이 구현했다:
-  - **공식 엔진 = LlmVisionProvider** — 구 MockVisionProvider는 제거.
-    이미지 바이트를 base64로 LLM 요청에 첨부(**최대 5장**, 초과분은 raw에
-    기록) → `vision-analysis` 템플릿 렌더링 → LLM Gateway 호출 → 응답 엄격
-    파싱(labels 필수, 실패 시 재시도 후 **null 폴백** — 기존 graceful
-    degradation 유지)
-  - **LLM Gateway 멀티모달 확장**: `LlmRequest.images` 추가 + 어댑터 3종
-    이미지 매핑(Anthropic image block · OpenAI image_url · Gemini inlineData)
-    구현 — 단, API 키가 없어 실모델 호출은 미검증
-  - **Company Brain**: 프로젝트 이름 질의·PROJECT 스코프 (0504와 같은 결)
-  - **초안 설계**: 0504 승인된 Mock JSON Echo 전략을 동일 적용 — 초안은
-    OCR 첫 줄 기반(labels/suggestedTitle, category "미분류", confidence 0.3)
-  - **VISION_PROVIDER 환경 변수 제거** — LLM_PROVIDER 하나로 일원화 (0504
-    승인 결정 #3과 동일 원칙 적용)
-  - VisionSummary 모델·저장 위치(ProductObject.visionSummary)·API·null 폴백
-    구조는 변경 없음. 새 결과는 source `llm:<provider>`, 구 "mock" 이력 보존
-- 하지 않은 것(스펙 없음): 이미지 바이트 크기 상한/리사이즈 전처리,
-  Vision 실행 이력 별도 테이블(현행대로 PO 버전에 내장), 실모델 스모크 테스트
-- 질문: ① 이미지 첨부 상한 5장·초안 설계·VISION_PROVIDER 제거가 의도에
-  부합하는지 ② 이미지 용량 가드(크기 상한/리사이즈) 도입 여부
-  ③ 다음 TASK 지정 요청 (후보: 구 mock Generator 내부 통합 — 0502 승인 시 예고).
+### 21. TASK-0506 "Legacy Generator Integration" 세부 해석 확인
+- 현황: 지시 사항(Deprecated Generator 제거 금지, Wrapper로 공식 엔진 호출,
+  API 계약 유지·내부만 통합)을 다음과 같이 구현했다:
+  - **`EngineContentGenerator`(Wrapper, apps/api)** — 구 `ContentGenerator`
+    Port를 구현하고 내부에서 공식 엔진의 생성 코어를 호출. 구 경로의 흐름
+    (READY 검증 → generate → 저장)·요청/응답/오류 계약은 변경 없음
+  - **생성 코어 공용화**: `ContentGenerationService.generateMarkdown()`
+    (저장 없는 Company Brain+렌더링+LLM 호출) 분리 — 공식 경로와 Wrapper가
+    공용. 같은 PO에 대해 두 경로의 본문이 동일함을 테스트·라이브로 검증
+  - **SOP 상세페이지 단계도 자동 통합** — ContentsService를 쓰는 SOP
+    product-content가 공식 엔진을 경유하게 됨 (라이브 4단계 DONE 확인)
+  - **CONTENT_GENERATOR 환경 변수 제거** — LLM_PROVIDER 하나로 일원화
+    (0504·0505 승인 원칙 적용). 구 `MockContentGenerator`는 지시대로
+    @deprecated 보존(어디에도 연결되지 않음, core 테스트 유지)
+  - TASK-0505 승인 결정 ① 반영: `VISION_MAX_IMAGES` 환경 변수화 (기본 5)
+- 하지 않은 것(스펙 없음): 구 라우트/Port/mock 구현의 최종 제거,
+  웹 UI 변경(웹은 이미 공식 경로 사용)
+- 질문: ① Wrapper를 apps/api에 둔 구조·CONTENT_GENERATOR env 제거가 의도에
+  부합하는지 ② 구 경로(라우트·Port·mock)의 최종 제거 시점 ③ Sprint 5 예고
+  백로그가 모두 완료된 상태 — Sprint 종료 여부와 다음 TASK 지정 요청.
 
 ### 2. tesseract Provider 유지 여부
 - 현황: OCR 기본 Provider는 mock이며, 로컬 오프라인 엔진(tesseract.js)이
@@ -50,6 +47,14 @@
 - 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
 
 ## 결정됨
+
+### 20. TASK-0505 해석 확인 → 승인 + 상한 환경변수화 지시 (2026-07-28)
+- CTO 결정: ① **최대 이미지 수 제한 유지 + 환경변수로 관리 가능하게 개선**
+  ② Mock JSON Echo 전략을 **Vision에도 공식 적용** ③ **VISION_PROVIDER 제거
+  상태 유지** — LLM_PROVIDER 하나만 사용 ④ **이미지 용량 제한·리사이즈는
+  실제 Provider 연결 전에 구현** ⑤ 구 Generator 통합은 TASK-0506으로 지시됨.
+- 반영(`574523a`): `VISION_MAX_IMAGES` 환경 변수화(기본 5장), ④는 실연결 전
+  구현 항목으로 백로그 기록.
 
 ### 19. TASK-0504 해석 확인 → 승인 + Mock 전략 확정 (2026-07-28)
 - CTO 결정: ① **Mock JSON Echo(초안 반환)를 공식 Mock 전략으로 유지**
