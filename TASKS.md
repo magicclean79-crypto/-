@@ -8,10 +8,11 @@
 
 ## 미완료 (스펙 확정, 구현 대기)
 
-- (없음 — TASK-0501 완료. CTO 리뷰/승인 대기 중이며 승인 전 다음 TASK를 시작하지 않는다)
+- (없음 — TASK-0502 완료. CTO 리뷰/승인 대기 중이며 승인 전 다음 TASK를 시작하지 않는다)
 
 ## 완료 — Sprint 5 (Goal: AI Execution)
 
+- [x] **TASK-0502 — Content Generation Engine** (`e147aef`): READY ProductObject + Company Brain(지식/결정/설정/금지어) + LLM Gateway로 Markdown 상세페이지 생성 → Content 저장, POST /projects/:id/contents/generate (구 mock 경로는 보존) — 해석 확인 CTO_REQUEST #17
 - [x] **TASK-0501 — LLM Gateway Foundation** (`9a5a3e2`): LlmProvider Port + LlmGateway(검증·재시도, @acos/core) + MockLlmProvider 기본, Provider 어댑터 3종(OpenAI·Anthropic·Gemini, 공식 SDK), LLM_PROVIDER 환경변수 교체(키 미설정 시 mock 폴백), GET /llm · POST /llm/complete — 해석 확인 CTO_REQUEST #16
 
 ## 완료 — Sprint 4 (Goal: Company Brain Integration — CTO 공식 종료, 2026-07-27)
