@@ -8,11 +8,12 @@
 
 ## 미완료 (스펙 확정, 구현 대기)
 
-- (없음 — TASK-0802 완료. CTO 리뷰/승인 대기 중이며 승인 전 다음 TASK를 시작하지 않는다)
+- (없음 — TASK-0803 완료. CTO 리뷰/승인 대기 중이며 승인 전 다음 TASK를 시작하지 않는다)
 
 ## 완료 — Sprint 8
 
-- [x] **TASK-0802 — User Management UI & Full Write Protection** (`3383e12`): 전면 쓰기 보호(WriteProtectionGuard APP_GUARD — 모든 POST/PATCH/PUT/DELETE 인증, 기본 EDITOR+, 읽기 성격 POST는 @Public, 조회 GET 비보호 유지) + 사용자 관리(목록/생성/역할 변경/비활성화 — 자기 자신 불가, 비활성화 시 세션 즉시 폐기) + Audit 확장(user_audit_log 4종 액션) + /admin/users UI(Playwright 3종, 웹 e2e 12종) + 웹 쓰기 호출 토큰 첨부·스모크 로그인 단계 — 해석 확인 CTO_REQUEST #32
+- [x] **TASK-0803 — Password Management & Operational Security** (`40bd4d7`): 비밀번호 변경(PATCH /auth/password — 본인 확인·현재 세션 외 폐기·감사 PASSWORD_CHANGED) + 비밀번호 재설정(POST /auth/users/:id/password-reset, ADMIN — 대상 전 세션 폐기·자기 자신 불가·감사 PASSWORD_RESET) + httpOnly/Secure/SameSite 세션 쿠키(로그인 발급·Bearer→쿠키 순 인식·로그아웃 만료, AUTH_COOKIE_SECURE/AUTH_COOKIE_SAMESITE, core 순수 로직) + /llm/health 운영/스테이징 EDITOR+ 보호(AUTH_PROTECT_HEALTH, CTO 결정 0802-③) + /account UI·/admin/users 재설정 인라인(Playwright 3종, 웹 e2e 15종) — 스키마 변경 없음, 해석 확인 CTO_REQUEST #33
+- [x] **TASK-0802 — User Management UI & Full Write Protection** (`3383e12`, CTO 승인 — @Public 예외 3종(Login·Company Brain Query·READY Validation)만 유지·새 쓰기 API 기본 보호, 권한 정책(Write EDITOR+/User Mgmt ADMIN/Logout VIEWER+/GET 유지) 확정, /llm/health는 운영/스테이징 EDITOR+ 인증(개발 비보호 가능)→0803에서 이행): 전면 쓰기 보호(WriteProtectionGuard APP_GUARD — 모든 POST/PATCH/PUT/DELETE 인증, 기본 EDITOR+, 읽기 성격 POST는 @Public, 조회 GET 비보호 유지) + 사용자 관리(목록/생성/역할 변경/비활성화 — 자기 자신 불가, 비활성화 시 세션 즉시 폐기) + Audit 확장(user_audit_log 4종 액션) + /admin/users UI(Playwright 3종, 웹 e2e 12종) + 웹 쓰기 호출 토큰 첨부·스모크 로그인 단계 — 해석 확인 CTO_REQUEST #32
 - [x] **TASK-0801 — Authentication & Authorization Foundation** (`400b4ae`, CTO 승인 — Foundation 적용 범위(발행 전이·사용자 관리) 확정→0802에서 전면 확대 지시, 역할 3종 공식 표준, 토큰은 개발 localStorage·운영 httpOnly/Secure/SameSite 쿠키 전환 확정): User Entity(역할 3종)+DB 세션(Bearer 256비트, 7일)+scrypt 해시(@acos/core)+RBAC(AuthGuard/@RequireRole 계층 비교 — 발행 전이 EDITOR+, 사용자 생성 ADMIN)+Actor Audit(content_status_history.actor에 수행자 이메일)+Login UI(/login, localStorage 토큰, Playwright 3종) — 관리자 부트스트랩(AUTH_ADMIN_*), 적용 범위는 발행 전이·사용자 관리(전면 강제는 CTO 결정 대기), 해석 확인 CTO_REQUEST #31
 
 ## 완료 — Sprint 7 (CTO 공식 종료, 2026-07-28)

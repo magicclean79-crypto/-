@@ -5,31 +5,34 @@
 
 ## 결정 대기
 
-### 32. TASK-0802 "User Management UI & Full Write Protection" 세부 해석 확인
-- 현황: 지시 항목(User List · User Create · Role Change · User Disable ·
-  모든 Write API 인증 · Role Guard 확장 · Audit 확장 · Playwright)을 다음과
-  같이 구현했다:
-  - **전면 쓰기 보호**: 전역 `WriteProtectionGuard`(APP_GUARD) — 모든
-    POST/PATCH/PUT/DELETE에 Bearer 인증 강제, 기본 요구 역할 **EDITOR**,
-    `@RequireRole`로 개별 지정(사용자 관리 ADMIN · 로그아웃 VIEWER)
-  - **@Public 예외 3종**(읽기 성격의 POST): 로그인 · Company Brain
-    조회(`POST /company-brain/query`) · READY 검증(판정만, 저장 없음)
-  - **조회 GET**: 0801 승인 ① 원칙에 따라 비보호 유지
-  - **사용자 관리(ADMIN)**: `GET /auth/users` 목록 ·
-    `PATCH /auth/users/:id` 역할 변경/비활성화 — **자기 자신 변경 불가
-    400**(마지막 관리자 강등/자기 비활성 방지), **비활성화 시 기존 세션
-    전부 즉시 폐기** + 로그인·토큰 검증 거부(활성화로 복구 가능)
-  - **Audit 확장**: `user_audit_log` — USER_CREATED/ROLE_CHANGED/
-    USER_DISABLED/USER_ENABLED (actor·대상·상세), `GET /auth/audit`(ADMIN)
-  - **Web UI**: `/admin/users` — 목록·생성 폼·역할 select·비활성화 토글·
-    감사 로그 + Playwright 3종. 웹의 모든 쓰기 호출(파이프라인·업로더)에
-    토큰 첨부, 스모크 스크립트에 로그인 단계 추가(9단계 리허설 PASS)
-- 하지 않은 것(스펙 없음): 비밀번호 변경/재설정(사용자 셀프 서비스),
-  운영 httpOnly 쿠키 전환(배포 도메인 확정 필요), 조회 GET 보호,
-  `/llm/health` 보호(GET이지만 실 Provider 호출 발생)
-- 질문: ① @Public 예외 3종·기본 EDITOR 정책이 의도에 부합하는지
-  ② `/llm/health`(GET이지만 실호출·Execution 기록 발생)를 비보호로 유지할지
-  ③ 비밀번호 변경/재설정 도입 여부·시점 ④ 다음 TASK 지정 요청.
+### 33. TASK-0803 "Password Management & Operational Security" 세부 해석 확인
+- 현황: 지시 항목(Password Change · Password Reset · httpOnly Cookie ·
+  Secure Cookie · SameSite · 운영 보안 강화 · Audit 확장)을 다음과 같이
+  구현했다:
+  - **Password Change**: `PATCH /auth/password` — 본인 셀프 서비스(모든
+    역할). 현재 비밀번호 확인·최소 8자·동일 거부. 성공 시 **현재 세션만
+    남기고 다른 세션 전부 폐기**. Web `/account` 신설
+  - **Password Reset**: `POST /auth/users/:id/password-reset` (ADMIN) —
+    **관리자가 새 비밀번호를 직접 지정**(메일 인프라 부재 전제), 대상의
+    모든 세션 즉시 폐기, 자기 자신 불가(400 — 변경 기능 사용).
+    `/admin/users` 행별 인라인 재설정 UI
+  - **쿠키 세션**: 로그인 시 응답 본문 토큰(개발 localStorage)과 **함께**
+    httpOnly `acos_session` 쿠키 발급. 서버는 Bearer 헤더 → 쿠키 순 인식,
+    로그아웃 시 즉시 만료. `AUTH_COOKIE_SECURE=1`(운영 필수) ·
+    `AUTH_COOKIE_SAMESITE=lax|strict|none`(none은 Secure 강제 — core에서
+    차단). CORS credentials 허용 — **운영 전환은 환경변수 설정만으로 완료**
+  - **운영 보안 강화**: `/llm/health` — NODE_ENV production/staging 또는
+    `AUTH_PROTECT_HEALTH=1`에서 EDITOR 이상 인증(0802 승인 ③ 이행),
+    개발 비보호 유지
+  - **Audit 확장**: PASSWORD_CHANGED(actor=본인) · PASSWORD_RESET
+    (actor=ADMIN) — 액션 6종, 스키마 변경 없음
+- 하지 않은 것(스펙 없음): 웹 UI의 쿠키 전용 전환(현재 개발 localStorage
+  병행 — 서버는 준비 완료), 이메일 링크형 셀프 재설정(메일 인프라 없음),
+  로그인 시도 제한(rate limit)·계정 잠금, 비밀번호 복잡도 규칙(길이 8자만)
+- 질문: ① 본문 토큰+httpOnly 쿠키 **병행 발급** 구조(개발 호환)와
+  운영에서 웹을 쿠키 전용으로 전환하는 시점 ② 재설정을 ADMIN 직접
+  지정 방식으로 확정할지(이메일 링크형은 메일 인프라 도입 후) ③ 로그인
+  시도 제한·비밀번호 복잡도 규칙 도입 여부 ④ 다음 TASK 지정 요청.
 
 ### 2. tesseract Provider 유지 여부
 - 현황: OCR 기본 Provider는 mock이며, 로컬 오프라인 엔진(tesseract.js)이
@@ -52,6 +55,16 @@
 - 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
 
 ## 결정됨
+
+### 32. TASK-0802 해석 확인 → 승인 + 보호 정책 확정 (2026-07-28)
+- CTO 결정: ① **@Public 예외는 Login · Company Brain Query · READY
+  Validation 3개만 유지** — 새로운 Write API는 기본적으로 보호
+  ② **기본 권한 정책 유지** — Write=EDITOR 이상 · User Management=ADMIN ·
+  Logout=VIEWER 이상 · GET=현재 정책 유지 ③ **/llm/health는 운영/스테이징
+  에서 EDITOR 이상 인증 요구** — 개발 환경은 비보호 유지 가능
+  ④ TASK-0803(Password Management & Operational Security) 지시됨.
+- 반영(`40bd4d7`): ③ health 보호 가드 구현(NODE_ENV/AUTH_PROTECT_HEALTH
+  판정), ①②는 현행 유지 확정 — 비밀번호/쿠키 구현 (#33 참고).
 
 ### 31. TASK-0801 해석 확인 → 승인 + 인증 정책 확정 (2026-07-28)
 - CTO 결정: ① **인증 적용 범위 현재 구조 유지** — Foundation 단계는 발행
