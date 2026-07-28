@@ -103,6 +103,17 @@ USD / 1M 토큰) 기준.
 
 기록용 쓰기 API는 없다 — 기록은 LlmService 내부에서만 일어난다.
 
+## Web Dashboard (TASK-0701, Sprint 7)
+
+`/executions` (apps/web) — Stats API + Timeline API를 소비하는 운영 화면:
+
+- **KPI 카드 4종**: 호출 수(성공/실패) · 성공률/실패율(**UI에서 % 표시** —
+  CTO 결정: API는 0~1) · 토큰(입력/출력) · 비용/지연(평균·최대)
+- **Timeline Chart**: hour/day/week 전환(쿼리 파라미터), 성공/실패 스택 막대,
+  UTC 축 — **빈 버킷은 UI에서 보간**(CTO 결정, `fillTimelineBuckets`)
+- **Feature/Provider/Model 통계 테이블**: 호출·성공률·실패·토큰·비용·평균 지연
+- 서버 컴포넌트 + CSS 막대(외부 차트 라이브러리 없음), API 미연결 시 안내 표시
+
 ## 테스트
 
 - Unit: `packages/core/src/execution/execution.spec.ts` — Tracker 성공/실패/기록
