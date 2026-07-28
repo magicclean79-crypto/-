@@ -75,10 +75,21 @@ export class OpenAiLlmProvider implements LlmProvider {
         : {}),
     });
 
+    // 운영 방어 (TASK-0901): JSON 출력이 max tokens 한도에서 잘리면 파싱이
+    // 불가능하므로 명확한 오류로 실패시킨다 (Execution에 FAILED로 기록됨 —
+    // 잘린 JSON 파싱 오류보다 원인 추적이 쉽다). 텍스트 출력은 그대로 반환.
+    const choice = response.choices[0];
+    if (choice?.finish_reason === "length" && request.responseFormat === "json") {
+      throw new Error(
+        `OpenAI 응답이 출력 한도(max tokens)에서 잘려 JSON을 완성하지 못했습니다 — ` +
+          `LLM_*_MAX_TOKENS 한도를 늘리거나 프롬프트를 줄여 주세요. (model: ${response.model})`,
+      );
+    }
+
     return {
       provider: this.name,
       model: response.model,
-      text: response.choices[0]?.message?.content ?? "",
+      text: choice?.message?.content ?? "",
       usage: {
         inputTokens: response.usage?.prompt_tokens ?? null,
         outputTokens: response.usage?.completion_tokens ?? null,

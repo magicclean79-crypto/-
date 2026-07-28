@@ -282,6 +282,11 @@ SOP와 나란히 회사 지식을 축적합니다 — [docs/architecture/decisio
 
 - 키 설정: `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY`
   (+ `LLM_*_MODEL`로 모델 덮어쓰기, `LLM_MAX_ATTEMPTS` 재시도)
+- **OpenAI Production (TASK-0901)**: feature별 출력 상한
+  `LLM_CONTENT_MAX_TOKENS`(4096) · `LLM_ANALYSIS_MAX_TOKENS`(2048) ·
+  `LLM_VISION_MAX_TOKENS`(2048), JSON 잘림(finish_reason=length) 방어,
+  주입 클라이언트 통합 검증. 실키 스모크 절차:
+  [docs/operations/real-provider-smoke.md](docs/operations/real-provider-smoke.md)
 
 ## Execution Domain (TASK-0601, Sprint 6)
 

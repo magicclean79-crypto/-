@@ -22,6 +22,18 @@ import { EXECUTION_STORE } from "../execution/execution.constants";
 import { LLM_PROVIDER } from "./llm.constants";
 
 /**
+ * 운영 출력 상한 (TASK-0901) — feature별 max tokens 기본값.
+ * 실 Provider(OpenAI) 연결 시 어댑터 기본값(1024)은 상세페이지 생성에서
+ * 잘림 위험이 있어, 호출 지점(LlmService) 한 곳에서 feature별로 채운다.
+ * 호출자가 maxTokens를 명시하면 그 값을 우선한다. dev는 기본값 유지.
+ */
+const FEATURE_MAX_TOKENS: Record<string, { env: string; fallback: number }> = {
+  "content-generation": { env: "LLM_CONTENT_MAX_TOKENS", fallback: 4096 },
+  "product-analysis": { env: "LLM_ANALYSIS_MAX_TOKENS", fallback: 2048 },
+  "vision-analysis": { env: "LLM_VISION_MAX_TOKENS", fallback: 2048 },
+};
+
+/**
  * LLM Gateway 서비스 (TASK-0501).
  * 검증·재시도는 @acos/core의 LlmGateway가, 실제 호출은 선택된 Provider가
  * 담당한다. 다른 모듈(콘텐츠 생성·분석·Vision 등)은 이 서비스를 통해서만
@@ -62,6 +74,21 @@ export class LlmService {
     const errors = validateLlmRequest(request);
     if (errors.length > 0) {
       throw new BadRequestException(errors.join(" "));
+    }
+
+    // 운영 출력 상한 (TASK-0901): 미지정 시 feature별 기본값을 채운다
+    if (request.maxTokens === undefined && options.feature) {
+      const entry = FEATURE_MAX_TOKENS[options.feature];
+      if (entry) {
+        const configured = Number(process.env[entry.env]);
+        request = {
+          ...request,
+          maxTokens:
+            Number.isInteger(configured) && configured > 0
+              ? configured
+              : entry.fallback,
+        };
+      }
     }
 
     try {

@@ -21,6 +21,7 @@ const SMOKE_PASSWORD = process.env.SMOKE_PASSWORD ?? "admin1234";
 const results = [];
 let failed = false;
 let authToken = "";
+let authCookie = ""; // 쿠키 전용 운영 모드 (TASK-0804/0901) — 본문 토큰이 없다
 
 function report(step, ok, detail) {
   results.push({ step, ok, detail });
@@ -36,11 +37,12 @@ async function api(path, init) {
     headers: {
       "content-type": "application/json",
       ...(authToken ? { authorization: `Bearer ${authToken}` } : {}),
+      ...(authCookie ? { cookie: authCookie } : {}),
       ...(init?.headers ?? {}),
     },
   });
   const body = await response.json().catch(() => null);
-  return { status: response.status, body };
+  return { status: response.status, body, headers: response.headers };
 }
 
 async function main() {
@@ -70,16 +72,21 @@ async function main() {
   }
 
   // 2. 로그인 (TASK-0802 — 쓰기 API 인증)
+  // 운영은 쿠키 전용 모드(TASK-0804)라 본문 토큰이 없다 — Set-Cookie를 사용
   const auth = await api("/auth/login", {
     method: "POST",
     body: JSON.stringify({ email: SMOKE_EMAIL, password: SMOKE_PASSWORD }),
   });
-  if (auth.status === 200 && auth.body?.token) {
-    authToken = auth.body.token;
+  const setCookie = auth.headers?.get("set-cookie") ?? "";
+  const cookieMatch = /acos_session=[0-9a-f]+/.exec(setCookie);
+  if (auth.status === 200 && (auth.body?.token || cookieMatch)) {
+    authToken = auth.body?.token ?? "";
+    authCookie = cookieMatch ? cookieMatch[0] : "";
     report(
       "로그인 (POST /auth/login)",
       true,
-      `${auth.body.user.email} (${auth.body.user.role})`,
+      `${auth.body.user.email} (${auth.body.user.role})` +
+        (authToken ? "" : " — 쿠키 전용 모드"),
     );
   } else {
     report(
@@ -182,11 +189,25 @@ async function main() {
           `tokens=${totals.inputTokens}/${totals.outputTokens} cost=${totals.cost ?? "미산정"}`
       : `HTTP ${stats.status}`,
   );
-  if (provider !== "mock" && totals && totals.cost === null) {
+  // 9. 운영 판정 (TASK-0901) — Provider·Feature 커버리지 + 비용 가시성
+  const providerKeys = (stats.body?.byProvider ?? []).map((item) => item.key);
+  const featureKeys = (stats.body?.byFeature ?? []).map((item) => item.key);
+  const requiredFeatures = ["product-analysis", "content-generation"];
+  const missingFeatures = requiredFeatures.filter(
+    (key) => !featureKeys.includes(key),
+  );
+  const providerCovered = providerKeys.includes(provider);
+  report(
+    "운영 판정 (Provider·Feature 커버리지)",
+    providerCovered && missingFeatures.length === 0,
+    `byProvider=[${providerKeys.join(",")}] byFeature=[${featureKeys.join(",")}]` +
+      (missingFeatures.length > 0 ? ` — 누락: ${missingFeatures.join(",")}` : ""),
+  );
+  if (provider !== "mock" && totals && !(totals.cost > 0)) {
     report(
       "비용 산정",
       false,
-      "실 Provider인데 cost가 미산정 — 가격표(DEFAULT_LLM_PRICING) 확인 필요",
+      `실 Provider인데 cost=${totals.cost ?? "미산정"} — 가격표(DEFAULT_LLM_PRICING)·모델명 확인 필요`,
     );
   }
 

@@ -23,9 +23,30 @@ Google Gemini)는 환경변수 하나로 교체되며, **기본은 mock** — AP
 | `ANTHROPIC_API_KEY` / `LLM_ANTHROPIC_MODEL` | — / 기본 `claude-opus-5` | anthropic 선택 시 |
 | `GEMINI_API_KEY` / `LLM_GEMINI_MODEL` | — / 기본 `gemini-2.5-flash` | gemini 선택 시 |
 | `LLM_MAX_ATTEMPTS` | 기본 3 | 게이트웨이 재시도 횟수 (지수 백오프) |
+| `LLM_CONTENT_MAX_TOKENS` | 기본 4096 | content-generation 출력 상한 (TASK-0901) |
+| `LLM_ANALYSIS_MAX_TOKENS` | 기본 2048 | product-analysis 출력 상한 (TASK-0901) |
+| `LLM_VISION_MAX_TOKENS` | 기본 2048 | vision-analysis 출력 상한 (TASK-0901) |
 
 새 Provider 추가: `@acos/core`의 `LlmProvider`를 구현하고
 `apps/api/src/llm/llm.module.ts`의 팩토리에 case 하나를 추가하면 됩니다.
+
+## OpenAI Production (TASK-0901, Sprint 9)
+
+실 OpenAI 연결로 운영하기 위한 확정 사항:
+
+- **feature별 출력 상한**: 호출자가 maxTokens를 지정하지 않으면
+  LlmService(단일 관문)가 feature 기본값을 채운다 — 어댑터 기본 1024는
+  상세페이지 생성에서 잘림 위험이 있어 상향 (위 표). dev는 기본 유지
+- **JSON 잘림 방어**: OpenAI 응답의 `finish_reason === "length"`이면서
+  `responseFormat: "json"`이면 잘린 JSON 파싱 대신 **명확한 오류로 실패**
+  시킨다 — Execution에 FAILED로 기록되어 원인 추적이 쉽다. 텍스트 출력은
+  그대로 반환 (부분 결과 허용)
+- **통합 검증**: 주입 클라이언트로 실 응답 형태(스냅샷 모델명·usage·
+  finish_reason)를 재현해 3개 엔진 전 경로를 검증
+  (`apps/api/src/llm/openai-production.spec.ts`). 실키 네트워크 검증은
+  운영/스테이징 스모크(`docs/operations/real-provider-smoke.md`) 전용
+- **비용**: Execution은 응답의 스냅샷 모델명(예: gpt-4o-2024-08-06)을
+  기록하고, 가격표 최장 접두사 매칭으로 비용을 산정한다
 
 ## 구조
 
