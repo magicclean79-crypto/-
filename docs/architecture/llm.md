@@ -103,13 +103,25 @@ Provider로 넘긴다 (1001의 설정 단계 Fallback과 구분 — CTO 결정 1
 | **Health Check Integration** | 연속 실패가 임계에 닿은 Provider는 쿨다운 동안 **체인 뒤로 밀린다**(제외가 아님 — 다른 후보가 모두 실패하면 여전히 시도). 쿨다운 경과 시 half-open으로 재시도하고 성공하면 즉시 회복 | `LLM_FAILOVER_HEALTH_THRESHOLD` (기본 3) · `LLM_FAILOVER_HEALTH_COOLDOWN_SEC` (기본 60) |
 | **Failover Metrics** | `GET /llm/failover` — 우선순위·타임아웃·Provider 건강 상태·시도/전환/소진/제외 누계와 Provider별 성공·실패. 웹 `/routing` 하단에 표시 | — |
 
-**Failover 대상이 아닌 오류** (CTO 지시):
+**오류 분류** (CTO 결정 1002-① 공식 표준):
 
-- **예산 초과(429)** — Provider를 바꿔도 결과가 같다. 호출 전 검사이므로
-  Execution도 남지 않는다. `markNoFailover()`로 명시한다.
-- **요청 검증 오류(400)** — 요청 자체가 잘못됐으므로 재시도·전환 모두 무의미.
+| 분류 | 판정 근거 | Failover |
+| --- | --- | --- |
+| `timeout` | `LlmTimeoutError` · HTTP 408 | **대상** |
+| `server_error` | HTTP 5xx | **대상** |
+| `rate_limit` | HTTP 429 · rate limit/overloaded 메시지 | **대상** |
+| `network` | `ECONNRESET`·`ETIMEDOUT` 등 · socket hang up / fetch failed | **대상** |
+| `budget` | `markNoFailover()` 표시 (예산 초과 429) | 제외 |
+| `validation` | `LlmValidationError` (요청 검증) | 제외 |
+| `auth` | HTTP 401/403 · 잘못된 API Key 메시지 | 제외 |
+| `invalid_request` | HTTP 4xx(400/404 등) · invalid request 메시지 | 제외 |
+| `unknown` | 위 어느 것으로도 판정되지 않음 | 제외 (안전 측) |
 
-이 둘은 계측의 `skipped`로 집계한다.
+판정은 상태 코드 → 오류 코드 → 메시지 순이며, SDK마다 다른 위치
+(`status` / `statusCode` / `response.status`)를 모두 본다. 분류하지 못한
+오류는 **제외**한다 — 잘못된 요청을 전 Provider에 반복하는 것보다 즉시
+실패가 낫다. 제외된 오류는 계측의 `skipped`로 집계하고, 분류명을 로그에
+남긴다. 예산 초과는 호출 전 검사이므로 Execution도 남지 않는다.
 
 **체인 구성**: 라우팅이 정한 Provider가 항상 1순위, 그 뒤에
 `LLM_FAILOVER_PRIORITY` 순서(중복 제거, 사용 불가 Provider 제외, 불건강
@@ -119,13 +131,52 @@ Provider는 뒤로). 2순위부터는 **호출자가 지정한 모델을 버리�
 **관측**: 각 시도가 Execution 1건으로 남는다 — 실패한 1순위와 성공한 2순위가
 모두 기록되므로 대시보드의 경로별 성공률이 실제 전환 이력을 보여준다.
 `GET /llm/health?provider=`로 특정 Provider를 점검할 때는 **Failover를 쓰지
-않고** 대상 Provider만 호출한다(진단 목적). 다만 그 결과는 Health Tracker와
-계측에 함께 반영된다.
+않고** 대상 Provider만 호출한다(진단 목적). 이 진단 호출은 **운영 계측에서
+분리**되어 `attempts`/`failovers`/`exhausted`/`skipped`/`byProvider`에 들어가지
+않고 `healthChecks`로 따로 집계된다 (CTO 결정 1002-④). 단, Provider 건강
+상태에는 그대로 반영되어 체인 순서에 영향을 준다.
 
 **이력 Provider 일치 (CTO 결정 1001-③)**: `AnalysisRun.provider`,
 `VisionSummary.source` 등 이력 Provider 필드는 정적 기본값이 아니라
 **실제 라우팅·Failover로 호출된 Provider**를 기록한다 (`llm:<provider>`) —
 Execution의 `provider`와 같은 의미를 갖는다.
+
+## Routing Experiment & Traffic Control (TASK-1003, Sprint 10)
+
+라우팅이 feature → Provider **하나**를 정한다면, Experiment는 같은 feature의
+트래픽을 **여러 변형에 비율로 나눈다**. Percentage / A·B / Canary / Weighted는
+모두 "가중치 있는 변형 집합"이라는 **하나의 원리**로 동작하며, 종류(kind)는
+운영자가 **의도를 선언**하는 값이다(대시보드 표시용 — 선택 알고리즘은 동일).
+
+| 항목 | 동작 | 환경변수 |
+| --- | --- | --- |
+| **Percentage Routing** | 가중치 비율로 분배 (`openai=90,anthropic=10`) | `LLM_EXPERIMENT_CONTENT` / `LLM_EXPERIMENT_ANALYSIS` / `LLM_EXPERIMENT_VISION` |
+| **A/B Routing** | 두 변형을 나눠 품질·비용 비교 (`ab\|openai:gpt-4o=50,anthropic:claude-sonnet-5=50`) | 〃 |
+| **Canary Routing** | 새 변형에 소량만 (`canary\|openai=95,anthropic=5`) | 〃 |
+| **Weighted Routing** | 3종 이상 가중 분배 (`openai=60,anthropic=30,gemini=10`) | 〃 |
+| **Experiment Dashboard** | 웹 **`/experiments`** — 설정 비율·배정 비율·실제 배정·변형별 실행 지표. `GET /llm/experiments` | — |
+| **Experiment Metrics** | `GET /executions/stats`의 **`byVariant`** — 변형(`feature→provider:model`)별 호출·성공률·지연·토큰·비용 | — |
+
+**형식**: `이름|종류|변형=가중치,변형=가중치` (이름·종류 생략 가능, 가중치
+생략 시 균등). 변형은 라우팅과 같은 `provider` 또는 `provider:model`.
+종류를 생략하면 변형 수와 가중치로 추정한다(2종·한쪽 10% 이하 = canary,
+2종 = ab, 3종 이상 = weighted).
+
+**우선순위**: 호출자 `model` 명시 > **실험 변형** > 라우팅 규칙 `:model` >
+`LLM_MODEL_*` > Provider 기본. 실험이 설정된 feature는 변형 추첨이 라우팅
+결과를 **대신한다**.
+
+**Graceful degradation**: 쓸 수 없는 Provider의 변형은 제외하고 남은 변형끼리
+가중치를 **재정규화**한다. 전부 쓸 수 없으면 실험을 적용하지 않고 기존
+라우팅으로 내려간다 — 실험 설정이 호출을 실패시키지 않는다.
+
+**배정 ≠ 실행**: 배정은 추첨 결과(의도)이고, 실제 실행은 Failover의 영향을
+받는다. 변형이 불건강해지면 체인이 재정렬되어 배정된 변형 대신 건강한
+Provider가 호출될 수 있다. 대시보드는 **배정(추첨)** 과 **실행(Execution)** 을
+나란히 보여주며, 두 값의 차이가 곧 그 변형의 실패 규모다.
+
+**무상태 배정**: 호출마다 독립 추첨한다. 사용자·세션 고정 배정(sticky)은
+LLM 호출 계층이 주체 식별자를 갖지 않아 별도 스펙이 필요하다.
 
 ## 구조
 
@@ -180,6 +231,7 @@ Execution의 `provider`와 같은 의미를 갖는다.
 | `GET` | `/llm/health` | **Provider 상태 점검 (TASK-0603)** — 최소 실호출 기반. `?provider=`로 특정 Provider 점검 (TASK-1002, Failover 미사용) |
 | `GET` | `/llm/routing` | **Routing 현황 (TASK-1001)** — feature별 Provider·모델·결정 근거 |
 | `GET` | `/llm/failover` | **Failover 현황 (TASK-1002)** — 우선순위·타임아웃·Provider 건강 상태·계측 |
+| `GET` | `/llm/experiments` | **Experiment 현황 (TASK-1003)** — 실험 종류·변형·가중치·실제 배정 |
 | `POST` | `/llm/complete` | `{ messages, model?, maxTokens? }` → `{ provider, model, text, usage }` (200) |
 
 오류: `400` 빈 메시지·잘못된 role·공백 content·잘못된 maxTokens.

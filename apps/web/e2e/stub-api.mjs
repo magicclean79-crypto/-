@@ -56,6 +56,41 @@ const stats = (totals, groups) => ({
         },
       ]
     : [],
+  // Experiment Metrics (TASK-1003) — 변형(feature→provider:model)별 집계
+  byVariant: groups.length
+    ? [
+        {
+          key: "product-analysis→openai:gpt-4o",
+          stats: {
+            count: 91,
+            successCount: 89,
+            failedCount: 2,
+            successRate: 0.978,
+            failureRate: 0.022,
+            inputTokens: 91000,
+            outputTokens: 27300,
+            cost: 1.2345,
+            avgLatencyMs: 910.2,
+            maxLatencyMs: 1500,
+          },
+        },
+        {
+          key: "product-analysis→anthropic:claude-sonnet-5",
+          stats: {
+            count: 9,
+            successCount: 9,
+            failedCount: 0,
+            successRate: 1,
+            failureRate: 0,
+            inputTokens: 9000,
+            outputTokens: 2700,
+            cost: 0.234,
+            avgLatencyMs: 1450.7,
+            maxLatencyMs: 2100,
+          },
+        },
+      ]
+    : [],
 });
 
 const DATA_TOTALS = {
@@ -534,6 +569,49 @@ const server = http.createServer((req, res) => {
     );
     return;
   }
+  // ── Routing Experiment (TASK-1003) ──
+  if (url.pathname === "/llm/experiments") {
+    res.end(
+      JSON.stringify({
+        availableProviders:
+          mode === "data" ? ["mock", "openai", "anthropic"] : ["mock"],
+        experiments:
+          mode === "data"
+            ? [
+                {
+                  feature: "product-analysis",
+                  name: "sonnet-canary",
+                  kind: "canary",
+                  env: "LLM_EXPERIMENT_ANALYSIS",
+                  active: true,
+                  reason: null,
+                  assignments: 100,
+                  variants: [
+                    { key: "openai:gpt-4o", provider: "openai", model: "gpt-4o", weight: 90, weightShare: 0.9, available: true, effectiveShare: 0.9, assignments: 91, actualShare: 0.91 },
+                    { key: "anthropic:claude-sonnet-5", provider: "anthropic", model: "claude-sonnet-5", weight: 10, weightShare: 0.1, available: true, effectiveShare: 0.1, assignments: 9, actualShare: 0.09 },
+                  ],
+                },
+                {
+                  feature: "vision-analysis",
+                  name: "vision-analysis",
+                  kind: "ab",
+                  env: "LLM_EXPERIMENT_VISION",
+                  active: false,
+                  reason:
+                    "사용 가능한 변형이 없어 실험을 적용하지 않고 기존 라우팅으로 처리합니다 (API 키 미설정 등).",
+                  assignments: 0,
+                  variants: [
+                    { key: "gemini", provider: "gemini", model: null, weight: 1, weightShare: 0.5, available: false, effectiveShare: 0, assignments: 0, actualShare: null },
+                    { key: "cohere", provider: "cohere", model: null, weight: 1, weightShare: 0.5, available: false, effectiveShare: 0, assignments: 0, actualShare: null },
+                  ],
+                },
+              ]
+            : [],
+        checkedAt: new Date().toISOString(),
+      }),
+    );
+    return;
+  }
   // ── Provider Failover (TASK-1002) ──
   if (url.pathname === "/llm/failover") {
     const now = new Date().toISOString();
@@ -560,6 +638,7 @@ const server = http.createServer((req, res) => {
                   { provider: "anthropic", success: 3, failed: 0 },
                   { provider: "mock", success: 2, failed: 0 },
                 ],
+                healthChecks: { ok: 4, failed: 1 },
                 since: now,
               },
               checkedAt: now,
@@ -578,6 +657,7 @@ const server = http.createServer((req, res) => {
                 exhausted: 0,
                 skipped: 0,
                 byProvider: [],
+                healthChecks: { ok: 0, failed: 0 },
                 since: now,
               },
               checkedAt: now,

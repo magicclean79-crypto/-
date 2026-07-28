@@ -313,6 +313,17 @@ API 키가 없으면 항상 mock으로 동작합니다 —
   **예산 초과·요청 검증 오류는 Failover 대상이 아닙니다**(Provider를 바꿔도
   결과가 같음). 이력 Provider 필드(`AnalysisRun.provider` 등)는 실제 호출된
   Provider를 기록합니다
+  - **오류 분류 (공식 표준)**: Failover 대상은 Timeout · Provider 5xx ·
+    Rate Limit · 일시적 네트워크 오류. 예산 초과 · 검증 오류 · 인증(401/403) ·
+    잘못된 API Key · 잘못된 요청은 대상이 아닙니다. `GET /llm/health` 진단
+    호출은 운영 계측과 분리됩니다
+- **Routing Experiment (TASK-1003)**: feature 트래픽을 여러 변형에 비율로
+  분배 — `LLM_EXPERIMENT_CONTENT`/`LLM_EXPERIMENT_ANALYSIS`/
+  `LLM_EXPERIMENT_VISION` = `이름|종류|변형=가중치,…`(미설정 = 실험 없음).
+  Percentage · **A/B** · **Canary** · Weighted를 하나의 가중 추첨 원리로
+  지원하고, 사용 불가 변형은 제외 후 재정규화(전부 불가 시 기존 라우팅) ·
+  `GET /llm/experiments` · 변형별 지표(`/executions/stats`의 `byVariant`) ·
+  웹 **`/experiments`** 대시보드(설정 비율 ↔ 실제 배정 ↔ 실행 지표 비교)
 
 ## Execution Domain (TASK-0601, Sprint 6)
 

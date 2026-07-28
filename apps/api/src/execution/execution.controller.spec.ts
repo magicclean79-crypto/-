@@ -196,10 +196,17 @@ describe("Execution API (API Test)", () => {
 
     expect(response.body.range.from).toBe("2026-07-28T00:00:00.000Z");
     // status/feature/provider/model + 경로(feature,provider) — TASK-1001
-    expect(groupByCalls).toHaveLength(5);
+    // + 변형(feature,provider,model) — TASK-1003
+    expect(groupByCalls).toHaveLength(6);
     expect(groupByCalls.map((call) => call.by)).toContainEqual([
       "feature",
       "provider",
+      "status",
+    ]);
+    expect(groupByCalls.map((call) => call.by)).toContainEqual([
+      "feature",
+      "provider",
+      "model",
       "status",
     ]);
     for (const call of groupByCalls) {

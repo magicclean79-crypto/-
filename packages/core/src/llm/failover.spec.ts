@@ -1,5 +1,6 @@
 import {
   buildFailoverChain,
+  classifyFailoverError,
   isFailoverEligible,
   LlmTimeoutError,
   markNoFailover,
@@ -9,21 +10,59 @@ import {
 import { LlmValidationError } from "./llm-gateway";
 
 describe("Provider Failover (TASK-1002)", () => {
-  describe("Failover 대상 판정", () => {
-    it("Validation 오류·NO_FAILOVER 표시는 제외 (CTO 지시)", () => {
-      expect(isFailoverEligible(new LlmValidationError(["잘못된 요청"]))).toBe(
-        false,
-      );
-      const budget = markNoFailover(new Error("예산 초과"));
-      expect(isFailoverEligible(budget)).toBe(false);
+  /**
+   * 오류 분류는 CTO 결정 1002-①로 확정된 목록을 그대로 따른다.
+   * 대상: Timeout · Provider 5xx · Rate Limit · 일시적 네트워크 오류
+   * 제외: Budget · Validation · 인증(401/403) · 잘못된 API Key · 잘못된 요청
+   */
+  describe("Failover 대상 판정 (CTO 결정 1002-①)", () => {
+    it("Timeout · 5xx · Rate Limit · 네트워크 오류만 대상", () => {
+      const eligible: [string, unknown][] = [
+        ["timeout", new LlmTimeoutError("openai", 1000)],
+        ["timeout(408)", Object.assign(new Error("요청 시간 초과"), { status: 408 })],
+        ["server_error(503)", Object.assign(new Error("서버 오류"), { status: 503 })],
+        ["server_error(메시지)", new Error("503 Service Unavailable")],
+        ["rate_limit(429)", Object.assign(new Error("과다 호출"), { status: 429 })],
+        ["rate_limit(메시지)", new Error("Rate limit reached for gpt-4o")],
+        ["network(code)", Object.assign(new Error("소켓 오류"), { code: "ECONNRESET" })],
+        ["network(메시지)", new Error("fetch failed")],
+      ];
+      for (const [label, error] of eligible) {
+        expect([label, isFailoverEligible(error)]).toEqual([label, true]);
+      }
     });
 
-    it("그 외 실행 오류는 Failover 대상", () => {
-      expect(isFailoverEligible(new Error("503 Service Unavailable"))).toBe(
-        true,
-      );
-      expect(isFailoverEligible(new LlmTimeoutError("openai", 1000))).toBe(true);
-      expect(isFailoverEligible("문자열 오류")).toBe(true);
+    it("Budget · Validation · 인증 · 잘못된 API Key · 잘못된 요청은 제외", () => {
+      const excluded: [string, unknown, string][] = [
+        ["budget", markNoFailover(new Error("예산 초과")), "budget"],
+        ["validation", new LlmValidationError(["잘못된 요청"]), "validation"],
+        ["auth(401)", Object.assign(new Error("인증 실패"), { status: 401 }), "auth"],
+        ["auth(403)", Object.assign(new Error("권한 없음"), { status: 403 }), "auth"],
+        ["invalid key", new Error("Incorrect API key provided"), "auth"],
+        [
+          "invalid request(400)",
+          Object.assign(new Error("잘못된 파라미터"), { status: 400 }),
+          "invalid_request",
+        ],
+        ["invalid request(메시지)", new Error("Invalid request: unsupported model"), "invalid_request"],
+      ];
+      for (const [label, error, kind] of excluded) {
+        expect([label, classifyFailoverError(error)]).toEqual([label, kind]);
+        expect([label, isFailoverEligible(error)]).toEqual([label, false]);
+      }
+    });
+
+    it("분류할 수 없는 오류는 안전하게 제외한다 (unknown)", () => {
+      expect(classifyFailoverError("문자열 오류")).toBe("unknown");
+      expect(classifyFailoverError(new Error("알 수 없는 문제"))).toBe("unknown");
+      expect(isFailoverEligible(new Error("알 수 없는 문제"))).toBe(false);
+    });
+
+    it("SDK 예외의 response.status도 인식한다", () => {
+      const error = Object.assign(new Error("오류"), {
+        response: { status: 502 },
+      });
+      expect(classifyFailoverError(error)).toBe("server_error");
     });
   });
 

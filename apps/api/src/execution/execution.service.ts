@@ -103,14 +103,21 @@ export class ExecutionService {
     const where: Prisma.ExecutionWhereInput | undefined =
       Object.keys(conditions).length > 0 ? conditions : undefined;
 
-    const [statusRows, featureRows, providerRows, modelRows, routeRows] =
-      await Promise.all([
-        this.groupBy("status", where),
-        this.groupBy("feature", where),
-        this.groupBy("provider", where),
-        this.groupBy("model", where),
-        this.groupByRoute(where),
-      ]);
+    const [
+      statusRows,
+      featureRows,
+      providerRows,
+      modelRows,
+      routeRows,
+      variantRows,
+    ] = await Promise.all([
+      this.groupBy("status", where),
+      this.groupBy("feature", where),
+      this.groupBy("provider", where),
+      this.groupBy("model", where),
+      this.groupByRoute(where),
+      this.groupByVariant(where),
+    ]);
 
     return {
       range: {
@@ -122,7 +129,36 @@ export class ExecutionService {
       byProvider: buildExecutionStats(providerRows),
       byModel: buildExecutionStats(modelRows),
       byRoute: buildExecutionStats(routeRows),
+      byVariant: buildExecutionStats(variantRows),
     };
+  }
+
+  /**
+   * Experiment Metrics (TASK-1003) — 실험 변형(feature→provider:model)별 집계.
+   * 경로(byRoute)보다 한 단계 세밀한 축으로, 같은 Provider의 모델 변형까지
+   * 구분해 A/B·Canary 비교(성공률·지연·비용)를 같은 스키마로 제공한다.
+   */
+  private async groupByVariant(
+    where: Prisma.ExecutionWhereInput | undefined,
+  ): Promise<ExecutionStatGroupRow[]> {
+    const rows = await this.prisma.execution.groupBy({
+      by: ["feature", "provider", "model", "status"],
+      where,
+      _count: { _all: true },
+      _sum: { inputTokens: true, outputTokens: true, cost: true },
+      _avg: { latencyMs: true },
+      _max: { latencyMs: true },
+    });
+    return rows.map((row) => ({
+      key: `${row.feature}→${row.provider}:${row.model}`,
+      status: row.status,
+      count: row._count._all,
+      inputTokens: row._sum.inputTokens ?? 0,
+      outputTokens: row._sum.outputTokens ?? 0,
+      cost: row._sum.cost === null ? null : Number(row._sum.cost),
+      avgLatencyMs: row._avg.latencyMs,
+      maxLatencyMs: row._max.latencyMs,
+    }));
   }
 
   /**

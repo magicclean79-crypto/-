@@ -23,12 +23,15 @@ class FlakyProvider implements LlmProvider {
   constructor(
     readonly name: string,
     readonly defaultModel: string,
-    private readonly behavior: "ok" | "fail" | "hang",
+    private readonly behavior: "ok" | "fail" | "hang" | "unauthorized",
   ) {}
   async complete(request: LlmRequest): Promise<LlmResult> {
     this.calls += 1;
     if (this.behavior === "fail") {
       throw new Error(`${this.name} 503 Service Unavailable`);
+    }
+    if (this.behavior === "unauthorized") {
+      throw Object.assign(new Error(`${this.name} 인증 실패`), { status: 401 });
     }
     if (this.behavior === "hang") {
       await new Promise((resolve) => setTimeout(resolve, 5_000));
@@ -84,8 +87,8 @@ describe("Provider Failover Engine (TASK-1002)", () => {
 
   function createService(
     behaviors: {
-      openai?: "ok" | "fail" | "hang";
-      anthropic?: "ok" | "fail" | "hang";
+      openai?: "ok" | "fail" | "hang" | "unauthorized";
+      anthropic?: "ok" | "fail" | "hang" | "unauthorized";
     } = {},
   ) {
     const mock = new MockLlmProvider();
@@ -282,5 +285,48 @@ describe("Provider Failover Engine (TASK-1002)", () => {
     expect(
       service.failover().health.find((s) => s.provider === "anthropic"),
     ).toMatchObject({ healthy: true });
+  });
+
+  it("Health Check는 운영 계측에서 분리된다 (CTO 결정 1002-④)", async () => {
+    process.env.LLM_FAILOVER_PRIORITY = "anthropic";
+    const { service } = createService({ openai: "fail" });
+
+    await service.health("openai"); // 실패 점검
+    await service.health("anthropic"); // 성공 점검
+
+    const { metrics } = service.failover();
+    // 진단 호출은 attempts/failovers/exhausted/skipped/byProvider에 포함되지 않는다
+    expect(metrics).toMatchObject({
+      attempts: 0,
+      failovers: 0,
+      exhausted: 0,
+      skipped: 0,
+      byProvider: [],
+    });
+    // 대신 진단 횟수로 따로 보인다
+    expect(metrics.healthChecks).toEqual({ ok: 1, failed: 1 });
+    // 건강 상태에는 그대로 반영된다
+    expect(
+      service.failover().health.find((s) => s.provider === "openai"),
+    ).toMatchObject({ consecutiveFailures: 1 });
+  });
+
+  it("인증 오류(401)는 Failover 대상이 아니다 — 즉시 실패 (CTO 결정 1002-①)", async () => {
+    process.env.LLM_ROUTE_ANALYSIS = "openai";
+    process.env.LLM_FAILOVER_PRIORITY = "anthropic";
+    const { service, anthropic, executions } = createService({
+      openai: "unauthorized",
+    });
+
+    await expect(
+      service.complete({ messages: MESSAGES }, { feature: "product-analysis" }),
+    ).rejects.toMatchObject({ status: 401 });
+    expect(anthropic.calls).toBe(0); // 전환하지 않는다
+    expect(executions).toHaveLength(1); // 시도 자체는 기록된다
+    expect(service.failover().metrics).toMatchObject({
+      failovers: 0,
+      exhausted: 0,
+      skipped: 1,
+    });
   });
 });

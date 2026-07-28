@@ -9,8 +9,11 @@ import { LlmValidationError } from "./llm-gateway";
  * - 실행 중 오류(Failover) = 호출이 실패/시간 초과 → 다음 우선순위 Provider
  *   (CTO 결정 1001-② 확정)
  *
- * **Failover 제외 대상 (CTO 지시)**: Budget 초과 · Validation 오류.
- * 이들은 Provider를 바꿔도 결과가 같으므로 즉시 실패시킨다.
+ * **Failover 대상 (CTO 결정 1002-①)**: Timeout · Provider 5xx ·
+ * Provider Rate Limit · 일시적 네트워크 오류.
+ * **제외 대상**: Budget 초과 · Validation 오류 · 인증 오류(401/403) ·
+ * 잘못된 API Key · 잘못된 요청. 이들은 Provider를 바꿔도 결과가 같거나
+ * 요청 자체가 잘못된 것이므로 즉시 실패시킨다.
  */
 
 /** Failover 대상이 아님을 표시하는 마커 — Budget/Validation 예외에 부여 */
@@ -23,23 +26,133 @@ export function markNoFailover<T extends object>(error: T): T {
 }
 
 /**
- * 이 오류가 다른 Provider로 넘길 가치가 있는지.
- * - Validation 오류(요청 자체가 잘못됨) → false
- * - NO_FAILOVER 표시(Budget 초과 등) → false
- * - 그 외(네트워크·5xx·rate limit·타임아웃 등) → true
+ * 오류 분류 (CTO 결정 1002-①). 앞 4종만 Failover 대상이다.
+ * `unknown`은 분류하지 못한 오류 — 안전하게 제외한다(잘못된 요청을
+ * 전 Provider에 반복하는 것보다 즉시 실패가 낫다).
+ */
+export type FailoverErrorKind =
+  | "timeout"
+  | "server_error"
+  | "rate_limit"
+  | "network"
+  | "budget"
+  | "validation"
+  | "auth"
+  | "invalid_request"
+  | "unknown";
+
+const FAILOVER_KINDS: ReadonlySet<FailoverErrorKind> = new Set([
+  "timeout",
+  "server_error",
+  "rate_limit",
+  "network",
+]);
+
+/** 일시적 네트워크 오류로 보는 Node/undici 오류 코드 */
+const NETWORK_CODES = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "EPIPE",
+  "ETIMEDOUT",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ENETUNREACH",
+  "ENETDOWN",
+  "EHOSTUNREACH",
+  "UND_ERR_SOCKET",
+  "UND_ERR_CONNECT_TIMEOUT",
+]);
+
+function readNumber(source: Record<string, unknown>, key: string): number | null {
+  const value = source[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/** Provider SDK 예외에서 HTTP 상태 코드를 찾는다 (SDK마다 위치가 다르다) */
+function httpStatusOf(error: Record<string, unknown>): number | null {
+  const direct = readNumber(error, "status") ?? readNumber(error, "statusCode");
+  if (direct !== null) {
+    return direct;
+  }
+  const response = error.response;
+  if (response !== null && typeof response === "object") {
+    return readNumber(response as Record<string, unknown>, "status");
+  }
+  return null;
+}
+
+/**
+ * 오류를 분류한다. 상태 코드 → 오류 코드 → 메시지 순으로 판정하며,
+ * 어느 것으로도 판정되지 않으면 `unknown`(= Failover 제외).
+ */
+export function classifyFailoverError(error: unknown): FailoverErrorKind {
+  if (error instanceof LlmTimeoutError) {
+    return "timeout";
+  }
+  if (error instanceof LlmValidationError) {
+    return "validation";
+  }
+  if (error === null || typeof error !== "object") {
+    return "unknown";
+  }
+  const record = error as Record<string, unknown>;
+  if ((error as Record<symbol, unknown>)[NO_FAILOVER] === true) {
+    // Budget 초과 등 명시적으로 금지된 오류
+    return "budget";
+  }
+
+  const status = httpStatusOf(record);
+  if (status !== null) {
+    if (status === 401 || status === 403) {
+      return "auth";
+    }
+    if (status === 429) {
+      return "rate_limit";
+    }
+    if (status === 408) {
+      return "timeout";
+    }
+    if (status >= 500) {
+      return "server_error";
+    }
+    if (status >= 400) {
+      return "invalid_request";
+    }
+  }
+
+  const code = typeof record.code === "string" ? record.code : "";
+  if (NETWORK_CODES.has(code.toUpperCase())) {
+    return "network";
+  }
+
+  const message = typeof record.message === "string" ? record.message : "";
+  if (/\b(401|403)\b|unauthorized|forbidden|invalid[ _-]?api[ _-]?key|incorrect api key|permission denied/i.test(message)) {
+    return "auth";
+  }
+  if (/\b429\b|rate[ _-]?limit|too many requests|quota exceeded|overloaded/i.test(message)) {
+    return "rate_limit";
+  }
+  if (/\b(408|timed? ?out)\b|etimedout|deadline exceeded/i.test(message)) {
+    return "timeout";
+  }
+  if (/\b5\d{2}\b|internal server error|bad gateway|service unavailable|gateway timeout/i.test(message)) {
+    return "server_error";
+  }
+  if (/econnreset|econnrefused|socket hang up|fetch failed|network (error|failure)|connection (reset|closed|refused)/i.test(message)) {
+    return "network";
+  }
+  if (/\b400\b|invalid[ _-]?request|bad request|unsupported|not found|\b404\b/i.test(message)) {
+    return "invalid_request";
+  }
+  return "unknown";
+}
+
+/**
+ * 이 오류가 다른 Provider로 넘길 가치가 있는지 (CTO 결정 1002-①).
+ * Timeout · 5xx · Rate Limit · 네트워크 오류만 true.
  */
 export function isFailoverEligible(error: unknown): boolean {
-  if (error instanceof LlmValidationError) {
-    return false;
-  }
-  if (
-    error !== null &&
-    typeof error === "object" &&
-    (error as Record<symbol, unknown>)[NO_FAILOVER] === true
-  ) {
-    return false;
-  }
-  return true;
+  return FAILOVER_KINDS.has(classifyFailoverError(error));
 }
 
 /** Provider 호출이 제한 시간을 초과했을 때 */

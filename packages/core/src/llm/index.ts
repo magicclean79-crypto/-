@@ -3,4 +3,5 @@ export * from "./llm-gateway";
 export * from "./failover";
 export * from "./provider-registry";
 export * from "./routing";
+export * from "./experiment";
 export * from "./providers/mock.provider";

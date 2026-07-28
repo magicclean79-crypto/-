@@ -12,6 +12,7 @@ import type {
   LlmBudgetDto,
   LlmCompleteRequest,
   LlmCompletionDto,
+  LlmExperimentsDto,
   LlmFailoverDto,
   LlmGatewayInfoDto,
   LlmHealthDto,
@@ -99,6 +100,15 @@ export class LlmController {
   @Get("failover")
   failover(): LlmFailoverDto {
     return this.llmService.failover();
+  }
+
+  /**
+   * Routing Experiment 현황 (TASK-1003) — feature별 실험(종류·변형·가중치)과
+   * 실제 배정 분포. Percentage / A·B / Canary / Weighted를 모두 표현한다.
+   */
+  @Get("experiments")
+  experiments(): LlmExperimentsDto {
+    return this.llmService.experiments();
   }
 
   /** 텍스트 완성 — 게이트웨이를 통해 선택된 Provider 호출 */

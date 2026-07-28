@@ -5,46 +5,52 @@
 
 ## 결정 대기
 
-### 39. TASK-1002 "Provider Failover Engine" 세부 해석 확인
-- 현황: 지시 5항목과 **CTO 결정 1001-③**을 다음과 같이 구현했다.
-  **예산 초과·검증 오류는 지시대로 Failover 대상에서 제외**했다:
-  - **Provider Priority**: `LLM_FAILOVER_PRIORITY`(예: `openai,anthropic,mock`).
-    **라우팅이 정한 Provider가 항상 1순위**, 그 뒤에 우선순위를 붙여 체인
-    구성(중복 제거·사용 불가 제외). **미설정이면 Failover 비활성**으로
-    기존 동작을 그대로 보존
-  - **Retry Policy**: Provider 안에서 기존 지수 백오프(`LLM_MAX_ATTEMPTS`)를
-    **먼저 소진**하고, 그래도 실패할 때만 다음 Provider로 전환
-  - **Timeout Policy**: `LLM_TIMEOUT_MS`(기본 120000, `0`=무제한) — 초과 시
-    실패로 간주해 전환
-  - **Health Check Integration**: 연속 실패 `LLM_FAILOVER_HEALTH_THRESHOLD`
-    (기본 3)회 → `LLM_FAILOVER_HEALTH_COOLDOWN_SEC`(기본 60초) 동안
-    **체인 뒤로 강등**(제외가 아님 — 다른 후보가 모두 실패하면 여전히 시도).
-    쿨다운 후 half-open 재시도, 성공 시 즉시 회복
-  - **Failover Metrics**: `GET /llm/failover`(우선순위·타임아웃·Provider
-    건강 상태·`attempts`/`failovers`/`exhausted`/`skipped`·Provider별
-    성공·실패) + 웹 `/routing` 하단 섹션
-  - **전환 제외**: 예산 초과 429는 `markNoFailover()`로 명시(호출 시도 자체
-    없음·Execution 미기록), 검증 오류 400도 즉시 실패 — 둘 다 `skipped` 집계
-  - **모델 승계**: 2순위부터는 **호출자 지정 모델을 버리고** 각 Provider의
-    기본 모델로 호출(모델명은 Provider 간 비호환 — 승계하면 확정 실패)
-  - **결정 1001-③ 이행**: `AnalysisRun.provider`·`VisionSummary.source`가
-    **실제 라우팅·전환된 Provider**(`llm:<provider>`)를 기록 — Execution의
-    `provider`와 동일 의미. **과거 이력은 소급 변경하지 않았습니다**
-  - 라이브: openai(무효 키) → **mock 전환 성공**, 두 시도 모두 Execution
-    기록, `AnalysisRun.provider=llm:mock`, 2회 실패 후 불건강 → 다음 호출에서
-    체인 뒤로 밀려 openai 호출 없이 성공
-- 하지 않은 것: 전환 알림(현재 로그·대시보드만), 건강 상태·계측의 인스턴스 간
-  공유(현재 인메모리·프로세스 단위), 라우팅 A/B·비율 분배, Failover 설정의
-  ADMIN 화면 관리
-- 질문: ① **전환 조건** — 현재는 예산·검증을 제외한 **모든 실행 오류**에서
-  전환합니다. 인증 오류(401, 키 자체가 잘못됨)처럼 재시도해도 같은 결과인
-  오류도 전환 대상으로 둘지, 아니면 제외 목록에 추가할지
-  ② **모델 승계** — 2순위부터 각 Provider 기본 모델로 내리는 현재 방식이
-  맞는지(호출자가 특정 모델을 요구한 경우에도 전환할지, 아니면 그때는
-  전환하지 않고 실패시킬지) ③ **건강 판정 기본값** — 연속 3회/60초가
-  적절한지 ④ **계측 범위** — `GET /llm/health` 진단 호출도 현재
-  `attempts`·`exhausted`에 포함됩니다(단일 관문 일관성). 진단 호출을 계측에서
-  분리할지 ⑤ 다음 TASK 지정 요청.
+### 40. TASK-1003 "Routing Experiment & Traffic Control" 세부 해석 확인
+- 현황: 지시 5항목과 **CTO 결정 1002-①·④**를 다음과 같이 구현했다:
+  - **하나의 가중 추첨 엔진**: Percentage / A·B / Canary / Weighted는 서로
+    다른 알고리즘이 아니라 같은 메커니즘의 다른 사용법이라 판단해 엔진을
+    하나로 두고, **종류(kind)는 운영자의 의도 선언**으로 삼았습니다
+    (대시보드 표시·검증용 — 선택 로직은 동일)
+  - **형식**: `LLM_EXPERIMENT_CONTENT`/`_ANALYSIS`/`_VISION` =
+    `이름|종류|변형=가중치,…` (이름·종류 생략 가능, 가중치 생략 시 균등).
+    변형은 라우팅과 같은 `provider` 또는 `provider:model`.
+    **미설정이면 실험 없음** — 기존 라우팅 그대로
+  - **Graceful degradation**: 쓸 수 없는 변형은 제외하고 재정규화, 전부
+    불가면 실험 미적용하고 라우팅으로 처리 (실험이 호출을 실패시키지 않음)
+  - **우선순위**: 호출자 `model` > 실험 변형 > 라우팅 규칙 > `LLM_MODEL_*`
+  - **Dashboard**: `GET /llm/experiments` + 웹 `/experiments` ·
+    **Metrics**: `/executions/stats`의 `byVariant`(`feature→provider:model`)
+  - **결정 1002-① 이행**: Failover 대상을 `timeout`/`server_error`/
+    `rate_limit`/`network` 4종으로 한정하고, `budget`/`validation`/`auth`
+    (401·403·잘못된 키)/`invalid_request`는 제외. 상태 코드 → 오류 코드 →
+    메시지 순으로 판정하며 SDK별 위치(`status`/`statusCode`/
+    `response.status`)를 모두 인식합니다
+  - **결정 1002-④ 이행**: `GET /llm/health`를 `attempts`/`failovers`/
+    `exhausted`/`skipped`/`byProvider`에서 분리하고 `metrics.healthChecks`로
+    따로 집계했습니다 (Provider 건강 상태에는 계속 반영)
+  - 라이브: canary 80/20 → 실제 배정 12/6, 변형별 실행 지표 비교
+    (mock 성공률 100% vs openai 0%), openai 403은 `auth`로 분류돼
+    **Failover 미발생**, health 3회 후에도 `attempts` 불변·`healthChecks`만 증가
+- **구현 중 확인된 상호작용**: 배정(추첨 결과)과 실제 실행이 다를 수 있습니다.
+  변형이 불건강해지면 Failover가 체인을 재정렬해 배정된 변형 대신 건강한
+  Provider가 호출됩니다. 가용성 우선 설계상 올바른 동작이라 판단해 감추지
+  않고 **대시보드에 배정과 실행을 나란히** 표시했습니다(차이 = 그 변형의 실패
+  규모). 다만 "실험 중인 변형은 Failover에서 제외한다" 같은 다른 정책도
+  가능하므로 확인이 필요합니다.
+- 하지 않은 것: 고정 배정(sticky — 사용자·프로젝트 단위), 통계적 유의성 판정,
+  실험 종료·승자 승격 자동화, 실험 설정의 ADMIN 화면 관리
+- 질문: ① **`unknown` 오류 정책** — 확정된 목록 어디에도 해당하지 않는 오류를
+  현재는 **안전 측으로 Failover 제외**했습니다(잘못된 요청을 전 Provider에
+  반복하는 것보다 즉시 실패가 낫다는 판단). 반대로 "미분류는 일시적 오류로
+  보고 전환"이 맞는지 ② **실험 표기법** — `이름|종류|변형=가중치` 단일 문자열
+  방식이 적절한지, 아니면 종류별로 환경변수를 나누는 편이 나은지
+  ③ **종류(kind) 선언** — 현재는 표시·추정용일 뿐 동작에 영향이 없습니다.
+  종류별로 다른 규칙(예: canary는 소수 변형 상한 강제, ab는 균등 강제)을
+  적용해야 하는지 ④ **고정 배정 필요 여부** — 필요하다면 배정 주체를
+  무엇으로 할지(프로젝트 / 사용자 / 상품) 지정 요청
+  ⑤ **배정 대 실행** — 위 상호작용에서 현재 방식(Failover 우선)을 유지할지,
+  실험 중인 변형은 Failover 대상에서 빼고 실패를 그대로 노출할지
+  ⑥ 다음 TASK 지정 요청.
 
 ### 2. tesseract Provider 유지 여부
 - 현황: OCR 기본 Provider는 mock이며, 로컬 오프라인 엔진(tesseract.js)이
@@ -67,6 +73,22 @@
 - 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
 
 ## 결정됨
+
+### 39. TASK-1002 해석 확인 → 승인 + 오류 분류·모델 승계·Health 표준 확정 (2026-07-28)
+- CTO 결정: ① **Failover 대상 오류 확정** — Timeout · Provider 5xx ·
+  Provider Rate Limit · 일시적 네트워크 오류. **제외** — Budget 초과 ·
+  Validation 오류 · 인증 오류(401/403) · 잘못된 API Key · 잘못된 요청
+  ② **Failover 시 전환된 Provider의 기본 모델 사용** — 현재 정책 유지
+  ③ **Health 기본값 공식 표준 확정** — 연속 실패 3회 · Cooldown 60초 ·
+  Half-open ④ **`GET /llm/health` 호출을 Failover 운영 계측(attempts,
+  failovers, exhausted)에서 분리** ⑤ TASK-1003(Routing Experiment & Traffic
+  Control) 지시됨 — Percentage / A·B / Canary / Weighted Routing +
+  Experiment Dashboard.
+- 반영(TASK-1003): ① `classifyFailoverError()`로 분류 규칙을 명시화하고
+  대상 4종만 전환하도록 좁힘(미분류는 안전 측 제외 — #40 ①에 확인 요청).
+  ② ③ 현행 구현과 일치 — 변경 없이 확정. ④ 진단 호출을 운영 계측에서 분리하고
+  `metrics.healthChecks`로 별도 집계(건강 상태 반영은 유지). ⑤ 5항목 구현
+  완료 (#40 참고).
 
 ### 38. TASK-1001 해석 확인 → 승인 + Routing 단위·Fallback·이력 Provider 확정 (2026-07-28)
 - CTO 결정: ① **Routing 단위는 Feature 3종(Content / Analysis / Vision)을

@@ -740,6 +740,11 @@ export interface FailoverMetricsDto {
     success: number;
     failed: number;
   }[];
+  /**
+   * `GET /llm/health` 진단 호출 (CTO 결정 1002-④로 위 운영 계측과 분리).
+   * 건강 상태에는 반영되지만 attempts/failovers/exhausted에는 포함되지 않는다.
+   */
+  healthChecks: { ok: number; failed: number };
   since: string;
 }
 
@@ -755,6 +760,52 @@ export interface LlmFailoverDto {
   attemptsPerProvider: number;
   health: ProviderHealthStateDto[];
   metrics: FailoverMetricsDto;
+  checkedAt: string;
+}
+
+// ── Routing Experiment (TASK-1003, Sprint 10) ─────────
+
+/** 실험 종류 — 선택 알고리즘은 같고 운영자의 의도 선언이 다르다 */
+export type ExperimentKindDto = "percentage" | "ab" | "canary" | "weighted";
+
+export interface ExperimentVariantDto {
+  /** 집계 키 — `provider` 또는 `provider:model` */
+  key: string;
+  provider: string;
+  model: string | null;
+  /** 설정된 가중치 */
+  weight: number;
+  /** 설정 가중치의 비율 (전체 대비) */
+  weightShare: number;
+  /** 이 Provider를 실제로 쓸 수 있는지 */
+  available: boolean;
+  /** 사용 불가 변형을 제외하고 재정규화한 배정 비율 */
+  effectiveShare: number;
+  /** 프로세스 시작 이후 이 변형에 배정된 호출 수 */
+  assignments: number;
+  /** 실제 배정 비율 (배정이 없으면 null) */
+  actualShare: number | null;
+}
+
+export interface ExperimentDto {
+  feature: string;
+  name: string;
+  kind: ExperimentKindDto;
+  /** 지정 환경변수명 */
+  env: string;
+  /** 사용 가능한 변형이 있어 실제로 트래픽이 나뉘는지 */
+  active: boolean;
+  /** 비활성·부분 제외 사유 (없으면 null) */
+  reason: string | null;
+  /** 이 실험의 총 배정 횟수 */
+  assignments: number;
+  variants: ExperimentVariantDto[];
+}
+
+/** Routing Experiment 현황 (TASK-1003) */
+export interface LlmExperimentsDto {
+  availableProviders: string[];
+  experiments: ExperimentDto[];
   checkedAt: string;
 }
 
@@ -823,6 +874,12 @@ export interface ExecutionDashboardDto {
    * key는 `${feature}→${provider}` 형식이다.
    */
   byRoute: ExecutionGroupStatsDto[];
+  /**
+   * Experiment Metrics (TASK-1003) — 실험 변형별 집계.
+   * key는 `${feature}→${provider}:${model}` 형식으로, 같은 Provider의
+   * 모델 변형까지 구분한다 (A/B·Canary 비교용).
+   */
+  byVariant: ExecutionGroupStatsDto[];
 }
 
 // ── Execution Timeline (TASK-0605) ─────────────────────
