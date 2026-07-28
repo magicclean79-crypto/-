@@ -2,6 +2,13 @@ import type { LlmImageDto, LlmMessageDto, LlmResponseFormat, VisionSummary } fro
 import type { PromptEngine } from "../prompt/prompt-engine";
 import { VISION_ANALYSIS_TEMPLATE_KEY } from "../prompt/templates/vision-analysis.template";
 import {
+  DEFAULT_IMAGE_GUARD_POLICY,
+  ImageGuardError,
+  validateSourceImage,
+  type ImageGuardPolicy,
+  type ImagePreprocessor,
+} from "./image-guard";
+import {
   parseVisionSummaryResponse,
   type VisionAnalysisContext,
 } from "./vision-analysis";
@@ -38,6 +45,13 @@ export interface LlmVisionProviderOptions {
   llmProviderName: string;
   /** 첨부 이미지 수 상한 (기본 VISION_MAX_IMAGES=5, 최소 1) */
   maxImages?: number;
+  /**
+   * 이미지 전처리기 (TASK-0604) — 리사이즈·최적화·EXIF 제거.
+   * 미지정 시 원본 검증(형식/용량)만 수행하고 원본 바이트를 그대로 첨부한다.
+   */
+  imagePreprocessor?: ImagePreprocessor;
+  /** 이미지 검증/전처리 정책 (기본 DEFAULT_IMAGE_GUARD_POLICY) */
+  imagePolicy?: ImageGuardPolicy;
 }
 
 /**
@@ -56,6 +70,7 @@ export interface LlmVisionProviderOptions {
 export class LlmVisionProvider implements VisionProvider {
   readonly name: string;
   private readonly maxImages: number;
+  private readonly imagePolicy: ImageGuardPolicy;
 
   constructor(private readonly options: LlmVisionProviderOptions) {
     this.name = `llm:${options.llmProviderName}`;
@@ -63,18 +78,42 @@ export class LlmVisionProvider implements VisionProvider {
       1,
       Math.floor(options.maxImages ?? VISION_MAX_IMAGES),
     );
+    this.imagePolicy = options.imagePolicy ?? DEFAULT_IMAGE_GUARD_POLICY;
   }
 
   async analyze(input: VisionInput): Promise<VisionRecognition> {
     const companyBrain = await this.options.loadCompanyBrain(input);
 
+    // Image Guard (TASK-0604): 검증/전처리 위반 이미지는 분석을 막지 않고
+    // 제외한다(ImageGuardError만 스킵). 스토리지 오류 등 인프라 실패는
+    // 그대로 전파되어 기존 재시도 → null 폴백 경로를 따른다.
     const attachedImages = input.images.slice(0, this.maxImages);
-    const images: LlmImageDto[] = await Promise.all(
-      attachedImages.map(async (image) => ({
+    const images: LlmImageDto[] = [];
+    const skippedImages: { id: string; reason: string }[] = [];
+    for (const image of attachedImages) {
+      const source = {
         mimeType: image.mimeType,
-        base64: Buffer.from(await image.getBytes()).toString("base64"),
-      })),
-    );
+        bytes: await image.getBytes(),
+      };
+      try {
+        validateSourceImage(source, this.imagePolicy);
+        const prepared = this.options.imagePreprocessor
+          ? await this.options.imagePreprocessor.prepare(
+              source,
+              this.imagePolicy,
+            )
+          : source;
+        images.push({
+          mimeType: prepared.mimeType,
+          base64: Buffer.from(prepared.bytes).toString("base64"),
+        });
+      } catch (error) {
+        if (!(error instanceof ImageGuardError)) {
+          throw error;
+        }
+        skippedImages.push({ id: image.id, reason: error.message });
+      }
+    }
 
     const context: VisionAnalysisContext = {
       project: {
@@ -106,6 +145,7 @@ export class LlmVisionProvider implements VisionProvider {
         responseText: completion.text,
         imageCount: images.length,
         omittedImageCount: input.images.length - attachedImages.length,
+        skippedImages,
         companyBrain: {
           knowledgeCount: companyBrain.knowledge.length,
           decisionCount: companyBrain.decisions.length,

@@ -135,6 +135,9 @@ OCR·Vision 결과를 조립한 **핵심 데이터 모델**입니다. 프로젝�
   바이트(base64, 최대 5장) + Prompt Engine(`vision-analysis`) + LLM Gateway +
   Company Brain 사용, 모델 선택은 `LLM_PROVIDER` 하나(기본 mock, 실패 시 null 폴백)
   — [docs/architecture/vision.md](docs/architecture/vision.md)
+- **Image Guard & Preprocessing (TASK-0604)**: Vision 호출 전 검증(MIME/용량) →
+  리사이즈(최대 1024px) → 최적화(JPEG q82) → **EXIF 제거** → 출력 5MB 제한 —
+  위반 이미지는 스킵(분석 계속), 정책은 `VISION_IMAGE_*` 환경변수로 조정
 
 ## AI 분석 (TASK-0204 · TASK-0504에서 LLM 기반 엔진으로 교체)
 

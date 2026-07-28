@@ -151,6 +151,74 @@ describe("LlmVisionProvider", () => {
     expect(raw).toMatchObject({ companyBrain: { knowledgeCount: 1 } });
   });
 
+  it("전처리기가 있으면 전처리된 바이트가 첨부된다 (Image Guard, TASK-0604)", async () => {
+    const prepared = new Uint8Array([9, 9]);
+    const preprocessor = {
+      prepare: jest.fn(async () => ({
+        mimeType: "image/jpeg",
+        bytes: prepared,
+        width: 100,
+        height: 80,
+        sourceBytes: 3,
+      })),
+    };
+    const requests: { images: { mimeType: string; base64: string }[] }[] = [];
+    const llm = new MockLlmProvider();
+    const provider = new LlmVisionProvider({
+      promptEngine: createDefaultPromptEngine(),
+      llmProviderName: llm.name,
+      complete: async (request) => {
+        requests.push(request);
+        const result = await llm.complete(request);
+        return { provider: result.provider, model: result.model, text: result.text };
+      },
+      loadCompanyBrain: emptyCompanyBrain,
+      imagePreprocessor: preprocessor,
+    });
+
+    await provider.analyze(input);
+
+    expect(preprocessor.prepare).toHaveBeenCalledTimes(1);
+    expect(requests[0].images).toEqual([
+      { mimeType: "image/jpeg", base64: Buffer.from(prepared).toString("base64") },
+    ]);
+  });
+
+  it("검증/전처리 위반 이미지는 스킵하고 분석은 계속한다 (raw.skippedImages)", async () => {
+    const { summary, raw } = await createMockLlmVisionProvider().analyze({
+      ...input,
+      images: [
+        { id: "img-ok", mimeType: "image/png", getBytes: async () => new Uint8Array([1]) },
+        { id: "img-bad", mimeType: "application/pdf", getBytes: async () => new Uint8Array([1]) },
+      ],
+    });
+
+    expect(summary.source).toBe("llm:mock");
+    expect(raw).toMatchObject({
+      imageCount: 1,
+      skippedImages: [
+        { id: "img-bad", reason: expect.stringContaining("허용되지 않는") },
+      ],
+    });
+  });
+
+  it("스토리지 오류(비 Guard 오류)는 스킵하지 않고 전파한다 (재시도→null 폴백 유지)", async () => {
+    await expect(
+      createMockLlmVisionProvider().analyze({
+        ...input,
+        images: [
+          {
+            id: "img-1",
+            mimeType: "image/png",
+            getBytes: async () => {
+              throw new Error("connect ECONNREFUSED");
+            },
+          },
+        ],
+      }),
+    ).rejects.toThrow("ECONNREFUSED");
+  });
+
   it("LLM 응답을 파싱할 수 없으면 reject한다 (호출자에서 재시도 후 null 폴백)", async () => {
     const provider = new LlmVisionProvider({
       promptEngine: createDefaultPromptEngine(),

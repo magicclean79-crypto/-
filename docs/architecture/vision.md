@@ -57,6 +57,29 @@ ProductObjectService
 - `VisionSummary.source`에 `llm:<LLM Provider>`가 남아 어떤 엔진이 생성했는지
   추적된다 (기존 버전의 `"mock"` 이력은 그대로 보존).
 
+## Image Guard & Preprocessing (TASK-0604)
+
+Vision Provider(LLM 멀티모달) 호출 전에 모든 이미지가 검증·전처리된다:
+
+```
+getBytes() → ① 원본 검증 (validateSourceImage, @acos/core — 순수 로직)
+                 MIME 허용 목록(jpeg/png/webp/gif) · 원본 최대 20MB · 빈 파일 거부
+             ② SharpImagePreprocessor (apps/api — sharp)
+                 rotate()  : EXIF Orientation을 픽셀 회전으로 반영
+                 resize()  : 최대 변 1024px, 비율 유지, 확대 없음
+                 재인코딩  : JPEG q82 (투명 PNG는 PNG 유지) — EXIF 등 메타데이터 제거
+                 용량 제한 : 전처리 후에도 5MB 초과면 거부
+             → base64로 LLM 요청에 첨부
+```
+
+- **위반 이미지는 분석을 막지 않는다** — `ImageGuardError`인 이미지만
+  스킵되어 `raw.skippedImages`(id·사유)에 기록되고 나머지로 분석을 계속한다.
+  스토리지 오류 등 인프라 실패는 그대로 전파되어 기존 재시도 → null 폴백을
+  따른다.
+- 정책은 환경변수로 조정 가능: `VISION_IMAGE_MAX_SOURCE_BYTES`(기본 20MB) ·
+  `VISION_IMAGE_MAX_DIMENSION`(기본 1024) · `VISION_IMAGE_MAX_OUTPUT_BYTES`
+  (기본 5MB). 기본값은 core(`DEFAULT_IMAGE_GUARD_POLICY`)에 선언되어 있다.
+
 ## 초안(Draft) + 검증·보강 설계 (Analysis와 동일 패턴)
 
 프롬프트에는 `buildDraftVisionSummary()`가 만든 **규칙 기반 초안 JSON**
