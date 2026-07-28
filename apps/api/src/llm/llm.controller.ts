@@ -18,6 +18,7 @@ import {
 } from "@acos/core";
 import type {
   ExperimentActionDto,
+  ExperimentAnalyticsDto,
   ExperimentAssignmentsDto,
   ExperimentLifecycleDto,
   ExperimentTransitionRequest,
@@ -31,9 +32,11 @@ import type {
   LlmProvidersDto,
   LlmRoutingDto,
 } from "@acos/shared";
+import { RequireRole } from "../auth/auth.guard";
 import type { AuthenticatedRequest } from "../auth/auth.guard";
 import { HealthProtectionGuard } from "../auth/health-protection.guard";
 import { featureExperiment } from "./experiment-config";
+import { ExperimentAnalyticsService } from "./experiment-analytics.service";
 import { ExperimentLifecycleService } from "./experiment-lifecycle.service";
 import { LlmBudgetService } from "./llm-budget.service";
 import { LlmService } from "./llm.service";
@@ -44,6 +47,7 @@ export class LlmController {
     private readonly llmService: LlmService,
     private readonly budgetService: LlmBudgetService,
     private readonly lifecycle: ExperimentLifecycleService,
+    private readonly analyticsService: ExperimentAnalyticsService,
   ) {}
 
   /** 선택된 Provider 확인 (기본 mock) */
@@ -136,27 +140,72 @@ export class LlmController {
     @Query("feature") feature?: string,
     @Query("limit") limit?: string,
   ): Promise<ExperimentAssignmentsDto> {
-    const [assignments, distribution] = await Promise.all([
+    const [assignments, distribution, reassignments] = await Promise.all([
       this.lifecycle.assignments({ feature, limit: Number(limit) || undefined }),
       feature
         ? this.lifecycle.distribution(feature)
         : Promise.resolve<{ variantKey: string; projects: number }[]>([]),
+      this.lifecycle.reassignments({ feature }),
     ]);
-    return { assignments, distribution };
+    return { assignments, distribution, reassignments };
   }
 
   /**
-   * 실험 상태 전이 (TASK-1101) — Start / Stop / Promote / Rollback.
-   * 쓰기 작업이므로 전역 WriteProtectionGuard가 EDITOR 이상을 요구한다.
-   * PROMOTE는 `variantKey`(승자)를 함께 보낸다.
+   * 실험 시작·중단 (TASK-1101) — **EDITOR 이상** (CTO 결정 1101-④).
+   * 트래픽 분배를 켜고 끄는 조작이다.
    */
-  @Post("experiments/:feature/:action")
+  @Post("experiments/:feature/start")
   @HttpCode(200)
-  async transition(
+  async start(
     @Param("feature") feature: string,
-    @Param("action") action: string,
     @Body() body: ExperimentTransitionRequest,
     @Req() request: AuthenticatedRequest,
+  ): Promise<ExperimentLifecycleDto> {
+    return this.transition(feature, "START", body, request);
+  }
+
+  @Post("experiments/:feature/stop")
+  @HttpCode(200)
+  async stop(
+    @Param("feature") feature: string,
+    @Body() body: ExperimentTransitionRequest,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<ExperimentLifecycleDto> {
+    return this.transition(feature, "STOP", body, request);
+  }
+
+  /**
+   * 승자 승격·되돌리기 (TASK-1101) — **ADMIN 전용** (CTO 결정 1101-④).
+   * 트래픽 100%의 목적지를 바꾸는 조작이라 시작·중단보다 높은 권한을 둔다.
+   * PROMOTE는 `variantKey`(승자)를 함께 보낸다.
+   */
+  @Post("experiments/:feature/promote")
+  @HttpCode(200)
+  @RequireRole("ADMIN")
+  async promote(
+    @Param("feature") feature: string,
+    @Body() body: ExperimentTransitionRequest,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<ExperimentLifecycleDto> {
+    return this.transition(feature, "PROMOTE", body, request);
+  }
+
+  @Post("experiments/:feature/rollback")
+  @HttpCode(200)
+  @RequireRole("ADMIN")
+  async rollback(
+    @Param("feature") feature: string,
+    @Body() body: ExperimentTransitionRequest,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<ExperimentLifecycleDto> {
+    return this.transition(feature, "ROLLBACK", body, request);
+  }
+
+  private async transition(
+    feature: string,
+    action: string,
+    body: ExperimentTransitionRequest,
+    request: AuthenticatedRequest,
   ): Promise<ExperimentLifecycleDto> {
     const normalized = action.toUpperCase();
     if (!(EXPERIMENT_ACTIONS as readonly string[]).includes(normalized)) {
@@ -177,6 +226,22 @@ export class LlmController {
       actor: request.user?.email ?? null,
       experiment: featureExperiment(feature),
     });
+  }
+
+  /**
+   * Experiment Analytics (TASK-1102) — 변형별 성과 요약과 승자 추천.
+   * 성공률·지연·비용 비교와 신뢰도(Confidence)를 함께 제공한다.
+   */
+  @Get("experiments/:feature/analytics")
+  async analytics(
+    @Param("feature") feature: string,
+  ): Promise<ExperimentAnalyticsDto> {
+    if (!LLM_FEATURE_EXPERIMENT_ENV[feature]) {
+      throw new BadRequestException(
+        `실험 대상 feature가 아닙니다: ${feature} (${Object.keys(LLM_FEATURE_EXPERIMENT_ENV).join(" / ")})`,
+      );
+    }
+    return this.analyticsService.analyze(feature);
   }
 
   /** 텍스트 완성 — 게이트웨이를 통해 선택된 Provider 호출 */

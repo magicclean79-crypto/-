@@ -5,9 +5,11 @@ import Link from "next/link";
 import type {
   ExecutionDashboardDto,
   ExperimentActionDto,
+  ExperimentAnalyticsDto,
   ExperimentAssignmentsDto,
   ExperimentKindDto,
   ExperimentStatusDto,
+  RecommendationBasisDto,
   LlmExperimentsDto,
 } from "@acos/shared";
 import { authFetchInit } from "../../lib/auth-client";
@@ -51,8 +53,23 @@ const KIND_STYLE: Record<ExperimentKindDto, string> = {
     "bg-teal-100 text-teal-800 dark:bg-teal-900/40 dark:text-teal-300",
 };
 
+const BASIS_LABEL: Record<RecommendationBasisDto, string> = {
+  "success-rate": "성공률",
+  cost: "비용",
+  latency: "지연",
+  "insufficient-data": "판단 보류",
+  "no-variants": "대상 없음",
+};
+
 function percent(value: number | null): string {
   return value === null ? "—" : `${(value * 100).toFixed(1)}%`;
+}
+
+/** 기준 대비 증감 — 부호를 붙여 방향을 분명히 한다 */
+function delta(value: number | null, format: (v: number) => string): string {
+  if (value === null) return "—";
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${format(value)}`;
 }
 
 /**
@@ -65,6 +82,9 @@ export default function ExperimentsPage() {
   const [stats, setStats] = useState<ExecutionDashboardDto | null>(null);
   const [assignments, setAssignments] =
     useState<ExperimentAssignmentsDto | null>(null);
+  const [analytics, setAnalytics] = useState<
+    Record<string, ExperimentAnalyticsDto>
+  >({});
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -81,7 +101,28 @@ export default function ExperimentsPage() {
         return;
       }
       setError(null);
-      setData((await experimentsRes.json()) as LlmExperimentsDto);
+      const experiments = (await experimentsRes.json()) as LlmExperimentsDto;
+      setData(experiments);
+
+      // 실험별 분석 (TASK-1102) — 실패한 건은 건너뛰고 나머지를 표시한다
+      const analyzed = await Promise.all(
+        experiments.experiments.map(async (experiment) => {
+          const response = await fetch(
+            `${API_URL}/llm/experiments/${experiment.feature}/analytics`,
+          );
+          return response.ok
+            ? ((await response.json()) as ExperimentAnalyticsDto)
+            : null;
+        }),
+      );
+      setAnalytics(
+        Object.fromEntries(
+          analyzed
+            .filter((item): item is ExperimentAnalyticsDto => item !== null)
+            .map((item) => [item.feature, item]),
+        ),
+      );
+
       if (statsRes.ok) {
         setStats((await statsRes.json()) as ExecutionDashboardDto);
       }
@@ -320,6 +361,122 @@ export default function ExperimentsPage() {
                 </p>
               ) : null}
 
+              {analytics[experiment.feature] ? (
+                <div
+                  className="mt-3 rounded-lg bg-zinc-50 p-3 dark:bg-zinc-900"
+                  data-testid="experiment-analytics"
+                >
+                  {(() => {
+                    const report = analytics[experiment.feature];
+                    const { recommendation } = report;
+                    return (
+                      <>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-xs font-semibold">
+                            승자 추천
+                          </span>
+                          <span
+                            data-testid="recommendation-basis"
+                            className={`rounded-full px-2 py-0.5 text-xs ${
+                              recommendation.conclusive
+                                ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
+                                : "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                            }`}
+                          >
+                            {recommendation.winner
+                              ? `${recommendation.winner} · ${BASIS_LABEL[recommendation.basis]}`
+                              : BASIS_LABEL[recommendation.basis]}
+                          </span>
+                          <span className="text-xs text-zinc-500">
+                            신뢰도{" "}
+                            <span
+                              className="font-mono"
+                              data-testid="recommendation-confidence"
+                            >
+                              {percent(recommendation.confidence)}
+                            </span>
+                            {recommendation.conclusive ? " · 통계적 확정" : " · 참고"}
+                          </span>
+                        </div>
+                        <p
+                          className="mt-1 text-xs text-zinc-600 dark:text-zinc-400"
+                          data-testid="recommendation-reason"
+                        >
+                          {recommendation.reason}
+                        </p>
+                        {report.comparisons.length > 0 ? (
+                          <div className="mt-2 overflow-x-auto">
+                            <table
+                              className="w-full text-left text-xs"
+                              data-testid="experiment-comparison"
+                            >
+                              <thead className="text-zinc-500">
+                                <tr>
+                                  <th className="py-1 pr-3 font-medium">
+                                    기준({report.baseline}) 대비
+                                  </th>
+                                  <th className="py-1 pr-3 font-medium">
+                                    성공률
+                                  </th>
+                                  <th className="py-1 pr-3 font-medium">지연</th>
+                                  <th className="py-1 pr-3 font-medium">
+                                    호출당 비용
+                                  </th>
+                                  <th className="py-1 pr-3 font-medium">
+                                    성공률 신뢰도
+                                  </th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {report.comparisons.map((item) => (
+                                  <tr
+                                    key={item.key}
+                                    data-testid="comparison-row"
+                                    className="border-t border-zinc-200 dark:border-zinc-800"
+                                  >
+                                    <td className="py-1 pr-3 font-mono">
+                                      {item.key}
+                                    </td>
+                                    <td className="py-1 pr-3 tabular-nums">
+                                      {delta(
+                                        item.successRateDelta,
+                                        (v) => `${(v * 100).toFixed(1)}%p`,
+                                      )}
+                                    </td>
+                                    <td className="py-1 pr-3 tabular-nums">
+                                      {delta(
+                                        item.latencyDelta,
+                                        (v) => `${Math.round(v)}ms`,
+                                      )}
+                                    </td>
+                                    <td className="py-1 pr-3 tabular-nums">
+                                      {delta(
+                                        item.costPerCallDelta,
+                                        (v) => `$${v.toFixed(6)}`,
+                                      )}
+                                    </td>
+                                    <td className="py-1 pr-3 tabular-nums">
+                                      {percent(item.successRateConfidence)}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : null}
+                        <p className="mt-1 text-xs text-zinc-500">
+                          관측 {report.totalCalls}건
+                          {report.since
+                            ? ` · ${new Date(report.since).toLocaleString("ko-KR")} 이후`
+                            : " · 전체 기간"}
+                          . 승격은 운영자가 판단합니다 — 추천은 근거일 뿐입니다.
+                        </p>
+                      </>
+                    );
+                  })()}
+                </div>
+              ) : null}
+
               <div className="mt-3 overflow-x-auto">
                 <table
                   className="w-full text-left text-sm"
@@ -455,6 +612,31 @@ export default function ExperimentsPage() {
                   </tbody>
                 </table>
               </div>
+
+              {assignments.reassignments.length > 0 ? (
+                <details className="mt-3" data-testid="reassignment-history">
+                  <summary className="cursor-pointer text-xs text-zinc-500">
+                    재배정 이력 {assignments.reassignments.length}건 — 실험
+                    정의가 바뀌면 고정 배정이 다시 정해집니다
+                  </summary>
+                  <ul className="mt-1 space-y-0.5">
+                    {assignments.reassignments.map((item) => (
+                      <li
+                        key={`${item.projectId}|${item.createdAt}`}
+                        className="text-xs text-zinc-500"
+                      >
+                        <span className="font-mono">{item.projectId}</span>{" "}
+                        <span className="font-mono">{item.fromVariant}</span> →{" "}
+                        <span className="font-mono">{item.toVariant}</span> ·{" "}
+                        {item.reason === "DEFINITION_CHANGED"
+                          ? "실험 정의 변경"
+                          : "변형 사용 불가"}{" "}
+                        · {new Date(item.createdAt).toLocaleString("ko-KR")}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              ) : null}
             </section>
           ) : null}
 

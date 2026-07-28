@@ -64,6 +64,15 @@ interface EventFindArgs {
 interface AssignmentWhere {
   where: { feature_projectId: { feature: string; projectId: string } };
 }
+interface AssignmentEventCreate {
+  feature: string;
+  projectId: string;
+  reason: string;
+  fromVariant: string | null;
+  toVariant: string;
+  fromSignature: string | null;
+  toSignature: string;
+}
 interface AssignmentUpsert extends AssignmentWhere {
   create: {
     stateId: string;
@@ -113,6 +122,10 @@ function createPrismaStub() {
       updatedAt: Date;
     }
   >();
+  const assignmentEvents: (AssignmentEventCreate & {
+    id: string;
+    createdAt: Date;
+  })[] = [];
   let clock = 0;
   const tick = () => new Date(2026, 0, 1, 0, 0, (clock += 1));
 
@@ -120,6 +133,7 @@ function createPrismaStub() {
     states,
     events,
     assignments,
+    assignmentEvents,
     prisma: {
       experimentState: {
         findUnique: async ({ where, include }: StateFindArgs) => {
@@ -182,7 +196,9 @@ function createPrismaStub() {
       experimentAssignment: {
         findUnique: async ({ where }: AssignmentWhere) => {
           const { feature, projectId } = where.feature_projectId;
-          return assignments.get(`${feature}|${projectId}`) ?? null;
+          const found = assignments.get(`${feature}|${projectId}`);
+          // Prisma는 새 객체를 돌려준다 — 복사본을 반환해 별칭 오염을 막는다
+          return found ? { ...found } : null;
         },
         upsert: async ({ where, create, update }: AssignmentUpsert) => {
           const { feature, projectId } = where.feature_projectId;
@@ -212,6 +228,19 @@ function createPrismaStub() {
           }));
         },
         deleteMany: async () => ({ count: 0 }),
+      },
+      experimentAssignmentEvent: {
+        create: async ({ data }: { data: AssignmentEventCreate }) => {
+          const created = { ...data, id: `ae-${assignmentEvents.length + 1}`, createdAt: tick() };
+          assignmentEvents.push(created);
+          return created;
+        },
+        findMany: async ({ where }: { where?: { feature?: string } }) =>
+          [...assignmentEvents]
+            .filter((item) =>
+              where?.feature ? item.feature === where.feature : true,
+            )
+            .reverse(),
       },
       project: { findMany: async () => [] },
       $transaction: async (operations: Promise<unknown>[]) =>
@@ -502,6 +531,35 @@ describe("Experiment Lifecycle & Sticky Assignment (TASK-1101)", () => {
       variantKey: "anthropic",
       signature: "anthropic=100",
     });
+  });
+
+  it("재배정은 Audit 이력으로 남는다 (CTO 결정 1101-⑤)", async () => {
+    process.env.LLM_EXPERIMENT_ANALYSIS = "openai=100";
+    const { service, lifecycle, stub } = createService();
+    await analyze(service, "proj-1");
+    // 최초 배정은 재배정이 아니므로 이력이 없다
+    expect(stub.assignmentEvents).toHaveLength(0);
+
+    process.env.LLM_EXPERIMENT_ANALYSIS = "anthropic=100";
+    await analyze(service, "proj-1");
+
+    expect(stub.assignmentEvents).toHaveLength(1);
+    const events = await lifecycle.reassignments({
+      feature: "product-analysis",
+    });
+    expect(events[0]).toMatchObject({
+      feature: "product-analysis",
+      projectId: "proj-1",
+      reason: "DEFINITION_CHANGED",
+      fromVariant: "openai",
+      toVariant: "anthropic",
+      fromSignature: "openai=100",
+      toSignature: "anthropic=100",
+    });
+
+    // 같은 정의로 다시 호출하면 재사용 — 새 이력이 쌓이지 않는다
+    await analyze(service, "proj-1");
+    expect(stub.assignmentEvents).toHaveLength(1);
   });
 
   it("experiments()에 운영 상태가 함께 실린다", async () => {

@@ -572,6 +572,65 @@ const server = http.createServer((req, res) => {
     );
     return;
   }
+  // ── Experiment Analytics (TASK-1102) ──
+  const analytics = url.pathname.match(
+    /^\/llm\/experiments\/([^/]+)\/analytics$/,
+  );
+  if (analytics) {
+    const feature = analytics[1];
+    res.end(
+      JSON.stringify(
+        mode === "data"
+          ? {
+              feature,
+              name: "sonnet-canary",
+              configured: true,
+              status: "RUNNING",
+              promotedVariant: null,
+              since: "2026-07-28T09:00:00.000Z",
+              totalCalls: 1000,
+              baseline: "openai:gpt-4o",
+              variants: [
+                { key: "openai:gpt-4o", provider: "openai", model: "gpt-4o", weightShare: 0.9, calls: 500, successes: 450, failures: 50, successRate: 0.9, successRateLow: 0.87, successRateHigh: 0.92, avgLatencyMs: 900, cost: 9, costPerCall: 0.018, inputTokens: 50000, outputTokens: 15000 },
+                { key: "anthropic:claude-sonnet-5", provider: "anthropic", model: "claude-sonnet-5", weightShare: 0.1, calls: 500, successes: 495, failures: 5, successRate: 0.99, successRateLow: 0.97, successRateHigh: 0.99, avgLatencyMs: 500, cost: 4.5, costPerCall: 0.009, inputTokens: 50000, outputTokens: 15000 },
+              ],
+              comparisons: [
+                { key: "anthropic:claude-sonnet-5", successRateDelta: 0.09, latencyDelta: -400, costPerCallDelta: -0.009, successRateConfidence: 0.999 },
+              ],
+              recommendation: {
+                winner: "anthropic:claude-sonnet-5",
+                basis: "success-rate",
+                confidence: 0.999,
+                reason:
+                  "성공률이 anthropic:claude-sonnet-5 99.0% vs openai:gpt-4o 90.0%로, 이 차이가 우연일 가능성은 낮습니다 (신뢰도 99.9%).",
+                conclusive: true,
+              },
+              checkedAt: new Date().toISOString(),
+            }
+          : {
+              feature,
+              name: feature,
+              configured: false,
+              status: "RUNNING",
+              promotedVariant: null,
+              since: null,
+              totalCalls: 0,
+              baseline: null,
+              variants: [],
+              comparisons: [],
+              recommendation: {
+                winner: null,
+                basis: "no-variants",
+                confidence: 0,
+                reason: "비교할 변형이 없습니다.",
+                conclusive: false,
+              },
+              checkedAt: new Date().toISOString(),
+            },
+      ),
+    );
+    return;
+  }
   // ── Experiment Lifecycle & Sticky Assignment (TASK-1101) ──
   if (url.pathname === "/llm/experiments/assignments") {
     res.end(
@@ -583,8 +642,11 @@ const server = http.createServer((req, res) => {
                 { feature: "product-analysis", projectId: "proj-b", projectName: "겨울 기획", variantKey: "anthropic:claude-sonnet-5", signature: "openai:gpt-4o=90,anthropic:claude-sonnet-5=10", assignedAt: "2026-07-28T11:00:00.000Z", updatedAt: "2026-07-28T11:00:00.000Z" },
               ],
               distribution: [],
+              reassignments: [
+                { feature: "product-analysis", projectId: "proj-b", reason: "DEFINITION_CHANGED", fromVariant: "openai:gpt-4o", toVariant: "anthropic:claude-sonnet-5", fromSignature: "openai:gpt-4o=95,anthropic:claude-sonnet-5=5", toSignature: "openai:gpt-4o=90,anthropic:claude-sonnet-5=10", createdAt: "2026-07-28T11:00:00.000Z" },
+              ],
             }
-          : { assignments: [], distribution: [] },
+          : { assignments: [], distribution: [], reassignments: [] },
       ),
     );
     return;

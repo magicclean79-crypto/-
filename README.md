@@ -330,7 +330,15 @@ API 키가 없으면 항상 mock으로 동작합니다 —
   (`POST /llm/experiments/:feature/:action`, EDITOR 이상, 전이 이력 감사) ·
   STOPPED는 기존 라우팅으로, PROMOTED는 승자 변형으로 전 트래픽 ·
   **Assignment Dashboard**(`GET /llm/experiments/assignments` + 웹
-  `/experiments`) — 배정(실험 결과)과 실행(Execution)을 나란히 표시
+  `/experiments`) — 배정(실험 결과)과 실행(Execution)을 나란히 표시.
+  권한은 **Start·Stop = EDITOR 이상 / Promote·Rollback = ADMIN 전용**이며,
+  정의 변경으로 재배정이 발생하면 사유와 함께 Audit 이력이 남습니다
+- **Experiment Analytics (TASK-1102)**: 변형별 성과 요약(성공률 + **Wilson
+  95% 신뢰구간**·지연·비용·호출당 비용) · 기준 변형 대비 **성공률/지연/비용
+  비교** · **승자 추천**(성공률 → 비용 → 지연 순, 표본이 모자라면 추천 보류) ·
+  **Confidence Score**(양측 2-비율 z검정) · `GET /llm/experiments/:feature/
+  analytics` + 웹 `/experiments` Analytics Dashboard.
+  승격은 운영자 수동 절차이며 추천은 근거를 제공할 뿐입니다
 
 ## Execution Domain (TASK-0601, Sprint 6)
 

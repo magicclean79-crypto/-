@@ -215,8 +215,16 @@ Sticky 배정**, 없으면 기존 무상태 추첨.
 - **Rollback**은 직전 전이의 **이전 상태**로 되돌린다(이력이 없으면 RUNNING).
   ROLLBACK 자체는 되돌리기 대상에서 제외해 무한 왕복을 막는다.
 - 상태 갱신과 이력 기록은 **한 트랜잭션** — 감사 이력이 상태와 어긋나지 않는다.
-- 모든 전이는 쓰기 API이므로 전역 WriteProtectionGuard가 **EDITOR 이상**을
-  요구하고, 수행자(actor)가 이력에 남는다.
+- **권한** (CTO 결정 1101-④): **Start·Stop = EDITOR 이상**,
+  **Promote·Rollback = ADMIN 전용**. 승격·되돌리기는 트래픽 100%의 목적지를
+  바꾸는 조작이라 등급을 올렸다. 수행자(actor)는 이력에 남는다.
+
+### 재배정 감사 (CTO 결정 1101-⑤)
+
+실험 정의가 바뀌어 고정 배정이 다시 정해지면 `experiment_assignment_events`에
+이력을 남긴다 — 어느 프로젝트가 어떤 변형에서 어떤 변형으로, 무슨 사유로
+(`DEFINITION_CHANGED` / `VARIANT_UNAVAILABLE`) 옮겨졌는지. 배정이 조용히
+흔들리지 않게 하려는 것이며, Assignment Dashboard에 함께 표시된다.
 
 ### Assignment Dashboard
 
@@ -227,6 +235,48 @@ Sticky 배정**, 없으면 기존 무상태 추첨.
 **배정과 실행은 별개다** (CTO 결정 1003-④): Assignment는 실험이 정한 결과,
 Execution은 실제 수행 결과다. 변형이 실패하거나 불건강해지면 Failover가
 개입해 둘이 달라질 수 있으므로 대시보드는 둘을 **나란히** 유지한다.
+
+## Experiment Analytics & Recommendation (TASK-1102, Sprint 11)
+
+"어느 변형이 나은가"를 **판단 근거와 함께** 제시한다. 승격 자체는 운영자의
+수동 절차이므로(CTO 결정 1101-③), 분석은 결정을 대신하지 않고 근거를 만든다.
+
+`GET /llm/experiments/:feature/analytics` — 변형별 성과·비교·추천.
+
+### Variant Performance Summary
+
+변형별 호출·성공/실패·성공률·평균 지연·비용·호출당 비용·토큰.
+성공률에는 **Wilson 95% 신뢰구간**을 함께 준다 — "3/3 성공 = 100%"처럼
+적은 표본을 과신해 표시하지 않기 위해서다.
+
+**근거는 배정이 아니라 실행(Execution)** 이다 (CTO 결정 1003-④). 지연은
+호출 수로 **가중 평균**한다(그룹 평균을 단순 평균하면 왜곡된다).
+
+**관측 기간**은 마지막 `START` 전이 시각(없으면 상태 생성 시점) 이후다 —
+실험 시작 전 이력이 비교에 섞이지 않게 한다.
+
+### Success Rate / Latency / Cost Comparison
+
+가중치가 가장 큰 변형을 **기준(baseline)** 으로 삼아 나머지를 비교한다:
+성공률 차이(%p), 지연 차이(ms), 호출당 비용 차이(USD), 그리고 성공률 차이가
+우연이 아닐 **신뢰도**(양측 2-비율 z검정).
+
+### Winner Recommendation & Confidence Score
+
+| 순서 | 판단 |
+| --- | --- |
+| 0 | **모든 변형이 최소 표본(기본 30회)** 을 채워야 한다 — 아니면 추천하지 않는다 |
+| 1 | 성공률 1·2위 차이의 신뢰도가 **95% 이상**이면 1위가 승자 (`success-rate`, 확정) |
+| 2 | 성공률이 통계적으로 구분되지 않으면 **호출당 비용**이 싼 쪽 (`cost`, 참고) |
+| 3 | 비용도 같으면 **평균 지연**이 짧은 쪽 (`latency`, 참고) |
+| 4 | 어느 축에서도 차이가 없으면 **추천 보류** |
+
+**품질 우선**이다 — 비용이 싸도 실패하는 변형은 이기지 못한다. 성공률로
+결정된 추천만 `conclusive: true`(통계적 확정)이고, 비용·지연 근거는 참고로
+표시한다. 모든 추천에 신뢰도(0~1)와 **사람이 읽는 근거 문장**이 붙는다.
+
+통계 함수는 core 순수 로직이다 — `normalCdf`(erf 근사),
+`wilsonInterval`, `proportionConfidence`.
 
 ## 구조
 
@@ -283,7 +333,9 @@ Execution은 실제 수행 결과다. 변형이 실패하거나 불건강해지�
 | `GET` | `/llm/failover` | **Failover 현황 (TASK-1002)** — 우선순위·타임아웃·Provider 건강 상태·계측 |
 | `GET` | `/llm/experiments` | **Experiment 현황 (TASK-1003)** — 실험 종류·변형·가중치·실제 배정 + 운영 상태(1101) |
 | `GET` | `/llm/experiments/assignments` | **Assignment Dashboard (TASK-1101)** — Project별 Sticky 배정·변형 분포 |
-| `POST` | `/llm/experiments/:feature/:action` | **Lifecycle (TASK-1101)** — `start`/`stop`/`promote`/`rollback` (EDITOR 이상, promote는 `variantKey` 필요) |
+| `POST` | `/llm/experiments/:feature/start` · `/stop` | **Lifecycle (TASK-1101)** — EDITOR 이상 |
+| `POST` | `/llm/experiments/:feature/promote` · `/rollback` | **Lifecycle (TASK-1101)** — **ADMIN 전용**(결정 1101-④), promote는 `variantKey` 필요 |
+| `GET` | `/llm/experiments/:feature/analytics` | **Analytics (TASK-1102)** — 변형 성과·비교·승자 추천·신뢰도 |
 | `POST` | `/llm/complete` | `{ messages, model?, maxTokens? }` → `{ provider, model, text, usage }` (200) |
 
 오류: `400` 빈 메시지·잘못된 role·공백 content·잘못된 maxTokens.

@@ -437,3 +437,21 @@ model ExperimentAssignment {
   @@index([feature, variantKey])
   @@map("experiment_assignments")
 }
+
+// 배정 변경 감사 (TASK-1102, CTO 결정 1101-⑤).
+// 실험 정의(변형·가중치)가 바뀌면 기존 Sticky 배정이 무효가 되어 다시
+// 배정되는데, 그 변화를 조용히 넘기지 않고 이력으로 남긴다.
+model ExperimentAssignmentEvent {
+  id           String   @id @default(cuid())
+  feature      String
+  projectId    String
+  reason       String // DEFINITION_CHANGED | VARIANT_UNAVAILABLE
+  fromVariant  String?
+  toVariant    String
+  fromSignature String?
+  toSignature  String
+  createdAt    DateTime @default(now())
+
+  @@index([feature, createdAt])
+  @@map("experiment_assignment_events")
+}

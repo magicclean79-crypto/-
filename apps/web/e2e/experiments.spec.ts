@@ -140,6 +140,47 @@ test.describe("Experiment Dashboard (TASK-1003)", () => {
     await expect(page.getByTestId("experiments-notice")).toContainText("실패");
   });
 
+  test("변형 성과 비교와 승자 추천이 근거·신뢰도와 함께 표시된다 (TASK-1102)", async ({
+    page,
+  }) => {
+    await setMode("data");
+    await page.goto("/experiments");
+
+    const analytics = page
+      .getByTestId("experiment-analytics")
+      .first();
+    await expect(analytics).toBeVisible();
+    await expect(analytics.getByTestId("recommendation-basis")).toContainText(
+      "anthropic:claude-sonnet-5",
+    );
+    await expect(analytics.getByTestId("recommendation-basis")).toContainText(
+      "성공률",
+    );
+    await expect(
+      analytics.getByTestId("recommendation-confidence"),
+    ).toContainText("99.9%");
+    await expect(analytics.getByTestId("recommendation-reason")).toContainText(
+      "우연일 가능성은 낮습니다",
+    );
+
+    // 기준 대비 비교 — 부호로 방향을 알 수 있어야 한다
+    const comparison = analytics.getByTestId("experiment-comparison");
+    await expect(comparison).toContainText("기준(openai:gpt-4o) 대비");
+    await expect(comparison).toContainText("+9.0%p");
+    await expect(comparison).toContainText("-400ms");
+    await expect(analytics).toContainText("관측 1000건");
+  });
+
+  test("재배정 이력이 사유와 함께 표시된다 (TASK-1102)", async ({ page }) => {
+    await setMode("data");
+    await page.goto("/experiments");
+
+    const history = page.getByTestId("reassignment-history");
+    await expect(history).toContainText("재배정 이력 1건");
+    await expect(history).toContainText("실험 정의 변경");
+    await expect(history).toContainText("proj-b");
+  });
+
   test("API 오류 시 오류 안내를 표시한다", async ({ page }) => {
     await setMode("error");
     await page.goto("/experiments");

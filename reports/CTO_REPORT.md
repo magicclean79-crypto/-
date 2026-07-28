@@ -13,89 +13,83 @@
 
 | 항목 | 값 |
 | --- | --- |
-| 보고 기준 TASK | **TASK-1101 — Sticky Assignment & Experiment Lifecycle** (Sprint 11) |
+| 보고 기준 TASK | **TASK-1102 — Experiment Analytics & Recommendation** (Sprint 11) |
 | 보고일 | 2026-07-28 |
 | 브랜치 | `claude/ai-product-content-os-setup-jb5oai` |
-| 핵심 성과 | **Project 기반 고정 배정**(결정적 해시) + 실험 운영 상태(Start/Stop/Promote/Rollback) + Assignment Dashboard |
-| 구현 중단 상태 | **TASK-1101 완료 후 즉시 중단** — CTO 승인 전 다음 TASK 미착수 |
-| 스펙 확인 필요 | 배정 주체·기본 상태·승격 후 정리·권한 등급 → **CTO_REQUEST #41 확인 요청** |
+| 핵심 성과 | **변형 성과 비교 + 승자 추천(신뢰도 포함)** · 권한 분리(Promote/Rollback ADMIN) · 재배정 Audit |
+| 구현 중단 상태 | **TASK-1102 완료 후 즉시 중단** — CTO 승인 전 다음 TASK 미착수 |
+| 스펙 확인 필요 | 최소 표본·판단 순서·관측 기간 초기화 → **CTO_REQUEST #42 확인 요청** |
 
 ## 2. 품질 게이트
 
 | 게이트 | 명령 | 결과 |
 | --- | --- | --- |
 | Build | `pnpm build` | ✅ 6/6 워크스페이스 성공 |
-| Test | `pnpm test` | ✅ **475** — core 194(+20) · api 247(+12) · **web e2e 34(+4)** — 전체 통과 |
+| Test | `pnpm test` | ✅ **502** — core 210(+16) · api 256(+9) · **web e2e 36(+2)** — 전체 통과 |
 | TypeScript | (빌드 포함) | ✅ 오류 0 |
 | ESLint | `pnpm lint` | ✅ 오류 0, 경고 0 |
 
 ## 3. 변경 사항 (이번 보고 주기)
 
-### TASK-1101 — Sticky Assignment & Experiment Lifecycle
+### TASK-1102 — Experiment Analytics & Recommendation
 
-지시 5항목 전부 이행. 실험 **정의**는 환경변수가 원천이라는 결정(1003-②)을
-유지하고, 이번 TASK는 **누가 어떤 변형을 받는지**와 **실험의 운영 상태**를 더한다.
+지시 7항목 전부 이행. 승격은 운영자 수동 절차이므로(CTO 결정 1101-③),
+분석은 **결정을 대신하지 않고 근거를 만든다**는 방향으로 설계했다.
 
-**1. Project 기반 Sticky Assignment**
+**1. Variant Performance Summary** — 변형별 호출·성공/실패·성공률·평균 지연·
+비용·호출당 비용·토큰. 성공률에는 **Wilson 95% 신뢰구간**을 함께 준다.
+"3/3 성공 = 100%"처럼 적은 표본을 확정처럼 보여주지 않기 위해서다.
+근거는 배정이 아니라 **실행(Execution)** 이고(CTO 결정 1003-④), 지연은
+호출 수로 **가중 평균**한다(그룹 평균의 단순 평균은 왜곡된다).
 
-같은 프로젝트는 항상 같은 변형을 받는다. 핵심은 배정을 저장소가 아니라
-**결정적 해시**로 정한 것이다:
+**2~4. Success Rate / Latency / Cost Comparison** — 가중치가 가장 큰 변형을
+기준(baseline)으로 삼아 성공률 차이(%p)·지연 차이(ms)·호출당 비용 차이(USD)와
+**성공률 차이의 신뢰도**를 낸다.
 
-```
-변형 = 가중추첨(변형목록, random = hash(정의서명 + projectId))
-```
+**5~6. Winner Recommendation & Confidence Score**
 
-저장소가 비어 있어도, 재기동해도, 여러 인스턴스에서도 결과가 같다. 저장
-(`experiment_assignments`)은 관측·감사용이며 **저장 실패가 호출을 실패시키지
-않는다**. 정의 **서명**(`변형=가중치` 목록)이 바뀌면 기존 배정은 무효가 되어
-다시 배정되고, 이름·종류만 바꾸면 서명은 그대로다(표시용 메타데이터 —
-CTO 결정 1003-③). `projectId`는 Content Generation·Product Analysis·
-Vision Analysis 호출 경로에서 전달되며, 없으면 기존 무상태 추첨이다.
+| 순서 | 판단 | 결과 |
+| --- | --- | --- |
+| 0 | 전 변형이 **최소 30회**를 채웠는가 | 아니면 **추천하지 않음** |
+| 1 | 성공률 1·2위 차이 신뢰도 **≥ 95%** | 1위가 승자 (`success-rate`, **확정**) |
+| 2 | 성공률이 통계적으로 동률 | **호출당 비용**이 싼 쪽 (`cost`, 참고) |
+| 3 | 비용도 동률 | **평균 지연**이 짧은 쪽 (`latency`, 참고) |
+| 4 | 어느 축도 차이 없음 | 추천 보류 |
 
-**2~4. Start / Stop / Promote / Rollback**
+**품질 우선**이다 — 비용이 싸도 실패하는 변형은 이기지 못한다. 성공률로
+결정된 추천만 `conclusive: true`이고 비용·지연 근거는 참고로 표시하며,
+모든 추천에 신뢰도와 **사람이 읽는 근거 문장**이 붙는다. 통계 함수
+(`normalCdf`·`wilsonInterval`·`proportionConfidence`)는 core 순수 로직이다.
 
-| 상태 | 동작 |
-| --- | --- |
-| **RUNNING** (기본) | 변형 배정 진행. **행이 없으면 이 상태** — TASK-1003 동작이 보존되어 실험을 켜려고 별도 조작이 필요 없다 |
-| **STOPPED** | 실험 미적용, **기존 라우팅**으로 처리. 배정 기록은 보존 |
-| **PROMOTED** | 배정 없이 **승자 변형으로 전 트래픽** |
+**7. Analytics Dashboard** — 웹 `/experiments` 실험 카드 안에 추천 배지
+(확정/참고 색 구분)·근거 문장·기준 대비 비교표를 넣었다. 설정 → 배정 →
+성과 → 추천이 한 화면에서 이어진다.
 
-- **Promote**는 승자가 **현재 정의에 있어야** 한다(없으면 400). 승자 Provider를
-  쓸 수 없게 되면 라우팅으로 강등된다 — 승격이 장애로 이어지지 않는다.
-- **Rollback**은 직전 전이의 **이전 상태**로 되돌린다(이력 없으면 RUNNING).
-  ROLLBACK 자체는 되돌리기 대상에서 제외해 무한 왕복을 막았다.
-- 상태 갱신과 이력 기록은 **한 트랜잭션** — 감사 이력이 상태와 어긋나지 않는다.
-- 전이는 쓰기 API이므로 전역 WriteProtectionGuard가 **EDITOR 이상**을 요구하고
-  수행자(actor)가 이력에 남는다.
+### CTO 결정 1101-④ 이행 — 권한 분리
 
-**5. Assignment Dashboard**
+**Start·Stop = EDITOR 이상**, **Promote·Rollback = ADMIN 전용**
+(`@RequireRole("ADMIN")`). 구현 중 Express 5의 path-to-regexp가
+`:action(start|stop)` 문법을 더는 지원하지 않아, **4개 명시 라우트**로
+분리했다 — 결과적으로 권한 의도가 라우트에 그대로 드러나 더 명확해졌다.
 
-웹 `/experiments`에 상태 배지·조작 버튼(시작/중단/되돌리기/변형별 승격)·
-전이 이력이 붙고, 하단에 **프로젝트별 배정 표**가 나온다.
-`GET /llm/experiments/assignments`가 원천이다.
+### CTO 결정 1101-⑤ 이행 — 재배정 Audit
 
-**구현 중 발견해 고친 결함**: 해시를 FNV-1a만으로 쓰면 `proj-1`, `proj-2`처럼
-**연속적인 프로젝트 ID가 비슷한 값으로 뭉쳐** 배정이 한쪽으로 완전히 쏠렸다
-(12개 프로젝트가 전부 한 변형으로 감 — 실제 테스트에서 재현). MurmurHash3의
-최종 혼합(fmix32)을 한 단계 더 돌려 해결하고, **이 실패 형태를 그대로 재현하는
-회귀 테스트**를 남겼다. 순번 ID를 쓰는 환경에서는 실험이 통째로 무의미해지는
-결함이라 조용히 고치지 않고 보고에 남긴다.
+실험 정의가 바뀌어 고정 배정이 다시 정해지면 `experiment_assignment_events`에
+남긴다: 프로젝트·이전/이후 변형·이전/이후 서명·사유
+(`DEFINITION_CHANGED` / `VARIANT_UNAVAILABLE`). Assignment Dashboard에
+사유와 함께 표시된다. **최초 배정은 재배정이 아니므로 기록하지 않는다.**
 
-### CTO 결정 1003-①~④ 반영
-
-| 결정 | 반영 |
-| --- | --- |
-| ① `unknown` 오류는 Failover 대상 아님 | **현행 유지 — 공식 표준으로 확정**(코드 변경 없음) |
-| ② 표기법 `이름\|종류\|변형=가중치` 유지 | 현행 유지. 정의는 계속 환경변수가 원천이고, 이번 TASK의 상태는 별도 계층으로 분리 |
-| ③ kind는 운영 메타데이터 (알고리즘 무영향) | 현행 유지. **배정 서명에서 kind·이름을 제외**해 "표시용"임을 코드로 못박음 |
-| ④ 배정과 실행 분리 | Assignment(실험 결과)와 Execution(수행 결과)을 각각 저장·표시. 대시보드가 둘을 나란히 유지 |
+구현 중 스텁이 살아 있는 객체 참조를 돌려주는 바람에 "이전 배정"이 갱신
+후 값으로 오염되는 것을 테스트가 잡아냈다. 스텁을 Prisma와 같게(복사본
+반환) 고치고, 서비스에서도 갱신 전 값을 명시적으로 붙잡도록 했다.
 
 ### 누적 완료 TASK
 
 | Sprint | TASK | 상태 |
 | --- | --- | --- |
-| Sprint 11 | **TASK-1101 — Sticky Assignment & Experiment Lifecycle** | **완료 — 승인 대기** |
-| Sprint 10 | 1001~1003 라우팅·Failover·실험 | 전체 승인 · **공식 종료** |
+| Sprint 11 | **TASK-1102 — Experiment Analytics & Recommendation** | **완료 — 승인 대기** |
+| Sprint 11 | TASK-1101 — Sticky Assignment & Experiment Lifecycle | 승인 (`5514b33`) |
+| Sprint 10 | 1001~1003 라우팅·Failover·실험 | 전체 승인 · 공식 종료 |
 | Sprint 9 | 0901~0903 실 Provider 연결·비용 거버넌스 | 전체 승인 · 공식 종료 |
 | Sprint 1~8 | Foundation ~ 인증/보안 | 전체 승인 · 공식 종료 |
 
@@ -103,112 +97,112 @@ Vision Analysis 호출 경로에서 전달되며, 없으면 기존 무상태 추
 
 | 위치 | 종류 | 수 | 결과 |
 | --- | --- | --- | --- |
-| `packages/core` | Unit — 기존 174 · **Sticky·Lifecycle 20** | 194 | ✅ |
-| `apps/api` | Service+API — 기존 235 · **Lifecycle·배정 12** | 247 | ✅ |
-| `apps/web` | Playwright e2e — 기존 30 · **배정·전이 4** | 34 | ✅ |
-| **합계** | | **475** | **전체 통과** |
+| `packages/core` | Unit — 기존 194 · **분석·통계 16** | 210 | ✅ |
+| `apps/api` | Service+API — 기존 247 · **분석 6 · 권한 3** | 256 | ✅ |
+| `apps/web` | Playwright e2e — 기존 34 · **분석·재배정 2** | 36 | ✅ |
+| **합계** | | **502** | **전체 통과** |
 
 신규 테스트가 검증하는 것:
-- **core**: 해시 결정성·범위·분포 · **연속 키 뭉침 회귀 테스트** · 서명
-  (변형 변경 시 달라짐 / 이름·종류 변경 시 동일) · Sticky(같은 프로젝트 20회
-  동일 · 프로젝트별 분산 · 저장 배정 재사용 · 서명 불일치 시 재배정 · 사용 불가
-  변형이면 재배정 · 전부 불가면 null) · 전이 규칙 4종(START 승자 해제 · STOP
-  승자 보존 · PROMOTE 검증 · ROLLBACK 복원/기본값) · 상태별 적용 판정
-- **api**: Sticky 15회 동일 변형·배정 1건만 저장 · 40개 프로젝트 분산 ·
-  projectId 없으면 저장 안 함 · **STOP → 라우팅으로 전환** · START 재개 ·
-  **Promotion → 1% 변형도 전 트래픽** · 정의에 없는 변형 400 · **Rollback** ·
-  전이 감사 이력 · Assignment Dashboard(목록·분포) · **정의 변경 시 재배정** ·
-  experiments()에 운영 상태 동반
-- **웹 e2e**: 배정 표 렌더링 · **중단 → 상태 배지·이력 갱신** · **승격 →
-  승자 표시** · 미인증 전이 안내
+- **core(통계)**: `normalCdf` 기준값(0/±1.96/3) · Wilson 구간(**3/3 성공에도
+  하한이 1이 아님**·표본이 크면 좁아짐) · 2-비율 신뢰도(차이·표본이 클수록
+  높아짐, 동률·표본 0이면 0)
+- **core(분석)**: 성공률·호출당 비용·신뢰구간 계산 · **가중치 최대 변형이
+  기준** · 기준 대비 3축 차이 · 가격표 없는 변형은 비용 null · 승자 추천
+  5경로(표본 부족 / **성공률 확정** / **비싸도 성공률 우선** / 비용 / 지연 /
+  전부 동률 보류) · 최소 표본 기준 조정
+- **api**: Execution 집계(**실험과 무관한 변형 제외**, 지연 호출 수 가중
+  평균) · 기준 대비 비교 · 근거·신뢰도 동반 추천 · 표본 부족 시 보류 ·
+  대상 아닌 feature 400 · **권한 3종**(Start/Stop EDITOR 200 · Promote/
+  Rollback EDITOR 403·ADMIN 200 · 미인증 401) · **재배정 Audit**(최초 배정은
+  미기록, 정의 변경 시 사유·from/to 기록, 재사용 시 중복 기록 없음)
+- **웹 e2e**: 추천 배지·신뢰도·근거 문장·기준 대비 비교(부호 포함) ·
+  재배정 이력 사유 표시
 
 라이브 검증 (실 PostgreSQL + 실스택, `LLM_EXPERIMENT_ANALYSIS=
-sonnet-canary|canary|mock=70,openai=30`, `LLM_ROUTE_ANALYSIS=anthropic`):
+sonnet-canary|ab|mock=50,openai=50`, openai는 무효 키):
 
-- **Sticky**: 같은 상품(프로젝트) 분석 **6회 연속 모두 배정 변형(openai)로
-  호출**, 배정 행은 1건만 저장(서명 `mock=70,openai=30`)
-- **프로젝트별 분산**: 서로 다른 두 프로젝트가 각각 `openai` / `mock`으로 배정
-- **STOP** → 다음 호출이 **라우팅 규칙(anthropic)** 으로 나감
-- **PROMOTE(mock)** → 다음 호출이 **mock으로 SUCCESS** · 정의에 없는
-  `gemini` 승격은 **400**(`변형 "gemini"은 현재 실험 정의에 없습니다`)
-- **ROLLBACK** → `PROMOTED → STOPPED`로 직전 상태 복원, 이력 3건 확인
-- **미인증 전이** → **401**
-- 브라우저 `/experiments` 렌더링 확인 (스크린샷 첨부)
+- **표본 부족 단계**: mock 1회·openai 3회에서 **추천 보류**, mock 성공률
+  100%지만 Wilson 구간 **0.21~1.00**으로 과신하지 않음을 확인
+- **표본 축적 후**: mock 34회(100%)·openai 102회(0%) → 추천 **mock**,
+  근거 `success-rate`, **신뢰도 1.0000·확정**, 비교 −100.0%p
+- **재배정 Audit(결정 ⑤)**: 정의를 `mock=70,openai=30` → `mock=50,openai=50`
+  으로 바꾸자 두 프로젝트 모두 `DEFINITION_CHANGED` 이력 기록
+- **권한(결정 ④)**: EDITOR — stop 200 · start 200 · **promote 403 ·
+  rollback 403** / ADMIN — **promote 200 · rollback 200**
+- 브라우저 `/experiments` Analytics 렌더링 확인 (스크린샷 첨부)
 
 ## 5. 아키텍처 변경 및 현황
 
-**이번 주기 변경 — 실험에 "주체"와 "상태"가 생김**:
+**이번 주기 변경 — 실험에 "판단 근거" 계층 추가**:
 
 ```
-호출(feature, projectId) ─▶ LlmService (단일 관문)
-                              ├─ 예산 → 라우팅(1001)
-                              ├─ 실험(1003) 있으면:
-                              │    ├─ Lifecycle(1101)  STOPPED → 미적용 / PROMOTED → 승자 고정
-                              │    └─ RUNNING → projectId 있으면 Sticky(결정적 해시), 없으면 추첨
-                              ├─ Failover 체인(1002)
-                              └─ Execution 기록 ─▶ byVariant (실행 결과)
-                                   ※ 배정(Assignment)은 별도 저장 — 결정 1003-④
+Execution(실제 수행) ──▶ groupBy(provider, model, status)  ※ 마지막 START 이후
+                             │
+실험 정의(환경변수) ─────────┤
+                             ▼
+                    analyzeExperiment (core 순수 로직)
+                      ├─ Variant Performance (+ Wilson 구간)
+                      ├─ Baseline 대비 비교 (성공률/지연/비용)
+                      └─ recommendWinner  성공률 → 비용 → 지연
+                             ▼
+                    GET /llm/experiments/:feature/analytics ─▶ 웹 대시보드
+                             ※ 승격은 사람이 판단 (결정 1101-③)
 ```
 
-① 배정 규칙·전이 규칙이 **core 순수 로직**으로 분리돼 저장소 없이 단위
-테스트로 고정된다. ② 배정이 **해시로 결정**되므로 저장소는 관측용 부가물이
-되고, DB 장애가 배정 일관성을 깨지 않는다. ③ 정의(환경변수)와 상태(DB)를
-분리해, Code-first 원칙을 지키면서도 운영 중 조작이 가능해졌다. ④ 상태 계층이
-추가돼도 **행이 없으면 RUNNING**이라 기존 동작이 그대로 유지된다.
+① 통계·판단이 **core 순수 로직**이라 DB 없이 경계 조건까지 테스트로
+고정된다. ② 분석은 **실행(Execution)** 을 근거로 삼아, 배정(의도)과 결과를
+분리한 결정 1003-④를 그대로 따른다. ③ 추천은 **확정(`conclusive`)과 참고를
+구분**해, 통계적 근거가 없는 제안을 확정처럼 보이지 않게 했다. ④ 권한이
+라우트 단위로 드러나 승격 같은 고위험 조작의 등급이 코드에서 읽힌다.
 
 **유지되는 핵심 결정**: 단일 관문 · Code-first 정의 · 미설정 시 기존 동작 ·
-Failover 오류 분류(1002 승인 ①) · Health 표준 3회/60초(1002 승인 ③) ·
-실험 표기법(1003 승인 ②) · kind는 메타데이터(1003 승인 ③) · 배정/실행 분리
-(1003 승인 ④)
+Failover 오류 분류(1002 승인 ①) · 실험 표기법(1003 승인 ②) · kind는
+메타데이터(1003 승인 ③) · 배정/실행 분리(1003 승인 ④) · 기본 RUNNING
+(1101 승인 ①) · Project 기반 Sticky(1101 승인 ②) · 승격은 수동(1101 승인 ③)
 
-**현황**: 모노레포(web·api·core/shared/agents/ui), **마이그레이션 22건**
+**현황**: 모노레포(web·api·core/shared/agents/ui), **마이그레이션 23건**
 (이번 TASK +1), drift 없음
 
 ## 6. 데이터 모델
 
-**마이그레이션 22 — 실험 운영 상태·배정 3개 테이블 신설** (기존 테이블 변경 없음):
+**마이그레이션 23 — `experiment_assignment_events` 신설** (기존 테이블 변경 없음):
+feature·projectId·사유·이전/이후 변형·이전/이후 서명·시각. 재배정이 조용히
+일어나지 않도록 남기는 감사 기록이다(CTO 결정 1101-⑤).
 
-| 테이블 | 내용 |
-| --- | --- |
-| `experiment_states` | feature별 상태(RUNNING/STOPPED/PROMOTED)·승자 변형·수행자 (feature 유니크) |
-| `experiment_events` | 전이 이력 — action·from/to 상태·from/to 변형·actor·note (Rollback 근거 겸 감사) |
-| `experiment_assignments` | Project → 변형 고정 배정 + 정의 서명 (`feature+projectId` 유니크) |
-
-실험 **정의**는 여전히 환경변수이며 DB에 저장하지 않는다.
+분석은 **별도 저장 없이** Execution 집계로 계산한다 — 지표를 이중으로
+저장하면 실행 이력과 어긋날 수 있기 때문이다.
 
 ## 7. API 표면
 
 | 영역 | 엔드포인트 |
 | --- | --- |
-| 배정 | **`GET /llm/experiments/assignments`** — Project별 배정·변형 분포 (`?feature=`) |
-| 전이 | **`POST /llm/experiments/:feature/:action`** — `start`/`stop`/`promote`/`rollback` (EDITOR 이상, promote는 `variantKey`) |
-| 실험 | `GET /llm/experiments` — 응답에 **`lifecycle`** 추가 |
-| 그 외 | 변경 없음 (호출 계약 동일) |
+| 분석 | **`GET /llm/experiments/:feature/analytics`** — 변형 성과·비교·추천·신뢰도 |
+| 전이 | `POST /llm/experiments/:feature/start` · `/stop` — **EDITOR 이상** |
+| 전이 | `POST /llm/experiments/:feature/promote` · `/rollback` — **ADMIN 전용** (결정 ④) |
+| 배정 | `GET /llm/experiments/assignments` — **`reassignments`** 추가 (결정 ⑤) |
 
-웹: `/experiments`에 상태 배지·조작 버튼·전이 이력·배정 표 추가
+웹: `/experiments` 실험 카드에 Analytics 영역, 배정 표에 재배정 이력 추가
 
 ## 8. 리스크·기술 부채
 
-1. **1101 해석 미확인** — 배정 주체·기본 상태·승격 후 정리·권한 등급
-   (CTO_REQUEST #41)
-2. **배정 주체가 Project 하나** — 사용자별·상품별 실험은 불가하다(지시대로
-   Project 기반). 다른 축이 필요하면 스펙 필요
-3. **승격 후에도 실험 정의가 남는다** — PROMOTED 상태로 승자만 쓰지만,
-   환경변수의 변형 목록은 그대로다. "승격 → 라우팅으로 확정 → 실험 제거"의
-   마지막 단계는 여전히 수동이다(#41 ③)
-4. **전이 권한이 EDITOR** — 승격·되돌리기는 트래픽 100%를 바꾸는 조작이라
-   ADMIN이 적절할 수 있다(#41 ④)
-5. **통계적 유의성 판정 없음** — 승자 선택은 사람이 지표를 보고 판단한다
-6. **다중 인스턴스** — 배정은 해시라 일관되지만, 상태 캐시 없이 매 호출
-   DB를 조회한다(현재 규모에선 문제 없으나 캐시 여지)
-7. **실키 스모크·Rate Limit 인메모리·건강 상태 인스턴스별 학습** — 기존 부채
+1. **1102 해석 미확인** — 최소 표본·판단 순서·관측 기간 초기화
+   (CTO_REQUEST #42)
+2. **관측 기간이 START마다 초기화된다** — STOP→START를 하면 그 전에 모은
+   근거가 분석에서 빠진다. 라이브 검증 중 실제로 겪었다(권한 테스트로
+   START를 호출하자 관측 0건). 의도된 설계이나 운영상 불편할 수 있다(#42 ③)
+3. **다중 비교 보정 없음** — 변형이 3개 이상이면 1·2위만 검정하므로
+   다중 비교로 인한 위양성 가능성이 있다. 2변형 A/B에서는 문제없다
+4. **비용 비교는 가격표가 있는 변형끼리만** — 미등록 모델은 비용 null이라
+   비용 근거 판단에서 제외된다(성공률·지연은 정상 비교)
+5. **승격은 여전히 수동** — 결정 1101-③에 따른 것이며, 추천은 근거만 제공
+6. **실키 스모크·Rate Limit 인메모리·건강 상태 인스턴스별 학습** — 기존 부채
 
 ## 9. 다음 권장 사항 (Sprint 11 후속 후보)
 
-1. **CTO_REQUEST #41 확인** — TASK-1101 해석 확인 및 다음 지시
-2. **실험 승격 완료 절차** — 승자를 라우팅 기본값으로 확정하고 실험 정의를
-   비우는 절차의 자동화(현재 수동)
-3. **실험 지표 요약** — 변형별 성공률·비용·지연의 기간 비교와 승자 추천
-   (판정은 사람이 하되 근거를 한 화면에)
+1. **CTO_REQUEST #42 확인** — TASK-1102 해석 확인 및 다음 지시
+2. **실험 종료 워크플로** — 추천 확정 → 승격 → 라우팅 기본값 반영 →
+   실험 정의 정리까지의 절차를 화면에서 한 흐름으로
+3. **기간 지정 분석** — 현재는 관측 시작 이후 전체. 최근 N일 비교가 있으면
+   품질 변화 추적이 쉬워진다
 4. **Provider 설정 ADMIN 화면** — 라우팅·우선순위·예산·실험 정의의 화면 관리
 5. **운영/스테이징 실키 스모크** — 3사 각 1회 (0901 승인 ③ 정책)

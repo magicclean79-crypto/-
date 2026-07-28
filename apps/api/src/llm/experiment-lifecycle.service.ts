@@ -17,6 +17,7 @@ import type {
   ExperimentAssignmentDto,
   ExperimentEventDto,
   ExperimentLifecycleDto,
+  ExperimentReassignmentDto,
 } from "@acos/shared";
 import { PrismaService } from "../prisma/prisma.service";
 
@@ -79,6 +80,9 @@ export class ExperimentLifecycleService {
       return assigned;
     }
 
+    // 갱신 전 값을 미리 붙잡아 둔다 (재배정 감사에 쓰는 "이전 배정")
+    const previous = existing ? { ...existing } : null;
+
     try {
       const state = await this.ensureState(experiment.feature);
       await this.prisma.experimentAssignment.upsert({
@@ -92,11 +96,55 @@ export class ExperimentLifecycleService {
         },
         update: { variantKey: assigned.key, signature: assigned.signature },
       });
+
+      // 재배정 감사 (CTO 결정 1101-⑤) — 기존 배정이 있었는데 바뀐 경우만.
+      // 정의 변경으로 배정이 조용히 흔들리지 않도록 이력을 남긴다.
+      if (previous) {
+        const sameDefinition = previous.signature === assigned.signature;
+        await this.prisma.experimentAssignmentEvent.create({
+          data: {
+            feature: experiment.feature,
+            projectId,
+            reason: sameDefinition ? "VARIANT_UNAVAILABLE" : "DEFINITION_CHANGED",
+            fromVariant: previous.variantKey,
+            toVariant: assigned.key,
+            fromSignature: previous.signature,
+            toSignature: assigned.signature,
+          },
+        });
+        this.logger.log(
+          `Sticky 재배정 (${experiment.feature}/${projectId}): ` +
+            `${previous.variantKey} → ${assigned.key}` +
+            `${sameDefinition ? " (변형 사용 불가)" : " (실험 정의 변경)"}`,
+        );
+      }
     } catch (error) {
       // 저장 실패해도 같은 해시로 같은 결과가 나온다
       this.logger.warn(`Sticky 배정 저장 실패 (배정은 유효): ${error}`);
     }
     return assigned;
+  }
+
+  /** 재배정 이력 (CTO 결정 1101-⑤) — Assignment Dashboard 표시용 */
+  async reassignments(options: {
+    feature?: string;
+    limit?: number;
+  }): Promise<ExperimentReassignmentDto[]> {
+    const rows = await this.prisma.experimentAssignmentEvent.findMany({
+      where: options.feature ? { feature: options.feature } : undefined,
+      orderBy: { createdAt: "desc" },
+      take: Math.min(Math.max(options.limit ?? 20, 1), 100),
+    });
+    return rows.map((row) => ({
+      feature: row.feature,
+      projectId: row.projectId,
+      reason: row.reason as ExperimentReassignmentDto["reason"],
+      fromVariant: row.fromVariant,
+      toVariant: row.toVariant,
+      fromSignature: row.fromSignature,
+      toSignature: row.toSignature,
+      createdAt: row.createdAt.toISOString(),
+    }));
   }
 
   private async ensureState(feature: string) {

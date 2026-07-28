@@ -4,6 +4,7 @@ import { MockLlmProvider } from "@acos/core";
 import request from "supertest";
 import { AuthService } from "../auth/auth.service";
 import { HealthProtectionGuard } from "../auth/health-protection.guard";
+import { ExperimentAnalyticsService } from "./experiment-analytics.service";
 import { ExperimentLifecycleService } from "./experiment-lifecycle.service";
 import { LlmBudgetService } from "./llm-budget.service";
 import { LLM_PROVIDER } from "./llm.constants";
@@ -49,6 +50,7 @@ describe("LLM API (API Test)", () => {
             state: async () => ({ status: "RUNNING", promotedVariant: null }),
             assignments: async () => [],
             distribution: async () => [],
+            reassignments: async () => [],
             transition: async () => ({
               feature: "product-analysis",
               status: "STOPPED",
@@ -58,6 +60,32 @@ describe("LLM API (API Test)", () => {
               assignmentCount: 0,
               updatedAt: new Date().toISOString(),
               events: [],
+            }),
+          },
+        },
+        {
+          // 분석 스텁 (TASK-1102) — 계산 로직은 core/전용 spec에서 검증
+          provide: ExperimentAnalyticsService,
+          useValue: {
+            analyze: async (feature: string) => ({
+              feature,
+              name: feature,
+              configured: false,
+              status: "RUNNING",
+              promotedVariant: null,
+              since: null,
+              totalCalls: 0,
+              baseline: null,
+              variants: [],
+              comparisons: [],
+              recommendation: {
+                winner: null,
+                basis: "no-variants",
+                confidence: 0,
+                reason: "비교할 변형이 없습니다.",
+                conclusive: false,
+              },
+              checkedAt: new Date().toISOString(),
             }),
           },
         },

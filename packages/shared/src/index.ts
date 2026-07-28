@@ -851,11 +851,104 @@ export interface ExperimentAssignmentDto {
   updatedAt: string;
 }
 
+/** 재배정 이력 1건 (TASK-1102, CTO 결정 1101-⑤) */
+export interface ExperimentReassignmentDto {
+  feature: string;
+  projectId: string;
+  /** 재배정 사유 — 실험 정의 변경 / 배정된 변형을 쓸 수 없게 됨 */
+  reason: "DEFINITION_CHANGED" | "VARIANT_UNAVAILABLE";
+  fromVariant: string | null;
+  toVariant: string;
+  fromSignature: string | null;
+  toSignature: string;
+  createdAt: string;
+}
+
 /** Assignment Dashboard 응답 (TASK-1101) */
 export interface ExperimentAssignmentsDto {
   assignments: ExperimentAssignmentDto[];
   /** feature별 변형 배정 분포 */
   distribution: { variantKey: string; projects: number }[];
+  /** 재배정 이력 (TASK-1102) */
+  reassignments: ExperimentReassignmentDto[];
+}
+
+// ── Experiment Analytics & Recommendation (TASK-1102, Sprint 11) ──
+
+/** 변형 1개의 성과 요약 */
+export interface ExperimentVariantPerformanceDto {
+  key: string;
+  provider: string;
+  model: string | null;
+  /** 설정된 배정 가중치 비율 */
+  weightShare: number | null;
+  calls: number;
+  successes: number;
+  failures: number;
+  /** 성공률 (호출이 없으면 null) */
+  successRate: number | null;
+  /** Wilson 95% 신뢰구간 하한·상한 — 표본이 적을 때 과신 방지 */
+  successRateLow: number | null;
+  successRateHigh: number | null;
+  avgLatencyMs: number | null;
+  /** 합계 비용(USD) — 가격표 없는 모델은 null */
+  cost: number | null;
+  /** 호출당 비용(USD) */
+  costPerCall: number | null;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+/** 기준(baseline) 대비 비교 */
+export interface ExperimentComparisonDto {
+  key: string;
+  /** 성공률 차이 (비율 포인트, +면 우세) */
+  successRateDelta: number | null;
+  /** 평균 지연 차이(ms, −면 빠름) */
+  latencyDelta: number | null;
+  /** 호출당 비용 차이(USD, −면 저렴) */
+  costPerCallDelta: number | null;
+  /** 성공률 차이가 우연이 아닐 신뢰도 (0~1) */
+  successRateConfidence: number;
+}
+
+/** 승자 추천 근거 종류 */
+export type RecommendationBasisDto =
+  | "success-rate"
+  | "cost"
+  | "latency"
+  | "insufficient-data"
+  | "no-variants";
+
+/** 승자 추천 (승격은 운영자 수동 절차 — CTO 결정 1101-③) */
+export interface ExperimentRecommendationDto {
+  winner: string | null;
+  basis: RecommendationBasisDto;
+  /** 신뢰도 0~1 */
+  confidence: number;
+  /** 사람이 읽는 근거 */
+  reason: string;
+  /** 통계적으로 확정으로 볼 수 있는지 */
+  conclusive: boolean;
+}
+
+/** Experiment Analytics 응답 (TASK-1102) */
+export interface ExperimentAnalyticsDto {
+  feature: string;
+  name: string;
+  /** 실험 정의(환경변수)가 있는지 */
+  configured: boolean;
+  status: ExperimentStatusDto;
+  promotedVariant: string | null;
+  /** 관측 시작 시각 (전체 기간이면 null) */
+  since: string | null;
+  totalCalls: number;
+  /** 비교 기준 변형 */
+  baseline: string | null;
+  variants: ExperimentVariantPerformanceDto[];
+  comparisons: ExperimentComparisonDto[];
+  recommendation: ExperimentRecommendationDto;
+  checkedAt: string;
 }
 
 /** 상태 전이 요청 본문 */
