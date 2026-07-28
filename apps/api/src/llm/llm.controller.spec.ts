@@ -4,6 +4,7 @@ import { MockLlmProvider } from "@acos/core";
 import request from "supertest";
 import { AuthService } from "../auth/auth.service";
 import { HealthProtectionGuard } from "../auth/health-protection.guard";
+import { LlmBudgetService } from "./llm-budget.service";
 import { LLM_PROVIDER } from "./llm.constants";
 import { LlmController } from "./llm.controller";
 import { LlmService } from "./llm.service";
@@ -17,6 +18,19 @@ describe("LLM API (API Test)", () => {
       providers: [
         LlmService,
         { provide: LLM_PROVIDER, useValue: new MockLlmProvider() },
+        {
+          // 예산 로직 자체는 llm-budget.service.spec에서 검증
+          provide: LlmBudgetService,
+          useValue: {
+            status: async () => ({
+              daily: { budget: null, spend: 0, ratio: null, status: "off" },
+              monthly: { budget: null, spend: 0, ratio: null, status: "off" },
+              alertRatio: 0.8,
+              checkedAt: new Date().toISOString(),
+            }),
+            assertWithinBudget: async () => undefined,
+          },
+        },
         HealthProtectionGuard,
         {
           // 가드 검증용 스텁 — 실제 세션 조회는 auth.controller.spec에서 검증
@@ -71,6 +85,48 @@ describe("LLM API (API Test)", () => {
       .post("/llm/complete")
       .send({})
       .expect(400);
+  });
+
+  it("GET /llm/providers — Registry·라우팅·선택 상태 (TASK-0902, 키 값 비노출)", async () => {
+    const response = await request(app.getHttpServer())
+      .get("/llm/providers")
+      .expect(200);
+
+    expect(response.body.selected).toEqual({
+      provider: "mock",
+      defaultModel: "mock-llm-1",
+    });
+    expect(response.body.routing).toEqual({
+      "content-generation": null,
+      "product-analysis": null,
+      "vision-analysis": null,
+    });
+    const names = response.body.providers.map(
+      (item: { name: string }) => item.name,
+    );
+    expect(names).toEqual(["mock", "openai", "anthropic", "gemini"]);
+    const openai = response.body.providers.find(
+      (item: { name: string }) => item.name === "openai",
+    );
+    expect(openai).toMatchObject({
+      connection: "official",
+      selected: false,
+      defaultModel: "gpt-4o",
+    });
+    expect(JSON.stringify(response.body)).not.toContain("sk-"); // 키 값 비노출
+    const mock = response.body.providers.find(
+      (item: { name: string }) => item.name === "mock",
+    );
+    expect(mock.selected).toBe(true);
+  });
+
+  it("GET /llm/budget — 예산 현황 (미설정 시 off)", async () => {
+    const response = await request(app.getHttpServer())
+      .get("/llm/budget")
+      .expect(200);
+    expect(response.body.daily.status).toBe("off");
+    expect(response.body.monthly.status).toBe("off");
+    expect(response.body.alertRatio).toBe(0.8);
   });
 
   it("GET /llm/health — 개발 환경(기본)은 비보호 (TASK-0803)", async () => {

@@ -2,6 +2,7 @@ import { Logger, Module } from "@nestjs/common";
 import { MockLlmProvider, type LlmProvider } from "@acos/core";
 import { AuthModule } from "../auth/auth.module";
 import { ExecutionModule } from "../execution/execution.module";
+import { LlmBudgetService } from "./llm-budget.service";
 import { LLM_PROVIDER } from "./llm.constants";
 import { LlmController } from "./llm.controller";
 import { LlmService } from "./llm.service";
@@ -72,6 +73,7 @@ export function createLlmProvider(): LlmProvider {
   controllers: [LlmController],
   providers: [
     LlmService,
+    LlmBudgetService,
     {
       provide: LLM_PROVIDER,
       useFactory: createLlmProvider,

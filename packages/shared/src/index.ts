@@ -643,6 +643,50 @@ export interface LlmGatewayInfoDto {
   defaultModel: string;
 }
 
+// ── Cost Governance & Multi-Provider Foundation (TASK-0902, Sprint 9) ──
+
+export type BudgetStatus = "off" | "ok" | "alert" | "exceeded";
+
+export interface BudgetWindowStatusDto {
+  /** 설정된 예산 (USD) — 미설정이면 null(무제한) */
+  budget: number | null;
+  spend: number;
+  ratio: number | null;
+  status: BudgetStatus;
+}
+
+/** LLM 비용 예산 현황 (TASK-0902) — UTC 일/월 기준 */
+export interface LlmBudgetDto {
+  daily: BudgetWindowStatusDto;
+  monthly: BudgetWindowStatusDto;
+  /** 경고 임계 (기본 0.8 = 80%) */
+  alertRatio: number;
+  checkedAt: string;
+}
+
+export type LlmProviderConnectionDto = "official" | "adapter-ready" | "mock";
+
+export interface LlmProviderInfoDto {
+  name: string;
+  title: string;
+  connection: LlmProviderConnectionDto;
+  /** API 키 환경변수 설정 여부 (키 값은 노출하지 않음) */
+  keyConfigured: boolean;
+  /** 현재 LLM_PROVIDER로 선택되어 있는지 */
+  selected: boolean;
+  defaultModel: string;
+  models: string[];
+  note: string;
+}
+
+/** Provider Registry + Model Routing 현황 (TASK-0902) */
+export interface LlmProvidersDto {
+  selected: LlmGatewayInfoDto;
+  /** feature별 라우팅 모델 (환경변수 미설정이면 null — Provider 기본 모델 사용) */
+  routing: Record<string, string | null>;
+  providers: LlmProviderInfoDto[];
+}
+
 /** LLM Provider 상태 점검 결과 (TASK-0603) — 최소 완성 호출로 확인 */
 export interface LlmHealthDto {
   provider: string;

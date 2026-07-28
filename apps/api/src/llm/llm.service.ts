@@ -7,6 +7,7 @@ import {
 } from "@nestjs/common";
 import {
   ExecutionTracker,
+  LLM_FEATURE_MODEL_ENV,
   LlmGateway,
   LlmValidationError,
   validateLlmRequest,
@@ -19,6 +20,7 @@ import type {
   LlmHealthDto,
 } from "@acos/shared";
 import { EXECUTION_STORE } from "../execution/execution.constants";
+import { LlmBudgetService } from "./llm-budget.service";
 import { LLM_PROVIDER } from "./llm.constants";
 
 /**
@@ -52,6 +54,7 @@ export class LlmService {
   constructor(
     @Inject(LLM_PROVIDER) provider: LlmProvider,
     @Optional() @Inject(EXECUTION_STORE) executionStore?: ExecutionStore,
+    @Optional() private readonly budget?: LlmBudgetService,
   ) {
     this.gateway = new LlmGateway(provider, {
       maxAttempts: Math.max(1, Number(process.env.LLM_MAX_ATTEMPTS ?? 3)),
@@ -90,6 +93,19 @@ export class LlmService {
         };
       }
     }
+
+    // Model Routing (TASK-0902): feature별 지정 모델 (호출자 명시가 우선)
+    if (request.model === undefined && options.feature) {
+      const routedEnv = LLM_FEATURE_MODEL_ENV[options.feature];
+      const routed = routedEnv ? process.env[routedEnv] : undefined;
+      if (routed) {
+        request = { ...request, model: routed };
+      }
+    }
+
+    // Cost Governance (TASK-0902): 예산 초과 시 호출 전 차단 (429) —
+    // Execution 미기록 (호출 시도가 아님, 검증 오류와 동일 원칙)
+    await this.budget?.assertWithinBudget();
 
     try {
       const run = (): ReturnType<LlmGateway["complete"]> =>

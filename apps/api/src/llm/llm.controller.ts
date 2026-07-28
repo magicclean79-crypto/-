@@ -6,23 +6,64 @@ import {
   Post,
   UseGuards,
 } from "@nestjs/common";
+import { LLM_FEATURE_MODEL_ENV, LLM_PROVIDER_REGISTRY } from "@acos/core";
 import type {
+  LlmBudgetDto,
   LlmCompleteRequest,
   LlmCompletionDto,
   LlmGatewayInfoDto,
   LlmHealthDto,
+  LlmProvidersDto,
 } from "@acos/shared";
 import { HealthProtectionGuard } from "../auth/health-protection.guard";
+import { LlmBudgetService } from "./llm-budget.service";
 import { LlmService } from "./llm.service";
 
 @Controller("llm")
 export class LlmController {
-  constructor(private readonly llmService: LlmService) {}
+  constructor(
+    private readonly llmService: LlmService,
+    private readonly budgetService: LlmBudgetService,
+  ) {}
 
   /** 선택된 Provider 확인 (기본 mock) */
   @Get()
   info(): LlmGatewayInfoDto {
     return this.llmService.info();
+  }
+
+  /**
+   * Provider Registry + Model Routing 현황 (TASK-0902).
+   * 키는 설정 여부만 노출한다 (값 비노출).
+   */
+  @Get("providers")
+  providers(): LlmProvidersDto {
+    const selected = this.llmService.info();
+    return {
+      selected,
+      routing: Object.fromEntries(
+        Object.entries(LLM_FEATURE_MODEL_ENV).map(([feature, env]) => [
+          feature,
+          process.env[env] ?? null,
+        ]),
+      ),
+      providers: LLM_PROVIDER_REGISTRY.map((info) => ({
+        name: info.name,
+        title: info.title,
+        connection: info.connection,
+        keyConfigured: info.keyEnv ? Boolean(process.env[info.keyEnv]) : true,
+        selected: info.name === selected.provider,
+        defaultModel: info.defaultModel,
+        models: info.models,
+        note: info.note,
+      })),
+    };
+  }
+
+  /** 비용 예산 현황 (TASK-0902) — UTC 일/월 지출·예산·경고 상태 */
+  @Get("budget")
+  async budget(): Promise<LlmBudgetDto> {
+    return this.budgetService.status();
   }
 
   /**

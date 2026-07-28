@@ -255,6 +255,39 @@ describe("OpenAI Production 통합 (TASK-0901)", () => {
     });
   });
 
+  it("Model Routing — LLM_MODEL_ANALYSIS 지정 시 해당 모델로 호출된다 (TASK-0902)", async () => {
+    process.env.LLM_MODEL_ANALYSIS = "gpt-4o-mini";
+    try {
+      nextResponse = fakeCompletion("{}");
+      await llm.complete(
+        {
+          messages: [{ role: "user", content: "분석" }],
+          responseFormat: "json",
+        },
+        { feature: "product-analysis" },
+      );
+      expect(captured[0].model).toBe("gpt-4o-mini");
+
+      // 호출자가 model을 명시하면 라우팅보다 우선한다
+      await llm.complete(
+        {
+          messages: [{ role: "user", content: "분석" }],
+          model: "gpt-4o",
+        },
+        { feature: "product-analysis" },
+      );
+      expect(captured[1].model).toBe("gpt-4o");
+      // 라우팅 없는 feature는 Provider 기본 모델
+      await llm.complete(
+        { messages: [{ role: "user", content: "생성" }] },
+        { feature: "content-generation" },
+      );
+      expect(captured[2].model).toBe("gpt-4o");
+    } finally {
+      delete process.env.LLM_MODEL_ANALYSIS;
+    }
+  });
+
   it("JSON 출력 잘림(finish_reason=length) — 명확한 오류 + Execution FAILED", async () => {
     nextResponse = fakeCompletion('{"name": "잘린', {
       finishReason: "length",

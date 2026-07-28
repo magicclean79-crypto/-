@@ -48,6 +48,20 @@ Google Gemini)는 환경변수 하나로 교체되며, **기본은 mock** — AP
 - **비용**: Execution은 응답의 스냅샷 모델명(예: gpt-4o-2024-08-06)을
   기록하고, 가격표 최장 접두사 매칭으로 비용을 산정한다
 
+## Cost Governance & Multi-Provider Foundation (TASK-0902, Sprint 9)
+
+| 항목 | 동작 | 환경변수 (기본) |
+| --- | --- | --- |
+| **Daily/Monthly Budget** | Execution cost(USD) 합계를 UTC 일/월 예산과 비교. **초과 시 새 LLM 호출을 429로 차단**(호출 전 검사 — Execution 미기록). 미설정 = 무제한(검사 오버헤드 없음) | `LLM_DAILY_BUDGET_USD` / `LLM_MONTHLY_BUDGET_USD` (미설정) |
+| **Cost Alert** | 예산의 80% 도달 시 경고 상태 — 상태 전이 시 서버 로그 + `/providers` 대시보드 배지 | `LLM_BUDGET_ALERT_RATIO` (0.8) |
+| **Provider Registry** | Code-first 중앙 정의(`LLM_PROVIDER_REGISTRY`, core) — 연결 상태(official/adapter-ready/mock)·키 설정 여부·기본 모델. `GET /llm/providers` (키 값 비노출) | — |
+| **Model Routing** | feature별 모델 지정 — 미지정 시 Provider 기본, 호출자 명시가 최우선. 현 단계는 선택된 Provider 안의 모델 선택 (cross-provider 라우팅은 다음 단계) | `LLM_MODEL_CONTENT` / `LLM_MODEL_ANALYSIS` / `LLM_MODEL_VISION` |
+| **Provider Dashboard** | 웹 `/providers` — Registry·라우팅·예산 카드(진행 바/배지)·Provider별 호출 통계. Playwright 3종 | — |
+
+검사 지점은 LlmService 단일 관문(Execution 기록과 동일 지점) —
+예산 로직은 core 순수 함수(`evaluateBudgetWindow`), 합산·차단은
+`LlmBudgetService`(api). `GET /llm/budget`으로 현황 조회.
+
 ## 구조
 
 - **Port (`packages/core/src/llm/`)** — 프레임워크 무관

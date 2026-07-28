@@ -287,6 +287,11 @@ SOP와 나란히 회사 지식을 축적합니다 — [docs/architecture/decisio
   `LLM_VISION_MAX_TOKENS`(2048), JSON 잘림(finish_reason=length) 방어,
   주입 클라이언트 통합 검증. 실키 스모크 절차:
   [docs/operations/real-provider-smoke.md](docs/operations/real-provider-smoke.md)
+- **Cost Governance (TASK-0902)**: `LLM_DAILY_BUDGET_USD`/`LLM_MONTHLY_BUDGET_USD`
+  (UTC, 초과 시 429 차단) · 경고 임계 `LLM_BUDGET_ALERT_RATIO`(0.8) ·
+  `GET /llm/budget`. **Multi-Provider Foundation**: Provider Registry
+  (`GET /llm/providers`) · Model Routing `LLM_MODEL_CONTENT/ANALYSIS/VISION` ·
+  웹 **`/providers`** 대시보드
 
 ## Execution Domain (TASK-0601, Sprint 6)
 

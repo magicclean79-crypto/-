@@ -451,6 +451,47 @@ const server = http.createServer((req, res) => {
   }
   res.setHeader("content-type", "application/json");
 
+  // ── Provider Dashboard (TASK-0902) ──
+  if (url.pathname === "/llm/providers") {
+    res.end(
+      JSON.stringify({
+        selected: { provider: "mock", defaultModel: "mock-llm-1" },
+        routing: {
+          "content-generation": null,
+          "product-analysis": mode === "data" ? "gpt-4o-mini" : null,
+          "vision-analysis": null,
+        },
+        providers: [
+          { name: "mock", title: "Mock", connection: "mock", keyConfigured: true, selected: true, defaultModel: "mock-llm-1", models: ["mock-llm-1"], note: "개발 기본 — 실제 API 미호출, 비용 0" },
+          { name: "openai", title: "OpenAI", connection: "official", keyConfigured: mode === "data", selected: false, defaultModel: "gpt-4o", models: ["gpt-4o", "gpt-4o-mini"], note: "공식 연결" },
+          { name: "anthropic", title: "Anthropic", connection: "adapter-ready", keyConfigured: false, selected: false, defaultModel: "claude-opus-5", models: ["claude-opus-5"], note: "공식 연결 대기" },
+          { name: "gemini", title: "Google Gemini", connection: "adapter-ready", keyConfigured: false, selected: false, defaultModel: "gemini-2.5-flash", models: ["gemini-2.5-flash"], note: "공식 연결 대기" },
+        ],
+      }),
+    );
+    return;
+  }
+  if (url.pathname === "/llm/budget") {
+    res.end(
+      JSON.stringify(
+        mode === "data"
+          ? {
+              daily: { budget: 10, spend: 8.52, ratio: 0.852, status: "alert" },
+              monthly: { budget: 100, spend: 42.1, ratio: 0.421, status: "ok" },
+              alertRatio: 0.8,
+              checkedAt: new Date().toISOString(),
+            }
+          : {
+              daily: { budget: null, spend: 0, ratio: null, status: "off" },
+              monthly: { budget: null, spend: 0, ratio: null, status: "off" },
+              alertRatio: 0.8,
+              checkedAt: new Date().toISOString(),
+            },
+      ),
+    );
+    return;
+  }
+
   if (url.pathname === "/executions/stats") {
     res.end(
       JSON.stringify(
