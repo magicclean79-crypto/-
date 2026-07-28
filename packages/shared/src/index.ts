@@ -563,6 +563,35 @@ export interface ExecutionDto {
   createdAt: string;
 }
 
+/** Execution 집계 통계 (TASK-0602) — 비율은 0~1, 표본 없으면 null */
+export interface ExecutionStats {
+  count: number;
+  successCount: number;
+  failedCount: number;
+  successRate: number | null;
+  failureRate: number | null;
+  inputTokens: number;
+  outputTokens: number;
+  /** 비용 합계 (USD) — 가격 산정된 호출이 없으면 null */
+  cost: number | null;
+  avgLatencyMs: number | null;
+  maxLatencyMs: number | null;
+}
+
+export interface ExecutionGroupStatsDto {
+  key: string;
+  stats: ExecutionStats;
+}
+
+export interface ExecutionDashboardDto {
+  /** 조회 기간 (미지정 시 null — 전체 기간) */
+  range: { from: string | null; to: string | null };
+  totals: ExecutionStats;
+  byFeature: ExecutionGroupStatsDto[];
+  byProvider: ExecutionGroupStatsDto[];
+  byModel: ExecutionGroupStatsDto[];
+}
+
 // ── Prompt Engine (TASK-0503) ──────────────────────────
 
 export interface PromptTemplateInfoDto {

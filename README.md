@@ -252,6 +252,7 @@ SOP와 나란히 회사 지식을 축적합니다 — [docs/architecture/decisio
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
 | `GET` | `/executions?feature=&limit=` | LLM 호출 이력 (최신순) — feature: `content-generation` `product-analysis` `vision-analysis` `dev` |
+| `GET` | `/executions/stats?from=&to=` | **Dashboard 집계 (TASK-0602)** — 호출 수·성공/실패율·토큰·비용·지연을 전체 + feature/provider/model별 제공 |
 
 ## Memory — 표준 Structured Memory (TASK-0402)
 

@@ -37,6 +37,7 @@ const rows: Execution[] = [
 
 describe("Execution API (API Test)", () => {
   let app: INestApplication;
+  const groupByCalls: { by: string[]; where?: unknown }[] = [];
   const prismaMock = {
     execution: {
       findMany: jest.fn(
@@ -44,6 +45,35 @@ describe("Execution API (API Test)", () => {
           rows
             .filter((row) => !where?.feature || row.feature === where.feature)
             .slice(0, take),
+      ),
+      groupBy: jest.fn(
+        async ({ by, where }: { by: string[]; where?: unknown }) => {
+          groupByCalls.push({ by, where });
+          const dimension = by[0] === "status" ? null : by[0];
+          const stat = (status: string, count: number) => ({
+            status,
+            _count: { _all: count },
+            _sum: {
+              inputTokens: count * 100,
+              outputTokens: count * 20,
+              cost: status === "SUCCESS" ? "0" : null,
+            },
+            _avg: { latencyMs: 10 },
+            _max: { latencyMs: 25 },
+          });
+          if (!dimension) {
+            return [stat("SUCCESS", 3), stat("FAILED", 1)];
+          }
+          const keys =
+            dimension === "feature"
+              ? ["content-generation", "product-analysis"]
+              : dimension === "provider"
+                ? ["mock"]
+                : ["mock-llm-1"];
+          return keys.flatMap((key, index) => [
+            { [dimension]: key, ...stat("SUCCESS", 2 - index) },
+          ]);
+        },
       ),
     },
   };
@@ -98,5 +128,63 @@ describe("Execution API (API Test)", () => {
   it("GET /executions?limit= — 잘못된 limit은 400", async () => {
     await request(app.getHttpServer()).get("/executions?limit=0").expect(400);
     await request(app.getHttpServer()).get("/executions?limit=abc").expect(400);
+  });
+
+  it("GET /executions/stats — 전체+차원별 통계 (TASK-0602)", async () => {
+    const response = await request(app.getHttpServer())
+      .get("/executions/stats")
+      .expect(200);
+
+    expect(response.body.range).toEqual({ from: null, to: null });
+    expect(response.body.totals).toMatchObject({
+      count: 4,
+      successCount: 3,
+      failedCount: 1,
+      successRate: 0.75,
+      failureRate: 0.25,
+      inputTokens: 400,
+      outputTokens: 80,
+      cost: 0,
+      avgLatencyMs: 10,
+      maxLatencyMs: 25,
+    });
+    // 호출 수 내림차순 정렬
+    expect(
+      response.body.byFeature.map((item: { key: string }) => item.key),
+    ).toEqual(["content-generation", "product-analysis"]);
+    expect(response.body.byProvider[0]).toMatchObject({
+      key: "mock",
+      stats: { count: 2, successRate: 1, failureRate: 0 },
+    });
+    expect(response.body.byModel[0].key).toBe("mock-llm-1");
+  });
+
+  it("GET /executions/stats?from=&to= — 기간 필터가 where로 전달된다", async () => {
+    groupByCalls.length = 0;
+    const response = await request(app.getHttpServer())
+      .get(
+        "/executions/stats?from=2026-07-28T00:00:00Z&to=2026-07-28T23:59:59Z",
+      )
+      .expect(200);
+
+    expect(response.body.range.from).toBe("2026-07-28T00:00:00.000Z");
+    expect(groupByCalls).toHaveLength(4);
+    expect(groupByCalls[0].where).toEqual({
+      createdAt: {
+        gte: new Date("2026-07-28T00:00:00Z"),
+        lte: new Date("2026-07-28T23:59:59Z"),
+      },
+    });
+  });
+
+  it("GET /executions/stats — 잘못된 날짜·역전 기간은 400", async () => {
+    await request(app.getHttpServer())
+      .get("/executions/stats?from=not-a-date")
+      .expect(400);
+    await request(app.getHttpServer())
+      .get(
+        "/executions/stats?from=2026-07-29T00:00:00Z&to=2026-07-28T00:00:00Z",
+      )
+      .expect(400);
   });
 });
