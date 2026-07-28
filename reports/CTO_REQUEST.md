@@ -5,34 +5,36 @@
 
 ## 결정 대기
 
-### 33. TASK-0803 "Password Management & Operational Security" 세부 해석 확인
-- 현황: 지시 항목(Password Change · Password Reset · httpOnly Cookie ·
-  Secure Cookie · SameSite · 운영 보안 강화 · Audit 확장)을 다음과 같이
-  구현했다:
-  - **Password Change**: `PATCH /auth/password` — 본인 셀프 서비스(모든
-    역할). 현재 비밀번호 확인·최소 8자·동일 거부. 성공 시 **현재 세션만
-    남기고 다른 세션 전부 폐기**. Web `/account` 신설
-  - **Password Reset**: `POST /auth/users/:id/password-reset` (ADMIN) —
-    **관리자가 새 비밀번호를 직접 지정**(메일 인프라 부재 전제), 대상의
-    모든 세션 즉시 폐기, 자기 자신 불가(400 — 변경 기능 사용).
-    `/admin/users` 행별 인라인 재설정 UI
-  - **쿠키 세션**: 로그인 시 응답 본문 토큰(개발 localStorage)과 **함께**
-    httpOnly `acos_session` 쿠키 발급. 서버는 Bearer 헤더 → 쿠키 순 인식,
-    로그아웃 시 즉시 만료. `AUTH_COOKIE_SECURE=1`(운영 필수) ·
-    `AUTH_COOKIE_SAMESITE=lax|strict|none`(none은 Secure 강제 — core에서
-    차단). CORS credentials 허용 — **운영 전환은 환경변수 설정만으로 완료**
-  - **운영 보안 강화**: `/llm/health` — NODE_ENV production/staging 또는
-    `AUTH_PROTECT_HEALTH=1`에서 EDITOR 이상 인증(0802 승인 ③ 이행),
-    개발 비보호 유지
-  - **Audit 확장**: PASSWORD_CHANGED(actor=본인) · PASSWORD_RESET
-    (actor=ADMIN) — 액션 6종, 스키마 변경 없음
-- 하지 않은 것(스펙 없음): 웹 UI의 쿠키 전용 전환(현재 개발 localStorage
-  병행 — 서버는 준비 완료), 이메일 링크형 셀프 재설정(메일 인프라 없음),
-  로그인 시도 제한(rate limit)·계정 잠금, 비밀번호 복잡도 규칙(길이 8자만)
-- 질문: ① 본문 토큰+httpOnly 쿠키 **병행 발급** 구조(개발 호환)와
-  운영에서 웹을 쿠키 전용으로 전환하는 시점 ② 재설정을 ADMIN 직접
-  지정 방식으로 확정할지(이메일 링크형은 메일 인프라 도입 후) ③ 로그인
-  시도 제한·비밀번호 복잡도 규칙 도입 여부 ④ 다음 TASK 지정 요청.
+### 34. TASK-0804 "Login Protection & Security Hardening" 세부 해석 확인
+- 현황: 지시 6항목(Rate Limit · Account Lockout · Password Complexity ·
+  Failed Login Audit · Cookie 전용 운영 모드 · Session Timeout) +
+  Playwright를 다음과 같이 구현했다:
+  - **Rate Limit**: 이메일 키 슬라이딩 윈도우 → 초과 시 **429**.
+    기본 **30회/60초** (`AUTH_LOGIN_MAX_ATTEMPTS`/`AUTH_LOGIN_WINDOW_SEC`).
+    인메모리 1차 방어 — 단일 인스턴스 전제(다중 인스턴스는 공유 저장소
+    필요, 부채 기록)
+  - **Account Lockout**: 연속 실패 **5회 → 15분 DB 잠금**
+    (`AUTH_LOCKOUT_THRESHOLD`/`AUTH_LOCKOUT_MINUTES`, users.lockedUntil) —
+    잠금 중 올바른 비밀번호도 거부, 시간 경과 자동 해제 + **ADMIN 비밀번호
+    재설정 시 즉시 해제**, 성공 로그인 시 카운터 초기화
+  - **Password Complexity**: **최소 8자 + 영문 1자 + 숫자 1자** — core
+    단일 정의(Code-first), 생성·변경·재설정 공통
+  - **Failed Login Audit**: LOGIN_FAILED(사유·n/임계) · ACCOUNT_LOCKED —
+    실존 계정만 기록(스팸 방지), 감사 액션 8종. /admin/users 잠김 배지
+  - **Cookie 전용 운영 모드**: `AUTH_COOKIE_ONLY`(운영/스테이징 기본
+    켜짐) — 로그인 응답 본문 토큰 제외, httpOnly 쿠키만 사용(0803 승인 ①
+    이행). 웹 인증 호출 전부 credentials include — 개발 Bearer/운영 쿠키
+    양쪽 모드 동작
+  - **Session Timeout**: `AUTH_SESSION_TTL_HOURS`(기본 168=7일) — 세션
+    만료·쿠키 Max-Age 통일
+- 하지 않은 것(스펙 없음): ADMIN "잠금 해제" 전용 버튼(재설정으로 해제
+  가능), Rate Limit 공유 저장소(Redis 등 — 다중 인스턴스 확장 시),
+  유휴(idle) 타임아웃(현재는 절대 TTL만), IP 키 Rate Limit(프록시 뒤
+  신뢰 가능한 IP 확보 후)
+- 질문: ① 기본값 확정 — Rate Limit 30회/60초 · 잠금 5회/15분 · 복잡도
+  8자+영문+숫자가 적절한지 ② Rate Limit 인메모리(단일 인스턴스) 전제
+  유지 여부 — 공유 저장소 도입 시점 ③ 유휴 타임아웃·잠금 해제 전용
+  UI 필요 여부 ④ 다음 TASK 지정 요청 (Sprint 8 종료 여부 포함).
 
 ### 2. tesseract Provider 유지 여부
 - 현황: OCR 기본 Provider는 mock이며, 로컬 오프라인 엔진(tesseract.js)이
@@ -55,6 +57,14 @@
 - 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
 
 ## 결정됨
+
+### 33. TASK-0803 해석 확인 → 승인 + 쿠키/재설정 정책 확정 (2026-07-28)
+- CTO 결정: ① **개발 환경은 본문 토큰 + httpOnly 쿠키 병행 발급 유지,
+  운영 환경은 쿠키 전용으로 전환** ② **Password Reset은 현재 ADMIN 직접
+  지정 방식 유지** — 메일 기반 재설정은 메일 인프라 도입 이후 구현
+  ③ TASK-0804(Login Protection & Security Hardening) 지시됨.
+- 반영(`5ce8a20`): ① 쿠키 전용 운영 모드(AUTH_COOKIE_ONLY — 운영/스테이징
+  기본 켜짐, 본문 토큰 제외) 구현, 웹 credentials 대응 (#34 참고).
 
 ### 32. TASK-0802 해석 확인 → 승인 + 보호 정책 확정 (2026-07-28)
 - CTO 결정: ① **@Public 예외는 Login · Company Brain Query · READY
