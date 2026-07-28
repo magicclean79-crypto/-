@@ -103,12 +103,13 @@ export class ExecutionService {
     const where: Prisma.ExecutionWhereInput | undefined =
       Object.keys(conditions).length > 0 ? conditions : undefined;
 
-    const [statusRows, featureRows, providerRows, modelRows] =
+    const [statusRows, featureRows, providerRows, modelRows, routeRows] =
       await Promise.all([
         this.groupBy("status", where),
         this.groupBy("feature", where),
         this.groupBy("provider", where),
         this.groupBy("model", where),
+        this.groupByRoute(where),
       ]);
 
     return {
@@ -120,7 +121,36 @@ export class ExecutionService {
       byFeature: buildExecutionStats(featureRows),
       byProvider: buildExecutionStats(providerRows),
       byModel: buildExecutionStats(modelRows),
+      byRoute: buildExecutionStats(routeRows),
     };
+  }
+
+  /**
+   * Routing Metrics (TASK-1001) — 실제 실행된 경로(feature→provider)별 집계.
+   * 라우팅 설정이 의도대로 동작했는지, 경로별 성공률·지연·비용이 어떤지를
+   * 같은 통계 스키마로 제공한다.
+   */
+  private async groupByRoute(
+    where: Prisma.ExecutionWhereInput | undefined,
+  ): Promise<ExecutionStatGroupRow[]> {
+    const rows = await this.prisma.execution.groupBy({
+      by: ["feature", "provider", "status"],
+      where,
+      _count: { _all: true },
+      _sum: { inputTokens: true, outputTokens: true, cost: true },
+      _avg: { latencyMs: true },
+      _max: { latencyMs: true },
+    });
+    return rows.map((row) => ({
+      key: `${row.feature}→${row.provider}`,
+      status: row.status,
+      count: row._count._all,
+      inputTokens: row._sum.inputTokens ?? 0,
+      outputTokens: row._sum.outputTokens ?? 0,
+      cost: row._sum.cost === null ? null : Number(row._sum.cost),
+      avgLatencyMs: row._avg.latencyMs,
+      maxLatencyMs: row._max.latencyMs,
+    }));
   }
 
   /**

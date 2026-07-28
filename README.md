@@ -299,6 +299,11 @@ API 키가 없으면 항상 mock으로 동작합니다 —
   `responseMimeType`) · 3사 통일 잘림 방어 · **Unified Execution**(동일
   스키마·전 Provider 비용 산정) · 웹 `/providers` **Provider 비교**
   (성공률·지연·비용·비용/호출)
+- **Cross-Provider Routing (TASK-1001)**: feature별 Provider 매핑
+  `LLM_ROUTE_CONTENT`/`LLM_ROUTE_ANALYSIS`/`LLM_ROUTE_VISION`
+  (`provider` 또는 `provider:model`) · **호출 시점 해석(재기동 불필요)** ·
+  사용 불가 Provider는 기본으로 폴백 · `GET /llm/routing` ·
+  Routing Metrics(`/executions/stats`의 `byRoute`) · 웹 **`/routing`** 대시보드
 
 ## Execution Domain (TASK-0601, Sprint 6)
 

@@ -687,6 +687,31 @@ export interface LlmProvidersDto {
   providers: LlmProviderInfoDto[];
 }
 
+// ── Cross-Provider Routing Engine (TASK-1001, Sprint 10) ──
+
+export type RoutingSource = "feature" | "default" | "fallback";
+
+export interface RoutingResolutionDto {
+  feature: string;
+  provider: string;
+  /** null이면 Provider 기본 모델 */
+  model: string | null;
+  source: RoutingSource;
+  /** fallback 사유 (그 외 null) */
+  reason: string | null;
+  /** 지정 환경변수 이름 (설정 안내용) */
+  env: string;
+}
+
+/** feature별 Provider 라우팅 현황 (TASK-1001) */
+export interface LlmRoutingDto {
+  defaultProvider: string;
+  /** 인스턴스가 준비된(키 설정 완료) Provider 목록 */
+  availableProviders: string[];
+  routes: RoutingResolutionDto[];
+  checkedAt: string;
+}
+
 /** LLM Provider 상태 점검 결과 (TASK-0603) — 최소 완성 호출로 확인 */
 export interface LlmHealthDto {
   provider: string;
@@ -747,6 +772,11 @@ export interface ExecutionDashboardDto {
   byFeature: ExecutionGroupStatsDto[];
   byProvider: ExecutionGroupStatsDto[];
   byModel: ExecutionGroupStatsDto[];
+  /**
+   * Routing Metrics (TASK-1001) — 실제 실행된 경로별 집계.
+   * key는 `${feature}→${provider}` 형식이다.
+   */
+  byRoute: ExecutionGroupStatsDto[];
 }
 
 // ── Execution Timeline (TASK-0605) ─────────────────────

@@ -35,6 +35,27 @@ const stats = (totals, groups) => ({
   byModel: groups.length
     ? [{ key: "mock-llm-1", stats: totals }]
     : [],
+  // Routing Metrics (TASK-1001) — 경로(feature→provider)별 집계
+  byRoute: groups.length
+    ? [
+        { key: "content-generation→mock", stats: totals },
+        {
+          key: "product-analysis→anthropic",
+          stats: {
+            count: 4,
+            successCount: 3,
+            failedCount: 1,
+            successRate: 0.75,
+            failureRate: 0.25,
+            inputTokens: 4000,
+            outputTokens: 1600,
+            cost: 0.06,
+            avgLatencyMs: 850.4,
+            maxLatencyMs: 1200,
+          },
+        },
+      ]
+    : [],
 });
 
 const DATA_TOTALS = {
@@ -485,6 +506,30 @@ const server = http.createServer((req, res) => {
           { name: "anthropic", title: "Anthropic", connection: "official", keyConfigured: false, selected: false, defaultModel: "claude-opus-5", models: ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"], note: "공식 연결 (TASK-0903)" },
           { name: "gemini", title: "Google Gemini", connection: "official", keyConfigured: false, selected: false, defaultModel: "gemini-2.5-flash", models: ["gemini-2.5-flash"], note: "공식 연결 (TASK-0903)" },
         ],
+      }),
+    );
+    return;
+  }
+  // ── Routing Dashboard (TASK-1001) ──
+  if (url.pathname === "/llm/routing") {
+    res.end(
+      JSON.stringify({
+        defaultProvider: "mock",
+        availableProviders:
+          mode === "data" ? ["mock", "openai", "anthropic"] : ["mock"],
+        routes:
+          mode === "data"
+            ? [
+                { feature: "content-generation", provider: "mock", model: null, source: "default", reason: null, env: "LLM_ROUTE_CONTENT" },
+                { feature: "product-analysis", provider: "anthropic", model: "claude-sonnet-5", source: "feature", reason: null, env: "LLM_ROUTE_ANALYSIS" },
+                { feature: "vision-analysis", provider: "mock", model: null, source: "fallback", reason: 'Provider "gemini"를 사용할 수 없어 기본 Provider로 처리했습니다 (API 키 미설정 등).', env: "LLM_ROUTE_VISION" },
+              ]
+            : [
+                { feature: "content-generation", provider: "mock", model: null, source: "default", reason: null, env: "LLM_ROUTE_CONTENT" },
+                { feature: "product-analysis", provider: "mock", model: null, source: "default", reason: null, env: "LLM_ROUTE_ANALYSIS" },
+                { feature: "vision-analysis", provider: "mock", model: null, source: "default", reason: null, env: "LLM_ROUTE_VISION" },
+              ],
+        checkedAt: new Date().toISOString(),
       }),
     );
     return;

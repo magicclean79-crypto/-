@@ -6,22 +6,30 @@ import {
   Optional,
 } from "@nestjs/common";
 import {
+  buildRoutingTable,
   ExecutionTracker,
-  LLM_FEATURE_MODEL_ENV,
+  LLM_FEATURE_PROVIDER_ENV,
   LlmGateway,
   LlmValidationError,
+  resolveRoute,
   validateLlmRequest,
 } from "@acos/core";
-import type { ExecutionStore, LlmProvider } from "@acos/core";
+import type {
+  ExecutionStore,
+  LlmProvider,
+  RoutingResolution,
+} from "@acos/core";
 import type {
   LlmCompleteRequest,
   LlmCompletionDto,
   LlmGatewayInfoDto,
   LlmHealthDto,
+  LlmRoutingDto,
 } from "@acos/shared";
 import { EXECUTION_STORE } from "../execution/execution.constants";
 import { LlmBudgetService } from "./llm-budget.service";
-import { LLM_PROVIDER } from "./llm.constants";
+import { LLM_PROVIDER, LLM_PROVIDER_MAP } from "./llm.constants";
+import { routingModelOverrides, routingRules } from "./routing-config";
 
 /**
  * 운영 출력 상한 (TASK-0901) — feature별 max tokens 기본값.
@@ -48,25 +56,71 @@ const FEATURE_MAX_TOKENS: Record<string, { env: string; fallback: number }> = {
 @Injectable()
 export class LlmService {
   private readonly logger = new Logger(LlmService.name);
+  /** 기본 Provider 게이트웨이 (LLM_PROVIDER) */
   private readonly gateway: LlmGateway;
+  /** 라우팅 대상 Provider 게이트웨이 (TASK-1001) — 키가 설정된 것만 */
+  private readonly gateways = new Map<string, LlmGateway>();
   private readonly tracker: ExecutionTracker | null;
 
   constructor(
     @Inject(LLM_PROVIDER) provider: LlmProvider,
     @Optional() @Inject(EXECUTION_STORE) executionStore?: ExecutionStore,
     @Optional() private readonly budget?: LlmBudgetService,
+    @Optional()
+    @Inject(LLM_PROVIDER_MAP)
+    providerMap?: Map<string, LlmProvider>,
   ) {
-    this.gateway = new LlmGateway(provider, {
-      maxAttempts: Math.max(1, Number(process.env.LLM_MAX_ATTEMPTS ?? 3)),
-      onAttemptFailed: (attempt, error) =>
-        this.logger.warn(`LLM attempt ${attempt} failed: ${error}`),
-    });
+    const createGateway = (target: LlmProvider): LlmGateway =>
+      new LlmGateway(target, {
+        maxAttempts: Math.max(1, Number(process.env.LLM_MAX_ATTEMPTS ?? 3)),
+        onAttemptFailed: (attempt, error) =>
+          this.logger.warn(`LLM attempt ${attempt} failed: ${error}`),
+      });
+
+    this.gateway = createGateway(provider);
+    this.gateways.set(provider.name, this.gateway);
+    // Cross-Provider Routing (TASK-1001): 사용 가능한 Provider 전부 준비
+    for (const [name, target] of providerMap ?? []) {
+      if (!this.gateways.has(name)) {
+        this.gateways.set(name, createGateway(target));
+      }
+    }
+
     this.tracker = executionStore
       ? new ExecutionTracker(executionStore, {
           onRecordError: (error) =>
             this.logger.warn(`Execution 기록 실패: ${error}`),
         })
       : null;
+  }
+
+  /** 라우팅 해석 (TASK-1001) — 호출 시점마다 환경을 읽는다 (Dynamic) */
+  private resolve(feature?: string): RoutingResolution {
+    return resolveRoute({
+      feature,
+      defaultProvider: this.gateway.providerName,
+      rules: routingRules(),
+      modelOverrides: routingModelOverrides(),
+      availableProviders: [...this.gateways.keys()],
+    });
+  }
+
+  /** feature별 Provider 라우팅 현황 (GET /llm/routing) */
+  routing(): LlmRoutingDto {
+    return {
+      defaultProvider: this.gateway.providerName,
+      availableProviders: [...this.gateways.keys()],
+      routes: buildRoutingTable({
+        defaultProvider: this.gateway.providerName,
+        rules: routingRules(),
+        modelOverrides: routingModelOverrides(),
+        availableProviders: [...this.gateways.keys()],
+      }).map((route) => ({
+        ...route,
+        env: LLM_FEATURE_PROVIDER_ENV[route.feature] ?? "",
+      })),
+      checkedAt: new Date().toISOString(),
+    };
   }
 
   async complete(
@@ -94,13 +148,15 @@ export class LlmService {
       }
     }
 
-    // Model Routing (TASK-0902): feature별 지정 모델 (호출자 명시가 우선)
-    if (request.model === undefined && options.feature) {
-      const routedEnv = LLM_FEATURE_MODEL_ENV[options.feature];
-      const routed = routedEnv ? process.env[routedEnv] : undefined;
-      if (routed) {
-        request = { ...request, model: routed };
-      }
+    // Cross-Provider Routing (TASK-1001): feature → Provider·모델 해석.
+    // 호출자가 model을 명시하면 그 값이 최우선이다.
+    const route = this.resolve(options.feature);
+    const gateway = this.gateways.get(route.provider) ?? this.gateway;
+    if (route.source === "fallback") {
+      this.logger.warn(`라우팅 폴백 (${route.feature}): ${route.reason}`);
+    }
+    if (request.model === undefined && route.model) {
+      request = { ...request, model: route.model };
     }
 
     // Cost Governance (TASK-0902): 예산 초과 시 호출 전 차단 (429) —
@@ -109,13 +165,13 @@ export class LlmService {
 
     try {
       const run = (): ReturnType<LlmGateway["complete"]> =>
-        this.gateway.complete(request);
+        gateway.complete(request);
       const result = this.tracker
         ? await this.tracker.track(
             options.feature ?? "dev",
             {
-              provider: this.gateway.providerName,
-              model: request.model ?? this.gateway.defaultModel,
+              provider: gateway.providerName,
+              model: request.model ?? gateway.defaultModel,
             },
             run,
           )

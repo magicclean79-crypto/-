@@ -195,13 +195,21 @@ describe("Execution API (API Test)", () => {
       .expect(200);
 
     expect(response.body.range.from).toBe("2026-07-28T00:00:00.000Z");
-    expect(groupByCalls).toHaveLength(4);
-    expect(groupByCalls[0].where).toEqual({
-      createdAt: {
-        gte: new Date("2026-07-28T00:00:00Z"),
-        lte: new Date("2026-07-28T23:59:59Z"),
-      },
-    });
+    // status/feature/provider/model + 경로(feature,provider) — TASK-1001
+    expect(groupByCalls).toHaveLength(5);
+    expect(groupByCalls.map((call) => call.by)).toContainEqual([
+      "feature",
+      "provider",
+      "status",
+    ]);
+    for (const call of groupByCalls) {
+      expect(call.where).toEqual({
+        createdAt: {
+          gte: new Date("2026-07-28T00:00:00Z"),
+          lte: new Date("2026-07-28T23:59:59Z"),
+        },
+      });
+    }
   });
 
   it("GET /executions/stats — 잘못된 날짜·역전 기간은 400", async () => {

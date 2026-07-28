@@ -2,10 +2,10 @@ import { Module } from "@nestjs/common";
 import { AuthModule } from "../auth/auth.module";
 import { ExecutionModule } from "../execution/execution.module";
 import { LlmBudgetService } from "./llm-budget.service";
-import { LLM_PROVIDER } from "./llm.constants";
+import { LLM_PROVIDER, LLM_PROVIDER_MAP } from "./llm.constants";
 import { LlmController } from "./llm.controller";
 import { LlmService } from "./llm.service";
-import { createLlmProvider } from "./provider.factory";
+import { createLlmProvider, createLlmProviderMap } from "./provider.factory";
 
 /**
  * LLM 모듈 — Provider 선택은 Registry 기반 Provider Factory가 담당한다
@@ -22,6 +22,11 @@ import { createLlmProvider } from "./provider.factory";
     {
       provide: LLM_PROVIDER,
       useFactory: createLlmProvider,
+    },
+    {
+      // Cross-Provider Routing (TASK-1001) — 키가 설정된 Provider 전부
+      provide: LLM_PROVIDER_MAP,
+      useFactory: createLlmProviderMap,
     },
   ],
   exports: [LlmService],

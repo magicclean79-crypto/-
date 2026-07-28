@@ -14,6 +14,7 @@ import type {
   LlmGatewayInfoDto,
   LlmHealthDto,
   LlmProvidersDto,
+  LlmRoutingDto,
 } from "@acos/shared";
 import { HealthProtectionGuard } from "../auth/health-protection.guard";
 import { LlmBudgetService } from "./llm-budget.service";
@@ -64,6 +65,16 @@ export class LlmController {
   @Get("budget")
   async budget(): Promise<LlmBudgetDto> {
     return this.budgetService.status();
+  }
+
+  /**
+   * Cross-Provider Routing 현황 (TASK-1001) — feature별 Provider·모델과
+   * 결정 근거(feature/default/fallback). 호출 시점 해석이므로 환경 변경이
+   * 재기동 없이 즉시 반영된다.
+   */
+  @Get("routing")
+  routing(): LlmRoutingDto {
+    return this.llmService.routing();
   }
 
   /**

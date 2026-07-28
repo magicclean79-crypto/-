@@ -62,12 +62,33 @@ Registry의 모든 모델이 가격표에 있는지는 테스트가 보증한다
 | **Daily/Monthly Budget** | Execution cost(USD) 합계를 UTC 일/월 예산과 비교. **초과 시 새 LLM 호출을 429로 차단**(호출 전 검사 — Execution 미기록). 미설정 = 무제한(검사 오버헤드 없음) | `LLM_DAILY_BUDGET_USD` / `LLM_MONTHLY_BUDGET_USD` (미설정) |
 | **Cost Alert** | 예산의 80% 도달 시 경고 상태 — 상태 전이 시 서버 로그 + `/providers` 대시보드 배지 | `LLM_BUDGET_ALERT_RATIO` (0.8) |
 | **Provider Registry** | Code-first 중앙 정의(`LLM_PROVIDER_REGISTRY`, core) — 연결 상태(official/adapter-ready/mock)·키 설정 여부·기본 모델. `GET /llm/providers` (키 값 비노출). **TASK-0903: openai·anthropic·gemini 3사 전부 `official`** | — |
-| **Model Routing** | feature별 모델 지정 — 미지정 시 Provider 기본, 호출자 명시가 최우선. 현 단계는 선택된 Provider 안의 모델 선택 (cross-provider 라우팅은 다음 단계) | `LLM_MODEL_CONTENT` / `LLM_MODEL_ANALYSIS` / `LLM_MODEL_VISION` |
+| **Model Routing** | feature별 모델 지정 — 미지정 시 Provider 기본, 호출자 명시가 최우선. **같은 Provider일 때만 적용**(0902) | `LLM_MODEL_CONTENT` / `LLM_MODEL_ANALYSIS` / `LLM_MODEL_VISION` |
 | **Provider Dashboard** | 웹 `/providers` — Registry·라우팅·예산 카드(진행 바/배지)·**Provider 비교**(호출·성공률·평균 지연·토큰·비용·비용/호출, TASK-0903). Playwright 3종 | — |
 
 검사 지점은 LlmService 단일 관문(Execution 기록과 동일 지점) —
 예산 로직은 core 순수 함수(`evaluateBudgetWindow`), 합산·차단은
 `LlmBudgetService`(api). `GET /llm/budget`으로 현황 조회.
+
+## Cross-Provider Routing Engine (TASK-1001, Sprint 10)
+
+feature별로 **Provider 자체를 분리**한다 (0902의 "Provider 내부 모델 선택"
+확장 — CTO 승인 ②의 후속 단계).
+
+| 항목 | 동작 | 환경변수 |
+| --- | --- | --- |
+| **Feature별 Provider Mapping** | `provider` 또는 `provider:model` 값으로 feature → Provider 지정 | `LLM_ROUTE_CONTENT` / `LLM_ROUTE_ANALYSIS` / `LLM_ROUTE_VISION` |
+| **Dynamic Routing** | **호출 시점마다 해석** — 환경 변경이 재기동 없이 다음 호출부터 반영 | — |
+| **Graceful degradation** | 매핑된 Provider를 쓸 수 없으면(키 미설정) 기본 Provider로 내려가고 경고 로그 (`source: "fallback"`). **호출 실패 시 전환(Failover)은 범위 밖** — CTO 지시 | — |
+| **Routing Dashboard** | 웹 `/routing` — feature별 Provider·모델·결정 근거(feature/default/fallback)·환경변수명. `GET /llm/routing` | — |
+| **Routing Metrics** | `GET /executions/stats`의 **`byRoute`** — 실제 실행된 경로(`feature→provider`)별 호출·성공률·지연·토큰·비용 | — |
+
+**우선순위**: 호출자 `model` 명시 > 라우팅 규칙의 `:model` >
+`LLM_MODEL_*`(같은 Provider일 때만) > Provider 기본 모델.
+`dev` feature(개발용 `/llm/complete`·health)는 항상 기본 Provider.
+
+**구조**: 해석은 core 순수 로직(`resolveRoute`/`buildRoutingTable`),
+Provider 인스턴스는 `createLlmProviderMap()`(키가 설정된 것 전부),
+선택·호출은 `LlmService`(Execution 기록과 동일 단일 관문).
 
 ## 구조
 

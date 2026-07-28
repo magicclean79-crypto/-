@@ -58,3 +58,37 @@ export function createLlmProvider(): LlmProvider {
 
   return adapter({ apiKey, model: process.env[MODEL_ENV[name]] });
 }
+
+/**
+ * Cross-Provider Routing용 Provider 인스턴스 맵 (TASK-1001).
+ *
+ * 키가 설정된 Provider를 **전부** 생성해 둔다 — feature별 라우팅이
+ * 호출 시점에 이 맵에서 Provider를 고른다. mock은 항상 포함(기본·폴백).
+ * 키가 없는 Provider는 맵에 없으며, 라우팅은 기본 Provider로 내려간다
+ * (Graceful degradation — Failover는 이번 범위 아님).
+ */
+export function createLlmProviderMap(): Map<string, LlmProvider> {
+  const logger = new Logger("LlmProviderFactory");
+  const providers = new Map<string, LlmProvider>();
+  providers.set("mock", new MockLlmProvider());
+
+  for (const info of LLM_PROVIDER_REGISTRY) {
+    const adapter = ADAPTERS[info.name];
+    if (!adapter || !info.keyEnv) {
+      continue;
+    }
+    const apiKey = process.env[info.keyEnv];
+    if (!apiKey) {
+      continue;
+    }
+    providers.set(
+      info.name,
+      adapter({ apiKey, model: process.env[MODEL_ENV[info.name]] }),
+    );
+  }
+
+  logger.log(
+    `라우팅 가능 Provider: ${[...providers.keys()].join(", ")}`,
+  );
+  return providers;
+}
