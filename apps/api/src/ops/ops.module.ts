@@ -1,7 +1,9 @@
 import { Module } from "@nestjs/common";
 import { AuthModule } from "../auth/auth.module";
 import { LlmModule } from "../llm/llm.module";
+import { StorageModule } from "../storage/storage.module";
 import { AlertService } from "./alert.service";
+import { BackupService } from "./backup.service";
 import { DistributedLockService } from "./distributed-lock.service";
 import { NotificationQueueService } from "./notification-queue.service";
 import { NotificationService } from "./notification.service";
@@ -15,7 +17,7 @@ import { ScheduledChecksService } from "./scheduled-checks.service";
  * 로그와 (설정 시) 웹훅으로 내보낸다. 판정 로직은 전부 @acos/core에 있다.
  */
 @Module({
-  imports: [AuthModule, LlmModule],
+  imports: [AuthModule, LlmModule, StorageModule],
   controllers: [OpsController],
   providers: [
     AlertService,
@@ -23,6 +25,7 @@ import { ScheduledChecksService } from "./scheduled-checks.service";
     NotificationService,
     NotificationQueueService,
     DistributedLockService,
+    BackupService,
   ],
   exports: [
     AlertService,
@@ -30,6 +33,7 @@ import { ScheduledChecksService } from "./scheduled-checks.service";
     NotificationService,
     NotificationQueueService,
     DistributedLockService,
+    BackupService,
   ],
 })
 export class OpsModule {}

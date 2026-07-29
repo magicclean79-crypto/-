@@ -1,5 +1,10 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
-import { decideQueueOutcome, selectChannels, summarizeQueue } from "@acos/core";
+import {
+  decideQueueOutcome,
+  resolveArchiveAfterDays,
+  selectChannels,
+  summarizeQueue,
+} from "@acos/core";
 import type {
   NotificationChannel,
   NotificationPayload,
@@ -22,13 +27,14 @@ interface QueueRow {
   channel: string;
   level: string;
   payload: unknown;
-  status: "PENDING" | "SENT" | "DEAD";
+  status: "PENDING" | "SENT" | "DEAD" | "ARCHIVED";
   attempts: number;
   nextAttemptAt: Date;
   lastStatus: number | null;
   lastError: string | null;
   sentAt: Date | null;
   deadAt: Date | null;
+  archivedAt: Date | null;
   createdAt: Date;
 }
 
@@ -274,6 +280,27 @@ export class NotificationQueueService implements OnModuleInit, OnModuleDestroy {
       deadLetters: rows.filter((row) => row.status === "DEAD").map(toDto),
       recent: rows.slice(0, 20).map(toDto),
     };
+  }
+
+  /**
+   * Dead Letter 보관 (TASK-1601, CTO 결정 1501-③).
+   * **삭제하지 않는다** — 90일이 지난 것만 `ARCHIVED`로 옮겨 현황에서 비켜 둔다.
+   */
+  async archiveDeadLetters(): Promise<{ archived: number; afterDays: number }> {
+    const afterDays = resolveArchiveAfterDays(
+      process.env as Record<string, string | undefined>,
+    );
+    const cutoff = new Date(Date.now() - afterDays * 24 * 60 * 60 * 1000);
+    const result = await this.prisma.notificationQueue.updateMany({
+      where: { status: "DEAD", deadAt: { lte: cutoff } },
+      data: { status: "ARCHIVED", archivedAt: new Date() },
+    });
+    if (result.count > 0) {
+      this.logger.log(
+        `Dead Letter ${result.count}건을 보관했습니다 (${afterDays}일 경과) — 삭제하지 않습니다.`,
+      );
+    }
+    return { archived: result.count, afterDays };
   }
 
   /**

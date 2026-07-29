@@ -299,7 +299,7 @@ export function resolveChannelPolicy(
 
 // ── Persistent Notification Queue (CTO 결정 1401-②) ──────────
 
-export type QueueStatus = "PENDING" | "SENT" | "DEAD";
+export type QueueStatus = "PENDING" | "SENT" | "DEAD" | "ARCHIVED";
 
 /** 큐에 담긴 전송 1건의 상태 (판정 입력) */
 export interface QueueItemState {
@@ -359,6 +359,8 @@ export interface QueueSummary {
   sent: number;
   /** Dead Letter — 사람이 고쳐야 나간다 */
   dead: number;
+  /** 90일이 지나 보관된 Dead Letter (CTO 결정 1501-③ — 삭제 아님) */
+  archived: number;
   /** 지금 보낼 수 있는 항목 수 */
   due: number;
 }
@@ -371,6 +373,7 @@ export function summarizeQueue(
     pending: items.filter((item) => item.status === "PENDING").length,
     sent: items.filter((item) => item.status === "SENT").length,
     dead: items.filter((item) => item.status === "DEAD").length,
+    archived: items.filter((item) => item.status === "ARCHIVED").length,
     due: items.filter((item) => isDue(item, now)).length,
   };
 }

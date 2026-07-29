@@ -4,13 +4,16 @@ import {
   detectBudgetAlerts,
   detectConfigurationAlerts,
   detectProviderAlerts,
+  detectLockOutageAlert,
   detectSchedulerAlerts,
   detectUnpricedAlerts,
   isSchedulerStopped,
+  resolveGraceFactor,
   resolveSchedules,
   shouldRun,
   validateEnvironment,
 } from "@acos/core";
+import { DEFAULT_LOCK_OUTAGE_THRESHOLD_MS } from "@acos/core";
 import type { AlertKind, JobSchedule, ScheduledJob } from "@acos/core";
 import type {
   CheckRunDto,
@@ -22,7 +25,9 @@ import { LlmBudgetService } from "../llm/llm-budget.service";
 import { ProviderProductionService } from "../llm/provider-production.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { AlertService } from "./alert.service";
+import { BackupService } from "./backup.service";
 import { DistributedLockService } from "./distributed-lock.service";
+import { NotificationQueueService } from "./notification-queue.service";
 
 interface CheckRunRow {
   id: string;
@@ -53,8 +58,12 @@ const JOB_ALERT_KINDS: Record<ScheduledJob, AlertKind[]> = {
   "cost-verification": ["budget", "unpriced-model"],
   "provider-validation": ["configuration"],
   "health-check": ["provider-failure"],
-  // 보관은 경보를 만들지 않는다 — 정리 작업이다
+  // 보관·백업·복구 검증은 경보를 만들지 않는다 — 정리·검증 작업이다
+  // (판정은 운영 대시보드가 하고, 실패는 실행 이력에 남는다)
   "alert-archive": [],
+  backup: [],
+  "restore-verify": [],
+  "provider-smoke": [],
 };
 
 /** 사람이 읽는 주기 설명 (경보 문구용) */
@@ -62,7 +71,9 @@ function describeInterval(schedule: JobSchedule): string {
   if (schedule.dailyAtMinutes !== null) {
     const hours = String(Math.floor(schedule.dailyAtMinutes / 60)).padStart(2, "0");
     const minutes = String(schedule.dailyAtMinutes % 60).padStart(2, "0");
-    return `매일 ${hours}:${minutes} UTC`;
+    // 운영 서버 로컬 시각 기준이다 (CTO 결정 1501-①) — UTC라고 적으면
+    // 상태와 설명이 어긋나 운영자가 다른 시각을 기다리게 된다
+    return `매일 ${hours}:${minutes} 로컬(${process.env.TZ ?? "시스템 기본"})`;
   }
   return `${Math.round(schedule.intervalMs / 1000)}초`;
 }
@@ -104,6 +115,9 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
     private readonly budget: LlmBudgetService,
     private readonly alerts: AlertService,
     private readonly locks: DistributedLockService,
+    private readonly backups: BackupService,
+    private readonly production2: ProviderProductionService,
+    private readonly queue: NotificationQueueService,
   ) {}
 
   /** 점검 1건의 잠금 이름 */
@@ -188,7 +202,11 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
           job: schedule.job,
           stopped: isSchedulerStopped(schedule, last, now, {
             startedAt: this.startedAt,
-            graceFactor: this.graceFactor,
+            // Job별 여유 배수 (CTO 결정 1501-④)
+            graceFactor: resolveGraceFactor(
+              schedule.job,
+              process.env as Record<string, string | undefined>,
+            ),
           }),
           lastRunAt: last === null ? null : new Date(last).toISOString(),
           interval: describeInterval(schedule),
@@ -196,10 +214,16 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
       }),
     );
 
-    const detected = detectSchedulerAlerts({
-      jobs,
-      lockUnavailable: this.locks.distributed && !this.locks.healthy,
-    });
+    const lockUnavailable = this.locks.distributed && !this.locks.healthy;
+    const detected = [
+      ...detectSchedulerAlerts({ jobs, lockUnavailable }),
+      // Redis 장애가 지속되면 별도 critical (CTO 결정 1501-②)
+      ...detectLockOutageAlert({
+        unhealthySince: this.locks.unhealthySince,
+        now,
+        thresholdMs: this.lockOutageThresholdMs,
+      }),
+    ];
     await this.alerts.sync(["scheduler-stopped"], detected);
   }
 
@@ -208,9 +232,12 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
     return !["off", "false", "0"].includes(value);
   }
 
-  private get graceFactor(): number {
-    const raw = Number(process.env.OPS_SCHEDULER_GRACE_FACTOR);
-    return Number.isFinite(raw) && raw > 0 ? raw : 3;
+  /** Redis 장애를 critical로 볼 지속 시간 (CTO 결정 1501-② — 기본 30분) */
+  get lockOutageThresholdMs(): number {
+    const raw = Number(process.env.OPS_LOCK_OUTAGE_THRESHOLD_MS);
+    return Number.isFinite(raw) && raw > 0
+      ? Math.round(raw)
+      : DEFAULT_LOCK_OUTAGE_THRESHOLD_MS;
   }
 
   /** 마지막 실행 시각 — 인스턴스 메모리보다 DB가 진실이다(다중 인스턴스) */
@@ -328,12 +355,21 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** 전체 점검 실행 (수동 트리거·배포 직후용) */
+  /**
+   * 전체 점검 실행 (수동 트리거·배포 직후용).
+   *
+   * **꺼 둔 점검은 건드리지 않는다** — 기본이 꺼짐인 스모크는 실 Provider를
+   * 호출해 과금되므로, "지금 점검" 한 번이 돈을 쓰게 하면 안 된다.
+   * 개별 실행(`?job=`)으로는 여전히 강제할 수 있다.
+   */
   async runAll(
     trigger: "schedule" | "manual" = "manual",
   ): Promise<CheckRunResultDto[]> {
     const results: CheckRunResultDto[] = [];
     for (const schedule of this.schedules()) {
+      if (!schedule.enabled) {
+        continue;
+      }
       results.push(await this.run(schedule.job, trigger));
     }
     return results;
@@ -388,14 +424,60 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
       };
     }
 
+    if (job === "backup") {
+      const result = await this.backups.backup("schedule");
+      return {
+        ok: result.ok,
+        detail: result.ok
+          ? `백업 성공 — ${result.sizeBytes ?? 0}바이트 (${result.durationMs}ms)`
+          : `백업 실패 — ${result.error ?? "원인 불명"}`,
+        notified: [],
+      };
+    }
+
+    if (job === "restore-verify") {
+      const result = await this.backups.verifyRestore("schedule");
+      return {
+        // 미구성은 실패가 아니다 — 못 한 것과 실패한 것은 다르다
+        ok: result.configured ? result.ok : true,
+        detail: !result.configured
+          ? "복원 검증 미구성 — BACKUP_RESTORE_DB_URL이 없습니다"
+          : result.ok
+            ? `복원 검증 통과 — 테이블 ${result.tables}개`
+            : `복원 검증 실패 — ${result.error ?? "원인 불명"}`,
+        notified: [],
+      };
+    }
+
+    if (job === "provider-smoke") {
+      // 실 Provider를 호출한다 = 과금 (기본이 꺼짐인 이유)
+      const validation = await this.production2.validateProviders({ live: true });
+      const failed = validation.providers.filter(
+        (entry) => entry.live !== null && entry.live.status === "error",
+      );
+      return {
+        ok: failed.length === 0,
+        detail:
+          `Live Check ${validation.providers.filter((entry) => entry.live !== null).length}개 · ` +
+          (failed.length === 0
+            ? "전부 정상"
+            : `실패 ${failed.map((entry) => entry.provider).join(", ")}`),
+        notified: [],
+      };
+    }
+
     if (job === "alert-archive") {
       // 보관은 경보를 만들지 않는다 — 정리 작업이다 (CTO 결정 1401-③)
-      const result = await this.alerts.archive();
+      const [alerts, queue] = await Promise.all([
+        this.alerts.archive(),
+        // Dead Letter도 90일 후 보관 (CTO 결정 1501-③ — 삭제 아님)
+        this.queue.archiveDeadLetters(),
+      ]);
       return {
         ok: true,
         detail:
-          `보관 ${result.archived}건 (해소 후 ${result.afterDays}일 경과, ` +
-          `검사 ${result.checked}건) — 삭제하지 않습니다`,
+          `경보 보관 ${alerts.archived}건 · Dead Letter 보관 ${queue.archived}건 ` +
+          `(해소 후 ${alerts.afterDays}일 경과) — 삭제하지 않습니다`,
         notified: [],
       };
     }

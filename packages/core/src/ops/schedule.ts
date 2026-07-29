@@ -15,6 +15,10 @@ export const SCHEDULED_JOBS = [
   "health-check",
   // 경보 보관 (TASK-1501, CTO 결정 1401-③) — 하루 1회 새벽
   "alert-archive",
+  // 운영 검증 (TASK-1601, Sprint 16)
+  "backup",
+  "restore-verify",
+  "provider-smoke",
 ] as const;
 
 export type ScheduledJob = (typeof SCHEDULED_JOBS)[number];
@@ -29,7 +33,19 @@ export const DEFAULT_JOB_INTERVALS: Record<ScheduledJob, number> = {
   "health-check": 60 * 60 * 1000,
   // 보관은 하루 1회 — 간격이 아니라 **시각**으로 돈다 (아래 DAILY_JOBS)
   "alert-archive": 24 * 60 * 60 * 1000,
+  // 백업·복구 검증·스모크도 시각 기반 (TASK-1601)
+  backup: 24 * 60 * 60 * 1000,
+  "restore-verify": 24 * 60 * 60 * 1000,
+  "provider-smoke": 24 * 60 * 60 * 1000,
 };
+
+/**
+ * 기본이 **꺼짐**인 점검 (TASK-1601).
+ *
+ * 실 Provider를 호출해 **과금되는** 스모크는 운영자가 명시적으로 켜야 한다 —
+ * 켜져 있는 줄 모르고 돈이 나가는 상황을 만들지 않는다.
+ */
+export const DEFAULT_DISABLED_JOBS: ScheduledJob[] = ["provider-smoke"];
 
 /**
  * 시각 기반으로 도는 점검 (CTO 결정 1401-③).
@@ -39,9 +55,25 @@ export const DEFAULT_JOB_INTERVALS: Record<ScheduledJob, number> = {
  */
 export const DAILY_JOBS: Partial<Record<ScheduledJob, string>> = {
   "alert-archive": "OPS_CHECK_ARCHIVE_AT",
+  backup: "OPS_CHECK_BACKUP_AT",
+  "restore-verify": "OPS_CHECK_RESTORE_AT",
+  "provider-smoke": "OPS_CHECK_SMOKE_AT",
 };
 
-/** 기본 실행 시각 (UTC) — 다른 시간 계산(예산 창)과 같은 기준 */
+/** 점검별 기본 실행 시각 — 서로 겹치지 않게 둔다 (백업 → 복구 검증 → 보관) */
+export const DEFAULT_DAILY_TIMES: Partial<Record<ScheduledJob, string>> = {
+  backup: "03:00",
+  "restore-verify": "03:30",
+  "alert-archive": "04:00",
+  "provider-smoke": "05:00",
+};
+
+/**
+ * 기본 실행 시각 — **운영 서버의 로컬 시간대** 기준 (CTO 결정 1501-①).
+ *
+ * 예산 창 등 다른 시간 계산은 UTC지만, 보관은 "트래픽이 적은 새벽"을 노리는
+ * 작업이라 사람이 사는 시간대를 따라야 한다. 시간대는 `TZ` 환경변수를 따른다.
+ */
 export const DEFAULT_DAILY_AT = "04:00";
 
 const UNIT_MS: Record<string, number> = {
@@ -87,7 +119,7 @@ export interface JobSchedule {
   /** 값의 출처 (표시용) */
   source: "env" | "default" | "disabled";
   env: string;
-  /** 시각 기반 점검이면 자정 이후 분 (UTC) — 간격 기반이면 null */
+  /** 시각 기반 점검이면 자정 이후 분 (**운영 서버 로컬 시각**) — 간격 기반이면 null */
   dailyAtMinutes: number | null;
 }
 
@@ -97,6 +129,9 @@ export const JOB_INTERVAL_ENV: Record<ScheduledJob, string> = {
   "provider-validation": "OPS_CHECK_CONFIG_INTERVAL",
   "health-check": "OPS_CHECK_HEALTH_INTERVAL",
   "alert-archive": "OPS_CHECK_ARCHIVE_AT",
+  backup: "OPS_CHECK_BACKUP_AT",
+  "restore-verify": "OPS_CHECK_RESTORE_AT",
+  "provider-smoke": "OPS_CHECK_SMOKE_AT",
 };
 
 /**
@@ -140,21 +175,25 @@ export function resolveSchedules(
       rawNormalized === "off" || rawNormalized === "false" || rawNormalized === "0";
 
     const daily = DAILY_JOBS[job] !== undefined;
+    const defaultAt = DEFAULT_DAILY_TIMES[job] ?? DEFAULT_DAILY_AT;
+    // 과금되는 점검은 명시적으로 켜야 한다 (TASK-1601)
+    const defaultOff =
+      DEFAULT_DISABLED_JOBS.includes(job) && raw === undefined;
 
-    if (allDisabled || jobOff) {
+    if (allDisabled || jobOff || defaultOff) {
       return {
         job,
         intervalMs: DEFAULT_JOB_INTERVALS[job],
         enabled: false,
         source: "disabled" as const,
         env: name,
-        dailyAtMinutes: daily ? parseDailyAt(DEFAULT_DAILY_AT) : null,
+        dailyAtMinutes: daily ? parseDailyAt(defaultAt) : null,
       };
     }
 
     if (daily) {
       // 해석할 수 없는 시각은 기본값으로 — 엉뚱한 시각에 돌지 않게
-      const minutes = parseDailyAt(raw) ?? parseDailyAt(DEFAULT_DAILY_AT)!;
+      const minutes = parseDailyAt(raw) ?? parseDailyAt(defaultAt)!;
       return {
         job,
         intervalMs: DEFAULT_JOB_INTERVALS[job],
@@ -194,12 +233,10 @@ export function shouldRun(
   }
 
   if (schedule.dailyAtMinutes !== null) {
-    const today = Date.UTC(
-      new Date(now).getUTCFullYear(),
-      new Date(now).getUTCMonth(),
-      new Date(now).getUTCDate(),
-    );
-    const dueAt = today + schedule.dailyAtMinutes * 60_000;
+    // 로컬 시간대 기준 자정 (CTO 결정 1501-① — TZ 환경변수를 따른다)
+    const midnight = new Date(now);
+    midnight.setHours(0, 0, 0, 0);
+    const dueAt = midnight.getTime() + schedule.dailyAtMinutes * 60_000;
     if (now < dueAt) {
       return false;
     }
@@ -240,4 +277,36 @@ export function isSchedulerStopped(
   // 한 번도 안 돌았으면 기동 시점부터 센다 — 방금 뜬 서버를 장애라 하지 않는다
   const reference = lastRunAt ?? options.startedAt ?? now;
   return now - reference > window;
+}
+
+/**
+ * Job별 정지 판정 여유 배수 (CTO 결정 1501-④).
+ *
+ * 기본 3배를 유지하되 Job마다 조정할 수 있다 — 주기가 긴 점검(보관은 하루)은
+ * 3배면 사흘이라 감지가 너무 늦고, 짧은 점검은 3배로도 충분하다.
+ * `OPS_SCHEDULER_GRACE_<JOB>` (예: `OPS_SCHEDULER_GRACE_COST_VERIFICATION`).
+ */
+export const DEFAULT_GRACE_FACTOR = 3;
+
+export function graceFactorEnv(job: ScheduledJob): string {
+  return `OPS_SCHEDULER_GRACE_${job.toUpperCase().replace(/-/g, "_")}`;
+}
+
+export function resolveGraceFactor(
+  job: ScheduledJob,
+  env: Record<string, string | undefined>,
+): number {
+  const parse = (value: string | undefined): number | null => {
+    if (value === undefined || value.trim().length === 0) {
+      return null;
+    }
+    const parsed = Number(value);
+    // 잘못 적은 값 때문에 판정이 무너지는 것보다 기본값이 안전하다
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  };
+  return (
+    parse(env[graceFactorEnv(job)]) ??
+    parse(env.OPS_SCHEDULER_GRACE_FACTOR) ??
+    DEFAULT_GRACE_FACTOR
+  );
 }

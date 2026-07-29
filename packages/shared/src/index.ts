@@ -1564,7 +1564,7 @@ export interface NotificationQueueDto {
   channel: string;
   level: string;
   title: string;
-  /** PENDING | SENT | DEAD */
+  /** PENDING | SENT | DEAD | ARCHIVED */
   status: string;
   attempts: number;
   nextAttemptAt: string;
@@ -1583,8 +1583,102 @@ export interface NotificationQueueStatusDto {
   dead: number;
   /** 지금 보낼 수 있는 항목 수 */
   due: number;
+  /** 90일이 지나 보관된 Dead Letter (CTO 결정 1501-③ — 삭제 아님) */
+  archived: number;
   workerEnabled: boolean;
   workerIntervalMs: number;
   deadLetters: NotificationQueueDto[];
   recent: NotificationQueueDto[];
+}
+
+// ── Production Verification & Operational Readiness (TASK-1601, Sprint 16) ──
+
+/** 백업 실행 이력 1건 */
+export interface BackupRunDto {
+  id: string;
+  ok: boolean;
+  /** 덤프 크기 (bytes) — 실패면 null */
+  sizeBytes: number | null;
+  /** 파일명만 (절대 경로는 노출하지 않는다) */
+  fileName: string | null;
+  durationMs: number;
+  trigger: string;
+  error: string | null;
+  createdAt: string;
+}
+
+/** 복원 검증 이력 1건 */
+export interface RestoreRunDto {
+  id: string;
+  ok: boolean;
+  /** 복원 후 확인한 테이블 수 */
+  tables: number | null;
+  fileName: string | null;
+  durationMs: number;
+  trigger: string;
+  error: string | null;
+  createdAt: string;
+}
+
+export type ReadinessVerdictDto = "ok" | "stale" | "failed" | "missing";
+export type DrStatusDto = "pass" | "fail" | "warn" | "manual";
+
+export interface DrItemDto {
+  id: string;
+  title: string;
+  status: DrStatusDto;
+  detail: string;
+  /** 복구 가능성을 좌우하는 항목인가 */
+  critical: boolean;
+}
+
+/** SMTP 검증 결과 — 연결·인증만 확인하고 메일은 보내지 않는다 */
+export interface SmtpValidationDto {
+  configured: boolean;
+  ok: boolean;
+  detail: string;
+  host: string | null;
+  latencyMs: number;
+}
+
+/** Redis(분산 잠금) 상태 */
+export interface RedisHealthDto {
+  /** Redis를 쓰는 구성인가 */
+  configured: boolean;
+  ok: boolean;
+  detail: string;
+  latencyMs: number | null;
+  /** 잠금 불가가 시작된 시각 — 정상이면 null */
+  unhealthySince: string | null;
+  /** 이 시간 이상 지속되면 critical (CTO 결정 1501-②) */
+  outageThresholdMs: number;
+}
+
+/** 운영 대시보드 (GET /ops/readiness) */
+export interface OperationsReadinessDto {
+  /** critical 항목이 전부 통과하면 true */
+  recoverable: boolean;
+  summary: { pass: number; fail: number; warn: number; manual: number };
+  checklist: DrItemDto[];
+  backup: {
+    verdict: ReadinessVerdictDto;
+    message: string;
+    ageMs: number | null;
+    sizeBytes: number | null;
+    history: BackupRunDto[];
+    directory: string;
+    retentionDays: number;
+  };
+  restore: {
+    verdict: ReadinessVerdictDto;
+    message: string;
+    ageMs: number | null;
+    tables: number | null;
+    history: RestoreRunDto[];
+    /** 복원 검증용 별도 DB가 설정되어 있는가 */
+    configured: boolean;
+  };
+  smtp: SmtpValidationDto;
+  redis: RedisHealthDto;
+  checkedAt: string;
 }

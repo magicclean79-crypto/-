@@ -1,6 +1,8 @@
 import {
+  DEFAULT_GRACE_FACTOR,
   DEFAULT_JOB_INTERVALS,
   isSchedulerStopped,
+  resolveGraceFactor,
   parseDailyAt,
   parseIntervalMs,
   resolveSchedules,
@@ -82,20 +84,48 @@ describe("Scheduled Checks (TASK-1302)", () => {
       expect(byJob["cost-verification"].enabled).toBe(true);
     });
 
-    it("선언된 점검 4종을 빠짐없이 돌려준다", () => {
+    it("선언된 점검 7종을 빠짐없이 돌려준다", () => {
       expect(resolveSchedules({}).map((entry) => entry.job).sort()).toEqual([
         "alert-archive",
+        "backup",
         "cost-verification",
         "health-check",
+        "provider-smoke",
         "provider-validation",
+        "restore-verify",
       ]);
+    });
+
+    it("과금되는 스모크는 기본이 꺼짐 — 모르는 사이 돈이 나가지 않게 (TASK-1601)", () => {
+      const byJob = Object.fromEntries(
+        resolveSchedules({}).map((entry) => [entry.job, entry]),
+      );
+      expect(byJob["provider-smoke"].enabled).toBe(false);
+      // 명시적으로 켜야 돈다
+      expect(
+        resolveSchedules({ OPS_CHECK_SMOKE_AT: "05:00" }).find(
+          (entry) => entry.job === "provider-smoke",
+        )!.enabled,
+      ).toBe(true);
+      // 백업·복구 검증은 기본이 켜짐
+      expect(byJob.backup.enabled).toBe(true);
+      expect(byJob["restore-verify"].enabled).toBe(true);
+    });
+
+    it("점검별 기본 시각이 겹치지 않는다 (백업 → 복구 검증 → 보관)", () => {
+      const byJob = Object.fromEntries(
+        resolveSchedules({}).map((entry) => [entry.job, entry]),
+      );
+      expect(byJob.backup.dailyAtMinutes).toBe(3 * 60);
+      expect(byJob["restore-verify"].dailyAtMinutes).toBe(3 * 60 + 30);
+      expect(byJob["alert-archive"].dailyAtMinutes).toBe(4 * 60);
     });
 
     it("보관은 시각 기반이다 (CTO 결정 1401-③ — 하루 1회 새벽)", () => {
       const archive = resolveSchedules({}).find(
         (entry) => entry.job === "alert-archive",
       )!;
-      expect(archive.dailyAtMinutes).toBe(4 * 60); // 04:00 UTC
+      expect(archive.dailyAtMinutes).toBe(4 * 60); // 04:00 로컬 (결정 1501-①)
       expect(archive.enabled).toBe(true);
 
       const custom = resolveSchedules({ OPS_CHECK_ARCHIVE_AT: "02:30" }).find(
@@ -160,26 +190,70 @@ describe("Scheduled Checks (TASK-1302)", () => {
       enabled: true,
       source: "default",
       env: "OPS_CHECK_ARCHIVE_AT",
-      dailyAtMinutes: 4 * 60, // 04:00 UTC
+      dailyAtMinutes: 4 * 60, // 04:00 (로컬)
     };
-    const at = (iso: string) => new Date(iso).getTime();
+    /** 로컬 시간대 기준으로 만든다 (CTO 결정 1501-① — TZ를 따른다) */
+    const local = (day: number, hour: number, minute = 0) =>
+      new Date(2026, 6, day, hour, minute, 0, 0).getTime();
 
     it("그 시각 전에는 돌지 않는다 — 한 번도 안 돌았어도", () => {
       // "새벽에 돌리라"는 지시를 기동 시점에 어기지 않는다
-      expect(shouldRun(daily, null, at("2026-07-29T03:59:00Z"))).toBe(false);
+      expect(shouldRun(daily, null, local(29, 3, 59))).toBe(false);
     });
 
     it("그 시각을 지나고 아직 안 돌았으면 돈다", () => {
-      expect(shouldRun(daily, null, at("2026-07-29T04:00:00Z"))).toBe(true);
-      expect(
-        shouldRun(daily, at("2026-07-28T04:05:00Z"), at("2026-07-29T05:00:00Z")),
-      ).toBe(true);
+      expect(shouldRun(daily, null, local(29, 4, 0))).toBe(true);
+      expect(shouldRun(daily, local(28, 4, 5), local(29, 5, 0))).toBe(true);
     });
 
     it("오늘 이미 돌았으면 다시 돌지 않는다", () => {
+      expect(shouldRun(daily, local(29, 4, 1), local(29, 23, 0))).toBe(false);
+    });
+
+    it("**로컬 시간대** 기준으로 판정한다 (CTO 결정 1501-①)", () => {
+      // 로컬 03:59는 아직, 04:00은 실행 — UTC였다면 시간대에 따라 어긋난다
+      expect(shouldRun(daily, null, local(29, 3, 59))).toBe(false);
+      expect(shouldRun(daily, null, local(29, 4, 1))).toBe(true);
+    });
+  });
+
+  describe("resolveGraceFactor (CTO 결정 1501-④)", () => {
+    it("기본은 3배", () => {
+      expect(resolveGraceFactor("cost-verification", {})).toBe(
+        DEFAULT_GRACE_FACTOR,
+      );
+      expect(DEFAULT_GRACE_FACTOR).toBe(3);
+    });
+
+    it("전체 기본값을 바꿀 수 있다", () => {
       expect(
-        shouldRun(daily, at("2026-07-29T04:01:00Z"), at("2026-07-29T23:00:00Z")),
-      ).toBe(false);
+        resolveGraceFactor("cost-verification", {
+          OPS_SCHEDULER_GRACE_FACTOR: "5",
+        }),
+      ).toBe(5);
+    });
+
+    it("Job별 값이 전체 기본값보다 우선한다", () => {
+      const env = {
+        OPS_SCHEDULER_GRACE_FACTOR: "5",
+        OPS_SCHEDULER_GRACE_ALERT_ARCHIVE: "1.5",
+      };
+      expect(resolveGraceFactor("alert-archive", env)).toBe(1.5);
+      expect(resolveGraceFactor("cost-verification", env)).toBe(5);
+    });
+
+    it("해석할 수 없는 값은 다음 순위로 내려간다", () => {
+      expect(
+        resolveGraceFactor("alert-archive", {
+          OPS_SCHEDULER_GRACE_ALERT_ARCHIVE: "abc",
+          OPS_SCHEDULER_GRACE_FACTOR: "4",
+        }),
+      ).toBe(4);
+      expect(
+        resolveGraceFactor("alert-archive", {
+          OPS_SCHEDULER_GRACE_ALERT_ARCHIVE: "0",
+        }),
+      ).toBe(DEFAULT_GRACE_FACTOR);
     });
   });
 

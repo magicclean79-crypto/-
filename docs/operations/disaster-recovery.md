@@ -1,0 +1,217 @@
+# Disaster Recovery (TASK-1601, Sprint 16)
+
+**지금 무너지면 되살릴 수 있는가**를 다루는 문서입니다.
+배포 절차는 [production-runbook.md](production-runbook.md), 장애 대응 순서는
+[recovery-guide.md](recovery-guide.md)를 참고하세요.
+
+> 첫 화면은 `/admin/operations`(ADMIN)입니다 — 백업·복원 검증·재해 복구
+> 체크리스트·Redis·SMTP가 한 화면에서 판정됩니다.
+> API로는 `GET /ops/readiness`가 같은 판정을 돌려줍니다.
+
+---
+
+## 0. 원칙
+
+- **복원해 보지 않은 백업은 백업이 아닙니다.** 그래서 백업 이력과 복원 검증
+  이력을 한 쌍으로 판정합니다. 복원 검증 이력이 없으면 `missing`이고,
+  그것은 통과가 아닙니다.
+- **미구성과 실패는 다릅니다.** 복원 대상 DB(`BACKUP_RESTORE_DB_URL`)가 없으면
+  "미구성"으로 표시하지, 실패로 세지 않습니다.
+- **운영 DB에는 복원하지 않습니다.** 복원 검증은 반드시 별도 DB에서 합니다 —
+  검증하려다 데이터를 잃는 것이 최악입니다.
+- **자동 판정이 불가능한 항목은 `직접 확인`으로 남깁니다.** 이 문서를 읽고
+  절차가 유효한지 확인하는 일(체크리스트의 `runbook` 항목)이 그렇습니다.
+
+---
+
+## 1. 무엇이 백업되는가
+
+| 대상 | 방법 | 주기 |
+| --- | --- | --- |
+| PostgreSQL 전체 | `pg_dump --format=custom` | 매일 `OPS_CHECK_BACKUP_AT` (기본 03:00 로컬) |
+| 복원 검증 | `pg_restore` → 별도 DB → 테이블 수 확인 | 매일 `OPS_CHECK_RESTORE_AT` (기본 03:30 로컬) |
+| 이미지(S3) | 저장소 제공자의 버전 관리·복제 | 저장소 정책 (**직접 확인**) |
+
+이미지 저장소는 이 시스템이 백업하지 않습니다 — S3 호환 저장소의 버킷 정책
+(버전 관리·교차 리전 복제)에 의존합니다. 그 정책이 켜져 있는지는 사람이
+확인해야 합니다.
+
+### 시간대
+
+일 1회 점검은 **운영 서버 로컬 시각**으로 돕니다 (CTO 결정 1501-①).
+`TZ`를 지정하지 않으면 컨테이너 기본값(대개 UTC)을 따르므로,
+"새벽 3시"가 운영자가 생각하는 새벽이 아닐 수 있습니다.
+
+```bash
+TZ=Asia/Seoul
+```
+
+---
+
+## 2. 설정
+
+| 변수 | 뜻 | 기본값 |
+| --- | --- | --- |
+| `BACKUP_DIR` | 덤프를 두는 디렉터리 | `/var/backups/acos` |
+| `BACKUP_RETENTION_DAYS` | 보관 일수 | 14 |
+| `BACKUP_KEEP_MINIMUM` | 기간이 지나도 남길 최소 개수 | 3 |
+| `BACKUP_TIMEOUT_MS` | `pg_dump`/`pg_restore` 제한 시간 | 600000 |
+| `BACKUP_RESTORE_DB_URL` | **복원 검증 전용** DB | 없음(미구성) |
+| `OPS_CHECK_BACKUP_AT` | 백업 시각 HH:MM | `03:00` |
+| `OPS_CHECK_RESTORE_AT` | 복원 검증 시각 HH:MM | `03:30` |
+| `OPS_CHECK_ARCHIVE_AT` | 경보·Dead Letter 보관 시각 | `04:00` |
+
+> `BACKUP_DIR`는 **컨테이너 밖 볼륨**을 가리켜야 합니다. 기본값 그대로 두고
+> 볼륨을 붙이지 않으면 컨테이너가 재시작할 때 백업이 함께 사라집니다.
+
+> `BACKUP_RESTORE_DB_URL`에 **운영 DB를 절대 넣지 마십시오.**
+> 복원은 `--clean`으로 대상 스키마를 지우고 씁니다.
+
+`BACKUP_KEEP_MINIMUM`은 정리가 마지막 백업까지 지우는 것을 막습니다 —
+보관 기간이 지났더라도 최근 N개는 남습니다.
+
+---
+
+## 3. 판정 기준
+
+`GET /ops/readiness`가 돌려주는 판정입니다.
+
+### 백업
+
+| 판정 | 조건 | 의미 |
+| --- | --- | --- |
+| `ok` | 최근 성공, 크기 정상 | 복구 지점이 있습니다 |
+| `stale` | 마지막 성공이 2일 초과 | 백업 예약이 도는지 확인 |
+| `failed` | 마지막 시도 실패, 또는 크기 1KB 미만 | 즉시 수동 백업 |
+| `missing` | 이력 없음 | **복구할 지점이 없습니다** |
+
+크기 검사가 있는 이유: `pg_dump`는 부분 실패에도 0에 가까운 파일을 남길 수
+있고, 그것을 "성공"으로 세면 복구 계획이 통째로 거짓이 됩니다.
+
+### 복원 검증
+
+| 판정 | 조건 |
+| --- | --- |
+| `ok` | 최근 8일 안에 복원 성공, 테이블 확인 |
+| `stale` | 마지막 성공이 8일 초과 |
+| `failed` | 복원 실패 또는 복원 후 테이블 0개 |
+| `missing` | 이력 없음 — 복원해 본 적이 없습니다 |
+
+### 재해 복구 체크리스트
+
+| 항목 | 복구 가능성 좌우 | 자동 판정 |
+| --- | --- | --- |
+| 백업 존재·신선도 | ○ | 예 |
+| 복원 검증 | ○ | 예 |
+| 데이터베이스 연결 | ○ | 예 |
+| 이미지 저장소 접근 | ○ | 예 |
+| 분산 잠금(Redis) | × | 예 |
+| 경보 전달 채널 | × | 예 |
+| 복구 절차 숙지·연락 체계 | × | **직접 확인** |
+
+`복구 가능`은 위 ○ 항목에 실패가 하나도 없을 때만 표시됩니다.
+Redis 장애는 복구 가능성을 낮추지 않습니다 — 예약 점검만 멈추고 LLM 호출은
+계속됩니다 (CTO 결정 1501-②).
+
+---
+
+## 4. 수동 실행
+
+화면(`/admin/operations`)의 버튼과 같은 동작입니다. 모두 ADMIN 전용입니다.
+
+```bash
+# 지금 백업 받기
+curl -X POST http://localhost:4000/ops/backup/run -b cookies.txt
+
+# 지금 복원 검증하기 (별도 DB에 복원)
+curl -X POST http://localhost:4000/ops/backup/verify-restore -b cookies.txt
+
+# 재해 복구 상태 확인
+curl http://localhost:4000/ops/readiness -b cookies.txt
+
+# 메일 경로 확인 (연결·인증만, 메일은 보내지 않음)
+curl -X POST http://localhost:4000/ops/notifications/verify-smtp -b cookies.txt
+```
+
+Provider Smoke는 **실제 과금**되므로 기본으로 돌지 않습니다
+(CTO 결정 1301-①). `/ops/checks/run` 같은 "지금 점검"도 꺼져 있는 작업은
+건너뜁니다. 켜려면 `OPS_CHECK_SMOKE_AT`에 시각을 지정하십시오.
+
+---
+
+## 5. 실제 복구 절차
+
+### 5.1 데이터베이스를 되살린다
+
+1. **먼저 현재 상태를 보존합니다.** 망가진 DB라도 지우지 마십시오 —
+   원인 분석과 부분 복구의 유일한 근거입니다.
+   ```bash
+   pg_dump --format=custom --file /var/backups/acos/incident-$(date +%s).dump "$DATABASE_URL"
+   ```
+2. 복원할 덤프를 고릅니다. `/admin/operations`의 백업 이력에서 파일명과
+   크기·시각을 확인합니다.
+3. **빈 데이터베이스**를 만들고 복원합니다.
+   ```bash
+   createdb acos_restored
+   pg_restore --clean --if-exists --no-owner --dbname "postgresql://.../acos_restored" \
+     /var/backups/acos/<파일명>
+   ```
+4. 테이블 수와 핵심 데이터를 확인합니다.
+   ```bash
+   psql --tuples-only --no-align --command \
+     "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'" \
+     "postgresql://.../acos_restored"
+   ```
+5. 확인이 끝나면 `DATABASE_URL`을 복원된 DB로 바꾸고 재기동합니다.
+6. 마이그레이션 상태를 맞춥니다.
+   ```bash
+   pnpm --filter api exec prisma migrate deploy
+   ```
+
+> 덤프에는 `DATABASE_URL`의 `?schema=public` 같은 Prisma 전용 파라미터를
+> 넣지 마십시오 — `pg_dump`가 `invalid URI query parameter`로 거부합니다.
+> 서버는 이 파라미터를 자동으로 걷어냅니다.
+
+### 5.2 잃은 구간을 파악한다
+
+마지막 백업 이후의 데이터는 복구되지 않습니다.
+`/admin/operations`의 "마지막 백업 N분 전"이 곧 **최대 손실 구간**입니다.
+그 구간에 무엇이 있었는지는 실행 이력(`/executions`)과 감사 로그로
+역추적합니다.
+
+### 5.3 이미지 저장소
+
+DB만 복원하면 콘텐츠에 걸린 이미지 참조가 깨질 수 있습니다.
+저장소 버킷을 같은 시점으로 되돌리거나, 깨진 참조를 목록으로 뽑아
+재업로드해야 합니다. 이 절차는 저장소 제공자에 따라 다릅니다 —
+사용 중인 제공자의 절차를 여기에 추가하십시오.
+
+---
+
+## 6. 정기 점검 (분기 1회 권장)
+
+자동 판정으로 대신할 수 없는 항목입니다. 체크리스트의
+`복구 절차 숙지·연락 체계`가 `직접 확인`으로 남아 있는 이유입니다.
+
+- [ ] 이 문서의 명령을 **실제로 한 번 실행**해 봤는가 (읽기만 한 것은 아닌가)
+- [ ] `BACKUP_DIR`가 컨테이너 밖 볼륨을 가리키는가
+- [ ] `BACKUP_RESTORE_DB_URL`이 운영 DB가 **아닌지** 다시 확인했는가
+- [ ] 이미지 저장소의 버전 관리·복제 정책이 켜져 있는가
+- [ ] 장애 시 연락 대상과 순서가 최신인가
+- [ ] 경보 채널(`/admin/operations`의 Slack·Email·Webhook)이 실제로 도착하는가
+- [ ] 복원 검증이 최근 8일 안에 통과했는가
+
+---
+
+## 7. 증상별 대응
+
+| 증상 | 원인 | 조치 |
+| --- | --- | --- |
+| 백업 `missing` | 예약이 한 번도 돌지 않음 | `OPS_SCHEDULED_CHECKS`·`OPS_CHECK_BACKUP_AT` 확인, 수동 실행 |
+| 백업 `stale` | 예약이 멈춤 | 예약 점검 정지 경보 확인, 스케줄러 로그 |
+| 백업 `failed` (크기 이상) | 디스크 부족·권한 | `BACKUP_DIR` 여유 공간, 프로세스 권한 |
+| 복원 `missing` | 검증 대상 DB 미구성 | `BACKUP_RESTORE_DB_URL` 설정 |
+| 복원 `failed` | 덤프 손상·버전 불일치 | `pg_restore` 로그, PostgreSQL 버전 확인 |
+| Redis 30분 이상 장애 | 캐시 서버 다운 | Critical 경보 반복 — 예약 점검이 멈춘 상태, LLM 호출은 계속됨 |
+| SMTP `미구성` | `SMTP_HOST`·`ALERT_EMAIL_TO` 없음 | 설정하거나, 메일을 쓰지 않기로 명시 |
+| SMTP 검증 실패 | 인증·방화벽 | 자격 증명과 포트(587/465) 확인 |

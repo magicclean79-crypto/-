@@ -24,6 +24,10 @@ const PRODUCTION_ENV: Record<string, string> = {
   ALERT_WEBHOOK_URL: "https://hooks.example.com/acos",
   // 분산 잠금 (TASK-1401) — 없으면 다중 인스턴스에서 점검이 중복 실행된다
   REDIS_URL: "redis://cache:6379",
+  // 재해 복구 (TASK-1601) — 백업 위치와 복원 검증 대상이 운영 기준선에 들어왔다
+  TZ: "Asia/Seoul",
+  BACKUP_DIR: "/var/backups/acos",
+  BACKUP_RESTORE_DB_URL: "postgresql://user:pw@db:5432/acos_restore_check",
 };
 
 describe("Environment Validation (TASK-1202)", () => {
@@ -203,6 +207,36 @@ describe("Environment Validation (TASK-1202)", () => {
         views.find((view) => view.name === "ANTHROPIC_API_KEY")
           ?.requiredInProduction,
       ).toBe(false);
+    });
+  });
+
+  describe("재해 복구 설정 (TASK-1601)", () => {
+    it("복원 검증 대상이 없으면 운영에서 경고한다", () => {
+      const { BACKUP_RESTORE_DB_URL, ...rest } = PRODUCTION_ENV;
+      void BACKUP_RESTORE_DB_URL;
+      const result = validateEnvironment(rest);
+      // 기동은 막지 않는다 — 다만 "복원해 본 적 없는 백업"임을 알린다
+      expect(result.ok).toBe(true);
+      expect(
+        result.warnings.find((issue) => issue.name === "BACKUP_RESTORE_DB_URL")
+          ?.message,
+      ).toContain("복원해 보지 않은 백업은 백업이 아닙니다");
+    });
+
+    it("백업 위치가 없으면 사라지는 곳에 쌓인다고 경고한다", () => {
+      const { BACKUP_DIR, ...rest } = PRODUCTION_ENV;
+      void BACKUP_DIR;
+      expect(
+        validateEnvironment(rest).warnings.map((issue) => issue.name),
+      ).toContain("BACKUP_DIR");
+    });
+
+    it("복원 검증 DB 주소는 비밀로 다룬다 — 화면에 노출하지 않는다", () => {
+      const view = describeEnvironment(PRODUCTION_ENV).find(
+        (item) => item.name === "BACKUP_RESTORE_DB_URL",
+      )!;
+      expect(view).toMatchObject({ secret: true, configured: true });
+      expect(view.value).toBeNull();
     });
   });
 

@@ -742,8 +742,9 @@ TASK-1401의 재시도는 **프로세스 안에서만** 돌아, 인스턴스가 
 
 ### Alert Archive를 예약 점검으로 (CTO 결정 1401-③)
 
-보관이 네 번째 예약 점검(`alert-archive`)이 됐고, **하루 1회 04:00 UTC**에 돈다
-(`OPS_CHECK_ARCHIVE_AT=HH:MM`).
+보관이 네 번째 예약 점검(`alert-archive`)이 됐고, **하루 1회 04:00**에 돈다
+(`OPS_CHECK_ARCHIVE_AT=HH:MM`). 시각은 **운영 서버 로컬 시간대** 기준이다
+(CTO 결정 1501-① — `TZ`를 따른다).
 
 시각 기반 점검을 표현하려고 스케줄러를 **단일 티커**로 바꿨다 — 점검마다 타이머를
 두면 "매일 몇 시"를 표현할 수 없고, 재기동할 때마다 시점이 밀린다. 티커는 짧은
@@ -775,3 +776,109 @@ TASK-1401의 재시도는 **프로세스 안에서만** 돌아, 인스턴스가 
 
 `GET /ops/alerts`의 `coordination`에 `lockHealthy`가 추가됐다 —
 false면 예약 점검이 돌지 않는다는 뜻이다.
+
+---
+
+## Production Verification & Operational Readiness (TASK-1601, Sprint 16)
+
+TASK-1501까지는 "잘 돌고 있는가"를 봤다. 이번은 **"지금 무너지면 되살릴 수
+있는가"** 다. 실행 절차는 [운영 문서](../operations/disaster-recovery.md)에 있고,
+여기서는 판정 규칙을 적는다.
+
+### Real SMTP Validation
+
+메일 경로는 그동안 **한 번도 살아 있는 서버로 확인된 적이 없었다**. 이제
+`POST /ops/notifications/verify-smtp`가 실제 SMTP 연결과 인증까지 한다.
+
+- **메일은 보내지 않는다.** `transporter.verify()`는 EHLO → AUTH → QUIT까지만
+  한다 — 점검이 수신함을 채우면 사람이 점검 메일을 무시하게 된다.
+- 설정이 없으면 `configured:false`로 알린다. **미구성과 실패는 다르다.**
+- 결과에 `ALERT_EMAIL_TO`를 담지 않는다 — 수신자 주소는 비밀이다.
+
+### Backup Automation
+
+`pg_dump --format=custom`으로 하루 1회(`OPS_CHECK_BACKUP_AT`, 기본 03:00 로컬)
+받는다.
+
+- **크기를 기록한다.** `pg_dump`는 부분 실패에도 0에 가까운 파일을 남길 수 있고,
+  그걸 "성공"으로 세면 복구 계획이 통째로 거짓이 된다. 1KB 미만은 `failed`다.
+- 보존 기간(`BACKUP_RETENTION_DAYS`, 기본 14일)이 지난 덤프만 지우되,
+  **최근 `BACKUP_KEEP_MINIMUM`개(기본 3)는 나이와 무관하게 남긴다** — 정리가
+  마지막 백업을 지우면 안 된다.
+- 실패해도 **예외를 던지지 않고 이력에 남긴다** — 예약 실행이 죽으면 다음 백업도
+  못 받는다.
+- 화면·API에는 **파일명만** 노출한다. 절대 경로는 서버 구조를 드러낸다.
+- Prisma의 `DATABASE_URL`에 붙는 `?schema=public`은 `pg_dump`가
+  `invalid URI query parameter`로 거부한다 — libpq가 아는 파라미터만 남기고
+  걷어낸다(라이브 검증에서 발견).
+
+### Restore Verification
+
+**복원해 보지 않은 백업은 백업이 아니다.** 하루 1회(`OPS_CHECK_RESTORE_AT`,
+기본 03:30 로컬) 최신 덤프를 복원하고 테이블 수를 센다.
+
+- 복원은 **반드시 별도 DB**(`BACKUP_RESTORE_DB_URL`)에 한다. 운영 DB에 복원하는
+  자동화는 만들지 않는다 — 검증하려다 데이터를 잃는 것이 최악이다.
+- 대상이 없으면 `configured:false` — 실패가 아니라 **하지 못한 것**이다.
+- `pg_restore`는 무해한 경고에도 비영점 종료할 수 있어, 판정은 종료 코드가 아니라
+  **복원 후 테이블 수**로 한다. 0개면 실패다.
+
+| 판정 | 백업 | 복원 검증 |
+| --- | --- | --- |
+| `ok` | 최근 성공·크기 정상 | 8일 안에 성공 |
+| `stale` | 마지막 성공이 2일 초과 | 8일 초과 |
+| `failed` | 실패 또는 1KB 미만 | 실패 또는 테이블 0개 |
+| `missing` | **이력 없음 — 통과가 아니다** | **이력 없음 — 통과가 아니다** |
+
+### Disaster Recovery Checklist
+
+배포 체크리스트(1202)와 목적이 다르다 — 그쪽은 "지금 배포해도 되는가",
+이쪽은 "지금 무너지면 되살릴 수 있는가"다.
+
+`복구 가능`은 **복구 가능성을 좌우하는(critical) 항목에 실패가 없을 때만** true다.
+백업·복원 검증·DB·저장소가 critical이고, Redis와 경보 채널은 아니다 — Redis가
+죽어도 복구는 할 수 있다.
+
+복구 절차 숙지·연락 체계는 자동 판정이 불가능하므로 **`manual`로 남긴다**.
+모르는 것을 통과로 처리하지 않는다.
+
+### Provider Smoke Automation
+
+예약(`OPS_CHECK_SMOKE_AT`)에 자리는 있지만 **기본은 꺼져 있다** — 실제 API를
+호출해 과금되기 때문이다(CTO 결정 1301-①). `POST /ops/checks/run`("지금 점검")도
+**꺼진 작업은 건너뛴다** — 과금되는 동작이 "전체 점검"에 딸려 도는 일은 없어야
+한다.
+
+### Redis Health · 장애 지속 경보 (CTO 결정 1501-②)
+
+Redis가 죽어도 **LLM 호출은 계속 허용한다.** 멈추는 것은 예약 점검뿐이다.
+장애가 `OPS_LOCK_OUTAGE_THRESHOLD_MS`(기본 30분)를 넘기면 **Critical 경보가
+반복**된다 — 비용은 나가는데 비용 점검은 멈춘 상태이기 때문이다.
+
+### 일 1회 점검의 시간대 (CTO 결정 1501-①)
+
+`alert-archive`·`backup`·`restore-verify`·`provider-smoke`는 **운영 서버 로컬
+시각**으로 돈다(`TZ`). 예산 창 같은 다른 계산은 UTC지만, 이 넷은 "트래픽이 적은
+새벽"을 노리는 것이라 운영자가 사는 시간대를 따라야 한다.
+
+### Dead Letter 보관 (CTO 결정 1501-③)
+
+Dead Letter도 **지우지 않는다** — 90일이 지난 것만 `ARCHIVED`로 옮겨 현황에서
+비켜 둔다. `alert-archive` 점검이 경보와 Dead Letter를 함께 정리한다.
+
+### Job별 여유 배수 (CTO 결정 1501-④)
+
+정지 판정 여유는 기본 3배(`OPS_SCHEDULER_GRACE_FACTOR`)이고,
+`OPS_SCHEDULER_GRACE_<JOB>`으로 점검별로 조정한다(예:
+`OPS_SCHEDULER_GRACE_BACKUP`). 종류별 값 ?? 전체 값 ?? 3 순으로 결정된다.
+
+### API
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `GET` | `/ops/readiness` | **운영 대시보드 (ADMIN)** — 체크리스트·백업·복원·Redis·SMTP |
+| `POST` | `/ops/backup/run` | **지금 백업 (ADMIN)** |
+| `POST` | `/ops/backup/verify-restore` | **지금 복원 검증 (ADMIN)** — 별도 DB |
+| `POST` | `/ops/notifications/verify-smtp` | **메일 경로 확인 (ADMIN)** — 메일은 보내지 않는다 |
+
+웹 화면은 **`/admin/operations`**(ADMIN 전용).

@@ -7,7 +7,9 @@ import { WriteProtectionGuard } from "../auth/write-protection.guard";
 import { LlmBudgetService } from "../llm/llm-budget.service";
 import { ProviderProductionService } from "../llm/provider-production.service";
 import { PrismaService } from "../prisma/prisma.service";
+import { StorageService } from "../storage/storage.service";
 import { AlertService } from "./alert.service";
+import { BackupService } from "./backup.service";
 import { DistributedLockService } from "./distributed-lock.service";
 import { NotificationQueueService } from "./notification-queue.service";
 import { NotificationService } from "./notification.service";
@@ -81,6 +83,8 @@ function createPrismaStub() {
     deadAt: Date | null;
     createdAt: Date;
   }[] = [];
+  const backups: Record<string, unknown>[] = [];
+  const restores: Record<string, unknown>[] = [];
   let seq = 0;
 
   return {
@@ -88,6 +92,8 @@ function createPrismaStub() {
     runs,
     deliveries,
     queue,
+    backups,
+    restores,
     stub: {
       alert: {
         findMany: async (args?: {
@@ -211,6 +217,27 @@ function createPrismaStub() {
           return { count };
         },
       },
+      backupRun: {
+        create: async (args: { data: Record<string, unknown> }) => {
+          seq += 1;
+          const row = { id: `bk-${seq}`, createdAt: new Date(), ...args.data };
+          backups.push(row as never);
+          return { ...row };
+        },
+        findMany: async () =>
+          [...backups].reverse().map((row) => ({ ...row })),
+      },
+      restoreRun: {
+        create: async (args: { data: Record<string, unknown> }) => {
+          seq += 1;
+          const row = { id: `rs-${seq}`, createdAt: new Date(), ...args.data };
+          restores.push(row as never);
+          return { ...row };
+        },
+        findMany: async () =>
+          [...restores].reverse().map((row) => ({ ...row })),
+      },
+      $queryRaw: async () => [{ "?column?": 1 }],
       checkRun: {
         create: async (args: { data: Record<string, unknown> }) => {
           seq += 1;
@@ -303,6 +330,8 @@ async function build(overrides: Overrides = {}) {
       NotificationService,
       NotificationQueueService,
       DistributedLockService,
+      BackupService,
+      { provide: StorageService, useValue: { check: async () => "버킷 접근 정상" } },
       { provide: PrismaService, useValue: prisma.stub },
       { provide: ProviderProductionService, useValue: production },
       { provide: LlmBudgetService, useValue: budget },
@@ -607,6 +636,10 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
         "health-check",
         // 보관이 예약 점검에 편입됐다 (CTO 결정 1401-③)
         "alert-archive",
+        // 운영 검증 점검 (TASK-1601)
+        "backup",
+        "restore-verify",
+        "provider-smoke",
       ]);
       // 마지막 실행 결과가 붙는다
       expect(
@@ -633,7 +666,11 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
         .post("/ops/checks/run")
         .set("Authorization", "Bearer tok-admin")
         .expect(200);
-      expect(all.body).toHaveLength(4);
+      // provider-smoke는 기본 꺼짐이라 runAll 대상이 아니다 (과금 방지)
+      expect(all.body).toHaveLength(6);
+      expect(all.body.map((entry: { job: string }) => entry.job)).not.toContain(
+        "provider-smoke",
+      );
 
       await request(server)
         .post("/ops/checks/run?job=nope")
@@ -749,7 +786,7 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
       const coordination = await built.checks.coordination();
       expect(coordination.distributed).toBe(false);
       expect(coordination.instance).toMatch(/-\d+-[0-9a-f]+$/);
-      expect(coordination.leases).toHaveLength(4);
+      expect(coordination.leases).toHaveLength(7);
       // 단일 모드에서는 내가 항상 리더다
       expect(coordination.leases.every((lease) => lease.self)).toBe(true);
     });
@@ -1046,6 +1083,213 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
       await request(server).post("/ops/notifications/queue/drain").expect(401);
       await request(server)
         .post("/ops/notifications/queue/requeue")
+        .set("Authorization", "Bearer tok-editor")
+        .expect(403);
+    });
+  });
+
+  describe("Production Verification & Operational Readiness (TASK-1601)", () => {
+    it("Prisma 전용 파라미터를 떼어 낸다 — pg_dump가 ?schema=를 거부한다", () => {
+      // 라이브 검증에서 실제로 실패했던 지점이다
+      expect(
+        BackupService.toLibpqUrl(
+          "postgresql://u:p@h:5432/acos?schema=public&connection_limit=5",
+        ),
+      ).toBe("postgresql://u:p@h:5432/acos");
+      // libpq가 아는 파라미터는 남긴다
+      expect(
+        BackupService.toLibpqUrl("postgresql://u:p@h:5432/acos?sslmode=require"),
+      ).toContain("sslmode=require");
+      // 해석할 수 없으면 그대로 둔다
+      expect(BackupService.toLibpqUrl("not-a-url")).toBe("not-a-url");
+    });
+
+    it("복원 검증은 미구성이면 실패가 아니다 — 못 한 것과 실패한 것은 다르다", async () => {
+      delete process.env.BACKUP_RESTORE_DB_URL;
+      const built = await build();
+      app = built.app;
+
+      const result = await built.checks.run("restore-verify", "manual");
+      expect(result.ok).toBe(true);
+      expect(result.detail).toContain("미구성");
+      // 미구성은 이력에 남기지 않는다 — 하지 않은 일을 했다고 기록하지 않는다
+      expect(built.prisma.restores).toHaveLength(0);
+    });
+
+    it("백업 실패도 이력에 남고 예외를 던지지 않는다", async () => {
+      delete process.env.DATABASE_URL;
+      const built = await build();
+      app = built.app;
+
+      const result = await built.checks.run("backup", "manual");
+      expect(result.ok).toBe(false);
+      expect(built.prisma.backups).toHaveLength(1);
+      expect(built.prisma.backups[0]).toMatchObject({ ok: false });
+    });
+
+    it("보관 점검이 경보와 Dead Letter를 함께 정리한다 (CTO 결정 1501-③)", async () => {
+      const built = await build();
+      app = built.app;
+
+      const result = await built.checks.run("alert-archive", "manual");
+      expect(result.detail).toContain("Dead Letter 보관");
+      expect(result.detail).toContain("삭제하지 않습니다");
+    });
+
+    it("GET /ops/readiness — 백업·복원 이력이 없으면 복구 불가로 판정한다", async () => {
+      const built = await build();
+      app = built.app;
+
+      const response = await request(built.app.getHttpServer())
+        .get("/ops/readiness")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+
+      // 복원해 보지 않은 백업은 백업이 아니다
+      expect(response.body.recoverable).toBe(false);
+      expect(response.body.backup.verdict).toBe("missing");
+      expect(response.body.restore.verdict).toBe("missing");
+      expect(
+        response.body.checklist.map((item: { id: string }) => item.id),
+      ).toContain("runbook");
+      // 자동 판정이 불가능한 항목은 manual로 남는다
+      expect(response.body.summary.manual).toBe(1);
+    });
+
+    it("GET /ops/readiness — SMTP·Redis 상태를 담되 수신자는 노출하지 않는다", async () => {
+      process.env.SMTP_HOST = "smtp.example.com";
+      process.env.ALERT_EMAIL_TO = "ops-secret@acos.local";
+      const built = await build();
+      app = built.app;
+
+      const response = await request(built.app.getHttpServer())
+        .get("/ops/readiness")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+
+      expect(response.body.smtp.configured).toBe(true);
+      expect(JSON.stringify(response.body)).not.toContain("ops-secret");
+      // Redis 미구성이면 그 사실을 말한다
+      expect(response.body.redis.configured).toBe(false);
+      expect(response.body.redis.outageThresholdMs).toBe(30 * 60 * 1000);
+    });
+
+    it("SMTP 미구성은 실패가 아니라 미구성으로 알린다", async () => {
+      delete process.env.SMTP_HOST;
+      delete process.env.ALERT_EMAIL_TO;
+      const built = await build();
+      app = built.app;
+
+      const response = await request(built.app.getHttpServer())
+        .post("/ops/notifications/verify-smtp")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+      expect(response.body).toMatchObject({ configured: false, ok: false });
+      expect(response.body.detail).toContain("쓰지 않는 구성");
+    });
+
+    it("Redis 장애가 30분 이상 지속되면 critical (CTO 결정 1501-②)", async () => {
+      const built = await build();
+      app = built.app;
+      const locks = built.app.get(DistributedLockService) as unknown as {
+        distributed: boolean;
+        healthy: boolean;
+        unhealthySince: number | null;
+      };
+      Object.defineProperty(locks, "distributed", { get: () => true });
+      Object.defineProperty(locks, "healthy", { get: () => false });
+      Object.defineProperty(locks, "unhealthySince", {
+        get: () => Date.now() - 31 * 60_000,
+      });
+
+      await built.checks.watchdog();
+      const alert = built.prisma.alerts.get("scheduler-stopped:lock");
+      expect(alert).toMatchObject({ level: "CRITICAL", status: "ACTIVE" });
+      expect(alert!.message).toContain("비용은 나가는데 비용 점검은 멈춘 상태");
+    });
+
+    it("짧은 Redis 끊김은 지속 경보를 만들지 않는다", async () => {
+      const built = await build();
+      app = built.app;
+      const locks = built.app.get(DistributedLockService) as unknown as object;
+      Object.defineProperty(locks, "distributed", { get: () => true });
+      Object.defineProperty(locks, "healthy", { get: () => false });
+      Object.defineProperty(locks, "unhealthySince", {
+        get: () => Date.now() - 60_000,
+      });
+
+      await built.checks.watchdog();
+      expect(built.prisma.alerts.get("scheduler-stopped:lock")).toBeUndefined();
+    });
+
+    it("Job별 여유 배수가 적용된다 (CTO 결정 1501-④)", async () => {
+      process.env.OPS_CHECK_COST_INTERVAL = "1000";
+      process.env.OPS_SCHEDULER_GRACE_FACTOR = "100";
+      process.env.OPS_SCHEDULER_GRACE_COST_VERIFICATION = "1";
+      const built = await build();
+      app = built.app;
+      built.prisma.runs.push({
+        id: "old",
+        job: "cost-verification",
+        ok: true,
+        detail: "",
+        alertsRaised: 0,
+        durationMs: 1,
+        trigger: "schedule",
+        createdAt: new Date(Date.now() - 60_000),
+      });
+
+      await built.checks.watchdog();
+      // 전체 기본은 100배(관대)지만 이 Job만 1배라 멈춘 것으로 본다
+      expect(
+        built.prisma.alerts.get("scheduler-stopped:cost-verification"),
+      ).toBeDefined();
+    });
+
+    it("일 1회 점검의 설명이 로컬 시각이라고 말한다 (CTO 결정 1501-①)", async () => {
+      // 라이브 검증에서 기동 로그가 "매일 04:00 UTC"라고 말하는 것을 발견했다 —
+      // 실제로는 로컬 시각으로 도는데 설명만 UTC면 운영자가 다른 시각을 기다린다
+      process.env.TZ = "Asia/Seoul";
+      const built = await build();
+      app = built.app;
+      const archive = built.checks
+        .schedules()
+        .find((entry) => entry.job === "alert-archive")!;
+      expect(archive.dailyAtMinutes).toBe(240);
+
+      built.prisma.runs.push({
+        id: "stale",
+        job: "alert-archive",
+        ok: true,
+        detail: "",
+        alertsRaised: 0,
+        durationMs: 1,
+        trigger: "schedule",
+        createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
+      });
+      await built.checks.watchdog();
+      const alert = built.prisma.alerts.get("scheduler-stopped:alert-archive");
+      expect(alert!.message).toContain("로컬");
+      expect(alert!.message).not.toContain("UTC");
+    });
+
+    it("운영 검증 API도 ADMIN 전용", async () => {
+      const built = await build();
+      app = built.app;
+      const server = built.app.getHttpServer();
+
+      await request(server).get("/ops/readiness").expect(401);
+      await request(server)
+        .get("/ops/readiness")
+        .set("Authorization", "Bearer tok-editor")
+        .expect(403);
+      await request(server).post("/ops/backup/run").expect(401);
+      await request(server)
+        .post("/ops/backup/verify-restore")
+        .set("Authorization", "Bearer tok-editor")
+        .expect(403);
+      await request(server)
+        .post("/ops/notifications/verify-smtp")
         .set("Authorization", "Bearer tok-editor")
         .expect(403);
     });

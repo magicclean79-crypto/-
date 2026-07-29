@@ -479,8 +479,8 @@ TASK-1302가 남긴 두 부채를 갚습니다: **예약 점검의 인스턴스�
   **재시작을 견딥니다**. 워커는 리더만 돌립니다(같은 알림이 여러 번 가지 않도록)
 - **Dead Letter Queue**: 4xx이거나 최대 시도를 소진하면 `DEAD`로 남기고
   **지우지 않습니다**. 설정을 고친 뒤 `requeue`로 다시 보냅니다
-- **Alert Archive 예약화**: 네 번째 예약 점검으로 편입되어 **매일 04:00 UTC**에
-  돕니다. 그 시각 전에는 한 번도 안 돌았어도 돌지 않습니다
+- **Alert Archive 예약화**: 네 번째 예약 점검으로 편입되어 **매일 04:00**(운영
+  서버 로컬 시각, `TZ`)에 돕니다. 그 시각 전에는 한 번도 안 돌았어도 돌지 않습니다
 - **운영 기본 채널 정책**: Slack Warning 이상 / **Email Critical 이상** /
   Webhook Warning 이상 / 해소 포함 — 메일은 쌓이면 읽지 않게 되기 때문입니다.
   환경변수로 전부 변경 가능합니다
@@ -490,6 +490,37 @@ TASK-1302가 남긴 두 부채를 갚습니다: **예약 점검의 인스턴스�
 | `GET` | `/ops/notifications/queue` | **큐 현황 (ADMIN)** — 대기·성공·Dead Letter |
 | `POST` | `/ops/notifications/queue/drain` | **지금 보내기 (ADMIN)** |
 | `POST` | `/ops/notifications/queue/requeue` | **Dead Letter 재시도 (ADMIN)** |
+
+## 운영 검증·재해 복구 (TASK-1601, Sprint 16)
+
+"잘 돌고 있는가"(`/admin/production`)와 별개로, **"지금 무너지면 되살릴 수
+있는가"** 를 판정하는 화면입니다 — 웹 **`/admin/operations`**(ADMIN 전용).
+절차는 [docs/operations/disaster-recovery.md](docs/operations/disaster-recovery.md).
+
+- **Real SMTP Validation**: 실제 SMTP에 연결·인증까지 확인합니다.
+  **메일은 보내지 않습니다** — 점검이 수신함을 채우면 사람이 무시하게 됩니다.
+  미설정은 실패가 아니라 **미구성**으로 알립니다
+- **Backup Automation**: `pg_dump --format=custom`을 매일 **03:00**(로컬)에
+  받고 **크기를 기록**합니다 — 1KB 미만은 빈 덤프로 보고 실패로 셉니다.
+  보존 기간이 지나도 **최근 3개는 남깁니다**
+- **Restore Verification**: 매일 **03:30**(로컬)에 최신 덤프를 **별도
+  DB**(`BACKUP_RESTORE_DB_URL`)에 복원하고 테이블 수를 셉니다. 운영 DB에는 절대
+  복원하지 않습니다. **복원해 보지 않은 백업은 백업이 아닙니다** — 이력이 없으면
+  `missing`이고, 그것은 통과가 아닙니다
+- **Disaster Recovery Checklist**: 백업·복원·DB·저장소가 복구를 좌우하는
+  항목이고, Redis·경보 채널은 아닙니다. 복구 절차 숙지·연락 체계는 자동 판정이
+  불가능하므로 **`직접 확인`으로 남깁니다**
+- **Provider Smoke Automation**: 예약 자리는 있지만 **기본은 꺼져 있습니다** —
+  실제 과금되기 때문입니다. "지금 점검"도 **꺼진 작업은 건너뜁니다**
+- **Redis Health**: Redis가 죽어도 **LLM 호출은 계속됩니다**. 예약 점검만
+  멈추고, 30분 이상 지속되면 Critical 경보가 반복됩니다
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `GET` | `/ops/readiness` | **운영 대시보드 (ADMIN)** |
+| `POST` | `/ops/backup/run` | **지금 백업 (ADMIN)** |
+| `POST` | `/ops/backup/verify-restore` | **지금 복원 검증 (ADMIN)** |
+| `POST` | `/ops/notifications/verify-smtp` | **메일 경로 확인 (ADMIN)** |
 
 ## Execution Domain (TASK-0601, Sprint 6)
 

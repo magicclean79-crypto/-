@@ -416,7 +416,8 @@ export default function ProductionOpsPage() {
                       {!schedule.enabled
                         ? "중단"
                         : schedule.dailyAtMinutes !== null
-                          ? `매일 ${String(Math.floor(schedule.dailyAtMinutes / 60)).padStart(2, "0")}:${String(schedule.dailyAtMinutes % 60).padStart(2, "0")} UTC`
+                          ? // 일 1회 점검은 운영 서버 로컬 시각 기준 (CTO 결정 1501-①)
+                            `매일 ${String(Math.floor(schedule.dailyAtMinutes / 60)).padStart(2, "0")}:${String(schedule.dailyAtMinutes % 60).padStart(2, "0")} 로컬`
                           : duration(schedule.intervalMs)}
                     </td>
                     <td className="py-1.5 text-xs">

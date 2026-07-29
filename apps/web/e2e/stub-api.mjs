@@ -16,6 +16,9 @@ let stubChecksRan = false;
 let stubArchived = 0;
 let stubQueueDrained = false;
 let stubDeadRequeued = false;
+// 운영 검증 스텁 상태 (TASK-1601)
+let stubBackupRan = false;
+let stubRestoreVerified = false;
 
 const stats = (totals, groups) => ({
   range: { from: null, to: null },
@@ -210,6 +213,8 @@ const server = http.createServer((req, res) => {
       stubArchived = 0;
       stubQueueDrained = false;
       stubDeadRequeued = false;
+      stubBackupRan = false;
+      stubRestoreVerified = false;
       resetPublishing();
       resetUsers();
       res.end(JSON.stringify({ mode }));
@@ -661,6 +666,255 @@ const server = http.createServer((req, res) => {
     );
     return;
   }
+  // ── 운영 검증·재해 복구 (TASK-1601) ── ADMIN 전용
+  if (
+    url.pathname === "/ops/readiness" ||
+    url.pathname === "/ops/backup/run" ||
+    url.pathname === "/ops/backup/verify-restore" ||
+    url.pathname === "/ops/notifications/verify-smtp"
+  ) {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    const healthy = mode === "data";
+
+    if (req.method === "POST" && url.pathname === "/ops/backup/run") {
+      stubBackupRan = true;
+      res.end(
+        JSON.stringify({
+          id: "b-new",
+          ok: true,
+          sizeBytes: 2_400_000,
+          fileName: "acos-2026-07-29.dump",
+          durationMs: 4200,
+          trigger: "manual",
+          error: null,
+          createdAt: new Date().toISOString(),
+        }),
+      );
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/ops/backup/verify-restore") {
+      // 미구성(healthy=false)은 **실패가 아니라 하지 못한 것**이다
+      stubRestoreVerified = healthy;
+      res.end(
+        JSON.stringify(
+          healthy
+            ? {
+                id: "r-new",
+                ok: true,
+                tables: 24,
+                fileName: "acos-2026-07-29.dump",
+                durationMs: 8100,
+                trigger: "manual",
+                error: null,
+                createdAt: new Date().toISOString(),
+                configured: true,
+              }
+            : {
+                id: "not-configured",
+                ok: false,
+                tables: null,
+                fileName: null,
+                durationMs: 0,
+                trigger: "manual",
+                error: "BACKUP_RESTORE_DB_URL이 없어 복원 검증을 하지 않았습니다.",
+                createdAt: new Date().toISOString(),
+                configured: false,
+              },
+        ),
+      );
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/ops/notifications/verify-smtp") {
+      res.end(
+        JSON.stringify(
+          healthy
+            ? {
+                configured: true,
+                ok: true,
+                detail: "SMTP 연결·인증을 확인했습니다 (메일은 보내지 않았습니다).",
+                host: "smtp.example.com",
+                latencyMs: 120,
+              }
+            : {
+                configured: false,
+                ok: false,
+                detail:
+                  "SMTP_HOST 또는 ALERT_EMAIL_TO가 없습니다 — 메일 경로가 구성되지 않았습니다.",
+                host: null,
+                latencyMs: 0,
+              },
+        ),
+      );
+      return;
+    }
+
+    // 재해 복구 판정 — 백업·복원 이력이 없으면 "복구 불가"다
+    const backupHistory =
+      healthy || stubBackupRan
+        ? [
+            {
+              id: "b-1",
+              ok: true,
+              sizeBytes: 2_400_000,
+              fileName: "acos-2026-07-29.dump",
+              durationMs: 4200,
+              trigger: stubBackupRan ? "manual" : "schedule",
+              error: null,
+              createdAt: new Date().toISOString(),
+            },
+          ]
+        : [];
+    const restoreHistory =
+      healthy || stubRestoreVerified
+        ? [
+            {
+              id: "r-1",
+              ok: true,
+              tables: 24,
+              fileName: "acos-2026-07-29.dump",
+              durationMs: 8100,
+              trigger: "schedule",
+              error: null,
+              createdAt: new Date().toISOString(),
+            },
+          ]
+        : [];
+
+    const checklist = [
+      {
+        id: "backup",
+        title: "백업 존재·신선도",
+        status: backupHistory.length > 0 ? "pass" : "fail",
+        detail:
+          backupHistory.length > 0
+            ? "마지막 백업 3분 전 (2400000바이트)."
+            : "백업 이력이 없습니다 — 복구할 수 있는 지점이 없습니다.",
+        critical: true,
+      },
+      {
+        id: "restore",
+        title: "복원 검증",
+        status: restoreHistory.length > 0 ? "pass" : "fail",
+        detail:
+          restoreHistory.length > 0
+            ? "복원 검증 통과 — 테이블 24개 확인."
+            : "복원 검증 이력이 없습니다 — 복원해 보지 않은 백업은 백업이 아닙니다.",
+        critical: true,
+      },
+      {
+        id: "database",
+        title: "데이터베이스 연결",
+        status: "pass",
+        detail: "연결 정상.",
+        critical: true,
+      },
+      {
+        id: "storage",
+        title: "이미지 저장소 접근",
+        status: "pass",
+        detail: "버킷 접근 정상.",
+        critical: true,
+      },
+      {
+        id: "lock",
+        title: "분산 잠금(Redis)",
+        status: healthy ? "pass" : "warn",
+        detail: healthy
+          ? "Redis 응답 정상."
+          : "Redis에 연결할 수 없습니다 — 예약 점검이 멈추지만 LLM 호출은 계속됩니다 (CTO 결정 1501-②).",
+        critical: false,
+      },
+      {
+        id: "alert-channel",
+        title: "경보 전달 채널",
+        status: healthy ? "pass" : "warn",
+        detail: healthy
+          ? "2개 채널이 설정되어 있습니다."
+          : "채널이 없습니다 — 사고가 나도 로그에만 남습니다.",
+        critical: false,
+      },
+      {
+        id: "runbook",
+        title: "복구 절차 숙지·연락 체계",
+        status: "manual",
+        detail:
+          "docs/operations/disaster-recovery.md를 최근에 읽고 절차가 유효한지 확인하세요 (자동 판정 불가).",
+        critical: false,
+      },
+    ];
+
+    res.end(
+      JSON.stringify({
+        recoverable: checklist.every(
+          (item) => !item.critical || item.status !== "fail",
+        ),
+        summary: {
+          pass: checklist.filter((item) => item.status === "pass").length,
+          fail: checklist.filter((item) => item.status === "fail").length,
+          warn: checklist.filter((item) => item.status === "warn").length,
+          manual: checklist.filter((item) => item.status === "manual").length,
+        },
+        checklist,
+        backup: {
+          verdict: backupHistory.length > 0 ? "ok" : "missing",
+          message:
+            backupHistory.length > 0
+              ? "마지막 백업 3분 전 (2400000바이트)."
+              : "백업 이력이 없습니다 — 복구할 수 있는 지점이 없습니다.",
+          ageMs: backupHistory.length > 0 ? 180_000 : null,
+          sizeBytes: backupHistory.length > 0 ? 2_400_000 : null,
+          history: backupHistory,
+          directory: "acos",
+          retentionDays: 14,
+        },
+        restore: {
+          verdict: restoreHistory.length > 0 ? "ok" : "missing",
+          message:
+            restoreHistory.length > 0
+              ? "복원 검증 통과 — 테이블 24개 확인."
+              : "복원 검증 이력이 없습니다 — 복원해 보지 않은 백업은 백업이 아닙니다.",
+          ageMs: restoreHistory.length > 0 ? 3_600_000 : null,
+          tables: restoreHistory.length > 0 ? 24 : null,
+          history: restoreHistory,
+          configured: healthy,
+        },
+        smtp: healthy
+          ? {
+              configured: true,
+              ok: true,
+              detail: "SMTP 연결·인증을 확인했습니다 (메일은 보내지 않았습니다).",
+              host: "smtp.example.com",
+              latencyMs: 120,
+            }
+          : {
+              configured: false,
+              ok: false,
+              detail:
+                "SMTP_HOST 또는 ALERT_EMAIL_TO가 없습니다 — 메일 경로가 구성되지 않았습니다.",
+              host: null,
+              latencyMs: 0,
+            },
+        redis: {
+          configured: true,
+          ok: healthy,
+          detail: healthy
+            ? "Redis 응답 정상."
+            : "Redis에 연결할 수 없습니다 — 예약 점검이 멈춥니다.",
+          latencyMs: healthy ? 2 : null,
+          unhealthySince: healthy ? null : new Date().toISOString(),
+          outageThresholdMs: 1_800_000,
+        },
+        checkedAt: new Date().toISOString(),
+      }),
+    );
+    return;
+  }
   // ── 운영 자동화·경보 (TASK-1302) ── ADMIN 전용
   if (
     url.pathname === "/ops/alerts" ||
@@ -897,6 +1151,37 @@ const server = http.createServer((req, res) => {
             enabled: true,
             source: "default",
             env: "OPS_CHECK_ARCHIVE_AT",
+            lastRunAt: null,
+            lastResult: null,
+          },
+          {
+            job: "backup",
+            intervalMs: 86_400_000,
+            dailyAtMinutes: 180,
+            enabled: true,
+            source: "default",
+            env: "OPS_CHECK_BACKUP_AT",
+            lastRunAt: null,
+            lastResult: null,
+          },
+          {
+            job: "restore-verify",
+            intervalMs: 86_400_000,
+            dailyAtMinutes: 210,
+            enabled: true,
+            source: "default",
+            env: "OPS_CHECK_RESTORE_AT",
+            lastRunAt: null,
+            lastResult: null,
+          },
+          // 과금되므로 기본은 꺼져 있다 (CTO 결정 1301-①)
+          {
+            job: "provider-smoke",
+            intervalMs: 86_400_000,
+            dailyAtMinutes: 300,
+            enabled: false,
+            source: "disabled",
+            env: "OPS_CHECK_SMOKE_AT",
             lastRunAt: null,
             lastResult: null,
           },

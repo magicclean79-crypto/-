@@ -423,8 +423,8 @@ export const ENV_SPECS: EnvSpec[] = [
   {
     name: "OPS_CHECK_ARCHIVE_AT",
     category: "ops",
-    description: "경보 보관 실행 시각 HH:MM (UTC) — off로 중단",
-    fallback: "04:00 UTC (CTO 결정 1401-③)",
+    description: "경보·Dead Letter 보관 실행 시각 HH:MM (운영 서버 로컬 시각) — off로 중단",
+    fallback: "04:00 로컬 (CTO 결정 1501-①)",
   },
   {
     name: "OPS_SCHEDULER_WATCHDOG",
@@ -480,6 +480,100 @@ export const ENV_SPECS: EnvSpec[] = [
     description: "Webhook 최소 심각도 (warning | critical)",
     validate: oneOf(["warning", "critical"]),
     fallback: "warning (CTO 결정 1401-④)",
+  },
+  // ── 운영 검증·재해 복구 (TASK-1601) ──
+  {
+    name: "TZ",
+    category: "ops",
+    description:
+      "예약 점검의 기준 시간대 — 일 1회 점검은 이 시간대의 시각으로 돈다 (CTO 결정 1501-①)",
+    fallback: "컨테이너 기본 시간대 (대개 UTC)",
+    productionAdvice: (value) =>
+      value
+        ? null
+        : "TZ가 지정되지 않았습니다 — 새벽 백업·보관이 운영자가 생각하는 시각과 다르게 돌 수 있습니다.",
+  },
+  {
+    name: "BACKUP_DIR",
+    category: "ops",
+    description: "데이터베이스 백업 파일을 두는 디렉터리",
+    fallback: "./backups (컨테이너 안 — 재시작하면 사라진다)",
+    productionAdvice: (value) =>
+      value
+        ? null
+        : "백업 위치가 지정되지 않았습니다 — 컨테이너와 함께 사라지는 곳에 백업이 쌓입니다.",
+  },
+  {
+    name: "BACKUP_RETENTION_DAYS",
+    category: "ops",
+    description: "백업 보관 일수 — 지난 파일은 정리한다",
+    validate: positiveNumber("BACKUP_RETENTION_DAYS"),
+    fallback: "14",
+  },
+  {
+    name: "BACKUP_KEEP_MINIMUM",
+    category: "ops",
+    description:
+      "보관 기간이 지나도 남겨 둘 최소 백업 개수 — 정리가 마지막 백업까지 지우지 않도록",
+    validate: positiveNumber("BACKUP_KEEP_MINIMUM"),
+    fallback: "3",
+  },
+  {
+    name: "BACKUP_TIMEOUT_MS",
+    category: "ops",
+    description: "pg_dump·pg_restore 1회 제한 시간(ms)",
+    validate: positiveNumber("BACKUP_TIMEOUT_MS"),
+    fallback: "600000 (10분)",
+  },
+  {
+    name: "BACKUP_RESTORE_DB_URL",
+    category: "ops",
+    description:
+      "복원 검증 전용 데이터베이스 — **운영 DB를 절대 지정하지 마십시오** (덮어씁니다)",
+    secret: true,
+    validate: (value) =>
+      value.startsWith("postgres://") || value.startsWith("postgresql://")
+        ? null
+        : "postgresql:// 형식이어야 합니다.",
+    fallback: "복원 검증 미구성 (백업이 복원되는지 확인하지 못한다)",
+    productionAdvice: (value) =>
+      value
+        ? null
+        : "복원 검증 대상 DB가 없습니다 — 복원해 보지 않은 백업은 백업이 아닙니다.",
+  },
+  {
+    name: "OPS_CHECK_BACKUP_AT",
+    category: "ops",
+    description: "백업 실행 시각 HH:MM (운영 서버 로컬 시각) — off로 중단",
+    fallback: "03:00 로컬",
+  },
+  {
+    name: "OPS_CHECK_RESTORE_AT",
+    category: "ops",
+    description: "복원 검증 실행 시각 HH:MM (운영 서버 로컬 시각) — off로 중단",
+    fallback: "03:30 로컬",
+  },
+  {
+    name: "OPS_CHECK_SMOKE_AT",
+    category: "ops",
+    description:
+      "Provider Smoke 실행 시각 HH:MM — **실제 과금**되므로 기본은 꺼져 있다",
+    fallback: "꺼짐 (켜려면 시각을 지정, CTO 결정 1301-①)",
+  },
+  {
+    name: "OPS_LOCK_OUTAGE_THRESHOLD_MS",
+    category: "ops",
+    description:
+      "Redis 장애가 이 시간 이상 이어지면 Critical 경보를 반복한다 (CTO 결정 1501-②)",
+    validate: positiveNumber("OPS_LOCK_OUTAGE_THRESHOLD_MS"),
+    fallback: "1800000 (30분)",
+  },
+  {
+    name: "OPS_TICK_INTERVAL_MS",
+    category: "ops",
+    description: "예약 점검 스케줄러가 할 일을 둘러보는 주기(ms)",
+    validate: positiveNumber("OPS_TICK_INTERVAL_MS"),
+    fallback: "60000 (1분)",
   },
 ];
 

@@ -34,6 +34,8 @@ export class DistributedLockService implements OnModuleInit, OnModuleDestroy {
   private client: Redis | null = null;
   private readonly leases = new Map<string, Lease>();
   readonly self: string;
+  /** 잠금이 불가해진 시각 — 정상이면 null (CTO 결정 1501-②) */
+  private unhealthySinceAt: number | null = null;
 
   constructor() {
     this.self = instanceId({
@@ -68,7 +70,47 @@ export class DistributedLockService implements OnModuleInit, OnModuleDestroy {
     if (this.client === null) {
       return true; // 단일 모드는 잠금이 필요 없다
     }
-    return this.client.status === "ready";
+    const ok = this.client.status === "ready";
+    // 장애가 **얼마나 지속됐는지**를 알아야 30분 기준을 판정할 수 있다
+    if (ok) {
+      this.unhealthySinceAt = null;
+    } else if (this.unhealthySinceAt === null) {
+      this.unhealthySinceAt = Date.now();
+    }
+    return ok;
+  }
+
+  /** 잠금 불가가 시작된 시각 (epoch ms) — 정상이면 null */
+  get unhealthySince(): number | null {
+    // 호출로 상태를 갱신한다 (게터가 관측 지점이다)
+    void this.healthy;
+    return this.unhealthySinceAt;
+  }
+
+  /** Redis 상태 점검 (PING) — 대시보드용 */
+  async ping(): Promise<{ ok: boolean; detail: string; latencyMs: number | null }> {
+    if (this.client === null) {
+      return {
+        ok: true,
+        detail: "단일 인스턴스 모드 — Redis를 쓰지 않습니다.",
+        latencyMs: null,
+      };
+    }
+    const startedAt = Date.now();
+    try {
+      const reply = await this.client.ping();
+      return {
+        ok: reply === "PONG",
+        detail: reply === "PONG" ? "PING 응답 정상" : `예상치 못한 응답: ${reply}`,
+        latencyMs: Date.now() - startedAt,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        detail: `연결 실패: ${error instanceof Error ? error.message : String(error)}`,
+        latencyMs: Date.now() - startedAt,
+      };
+    }
   }
 
   onModuleInit(): void {

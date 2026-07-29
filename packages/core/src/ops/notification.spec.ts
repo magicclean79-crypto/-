@@ -280,6 +280,7 @@ describe("Notification Center (TASK-1401)", () => {
         pending: 2,
         sent: 1,
         dead: 1,
+        archived: 0,
         due: 1,
       });
     });

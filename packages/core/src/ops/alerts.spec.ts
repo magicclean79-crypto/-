@@ -2,6 +2,7 @@ import {
   DEFAULT_ALERT_COOLDOWN_MS,
   detectBudgetAlerts,
   detectConfigurationAlerts,
+  detectLockOutageAlert,
   detectSchedulerAlerts,
   detectProviderAlerts,
   detectUnpricedAlerts,
@@ -183,6 +184,58 @@ describe("Production Alerting (TASK-1302)", () => {
           lockUnavailable: true,
         }),
       ).toEqual([]);
+    });
+  });
+
+  describe("Redis 장애 지속 경보 (CTO 결정 1501-②)", () => {
+    const now = 10 * 60 * 60 * 1000;
+
+    it("정상이면 경보 없음", () => {
+      expect(detectLockOutageAlert({ unhealthySince: null, now })).toEqual([]);
+    });
+
+    it("짧은 끊김은 알리지 않는다 — 대개 스스로 복구된다", () => {
+      expect(
+        detectLockOutageAlert({ unhealthySince: now - 10 * 60_000, now }),
+      ).toEqual([]);
+    });
+
+    it("30분 이상 지속되면 critical", () => {
+      const [alert] = detectLockOutageAlert({
+        unhealthySince: now - 31 * 60_000,
+        now,
+      });
+      expect(alert).toMatchObject({
+        kind: "scheduler-stopped",
+        key: "scheduler-stopped:lock",
+        level: "critical",
+      });
+      expect(alert.message).toContain("31분 넘게");
+      // LLM 호출은 계속되므로 그 사실을 말한다 (결정 1501-②)
+      expect(alert.message).toContain("비용은 나가는데 비용 점검은 멈춘 상태");
+      // 마크다운 강조는 Slack·메일·화면에서 별표가 그대로 보인다 (1302 라이브 결함 재발 방지)
+      expect(alert.message).not.toContain("**");
+    });
+
+    it("1분 미만이어도 '0분째'라고 하지 않는다", () => {
+      // 한계값을 짧게 잡은 구성에서 상태와 설명이 어긋나면 안 된다
+      const [alert] = detectLockOutageAlert({
+        unhealthySince: now - 10_000,
+        now,
+        thresholdMs: 5_000,
+      });
+      expect(alert.message).toContain("1분 넘게");
+      expect(alert.message).not.toContain("0분");
+    });
+
+    it("한계는 조정할 수 있다", () => {
+      expect(
+        detectLockOutageAlert({
+          unhealthySince: now - 5 * 60_000,
+          now,
+          thresholdMs: 60_000,
+        }),
+      ).toHaveLength(1);
     });
   });
 

@@ -237,8 +237,28 @@ test.describe("Provider 운영 점검 (TASK-1301)", () => {
     await setMode("data");
     await openPage(page);
 
+    // 운영 서버 로컬 시각 기준 (CTO 결정 1501-①) — UTC로 적으면 운영자가
+    // 생각하는 새벽과 어긋난다
     await expect(page.getByTestId("schedule-alert-archive")).toContainText(
-      "매일 04:00 UTC",
+      "매일 04:00 로컬",
+    );
+  });
+
+  test("백업·복원 검증이 예약에 들어오고, 과금되는 스모크는 꺼져 있다 (TASK-1601)", async ({
+    page,
+  }) => {
+    await setMode("data");
+    await openPage(page);
+
+    await expect(page.getByTestId("schedule-backup")).toContainText(
+      "매일 03:00 로컬",
+    );
+    await expect(page.getByTestId("schedule-restore-verify")).toContainText(
+      "매일 03:30 로컬",
+    );
+    // 실제 과금되는 점검은 기본으로 돌지 않는다 (CTO 결정 1301-①)
+    await expect(page.getByTestId("schedule-provider-smoke")).toContainText(
+      "중단",
     );
   });
 

@@ -8,7 +8,12 @@ import {
   Query,
   UseGuards,
 } from "@nestjs/common";
-import { SCHEDULED_JOBS, summarizeAlerts } from "@acos/core";
+import {
+  buildDisasterRecoveryChecklist,
+  SCHEDULED_JOBS,
+  summarizeAlerts,
+  summarizeDisasterRecovery,
+} from "@acos/core";
 import type { ScheduledJob } from "@acos/core";
 import type {
   AlertArchiveResultDto,
@@ -17,9 +22,15 @@ import type {
   CheckRunResultDto,
   NotificationDeliveryDto,
   NotificationQueueStatusDto,
+  OperationsReadinessDto,
+  SmtpValidationDto,
 } from "@acos/shared";
 import { AuthGuard, RequireRole } from "../auth/auth.guard";
+import { PrismaService } from "../prisma/prisma.service";
+import { StorageService } from "../storage/storage.service";
 import { AlertService } from "./alert.service";
+import { BackupService } from "./backup.service";
+import { DistributedLockService } from "./distributed-lock.service";
 import { NotificationQueueService } from "./notification-queue.service";
 import { NotificationService } from "./notification.service";
 import { ScheduledChecksService } from "./scheduled-checks.service";
@@ -40,7 +51,134 @@ export class OpsController {
     private readonly checks: ScheduledChecksService,
     private readonly notifications: NotificationService,
     private readonly queue: NotificationQueueService,
+    private readonly backups: BackupService,
+    private readonly locks: DistributedLockService,
+    private readonly prisma: PrismaService,
+    private readonly storage: StorageService,
   ) {}
+
+  /**
+   * Operations Dashboard · Disaster Recovery Checklist (TASK-1601).
+   *
+   * 배포 체크리스트(1202)와 목적이 다르다 — 그쪽은 "지금 배포해도 되는가",
+   * 이쪽은 **"지금 무너지면 되살릴 수 있는가"** 다.
+   */
+  @Get("readiness")
+  async readiness(): Promise<OperationsReadinessDto> {
+    const [health, backupHistory, restoreHistory, smtp, redis, database, storage] =
+      await Promise.all([
+        this.backups.health(),
+        this.backups.backupHistory(10),
+        this.backups.restoreHistory(10),
+        this.notifications.verifySmtp(),
+        this.locks.ping(),
+        this.checkDatabase(),
+        this.checkStorage(),
+      ]);
+
+    const channels = this.notifications
+      .channelConfigs()
+      .filter((config) => config.enabled).length;
+
+    const checklist = buildDisasterRecoveryChecklist({
+      backup: health.backup,
+      restore: health.restore,
+      database,
+      storage,
+      // Redis를 안 쓰는 구성이면 항목 자체를 두지 않는다
+      lock: this.locks.distributed
+        ? { ok: redis.ok, detail: redis.detail }
+        : null,
+      notificationChannels: channels,
+      runbookPath: "docs/operations/disaster-recovery.md",
+    });
+    const summary = summarizeDisasterRecovery(checklist);
+    const unhealthySince = this.locks.unhealthySince;
+
+    return {
+      recoverable: summary.recoverable,
+      summary: {
+        pass: summary.pass,
+        fail: summary.fail,
+        warn: summary.warn,
+        manual: summary.manual,
+      },
+      checklist,
+      backup: {
+        verdict: health.backup.verdict,
+        message: health.backup.message,
+        ageMs: health.backup.ageMs,
+        sizeBytes: health.backup.sizeBytes,
+        history: backupHistory,
+        directory: this.backups.describeDirectory(),
+        retentionDays: this.backups.retentionDays,
+      },
+      restore: {
+        verdict: health.restore.verdict,
+        message: health.restore.message,
+        ageMs: health.restore.ageMs,
+        tables: health.restore.tables,
+        history: restoreHistory,
+        configured: this.backups.restoreTarget !== null,
+      },
+      smtp,
+      redis: {
+        configured: this.locks.distributed,
+        ok: redis.ok,
+        detail: redis.detail,
+        latencyMs: redis.latencyMs,
+        unhealthySince:
+          unhealthySince === null ? null : new Date(unhealthySince).toISOString(),
+        outageThresholdMs: this.checks.lockOutageThresholdMs,
+      },
+      checkedAt: new Date().toISOString(),
+    };
+  }
+
+  /** SMTP 연결·인증 검증 — **메일은 보내지 않는다** */
+  @Post("notifications/verify-smtp")
+  @HttpCode(200)
+  async verifySmtp(): Promise<SmtpValidationDto> {
+    return this.notifications.verifySmtp();
+  }
+
+  /** 백업 수동 실행 */
+  @Post("backup/run")
+  @HttpCode(200)
+  async runBackup() {
+    return this.backups.backup("manual");
+  }
+
+  /** 복원 검증 수동 실행 — 운영 DB가 아니라 별도 DB에 복원한다 */
+  @Post("backup/verify-restore")
+  @HttpCode(200)
+  async runRestoreVerify() {
+    return this.backups.verifyRestore("manual");
+  }
+
+  private async checkDatabase(): Promise<{ ok: boolean; detail: string }> {
+    try {
+      await this.prisma.$queryRaw`SELECT 1`;
+      return { ok: true, detail: "연결 정상" };
+    } catch (error) {
+      return {
+        ok: false,
+        detail: `연결 실패: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+
+  private async checkStorage(): Promise<{ ok: boolean; detail: string }> {
+    try {
+      const detail = await this.storage.check();
+      return { ok: true, detail };
+    } catch (error) {
+      return {
+        ok: false,
+        detail: `접근 실패: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
 
   /** 경보 현황 + 예약 점검 구성·마지막 결과 */
   @Get("alerts")

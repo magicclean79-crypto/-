@@ -320,6 +320,59 @@ export class NotificationService {
     return web ? `${web.replace(/\/$/, "")}/admin/production` : null;
   }
 
+  /**
+   * Real SMTP Validation (TASK-1601).
+   *
+   * `transporter.verify()`는 **연결과 인증만** 확인하고 메일을 보내지 않는다 —
+   * 설정이 맞는지 알고 싶을 때 과금·스팸 없이 확인할 수 있는 유일한 방법이다.
+   * 실제 발송은 `POST /ops/notifications/test`가 따로 있다.
+   *
+   * 미구성은 실패가 아니라 **미구성**으로 알린다 — 못 한 것과 실패한 것은 다르다.
+   */
+  async verifySmtp(): Promise<{
+    configured: boolean;
+    ok: boolean;
+    detail: string;
+    host: string | null;
+    latencyMs: number;
+  }> {
+    const host = process.env.SMTP_HOST?.trim();
+    const to = process.env.ALERT_EMAIL_TO?.trim();
+    if (!host || !to) {
+      return {
+        configured: false,
+        ok: false,
+        detail:
+          "SMTP_HOST 또는 ALERT_EMAIL_TO가 없습니다 — 메일 알림을 쓰지 않는 구성입니다.",
+        host: null,
+        latencyMs: 0,
+      };
+    }
+
+    const startedAt = Date.now();
+    try {
+      await this.transporter().verify();
+      return {
+        configured: true,
+        ok: true,
+        detail: "SMTP 연결·인증 정상 (메일은 보내지 않았습니다).",
+        // 호스트는 비밀이 아니지만 수신자는 노출하지 않는다
+        host,
+        latencyMs: Date.now() - startedAt,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`SMTP 검증 실패: ${message}`);
+      return {
+        configured: true,
+        ok: false,
+        detail: `SMTP 연결 실패 — ${message.slice(0, 200)}`,
+        host,
+        latencyMs: Date.now() - startedAt,
+      };
+    }
+  }
+
   /** 선언된 채널 이름 (표시·검증용) */
   static readonly channels = NOTIFICATION_CHANNELS;
 }

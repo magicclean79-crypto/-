@@ -263,6 +263,53 @@ export function detectSchedulerAlerts(input: {
   }));
 }
 
+/** 분산 잠금이 지속적으로 불가한 상태 (CTO 결정 1501-②) */
+export const DEFAULT_LOCK_OUTAGE_THRESHOLD_MS = 30 * 60 * 1000;
+
+/**
+ * Redis(분산 잠금) 장애가 **일정 시간 이상 지속**되면 critical을 알린다
+ * (CTO 결정 1501-②).
+ *
+ * 짧은 끊김은 흔하고 대개 스스로 복구된다 — 그때마다 알리면 사람이 무시한다.
+ * 기본 30분을 넘겨 계속되면 그때는 사람이 개입해야 하는 상황이다.
+ *
+ * **LLM 호출은 계속 허용된다** — 멈추는 것은 예약 점검뿐이다. 그래서 이
+ * 상태가 오래가면 "비용은 나가는데 비용 점검은 멈춘" 상태가 되고,
+ * 경보 문구가 그 사실을 말한다.
+ */
+export function detectLockOutageAlert(input: {
+  /** 잠금이 불가해진 시각 (epoch ms) — 정상이면 null */
+  unhealthySince: number | null;
+  now: number;
+  thresholdMs?: number;
+}): DetectedAlert[] {
+  if (input.unhealthySince === null) {
+    return [];
+  }
+  const threshold = input.thresholdMs ?? DEFAULT_LOCK_OUTAGE_THRESHOLD_MS;
+  const elapsed = input.now - input.unhealthySince;
+  if (elapsed < threshold) {
+    return [];
+  }
+
+  // 1분 미만이어도 "0분째"라고 하면 멈춘 사실과 설명이 어긋난다 —
+  // 라이브 검증에서 짧은 한계값으로 돌려 보다 발견했다
+  const minutes = Math.max(1, Math.floor(elapsed / 60_000));
+  return [
+    {
+      kind: "scheduler-stopped",
+      key: "scheduler-stopped:lock",
+      level: "critical",
+      title: "분산 잠금(Redis) 장애 지속",
+      message:
+        `분산 잠금을 ${minutes}분 넘게 사용할 수 없습니다 — 예약 점검이 그동안 돌지 않았습니다. ` +
+        // 마크다운 강조는 쓰지 않는다 — Slack·메일·화면에서 별표가 그대로 보인다
+        "LLM 호출은 계속 허용되므로 비용은 나가는데 비용 점검은 멈춘 상태입니다. " +
+        "Redis를 복구하세요.",
+    },
+  ];
+}
+
 // ── 중복·해소 판정 ───────────────────────────────────────────
 
 export interface ReconcileOptions {

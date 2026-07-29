@@ -449,6 +449,8 @@ enum NotificationQueueStatus {
   SENT
   /** Dead Letter — 사람이 고쳐야 나간다. **지우지 않는다** */
   DEAD
+  /** 90일이 지난 Dead Letter — 보관 (CTO 결정 1501-③, 삭제 아님) */
+  ARCHIVED
 }
 
 /**
@@ -472,12 +474,53 @@ model NotificationQueue {
   lastError     String?
   sentAt        DateTime?
   deadAt        DateTime?
+  archivedAt    DateTime?
   createdAt     DateTime                @default(now())
   updatedAt     DateTime                @updatedAt
 
   @@index([status, nextAttemptAt])
   @@index([alertKey, createdAt])
   @@map("notification_queue")
+}
+
+/**
+ * 백업 실행 이력 (TASK-1601).
+ * **크기를 남기는 이유**: "성공"이라도 0바이트면 복원할 수 없다.
+ */
+model BackupRun {
+  id         String   @id @default(cuid())
+  ok         Boolean
+  /** 덤프 크기 (bytes) — 실패면 null */
+  sizeBytes  BigInt?
+  /** 저장 경로 (파일명만 — 절대 경로는 노출하지 않는다) */
+  fileName   String?
+  durationMs Int
+  trigger    String   @default("schedule")
+  error      String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("backup_runs")
+}
+
+/**
+ * 복원 검증 이력 (TASK-1601).
+ * **복원해 보지 않은 백업은 백업이 아니다** — 그 확인의 기록이다.
+ */
+model RestoreRun {
+  id         String   @id @default(cuid())
+  ok         Boolean
+  /** 복원 후 확인한 테이블 수 */
+  tables     Int?
+  /** 검증에 쓴 백업 파일 */
+  fileName   String?
+  durationMs Int
+  trigger    String   @default("schedule")
+  error      String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("restore_runs")
 }
 
 /** 예약 점검 실행 이력 — "언제 마지막으로 확인했는가"의 근거 */

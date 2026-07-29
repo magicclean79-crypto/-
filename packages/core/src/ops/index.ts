@@ -5,3 +5,4 @@ export * from "./schedule";
 export * from "./leader";
 export * from "./notification";
 export * from "./alert-archive";
+export * from "./disaster-recovery";
