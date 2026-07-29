@@ -11,3 +11,4 @@ export * from "./recovery-drill";
 export * from "./backup-performance";
 export * from "./backup-integrity";
 export * from "./major-migrations";
+export * from "./storage-provisioning";

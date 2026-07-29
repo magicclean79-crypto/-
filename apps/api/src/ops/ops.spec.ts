@@ -1,10 +1,11 @@
 import type { INestApplication } from "@nestjs/common";
 import { APP_GUARD } from "@nestjs/core";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Test } from "@nestjs/testing";
 import request from "supertest";
-import { SCHEDULED_JOBS } from "@acos/core";
+import { resolveProvisioningPolicy, SCHEDULED_JOBS } from "@acos/core";
 import { AuthService } from "../auth/auth.service";
 import { WriteProtectionGuard } from "../auth/write-protection.guard";
 import { LlmBudgetService } from "../llm/llm-budget.service";
@@ -380,11 +381,23 @@ const storageProtection = {
   versioning: "unknown" as "enabled" | "disabled" | "unknown",
   replication: "unknown" as "enabled" | "disabled" | "unknown",
   uploadFails: false,
+  /** 원격 사본이 사라진 상태 (TASK-2201) */
+  remoteMissing: false,
 };
+
+/**
+ * 원격 사본으로 돌려줄 내용과 그 체크섬 (TASK-2101·2201).
+ *
+ * 해시를 역산할 수 없으므로, **내용을 고정하고 그 해시를 기록 체크섬으로
+ * 쓴다** — 그래야 대조가 실제로 이뤄지는지를 볼 수 있다.
+ */
+const REMOTE_OBJECT = Buffer.from("acos-test-dump");
+const REMOTE_CHECKSUM = createHash("sha256").update(REMOTE_OBJECT).digest("hex");
 const offsiteUploads: string[] = [];
 
 async function build(overrides: Overrides = {}) {
   storageProtection.versioning = "unknown";
+  storageProtection.remoteMissing = false;
   storageProtection.replication = "unknown";
   storageProtection.uploadFails = false;
   offsiteUploads.length = 0;
@@ -459,6 +472,12 @@ async function build(overrides: Overrides = {}) {
           // 목업 저장소는 보호 상태를 알려 주지 않는다 — unknown이 정직한 답이다
           bucket: "acos",
           backupBucket: "acos-backups",
+          // 프로비저닝 경계 (TASK-2201) — 실제 서비스와 같이 환경을 읽는다
+          get provisioning() {
+            return resolveProvisioningPolicy(
+              process.env as Record<string, string | undefined>,
+            );
+          },
           describeProtection: async () => ({
             versioning: storageProtection.versioning,
             replication: storageProtection.replication,
@@ -473,6 +492,18 @@ async function build(overrides: Overrides = {}) {
               throw new Error("저장소 연결 실패");
             }
             return `acos-backups/${key}`;
+          },
+          /**
+           * 원격 사본 내려받기 (TASK-2101·2201).
+           *
+           * 내용을 고정하고 그 해시(`REMOTE_CHECKSUM`)를 기록 체크섬으로
+           * 쓴다 — 그래야 대조가 실제로 이뤄지는지를 볼 수 있다.
+           */
+          getBackupObject: async (key: string) => {
+            if (storageProtection.remoteMissing) {
+              throw new Error(`객체를 찾을 수 없습니다: ${key}`);
+            }
+            return REMOTE_OBJECT;
           },
         },
       },
@@ -2722,6 +2753,183 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
       // 확인은 했고, 등록할 것이 있었는지가 분명하게 남는다
       expect(auto.registered === null).toBe(false);
       expect(auto.detail.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("Enterprise Production Readiness (TASK-2201)", () => {
+    beforeEach(() => {
+      process.env.BACKUP_DIR = join(tmpdir(), "acos-backup-test");
+      process.env.DATABASE_URL = "postgresql://u:p@localhost:5432/acos";
+      delete process.env.NODE_ENV;
+      delete process.env.BACKUP_CHAIN_WINDOW_HOURS;
+      delete process.env.OPS_CHECK_BACKUP_INTERVAL;
+      process.env.S3_ENDPOINT = "http://localhost:9000";
+    });
+
+    afterEach(() => {
+      delete process.env.BACKUP_CHAIN_WINDOW_HOURS;
+      delete process.env.OPS_CHECK_BACKUP_INTERVAL;
+    });
+
+    const offsiteBackup = (id: string, minutesAgo: number) => ({
+      id,
+      ok: true,
+      sizeBytes: BigInt(50_000),
+      fileName: `${id}.dump`,
+      durationMs: 300,
+      trigger: "schedule",
+      error: null,
+      checksum: REMOTE_CHECKSUM,
+      integrityOk: true,
+      entries: 120,
+      offsiteKey: `backups/${id}.dump`,
+      remoteCheckedAt: null,
+      remoteVerdict: null,
+      createdAt: new Date(Date.now() - minutesAgo * 60_000),
+    });
+
+    const readiness = async (built: Awaited<ReturnType<typeof build>>) =>
+      (
+        await request(built.app.getHttpServer())
+          .get("/ops/readiness")
+          .set("Authorization", "Bearer tok-admin")
+          .expect(200)
+      ).body;
+
+    it("수동 대조는 최근 3건까지 본다 (CTO 결정 2101-①)", async () => {
+      const built = await build();
+      app = built.app;
+      for (const [index, id] of ["bk-a", "bk-b", "bk-c", "bk-d"].entries()) {
+        built.prisma.backups.push(offsiteBackup(id, 4 - index) as never);
+      }
+
+      const response = await request(built.app.getHttpServer())
+        .post("/ops/backup/verify-remote?count=3")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+
+      expect(response.body.checked).toBe(3);
+      expect(response.body.status).toBe("pass");
+      expect(response.body.entries).toHaveLength(3);
+      // 건마다 기록이 남는다 — 어느 백업이 온전한지가 복구 시점 선택의 근거다
+      const recorded = (
+        built.prisma.backups as { remoteVerdict?: string | null }[]
+      ).filter((entry) => entry.remoteVerdict);
+      expect(recorded).toHaveLength(3);
+    });
+
+    it("3건을 넘겨 요청해도 3건까지만 본다", async () => {
+      const built = await build();
+      app = built.app;
+      for (const [index, id] of ["bk-a", "bk-b", "bk-c", "bk-d"].entries()) {
+        built.prisma.backups.push(offsiteBackup(id, 4 - index) as never);
+      }
+
+      const response = await request(built.app.getHttpServer())
+        .post("/ops/backup/verify-remote?count=99")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+
+      expect(response.body.checked).toBe(3);
+    });
+
+    it("숫자가 아닌 count는 거절한다", async () => {
+      const built = await build();
+      app = built.app;
+      await request(built.app.getHttpServer())
+        .post("/ops/backup/verify-remote?count=전부")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(400);
+    });
+
+    it("기본은 1건 — 자동과 같은 비용으로 돈다", async () => {
+      const built = await build();
+      app = built.app;
+      built.prisma.backups.push(offsiteBackup("bk-a", 1) as never);
+      built.prisma.backups.push(offsiteBackup("bk-b", 2) as never);
+
+      const response = await request(built.app.getHttpServer())
+        .post("/ops/backup/verify-remote")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+
+      expect(response.body.checked).toBe(1);
+    });
+
+    it("예약(자동)은 여전히 1건만 본다 (CTO 결정 2101-①)", async () => {
+      const built = await build();
+      app = built.app;
+      for (const [index, id] of ["bk-a", "bk-b", "bk-c"].entries()) {
+        built.prisma.backups.push(offsiteBackup(id, 3 - index) as never);
+      }
+
+      await built.checks.run("remote-verify", "manual");
+      const recorded = (
+        built.prisma.backups as { remoteVerdict?: string | null }[]
+      ).filter((entry) => entry.remoteVerdict);
+      expect(recorded).toHaveLength(1);
+    });
+
+    it("관측 창 상향이 Readiness에 Warning으로 드러난다 (CTO 결정 2101-②)", async () => {
+      process.env.OPS_CHECK_BACKUP_INTERVAL = "6h";
+      process.env.BACKUP_CHAIN_WINDOW_HOURS = "12";
+      const built = await build();
+      app = built.app;
+
+      const body = await readiness(built);
+      const item = body.checklist.find(
+        (entry: { id: string }) => entry.id === "chain-window",
+      );
+      expect(item).toMatchObject({ status: "warn", critical: false });
+      expect(item.detail).toContain("기동을 막지는 않습니다");
+      // 경고일 뿐 복구 가능성을 낮추지 않는다
+      expect(
+        body.checklist.filter(
+          (entry: { critical: boolean; status: string }) =>
+            entry.critical && entry.status === "fail",
+        ).map((entry: { id: string }) => entry.id),
+      ).not.toContain("chain-window");
+    });
+
+    it("정상 설정이면 통과하고 조용하다", async () => {
+      const built = await build();
+      app = built.app;
+      const item = (await readiness(built)).checklist.find(
+        (entry: { id: string }) => entry.id === "chain-window",
+      );
+      expect(item.status).toBe("pass");
+    });
+
+    it("해석할 수 없는 값도 기동을 막지 않고 Warning으로 남는다", async () => {
+      process.env.BACKUP_CHAIN_WINDOW_HOURS = "이십사";
+      const built = await build();
+      app = built.app;
+
+      const body = await readiness(built);
+      const item = body.checklist.find(
+        (entry: { id: string }) => entry.id === "chain-window",
+      );
+      expect(item.status).toBe("warn");
+      expect(body.enterprise.backupIntegrity.chain.windowSource).toBe("invalid");
+    });
+
+    it("운영에서는 앱이 버킷을 만들지 않는다고 밝힌다 (CTO 결정 2101-④)", async () => {
+      process.env.NODE_ENV = "production";
+      const built = await build();
+      app = built.app;
+
+      const provisioning = (await readiness(built)).enterprise
+        .storageProvisioning;
+      expect(provisioning.mode).toBe("external");
+      expect(provisioning.detail).toContain("운영 담당자가 준비합니다");
+    });
+
+    it("개발에서는 앱이 준비한다고 밝힌다", async () => {
+      const built = await build();
+      app = built.app;
+      expect(
+        (await readiness(built)).enterprise.storageProvisioning.mode,
+      ).toBe("managed");
     });
   });
 });

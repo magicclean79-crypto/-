@@ -12,7 +12,10 @@ import {
 import {
   buildDisasterRecoveryChecklist,
   DRILL_TRIGGERS,
+  judgeChainWindow,
   judgeRecordedRemoteIntegrity,
+  MAX_MANUAL_REMOTE_VERIFY_COUNT,
+  resolveRemoteVerifyCount,
   judgeStorageProtection,
   judgeStorageStandard,
   resolveSchedules,
@@ -36,6 +39,7 @@ import type {
   DrillRequirementDto,
   OperationsReadinessDto,
   RecoveryDrillDto,
+  RemoteVerifyResultDto,
   SmtpValidationDto,
 } from "@acos/shared";
 import { AuthGuard, RequireRole } from "../auth/auth.guard";
@@ -110,6 +114,8 @@ export class OpsController {
 
     // 조회는 원격에서 내려받지 않는다 — **기록된 대조 결과**를 읽는다.
     // 주 1회 예약(CTO 결정 2001-②)이 실제 내려받기를 담당한다.
+    // 관측 창 상향을 Readiness에 Warning으로 드러낸다 (CTO 결정 2101-②)
+    const chainWindowStatus = judgeChainWindow(health.chainWindow);
     const remoteVerifyIntervalMs = this.backups.remoteVerifyIntervalMs;
     const remoteVerifyScheduled =
       resolveSchedules(process.env as Record<string, string | undefined>).find(
@@ -191,6 +197,7 @@ export class OpsController {
           status: storageStandard.status,
           detail: storageStandard.detail,
         },
+        chainWindow: chainWindowStatus,
       },
     });
     const summary = summarizeDisasterRecovery(checklist);
@@ -277,6 +284,7 @@ export class OpsController {
             status: remoteIntegrity.status,
             detail: remoteIntegrity.detail,
             verdict: remoteIntegrity.verdict,
+            maxManualCount: MAX_MANUAL_REMOTE_VERIFY_COUNT,
             checkedAt:
               health.remoteRecord === null
                 ? null
@@ -292,6 +300,11 @@ export class OpsController {
             nextMilestone: health.scale.nextMilestone,
           },
           storageStandard,
+        },
+        // 운영에서는 버킷·IAM을 운영 담당자가 준비한다 (CTO 결정 2101-④)
+        storageProvisioning: {
+          mode: this.storage.provisioning.mode,
+          detail: this.storage.provisioning.detail,
         },
       },
       checkedAt: new Date().toISOString(),
@@ -434,10 +447,25 @@ export class OpsController {
    * 원격 사본 무결성 검증 (TASK-2001).
    * **내려받아 대조하므로 전송 비용이 든다** — 눌러야만 실행한다.
    */
+  /**
+   * 원격 사본 대조 — 수동은 **최근 3건까지** (CTO 결정 2101-①).
+   *
+   * 자동(주 1회)은 1건만 본다. 사람이 필요할 때 한 번 더 보는 쪽에만 폭을
+   * 주고, 상한을 둔다 — "전부"를 허용하면 이력이 쌓인 뒤 한 번의 클릭이
+   * 예상치 못한 전송 비용이 된다.
+   */
   @Post("backup/verify-remote")
   @HttpCode(200)
-  async verifyRemote() {
-    return this.backups.verifyRemoteCopy();
+  async verifyRemote(
+    @Query("count") count?: string,
+  ): Promise<RemoteVerifyResultDto> {
+    const wanted = resolveRemoteVerifyCount(count ?? 1);
+    if (count !== undefined && !/^\d+$/.test(count.trim())) {
+      throw new BadRequestException(
+        `count는 1~${MAX_MANUAL_REMOTE_VERIFY_COUNT} 사이의 숫자입니다.`,
+      );
+    }
+    return this.backups.verifyRemoteCopies(wanted);
   }
 
   /** 변경 사건 목록 */

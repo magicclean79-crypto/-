@@ -1,4 +1,6 @@
 import {
+  AUTO_REMOTE_VERIFY_COUNT,
+  MAX_MANUAL_REMOTE_VERIFY_COUNT,
   DEFAULT_CHAIN_GAP_FACTOR,
   DEFAULT_REMOTE_VERIFY_INTERVAL_MS,
   MIN_CHAIN_WINDOW_INTERVAL_FACTOR,
@@ -11,7 +13,10 @@ import {
   judgeRecordedRemoteIntegrity,
   judgeRemoteIntegrity,
   judgeStorageStandard,
+  judgeChainWindow,
   resolveChainWindowMs,
+  resolveRemoteVerifyCount,
+  summarizeRemoteBatch,
 } from "./backup-integrity";
 
 const HOUR = 60 * 60 * 1000;
@@ -425,5 +430,130 @@ describe("Operational Automation (TASK-2101)", () => {
         ).status,
       ).toBe("manual");
     });
+  });
+});
+
+describe("Production Readiness (TASK-2201)", () => {
+  describe("수동 대조 건수 (CTO 결정 2101-①)", () => {
+    it("자동은 1건, 수동은 최대 3건", () => {
+      expect(AUTO_REMOTE_VERIFY_COUNT).toBe(1);
+      expect(MAX_MANUAL_REMOTE_VERIFY_COUNT).toBe(3);
+    });
+
+    it("상한을 넘기면 상한으로 조인다 — 한 번의 클릭이 비용이 되면 안 된다", () => {
+      expect(resolveRemoteVerifyCount(99)).toBe(3);
+      expect(resolveRemoteVerifyCount("3")).toBe(3);
+    });
+
+    it("해석할 수 없거나 1 미만이면 1건", () => {
+      expect(resolveRemoteVerifyCount(undefined)).toBe(1);
+      expect(resolveRemoteVerifyCount("전부")).toBe(1);
+      expect(resolveRemoteVerifyCount(0)).toBe(1);
+      expect(resolveRemoteVerifyCount(-5)).toBe(1);
+    });
+
+    it("소수는 내림한다", () => {
+      expect(resolveRemoteVerifyCount(2.9)).toBe(2);
+    });
+  });
+
+  describe("summarizeRemoteBatch", () => {
+    const ok = (fileName: string) => ({
+      fileName,
+      result: judgeRemoteIntegrity({
+        found: true,
+        remoteChecksum: "a".repeat(64),
+        recordedChecksum: "a".repeat(64),
+      }),
+    });
+    const missing = (fileName: string) => ({
+      fileName,
+      result: judgeRemoteIntegrity({
+        found: false,
+        remoteChecksum: null,
+        recordedChecksum: "a".repeat(64),
+      }),
+    });
+
+    it("전부 일치하면 통과하고 건수를 말한다", () => {
+      const result = summarizeRemoteBatch([ok("a.dump"), ok("b.dump")]);
+      expect(result.status).toBe("pass");
+      expect(result.checked).toBe(2);
+      expect(result.detail).toContain("최근 2건");
+    });
+
+    it("하나라도 실패하면 실패 — 평균을 내면 잃은 시점이 사라진다", () => {
+      const result = summarizeRemoteBatch([
+        ok("a.dump"),
+        missing("b.dump"),
+        ok("c.dump"),
+      ]);
+      expect(result.status).toBe("fail");
+      expect(result.failed).toBe(1);
+      expect(result.ok).toBe(2);
+      // 어느 백업이 문제인지 밝힌다
+      expect(result.detail).toContain("b.dump");
+      expect(result.detail).toContain("되돌아갈 수 없습니다");
+    });
+
+    it("대조할 사본이 없으면 실패가 아니라 직접 확인이다", () => {
+      const result = summarizeRemoteBatch([]);
+      expect(result.status).toBe("manual");
+      expect(result.checked).toBe(0);
+    });
+  });
+
+  describe("judgeChainWindow (CTO 결정 2101-②)", () => {
+    it("상향되면 Warning — 드러내되 기동을 막지 않는다", () => {
+      const result = judgeChainWindow(resolveChainWindowMs("2", HOUR));
+      expect(result.status).toBe("warn");
+      expect(result.detail).toContain("설정한 값과 실제로 도는 값이 다릅니다");
+      expect(result.detail).toContain("기동을 막지는 않습니다");
+    });
+
+    it("상향되지 않으면 통과하고 조용하다", () => {
+      const result = judgeChainWindow(resolveChainWindowMs("48", HOUR));
+      expect(result.status).toBe("pass");
+      expect(result.detail).not.toContain("올렸습니다");
+    });
+
+    it("실패로 올리지 않는다 — 설정이 어긋난 것이지 복구가 불가능한 것이 아니다", () => {
+      expect(judgeChainWindow(resolveChainWindowMs("1", 24 * HOUR)).status).toBe(
+        "warn",
+      );
+    });
+  });
+});
+
+describe("관측 창 오설정은 기동을 막지 않는다 (TASK-2201, CTO 결정 2101-②)", () => {
+  it("해석할 수 없는 값은 무시하되 무시했다고 말한다", () => {
+    const result = resolveChainWindowMs("이십사시간", HOUR);
+    expect(result.source).toBe("invalid");
+    expect(result.windowMs).toBe(24 * HOUR);
+    expect(result.detail).toContain("해석할 수 없습니다");
+    expect(result.detail).toContain("이십사시간");
+  });
+
+  it("무시한 설정도 Warning으로 드러난다", () => {
+    const result = judgeChainWindow(resolveChainWindowMs("abc", HOUR));
+    expect(result.status).toBe("warn");
+    expect(result.detail).toContain("쓰이지 않고 있습니다");
+    expect(result.detail).toContain("기동을 막지는 않습니다");
+  });
+
+  it("무시할 때도 최소 창은 지킨다", () => {
+    // 하루 1회 백업이면 최소 4일 — 기본 24시간으로 돌면 판정할 표본이 없다
+    expect(resolveChainWindowMs("abc", 24 * HOUR).windowMs).toBe(96 * HOUR);
+  });
+
+  it("무시 문구에도 조사가 어긋나지 않는다", () => {
+    for (const intervalMs of [20_000, 60_000, HOUR, 24 * HOUR]) {
+      const detail = resolveChainWindowMs("nope", intervalMs).detail;
+      expect(detail).not.toMatch(/(시간|분|일)로 /);
+    }
+  });
+
+  it("빈 값은 설정하지 않은 것과 같다 — 무시했다고 말할 것이 없다", () => {
+    expect(resolveChainWindowMs("   ", HOUR).source).toBe("default");
   });
 });

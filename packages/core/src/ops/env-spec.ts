@@ -693,7 +693,15 @@ export const ENV_SPECS: EnvSpec[] = [
     category: "ops",
     description:
       "백업 사슬을 판정하는 관측 창(시간) — 최소는 백업 간격의 4배이며, 그보다 짧게 두면 자동으로 올립니다",
-    validate: positiveNumber("BACKUP_CHAIN_WINDOW_HOURS"),
+    // 형식 오류로 기동을 막지 않는다 (CTO 결정 2101-②) — 판정 설정 하나
+    // 때문에 서비스가 뜨지 않으면 안 된다. 잘못 적은 값은 Readiness의
+    // `chain-window` 항목에 Warning으로 드러난다.
+    productionAdvice: (value) =>
+      value !== undefined &&
+      value.trim().length > 0 &&
+      !(Number.isFinite(Number(value)) && Number(value) > 0)
+        ? "BACKUP_CHAIN_WINDOW_HOURS 값을 해석할 수 없어 기본값으로 돕니다 — 시간 단위 숫자로 적으세요. 기동은 막지 않습니다 (CTO 결정 2101-②)."
+        : null,
     fallback: "24 (CTO 결정 2001-①)",
   },
   {

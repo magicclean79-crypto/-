@@ -872,25 +872,39 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    // 원격 사본 무결성 검증 (TASK-2001) — 전송 비용이 들어 수동 실행이다
+    // 원격 사본 무결성 검증 (TASK-2001) — 전송 비용이 들어 수동 실행이다.
+    // 수동은 최근 3건까지 (TASK-2201, CTO 결정 2101-①)
     if (req.method === "POST" && url.pathname === "/ops/backup/verify-remote") {
+      const raw = Number(url.searchParams.get("count") ?? 1);
+      const count =
+        Number.isFinite(raw) && raw >= 1 ? Math.min(Math.floor(raw), 3) : 1;
       stubRemoteVerified = healthy;
       res.end(
         JSON.stringify(
           healthy
             ? {
-                verdict: "ok",
                 status: "pass",
                 detail:
-                  "원격 사본을 내려받아 대조했습니다 — SHA-256 일치 (cccccccccccc…).",
-                key: "backups/acos-2026-07-29.dump",
+                  count === 1
+                    ? "원격 사본을 내려받아 대조했습니다 — SHA-256 일치 (cccccccccccc…)."
+                    : `최근 ${count}건을 내려받아 대조했습니다 — 모두 SHA-256 일치.`,
+                checked: count,
+                ok: count,
+                failed: 0,
+                entries: Array.from({ length: count }, (_, index) => ({
+                  fileName: `acos-2026-07-2${9 - index}.dump`,
+                  verdict: "ok",
+                  detail: "SHA-256 일치",
+                })),
               }
             : {
-                verdict: "missing",
                 status: "fail",
                 detail:
                   "원격 사본을 찾을 수 없습니다 — 올렸다는 기록만 남아 있고 실제 사본은 없습니다.",
-                key: null,
+                checked: count,
+                ok: 0,
+                failed: count,
+                entries: [],
               },
         ),
       );
@@ -1105,6 +1119,15 @@ const server = http.createServer((req, res) => {
         critical: false,
       },
       {
+        id: "chain-window",
+        title: "사슬 관측 창 설정",
+        status: healthy ? "pass" : "warn",
+        detail: healthy
+          ? "관측 창 24.0시간 (기본값)."
+          : "설정한 관측 창 12.0시간 — 백업 간격 6.0시간의 4배에 못 미쳐 판정할 표본이 없습니다. 최소 24.0시간까지 올렸습니다. 설정한 값과 실제로 도는 값이 다릅니다 — BACKUP_CHAIN_WINDOW_HOURS를 백업 간격의 4배 이상으로 고치세요. 기동을 막지는 않습니다 (CTO 결정 2101-②).",
+        critical: false,
+      },
+      {
         id: "storage-standard",
         title: "운영 저장소 표준",
         status: "pass",
@@ -1300,6 +1323,18 @@ const server = http.createServer((req, res) => {
             medianMs: healthy ? 1_100 : 5_000,
             slowStreak: 0,
           },
+          // 버킷·권한 준비 주체 (TASK-2201, CTO 결정 2101-④)
+          storageProvisioning: healthy
+            ? {
+                mode: "external",
+                detail:
+                  "운영에서는 버킷과 접근 권한을 운영 담당자가 준비합니다 — 애플리케이션은 환경변수로 받은 버킷을 읽고 쓰기만 하며, 만들거나 정책을 바꾸지 않습니다 (CTO 결정 2101-④).",
+              }
+            : {
+                mode: "managed",
+                detail:
+                  "개발에서는 애플리케이션이 버킷을 만들고 공개 읽기 정책을 겁니다 — 개발자가 손으로 준비하게 하지 않습니다. 운영에서는 하지 않습니다.",
+              },
           // 백업 무결성 (TASK-2001)
           backupIntegrity: {
             chain: {
@@ -1324,6 +1359,8 @@ const server = http.createServer((req, res) => {
                 ? "원격 사본이 기록된 체크섬과 일치합니다 (acos-2026-07-29.dump) — 0초 전 대조."
                 : "원격 사본을 내려받아 대조하지 않았습니다 — 전송 비용이 들어 기본으로 돌리지 않습니다. 필요할 때 수동으로 확인하세요.",
               verdict: stubRemoteVerified ? "ok" : "unchecked",
+              // 수동 대조 상한 (TASK-2201, CTO 결정 2101-①)
+              maxManualCount: 3,
               // TASK-2101 — 기록된 대조 결과와 주 1회 예약 (CTO 결정 2001-②)
               checkedAt: stubRemoteVerified ? new Date().toISOString() : null,
               intervalMs: 7 * 24 * 60 * 60 * 1000,

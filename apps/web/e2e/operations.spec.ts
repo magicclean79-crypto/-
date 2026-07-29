@@ -391,7 +391,7 @@ test.describe("Enterprise Backup Integrity Platform (TASK-2001)", () => {
     await expect(remote).toContainText("직접 확인");
     await expect(remote).toContainText("전송 비용");
     await expect(page.getByTestId("verify-remote")).toContainText(
-      "원격 사본 검증 (전송 비용)",
+      "최근 1건 검증 (전송 비용)",
     );
 
     await page.getByTestId("verify-remote").click();
@@ -579,5 +579,83 @@ test.describe("Enterprise Operational Automation (TASK-2101)", () => {
     await expect(page.getByTestId("schedule-remote-verify")).toContainText(
       "7일",
     );
+  });
+});
+
+test.describe("Enterprise Production Readiness (TASK-2201)", () => {
+  test("수동 대조는 1건과 3건 중에 고른다 (CTO 결정 2101-①)", async ({
+    page,
+  }) => {
+    await setMode("data");
+    await openPage(page);
+
+    await expect(page.getByTestId("verify-remote")).toContainText(
+      "최근 1건 검증 (전송 비용)",
+    );
+    await expect(page.getByTestId("verify-remote-batch")).toContainText(
+      "최근 3건 검증",
+    );
+  });
+
+  test("3건 검증을 누르면 3건을 대조한다", async ({ page }) => {
+    await setMode("data");
+    await openPage(page);
+
+    await page.getByTestId("verify-remote-batch").click();
+    await expect(page.getByTestId("operations-note")).toContainText(
+      "최근 3건을 내려받아 대조했습니다",
+    );
+  });
+
+  test("1건 검증은 자동과 같은 비용으로 돈다", async ({ page }) => {
+    await setMode("data");
+    await openPage(page);
+
+    await page.getByTestId("verify-remote").click();
+    await expect(page.getByTestId("operations-note")).toContainText(
+      "내려받아 대조했습니다",
+    );
+    await expect(page.getByTestId("operations-note")).not.toContainText(
+      "최근 3건",
+    );
+  });
+
+  test("관측 창 상향이 체크리스트에 Warning으로 오른다 (CTO 결정 2101-②)", async ({
+    page,
+  }) => {
+    await setMode("empty");
+    await openPage(page);
+
+    const item = page.getByTestId("dr-item-chain-window");
+    await expect(item).toContainText("주의");
+    await expect(item).toContainText("기동을 막지는 않습니다");
+  });
+
+  test("설정이 정상이면 체크리스트도 조용하다", async ({ page }) => {
+    await setMode("data");
+    await openPage(page);
+    await expect(page.getByTestId("dr-item-chain-window")).toContainText(
+      "통과",
+    );
+  });
+
+  test("운영에서는 버킷·권한을 운영 담당자가 준비한다고 밝힌다 (CTO 결정 2101-④)", async ({
+    page,
+  }) => {
+    await setMode("data");
+    await openPage(page);
+
+    const panel = page.getByTestId("storage-provisioning");
+    await expect(panel).toContainText("운영 담당자 준비");
+    await expect(panel).toContainText("만들거나 정책을 바꾸지 않습니다");
+  });
+
+  test("개발에서는 애플리케이션이 준비한다고 밝힌다", async ({ page }) => {
+    await setMode("empty");
+    await openPage(page);
+
+    const panel = page.getByTestId("storage-provisioning");
+    await expect(panel).toContainText("애플리케이션 준비 (개발)");
+    await expect(panel).toContainText("운영에서는 하지 않습니다");
   });
 });

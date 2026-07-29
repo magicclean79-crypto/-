@@ -7,9 +7,12 @@ import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import {
   DEFAULT_JOB_INTERVALS,
+  AUTO_REMOTE_VERIFY_COUNT,
   defaultRpoTargetMs,
   judgeBackup,
   resolveChainWindowMs,
+  resolveRemoteVerifyCount,
+  summarizeRemoteBatch,
   judgeIntegrity,
   judgeOffsite,
   judgeRecoveryObjectives,
@@ -27,6 +30,8 @@ import type {
   BackupPerformance,
   ChainWindowResolution,
   DatabaseScale,
+  RemoteBatch,
+  RemoteBatchEntry,
   RemoteIntegrity,
   RemoteRecord,
   OffsiteHealth,
@@ -278,34 +283,55 @@ export class BackupService {
    * 화면은 계속 "확인하지 않았습니다"라고 말한다.
    */
   async verifyRemoteCopy(): Promise<RemoteIntegrity> {
-    const [latest] = (await this.backupHistory(20)).filter(
-      (entry) => entry.ok && entry.offsite,
+    const batch = await this.verifyRemoteCopies(AUTO_REMOTE_VERIFY_COUNT);
+    return (
+      batch.entries[0]?.result ??
+      judgeRemoteIntegrity(null)
     );
-    if (!latest || !latest.fileName) {
-      return judgeRemoteIntegrity(null);
+  }
+
+  /**
+   * 최근 N건 대조 (TASK-2201, CTO 결정 2101-①).
+   *
+   * **자동은 1건, 수동은 최대 3건.** 주기적으로 도는 것은 비용이 반복되므로
+   * 최소로 두고, 사람이 필요할 때 한 번 더 보는 쪽에만 폭을 준다. 상한을
+   * 두는 이유는 "전부"를 허용하면 이력이 쌓인 뒤 한 번의 클릭이 예상치 못한
+   * 전송 비용이 되기 때문이다.
+   */
+  async verifyRemoteCopies(count: number): Promise<RemoteBatch> {
+    const wanted = resolveRemoteVerifyCount(count);
+    const targets = (await this.backupHistory(50))
+      .filter((entry) => entry.ok && entry.offsite && entry.fileName)
+      .slice(0, wanted);
+
+    const entries: RemoteBatchEntry[] = [];
+    for (const target of targets) {
+      let result: RemoteIntegrity;
+      try {
+        const key = `${this.offsitePrefix}${target.fileName}`;
+        const buffer = await this.storage.getBackupObject(key);
+        const hash = createHash("sha256").update(buffer).digest("hex");
+        result = judgeRemoteIntegrity({
+          found: true,
+          remoteChecksum: hash,
+          recordedChecksum: target.checksum,
+        });
+      } catch (error) {
+        this.logger.error(
+          `원격 사본 검증 실패(${target.fileName}): ${error instanceof Error ? error.message : String(error)}`,
+        );
+        result = judgeRemoteIntegrity({
+          found: false,
+          remoteChecksum: null,
+          recordedChecksum: target.checksum,
+        });
+      }
+      // 건마다 남긴다 — 어느 백업이 온전한지가 복구 시점 선택의 근거다
+      await this.recordRemoteVerdict(target.id, result.verdict);
+      entries.push({ fileName: target.fileName, result });
     }
-    let result: RemoteIntegrity;
-    try {
-      const key = `${this.offsitePrefix}${latest.fileName}`;
-      const buffer = await this.storage.getBackupObject(key);
-      const hash = createHash("sha256").update(buffer).digest("hex");
-      result = judgeRemoteIntegrity({
-        found: true,
-        remoteChecksum: hash,
-        recordedChecksum: latest.checksum,
-      });
-    } catch (error) {
-      this.logger.error(
-        `원격 사본 검증 실패: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      result = judgeRemoteIntegrity({
-        found: false,
-        remoteChecksum: null,
-        recordedChecksum: latest.checksum,
-      });
-    }
-    await this.recordRemoteVerdict(latest.id, result.verdict);
-    return result;
+
+    return summarizeRemoteBatch(entries);
   }
 
   private async recordRemoteVerdict(

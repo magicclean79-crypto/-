@@ -55,8 +55,11 @@ export const MIN_CHAIN_WINDOW_INTERVAL_FACTOR = 4;
 
 export interface ChainWindowResolution {
   windowMs: number;
-  /** 설정을 그대로 썼는가 · 기본값인가 · 최소값으로 올렸는가 */
-  source: "env" | "default" | "clamped";
+  /**
+   * 설정을 그대로 썼는가 · 기본값인가 · 최소값으로 올렸는가 ·
+   * **해석할 수 없어 무시했는가** (TASK-2201)
+   */
+  source: "env" | "default" | "clamped" | "invalid";
   detail: string;
 }
 
@@ -76,6 +79,21 @@ export function resolveChainWindowMs(
   const trimmed = (raw ?? "").trim();
   const parsed = trimmed.length > 0 ? Number(trimmed) : Number.NaN;
   const configured = Number.isFinite(parsed) && parsed > 0;
+
+  // 적어 놓은 값이 무시되고 있다는 사실을 숨기지 않는다 (TASK-2201) —
+  // 기동을 막지는 않지만(CTO 결정 2101-②), 조용히 다른 값으로 돌지도 않는다
+  if (trimmed.length > 0 && !configured) {
+    const windowMs = Math.max(DEFAULT_CHAIN_WINDOW_MS, minimumMs);
+    return {
+      windowMs,
+      source: "invalid",
+      // 단위 뒤에 조사를 붙이지 않는다 — 초·분·시간·일로 받침이 달라진다
+      detail:
+        `BACKUP_CHAIN_WINDOW_HOURS 값을 해석할 수 없습니다: "${trimmed}" — ` +
+        `관측 창 ${hours(windowMs)} 기준으로 돕니다. 시간 단위 숫자로 적으세요.`,
+    };
+  }
+
   const requestedMs = configured
     ? Math.round(parsed * 60 * 60 * 1000)
     : DEFAULT_CHAIN_WINDOW_MS;
@@ -97,6 +115,38 @@ export function resolveChainWindowMs(
     source: configured ? "env" : "default",
     detail: `관측 창 ${hours(requestedMs)}${configured ? "" : " (기본값)"}.`,
   };
+}
+
+/**
+ * 관측 창 설정 판정 (TASK-2201, CTO 결정 2101-②).
+ *
+ * **상향은 유지하되 Readiness에 Warning으로 드러낸다. 기동은 막지 않는다.**
+ *
+ * 화면 한 줄로만 두면 아무도 고치지 않고, 기동을 막으면 판정 설정 하나 때문에
+ * 서비스가 뜨지 않는다. 둘 사이에서 **드러내되 세우지는 않는** 자리를 골랐다.
+ */
+export function judgeChainWindow(window: ChainWindowResolution): {
+  status: DrStatus;
+  detail: string;
+} {
+  if (window.source === "invalid") {
+    return {
+      status: "warn",
+      detail:
+        `${window.detail} 적어 놓은 값이 쓰이지 않고 있습니다. ` +
+        "기동을 막지는 않습니다 (CTO 결정 2101-②).",
+    };
+  }
+  if (window.source === "clamped") {
+    return {
+      status: "warn",
+      detail:
+        `${window.detail} 설정한 값과 실제로 도는 값이 다릅니다 — ` +
+        "BACKUP_CHAIN_WINDOW_HOURS를 백업 간격의 4배 이상으로 고치세요. " +
+        "기동을 막지는 않습니다 (CTO 결정 2101-②).",
+    };
+  }
+  return { status: "pass", detail: window.detail };
 }
 
 function hours(ms: number): string {
@@ -324,6 +374,99 @@ export function judgeRemoteIntegrity(
 
 /** 자동 대조 주기 — 주 1회 (CTO 결정 2001-②) */
 export const DEFAULT_REMOTE_VERIFY_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * 자동 대조가 보는 건수 — **1건** (CTO 결정 2101-①).
+ *
+ * 주기적으로 도는 것은 비용이 반복되므로 최소로 둔다.
+ */
+export const AUTO_REMOTE_VERIFY_COUNT = 1;
+
+/**
+ * 수동 대조가 볼 수 있는 최대 건수 — **3건** (CTO 결정 2101-①).
+ *
+ * 사람이 필요할 때 한 번 더 보는 것이라 비용이 반복되지 않는다. 다만
+ * **상한을 둔다** — "전부"를 허용하면 이력이 쌓인 뒤 한 번의 클릭이
+ * 예상치 못한 전송 비용이 된다.
+ */
+export const MAX_MANUAL_REMOTE_VERIFY_COUNT = 3;
+
+/** 요청한 건수를 1~3으로 조인다 — 잘못 적은 값으로 비용이 튀지 않게 */
+export function resolveRemoteVerifyCount(raw: unknown): number {
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return 1;
+  }
+  return Math.min(Math.floor(parsed), MAX_MANUAL_REMOTE_VERIFY_COUNT);
+}
+
+export interface RemoteBatchEntry {
+  fileName: string | null;
+  result: RemoteIntegrity;
+}
+
+export interface RemoteBatch {
+  status: DrStatus;
+  detail: string;
+  checked: number;
+  ok: number;
+  failed: number;
+  entries: RemoteBatchEntry[];
+}
+
+/**
+ * 여러 건 대조 결과 요약 (CTO 결정 2101-①).
+ *
+ * **하나라도 실패하면 실패다.** 3건 중 2건이 온전해도, 잃은 1건은
+ * 그 시점으로 되돌아갈 수 없다는 뜻이다 — 평균을 내면 그 사실이 사라진다.
+ */
+export function summarizeRemoteBatch(
+  entries: RemoteBatchEntry[],
+): RemoteBatch {
+  if (entries.length === 0) {
+    return {
+      status: "manual",
+      detail:
+        "대조할 원격 사본이 없습니다 — 원격 복제를 켰는지 확인하세요.",
+      checked: 0,
+      ok: 0,
+      failed: 0,
+      entries: [],
+    };
+  }
+
+  const failedEntries = entries.filter(
+    (entry) => entry.result.status === "fail",
+  );
+  const okCount = entries.filter(
+    (entry) => entry.result.verdict === "ok",
+  ).length;
+
+  if (failedEntries.length > 0) {
+    const names = failedEntries
+      .map((entry) => entry.fileName ?? "이름 미상")
+      .join(", ");
+    return {
+      status: "fail",
+      detail:
+        `${entries.length}건 중 ${failedEntries.length}건이 온전하지 않습니다 (${names}). ` +
+        "나머지가 멀쩡해도 그 시점으로는 되돌아갈 수 없습니다.",
+      checked: entries.length,
+      ok: okCount,
+      failed: failedEntries.length,
+      entries,
+    };
+  }
+
+  return {
+    status: "pass",
+    detail: `최근 ${entries.length}건을 내려받아 대조했습니다 — 모두 SHA-256 일치.`,
+    checked: entries.length,
+    ok: okCount,
+    failed: 0,
+    entries,
+  };
+}
 
 /**
  * 대조 결과가 **낡았다**고 볼 시점 — 주기의 2배.

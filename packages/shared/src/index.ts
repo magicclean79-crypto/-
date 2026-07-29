@@ -1727,13 +1727,15 @@ export interface EnterpriseRecoveryDto {
       longestGapMs: number | null;
       /** 관측 창 (ms)과 그 출처 — env·default·clamped (TASK-2101) */
       windowMs: number;
-      windowSource: "env" | "default" | "clamped";
+      windowSource: "env" | "default" | "clamped" | "invalid";
       windowDetail: string;
     };
     remote: {
       status: DrStatusDto;
       detail: string;
       verdict: string;
+      /** 수동 대조가 볼 수 있는 최대 건수 (TASK-2201, CTO 결정 2101-①) */
+      maxManualCount: number;
       /** 마지막 자동/수동 대조 시각 (ISO) — 대조한 적 없으면 null */
       checkedAt: string | null;
       /** 자동 대조 주기 (ms) — 주 1회 (CTO 결정 2001-②) */
@@ -1750,6 +1752,34 @@ export interface EnterpriseRecoveryDto {
     };
     storageStandard: { status: DrStatusDto; detail: string; standard: boolean };
   };
+  /**
+   * 저장소 프로비저닝 경계 (TASK-2201, CTO 결정 2101-④).
+   *
+   * `external`이면 운영 담당자가 버킷·IAM을 준비하고 애플리케이션은
+   * 환경변수만 씁니다.
+   */
+  storageProvisioning: {
+    mode: "managed" | "external";
+    detail: string;
+  };
+}
+
+/**
+ * 원격 사본 대조 결과 (POST /ops/backup/verify-remote).
+ *
+ * 건마다 결과를 담는다 — **어느 백업이 온전한지**가 복구 시점 선택의
+ * 근거이므로, 합쳐 놓으면 그 정보가 사라진다.
+ */
+export interface RemoteVerifyResultDto {
+  status: DrStatusDto;
+  detail: string;
+  checked: number;
+  ok: number;
+  failed: number;
+  entries: {
+    fileName: string | null;
+    result: { verdict: string; status: DrStatusDto; detail: string };
+  }[];
 }
 
 /** 복구 리허설 기록 1건 (TASK-1801, CTO 결정 1701-⑤) */

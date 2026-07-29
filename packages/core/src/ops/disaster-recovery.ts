@@ -213,6 +213,13 @@ export interface DrState {
     remoteIntegrity: { status: DrStatus; detail: string };
     /** 운영 저장소 표준 (CTO 결정 1901-③) */
     storageStandard: { status: DrStatus; detail: string };
+    /**
+     * 사슬 관측 창 (TASK-2201, CTO 결정 2101-②).
+     *
+     * 상향은 유지하되 **Readiness에 Warning으로 드러낸다** — 기동은 막지
+     * 않는다. 설정과 실제가 다른 상태를 화면에만 두면 아무도 고치지 않는다.
+     */
+    chainWindow: { status: DrStatus; detail: string };
     /** 복구 목표 RPO·RTO */
     objectives: { status: DrStatus; detail: string };
     /** 복원 대상 분리 (CTO 결정 1601-②) */
@@ -283,6 +290,7 @@ export function buildDisasterRecoveryChecklist(state: DrState): DrItem[] {
       backupChain,
       remoteIntegrity,
       storageStandard,
+      chainWindow,
     } = state.enterprise;
     items.push(
       {
@@ -353,6 +361,14 @@ export function buildDisasterRecoveryChecklist(state: DrState): DrItem[] {
         title: "운영 저장소 표준",
         status: storageStandard.status,
         detail: storageStandard.detail,
+        critical: false,
+      },
+      {
+        id: "chain-window",
+        title: "사슬 관측 창 설정",
+        status: chainWindow.status,
+        detail: chainWindow.detail,
+        // 설정이 어긋난 것이지 복구가 불가능한 것은 아니다 (CTO 결정 2101-②)
         critical: false,
       },
       {

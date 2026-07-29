@@ -319,6 +319,7 @@ describe("Enterprise Backup & Disaster Recovery (TASK-1701)", () => {
           backupChain: { status: "pass", detail: "" },
           remoteIntegrity: { status: "manual", detail: "" },
           storageStandard: { status: "pass", detail: "" },
+          chainWindow: { status: "pass", detail: "" },
         },
       });
       const summary = summarizeDisasterRecovery(items);
@@ -341,6 +342,7 @@ describe("Enterprise Backup & Disaster Recovery (TASK-1701)", () => {
           backupChain: { status: "pass", detail: "" },
           remoteIntegrity: { status: "manual", detail: "" },
           storageStandard: { status: "pass", detail: "" },
+          chainWindow: { status: "pass", detail: "" },
         },
       });
       expect(summarizeDisasterRecovery(items).recoverable).toBe(false);
@@ -363,6 +365,7 @@ describe("Enterprise Backup & Disaster Recovery (TASK-1701)", () => {
           backupChain: { status: "pass", detail: "" },
           remoteIntegrity: { status: "manual", detail: "" },
           storageStandard: { status: "fail", detail: "" },
+          chainWindow: { status: "pass", detail: "" },
         },
       });
       const summary = summarizeDisasterRecovery(items);

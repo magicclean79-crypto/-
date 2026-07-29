@@ -681,7 +681,8 @@ export default function OperationsPage() {
                 </div>
                 <p className="mt-1">{backupIntegrityChain!.detail}</p>
                 {/* 창을 올렸다면 숨기지 않는다 (CTO 결정 2001-①) */}
-                {backupIntegrityChain!.windowSource === "clamped" ? (
+                {backupIntegrityChain!.windowSource === "clamped" ||
+                backupIntegrityChain!.windowSource === "invalid" ? (
                   <p
                     data-testid="chain-window-clamped"
                     className="mt-1 text-xs text-amber-700 dark:text-amber-300"
@@ -705,23 +706,43 @@ export default function OperationsPage() {
                     {DR_LABEL[data.enterprise.backupIntegrity.remote.status]}
                   </span>
                   <strong>원격 사본 무결성</strong>
-                  <button
-                    type="button"
-                    data-testid="verify-remote"
-                    disabled={running !== null}
-                    onClick={() =>
-                      void act(
-                        "/ops/backup/verify-remote",
-                        "원격 사본 검증",
-                        (result) => String(result.detail ?? ""),
-                      )
-                    }
-                    className="ml-auto rounded-lg border border-amber-400 px-2.5 py-1 text-xs font-medium text-amber-700 hover:bg-amber-50 disabled:opacity-50 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-950"
-                  >
-                    {running === "원격 사본 검증"
-                      ? "내려받는 중…"
-                      : "원격 사본 검증 (전송 비용)"}
-                  </button>
+                  <div className="ml-auto flex gap-1.5">
+                    <button
+                      type="button"
+                      data-testid="verify-remote"
+                      disabled={running !== null}
+                      onClick={() =>
+                        void act(
+                          "/ops/backup/verify-remote",
+                          "원격 사본 검증",
+                          (result) => String(result.detail ?? ""),
+                        )
+                      }
+                      className="rounded-lg border border-amber-400 px-2.5 py-1 text-xs font-medium text-amber-700 hover:bg-amber-50 disabled:opacity-50 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-950"
+                    >
+                      {running === "원격 사본 검증"
+                        ? "내려받는 중…"
+                        : "최근 1건 검증 (전송 비용)"}
+                    </button>
+                    {/* 수동은 최대 3건까지 (CTO 결정 2101-①) — 자동은 1건 */}
+                    <button
+                      type="button"
+                      data-testid="verify-remote-batch"
+                      disabled={running !== null}
+                      onClick={() =>
+                        void act(
+                          `/ops/backup/verify-remote?count=${data.enterprise.backupIntegrity.remote.maxManualCount}`,
+                          "원격 사본 다건 검증",
+                          (result) => String(result.detail ?? ""),
+                        )
+                      }
+                      className="rounded-lg border border-amber-400 px-2.5 py-1 text-xs font-medium text-amber-700 hover:bg-amber-50 disabled:opacity-50 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-950"
+                    >
+                      {running === "원격 사본 다건 검증"
+                        ? "내려받는 중…"
+                        : `최근 ${data.enterprise.backupIntegrity.remote.maxManualCount}건 검증`}
+                    </button>
+                  </div>
                 </div>
                 <p className="mt-1">
                   {data.enterprise.backupIntegrity.remote.detail}
@@ -818,6 +839,29 @@ export default function OperationsPage() {
                   {data.enterprise.backupBucket.separated
                     ? "이미지 버킷과 분리되어 있습니다 — 한 쪽이 사라져도 다른 쪽이 남습니다."
                     : "이미지 버킷과 같습니다 — 그 버킷이 사라지면 이미지와 백업이 함께 사라집니다."}
+                </p>
+              </li>
+              {/* 버킷·IAM은 누가 준비하는가 (CTO 결정 2101-④) */}
+              <li
+                data-testid="storage-provisioning"
+                className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                      data.enterprise.storageProvisioning.mode === "external"
+                        ? OK_STYLE
+                        : MUTED_STYLE
+                    }`}
+                  >
+                    {data.enterprise.storageProvisioning.mode === "external"
+                      ? "운영 담당자 준비"
+                      : "애플리케이션 준비 (개발)"}
+                  </span>
+                  <strong>버킷·권한 준비 주체</strong>
+                </div>
+                <p className="mt-1">
+                  {data.enterprise.storageProvisioning.detail}
                 </p>
               </li>
               <li

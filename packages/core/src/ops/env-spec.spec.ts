@@ -294,3 +294,38 @@ describe("Environment Validation (TASK-1202)", () => {
     expect(new Set(names).size).toBe(names.length);
   });
 });
+
+describe("관측 창 설정은 기동을 막지 않는다 (TASK-2201, CTO 결정 2101-②)", () => {
+  it("해석할 수 없는 값이어도 환경 오류가 아니다", () => {
+    const result = validateEnvironment({
+      NODE_ENV: "production",
+      BACKUP_CHAIN_WINDOW_HOURS: "이십사",
+    });
+    expect(
+      result.errors.some((issue) => issue.name === "BACKUP_CHAIN_WINDOW_HOURS"),
+    ).toBe(false);
+  });
+
+  it("대신 운영에서 권고로 알린다", () => {
+    const result = validateEnvironment({
+      NODE_ENV: "production",
+      BACKUP_CHAIN_WINDOW_HOURS: "이십사",
+    });
+    const advice = result.warnings.find(
+      (issue) => issue.name === "BACKUP_CHAIN_WINDOW_HOURS",
+    );
+    expect(advice?.message).toContain("기동은 막지 않습니다");
+  });
+
+  it("정상 값에는 아무 말도 하지 않는다", () => {
+    const result = validateEnvironment({
+      NODE_ENV: "production",
+      BACKUP_CHAIN_WINDOW_HOURS: "48",
+    });
+    expect(
+      [...result.errors, ...result.warnings].some(
+        (issue) => issue.name === "BACKUP_CHAIN_WINDOW_HOURS",
+      ),
+    ).toBe(false);
+  });
+});

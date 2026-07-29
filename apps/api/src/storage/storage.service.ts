@@ -5,7 +5,11 @@ import {
   ServiceUnavailableException,
 } from "@nestjs/common";
 import { Client } from "minio";
-import type { ProtectionState } from "@acos/core";
+import {
+  describeMissingBucket,
+  resolveProvisioningPolicy,
+} from "@acos/core";
+import type { ProtectionState, ProvisioningPolicy } from "@acos/core";
 
 const DEFAULT_ENDPOINT = "http://localhost:9000";
 
@@ -63,11 +67,27 @@ export class StorageService implements OnModuleInit {
     try {
       await this.ensureBucket();
       this.logger.log(`Object storage ready (bucket: ${this.bucket})`);
-    } catch {
+    } catch (error) {
+      // 운영에서 "버킷이 없다"는 것과 "저장소가 꺼져 있다"는 것은 다르다 —
+      // 앞의 것은 운영 담당자가 준비할 일이 남았다는 뜻이다 (CTO 결정 2101-④)
       this.logger.warn(
-        "Object storage is not reachable. Run `pnpm docker:up` to start MinIO.",
+        this.provisioning.mode === "external"
+          ? (error as Error).message
+          : "Object storage is not reachable. Run `pnpm docker:up` to start MinIO.",
       );
     }
+  }
+
+  /**
+   * 프로비저닝 정책 (TASK-2201, CTO 결정 2101-④).
+   *
+   * **운영에서는 버킷을 만들지도, 정책을 걸지도 않는다.** 운영 담당자가
+   * 준비하고 애플리케이션은 환경변수로 받은 것을 읽고 쓰기만 한다.
+   */
+  get provisioning(): ProvisioningPolicy {
+    return resolveProvisioningPolicy(
+      process.env as Record<string, string | undefined>,
+    );
   }
 
   /**
@@ -77,7 +97,9 @@ export class StorageService implements OnModuleInit {
   async check(): Promise<string> {
     const exists = await this.client.bucketExists(this.bucket);
     if (!exists) {
-      throw new Error(`버킷을 찾을 수 없습니다: ${this.bucket}`);
+      // 운영에서는 **누가 무엇을 해야 하는지**까지 적는다 — "찾을 수
+      // 없습니다"로 끝내면 운영자는 앱이 만들어 주기를 기다린다
+      throw new Error(describeMissingBucket(this.bucket, this.provisioning));
     }
     return `버킷 접근 정상 (${this.bucket})`;
   }
@@ -144,18 +166,28 @@ export class StorageService implements OnModuleInit {
     if (this.bucketReady) {
       return;
     }
+    const policy = this.provisioning;
     const exists = await this.client.bucketExists(this.bucket);
+
     if (!exists) {
+      if (!policy.mayCreateBucket) {
+        // 운영에서 만들지 않는다 (CTO 결정 2101-④) — 오타 하나로 아무도
+        // 모르는 버킷이 생기고, 그 버킷은 보호 정책 대상이 아니다
+        throw new Error(describeMissingBucket(this.bucket, policy));
+      }
       await this.client.makeBucket(this.bucket);
     }
-    try {
-      await this.client.setBucketPolicy(
-        this.bucket,
-        publicReadPolicy(this.bucket),
-      );
-    } catch {
-      // 버킷 정책을 지원하지 않는 스토리지(로컬 목업 등)에서는 건너뛴다.
-      this.logger.warn("Could not apply public-read bucket policy.");
+
+    if (policy.maySetPolicy) {
+      try {
+        await this.client.setBucketPolicy(
+          this.bucket,
+          publicReadPolicy(this.bucket),
+        );
+      } catch {
+        // 버킷 정책을 지원하지 않는 스토리지(로컬 목업 등)에서는 건너뛴다.
+        this.logger.warn("Could not apply public-read bucket policy.");
+      }
     }
     this.bucketReady = true;
   }
@@ -207,9 +239,13 @@ export class StorageService implements OnModuleInit {
       return;
     }
     if (!(await this.client.bucketExists(this.backupBucket))) {
+      const policy = this.provisioning;
+      if (!policy.mayCreateBucket) {
+        throw new Error(describeMissingBucket(this.backupBucket, policy));
+      }
       await this.client.makeBucket(this.backupBucket);
     }
-    // 공개 정책을 걸지 않는다 — 백업은 공개 대상이 아니다
+    // 공개 정책은 어느 환경에서도 걸지 않는다 — 백업은 공개 대상이 아니다
     this.backupBucketReady = true;
   }
 
@@ -226,8 +262,12 @@ export class StorageService implements OnModuleInit {
       return this.publicUrl(key);
     } catch (error) {
       this.logger.error(`Failed to store object "${key}"`, error as Error);
+      // 운영에서 "MinIO가 실행 중인지 확인하세요"는 거짓 안내다 — 진짜 원인은
+      // 대개 버킷이 준비되지 않은 것이다 (CTO 결정 2101-④)
       throw new ServiceUnavailableException(
-        "스토리지에 연결할 수 없습니다. MinIO가 실행 중인지 확인해 주세요. (pnpm docker:up)",
+        this.provisioning.mode === "external"
+          ? (error as Error).message
+          : "스토리지에 연결할 수 없습니다. MinIO가 실행 중인지 확인해 주세요. (pnpm docker:up)",
       );
     }
   }
