@@ -1359,5 +1359,102 @@ export interface ProductionMonitorDto {
   };
   providers: ProviderMonitorRowDto[];
   alerts: MonitorAlertDto[];
+  /**
+   * 관측에서 **제외된** 진단 호출 수 (TASK-1302, CTO 결정 1301-③).
+   * 제외하되 숨기지는 않는다 — 진단이 실패하는 것도 알아야 할 정보다.
+   */
+  diagnosticCalls: number;
   checkedAt: string;
+}
+
+// ── Production Automation & Alerting (TASK-1302, Sprint 13) ──
+
+export const ALERT_KIND_VALUES = [
+  "budget",
+  "provider-failure",
+  "unpriced-model",
+  "configuration",
+] as const;
+
+export type AlertKindDto = (typeof ALERT_KIND_VALUES)[number];
+export type AlertLevelDto = "warning" | "critical";
+export type AlertStatusDto = "ACTIVE" | "RESOLVED";
+
+/** 경보 1건 — key가 같으면 같은 문제로 본다 */
+export interface AlertDto {
+  id: string;
+  kind: AlertKindDto;
+  key: string;
+  level: AlertLevelDto;
+  title: string;
+  message: string;
+  status: AlertStatusDto;
+  /** 같은 경보가 다시 감지된 횟수 */
+  occurrences: number;
+  firstRaisedAt: string;
+  lastRaisedAt: string;
+  /** 마지막으로 외부 채널에 알린 시각 (없으면 아직 알리지 않음) */
+  notifiedAt: string | null;
+  resolvedAt: string | null;
+}
+
+/** 예약 점검 1회 실행 이력 */
+export interface CheckRunDto {
+  id: string;
+  job: string;
+  ok: boolean;
+  detail: string;
+  alertsRaised: number;
+  durationMs: number;
+  /** schedule | manual */
+  trigger: string;
+  createdAt: string;
+}
+
+/** 예약 점검 구성 (간격·활성 여부) */
+export interface JobScheduleDto {
+  job: string;
+  intervalMs: number;
+  enabled: boolean;
+  /** env | default | disabled */
+  source: string;
+  env: string;
+  lastRunAt: string | null;
+  lastResult: CheckRunDto | null;
+}
+
+/** 경보·자동 점검 현황 (GET /ops/alerts) */
+export interface AlertBoardDto {
+  /** critical 경보가 하나도 없으면 true */
+  ok: boolean;
+  summary: {
+    total: number;
+    critical: number;
+    warning: number;
+  };
+  active: AlertDto[];
+  recent: AlertDto[];
+  schedules: JobScheduleDto[];
+  /** 외부 알림 채널 구성 여부 (URL은 노출하지 않는다) */
+  webhookConfigured: boolean;
+  /** 같은 경보 재알림 간격 (ms) */
+  cooldownMs: number;
+  checkedAt: string;
+}
+
+/** 점검 실행 결과 (POST /ops/checks/run) */
+export interface CheckRunResultDto {
+  job: string;
+  ok: boolean;
+  detail: string;
+  alertsRaised: number;
+  durationMs: number;
+  trigger: string;
+  /** 이번 실행에서 알린 경보 */
+  notified: {
+    key: string;
+    action: string;
+    level: AlertLevelDto | null;
+    title: string;
+  }[];
 }

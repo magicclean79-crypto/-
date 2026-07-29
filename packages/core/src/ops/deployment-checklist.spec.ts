@@ -21,6 +21,7 @@ const READY: DeploymentState = {
       OPENAI_API_KEY: "sk-proj-abcdefghijklmnop1234",
       LLM_DAILY_BUDGET_USD: "50",
       LLM_FAILOVER_PRIORITY: "openai",
+      ALERT_WEBHOOK_URL: "https://hooks.example.com/acos",
     },
   ),
   database: { ok: true, detail: "연결 정상" },

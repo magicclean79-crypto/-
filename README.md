@@ -388,7 +388,8 @@ API 키가 없으면 항상 mock으로 동작합니다 —
   모델은 비용이 `null`로 남아 **예산 상한이 무력화되므로** 가장 먼저 드러냅니다
 - **Production Monitoring**: Provider별 성공률·지연 분포(p50/p95/p99)·비용과
   경보. **표본이 적으면 판정하지 않습니다**(`unknown`) — 1회 실패로 "장애"라고
-  말하지 않습니다
+  말하지 않습니다. Health Check·Live Check 같은 **진단 호출은 관측에서
+  제외**되고(제외된 수는 함께 표시), 판정 기준은 `LLM_MONITOR_*`로 조정합니다
 - **Vision Production**: 이미지 전달 형식이 Provider마다 다릅니다(OpenAI
   `image_url` / Anthropic `image` block / Gemini `inlineData`). 하나만 맞으면
   Provider가 바뀌는 순간 이미지가 조용히 빠지므로 세 Provider 전부 회귀 테스트
@@ -406,6 +407,36 @@ API 키가 없으면 항상 mock으로 동작합니다 —
 Fast). 쓰지 않는 Provider의 키는 없어도 됩니다.
 
 자세한 내용: [docs/architecture/llm.md](docs/architecture/llm.md)
+
+## 운영 자동화·경보 (TASK-1302, Sprint 13)
+
+TASK-1301의 점검들은 **사람이 화면을 열어야** 결과를 볼 수 있었습니다.
+이제 주기적으로 돌고, 문제가 생기면 **사람을 찾아갑니다**.
+
+- **Scheduled Checks**: 비용 검증(15분) · 설정 검증(15분) · 운영 상태(1시간).
+  간격은 `OPS_CHECK_*_INTERVAL`(`15m`·`1h`·`30s` 형식)로 조정하고 `off`로
+  끕니다. **예약 점검은 Live Check를 하지 않습니다** — 실 키를 자동 호출하면
+  과금이 사람 모르게 발생합니다
+- **Alerts**: 예산 · Provider 장애 · 미산정 모델 · 설정 오류 4종.
+  **같은 문제는 한 번만 알립니다**(`ALERT_COOLDOWN_MS`, 기본 30분) — 같은
+  경보가 반복되면 사람이 무시하기 시작하고, 그 순간 경보 체계는 없는 것과
+  같아집니다. 심각도가 올라가면 쿨다운과 무관하게 알리고, **해소도 알립니다**
+- **전달 채널**: 로그(항상) + 웹훅(`ALERT_WEBHOOK_URL`). 웹훅 실패가 점검을
+  실패시키지 않습니다 — 알림이 죽었다고 감지까지 멈추면 상황이 더 나빠집니다
+- **CI/CD Deployment Gate**: `scripts/deployment-gate.mjs` — 파이프라인이
+  `/health/ready`로 배포 가능 여부를 자동 판정합니다.
+  `0` 가능 / `1` 불가 / **`2` 판정 불가**(확인하지 못한 것은 통과가 아닙니다)
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `GET` | `/ops/alerts` | **경보 현황 (ADMIN)** — 활성·최근 경보, 예약 점검 구성 |
+| `POST` | `/ops/checks/run` | **점검 수동 실행 (ADMIN)** — `?job=`으로 하나만 |
+
+```bash
+# 배포 파이프라인에서
+API_BASE=https://api.example.com GATE_EMAIL=... GATE_PASSWORD=... \
+  node scripts/deployment-gate.mjs || exit 1
+```
 
 ## Execution Domain (TASK-0601, Sprint 6)
 

@@ -4,6 +4,7 @@ import {
   monitorProduction,
   pricedModels,
   providerKeyRequired,
+  resolveMonitorOptions,
   validateApiKeyFormat,
   verifyCosts,
 } from "@acos/core";
@@ -180,30 +181,37 @@ export class ProviderProductionService {
    * Production Monitoring (TASK-1301) — 관측 창 안의 Execution으로
    * Provider별 성공률·지연 분포(p50/p95/p99)·비용을 계산한다.
    *
-   * 관측 대상에는 Health Check·Live Check 같은 **진단 호출도 포함**된다
-   * (feature "dev"로 기록되며 DB에 진단 표식이 없다). 진단도 Provider를
-   * 실제로 호출하므로 "지금 이 Provider가 살아 있는가"의 근거로는 옳지만,
-   * 사용자 트래픽 성공률과 섞이는 것도 사실이다. CTO 결정 1002-④는
-   * **Failover 계측**에 한정된 분리였으므로 현재는 포함을 유지하고,
-   * 분리 여부를 CTO 확인 항목으로 올린다 (CTO_REQUEST #45-③).
+   * **진단 호출(Health Check·Live Check)은 제외한다** (TASK-1302,
+   * CTO 결정 1301-③) — Provider를 실제로 호출하긴 하지만 사용자 트래픽이
+   * 아니므로 성공률·지연 분포에 섞이면 판정이 왜곡된다. feature를 새로
+   * 만들지 않고 `executions.diagnostic` 메타데이터로 구분한다.
+   * 진단 호출 수는 `diagnosticCalls`로 따로 보여 준다 — 숨기지는 않는다.
+   *
+   * 판정 기준(성공률·최소 표본·p95)은 환경변수로 조정할 수 있고, 미설정 시
+   * CTO 결정 1301-②의 확정 기본값을 쓴다.
    */
   async monitor(options: { minutes?: number } = {}): Promise<ProductionMonitorDto> {
     const minutes = Math.min(Math.max(options.minutes ?? 60, 1), 60 * 24 * 7);
     const since = new Date(Date.now() - minutes * 60 * 1000);
 
-    const records = await this.prisma.execution.findMany({
-      where: { createdAt: { gte: since } },
-      orderBy: { createdAt: "desc" },
-      take: 2000,
-      select: {
-        provider: true,
-        model: true,
-        status: true,
-        latencyMs: true,
-        cost: true,
-        createdAt: true,
-      },
-    });
+    const [records, diagnosticCalls] = await Promise.all([
+      this.prisma.execution.findMany({
+        where: { createdAt: { gte: since }, diagnostic: false },
+        orderBy: { createdAt: "desc" },
+        take: 2000,
+        select: {
+          provider: true,
+          model: true,
+          status: true,
+          latencyMs: true,
+          cost: true,
+          createdAt: true,
+        },
+      }),
+      this.prisma.execution.count({
+        where: { createdAt: { gte: since }, diagnostic: true },
+      }),
+    ]);
 
     const samples: MonitorSample[] = records.map((record) => ({
       provider: record.provider,
@@ -214,7 +222,10 @@ export class ProviderProductionService {
       createdAt: record.createdAt.toISOString(),
     }));
 
-    const result = monitorProduction(samples, { windowMinutes: minutes });
+    const result = monitorProduction(samples, {
+      ...resolveMonitorOptions(process.env as Record<string, string | undefined>),
+      windowMinutes: minutes,
+    });
     return {
       status: result.status,
       windowMinutes: result.windowMinutes,
@@ -222,6 +233,7 @@ export class ProviderProductionService {
       totals: result.totals,
       providers: result.providers,
       alerts: result.alerts,
+      diagnosticCalls,
       checkedAt: new Date().toISOString(),
     };
   }

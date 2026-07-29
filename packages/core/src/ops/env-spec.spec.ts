@@ -20,6 +20,8 @@ const PRODUCTION_ENV: Record<string, string> = {
   LLM_DAILY_BUDGET_USD: "50",
   // 참조하는 Provider의 키는 운영 필수(CTO 결정 1202-②) — openai만 참조한다
   LLM_FAILOVER_PRIORITY: "openai",
+  // 경보 전달 채널 (TASK-1302) — 없으면 경보가 로그에만 남는다
+  ALERT_WEBHOOK_URL: "https://hooks.example.com/acos",
 };
 
 describe("Environment Validation (TASK-1202)", () => {

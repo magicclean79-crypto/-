@@ -19,6 +19,8 @@ test.describe("Provider 운영 점검 (TASK-1301)", () => {
   test("정상 상태 — 키 형식·비용·모니터링을 한 화면에 보여준다", async ({
     page,
   }) => {
+    // 이 라우트를 처음 여는 테스트라 개발 서버 최초 컴파일 시간을 흡수한다
+    test.slow();
     await setMode("data");
     await openPage(page);
 
@@ -47,6 +49,19 @@ test.describe("Provider 운영 점검 (TASK-1301)", () => {
     await expect(page.getByTestId("cost-issues")).toHaveCount(0);
     await expect(page.getByTestId("cost-verification")).toContainText(
       "미산정 0건",
+    );
+  });
+
+  test("진단 호출은 관측에서 제외되고, 제외된 수는 보인다 (CTO 결정 1301-③)", async ({
+    page,
+  }) => {
+    await setMode("data");
+    await openPage(page);
+    await expect(page.getByTestId("production-monitor")).toContainText(
+      "관측에서 제외",
+    );
+    await expect(page.getByTestId("production-monitor")).toContainText(
+      "진단 호출 2건",
     );
   });
 
@@ -87,6 +102,64 @@ test.describe("Provider 운영 점검 (TASK-1301)", () => {
     await page.goto("/admin/production");
     await expect(page.getByTestId("production-error")).toContainText(
       "ADMIN 권한이 필요합니다",
+    );
+  });
+
+  test("경보 — 활성 경보와 예약 점검 구성을 보여준다", async ({ page }) => {
+    await setMode("empty");
+    await openPage(page);
+
+    // 배지와 아래 목록이 어긋나면 안 된다 (심각 1 · 주의 1)
+    await expect(page.getByTestId("alert-verdict")).toContainText("조치 필요");
+    const active = page.getByTestId("active-alerts");
+    await expect(active).toContainText("일 예산 초과");
+    await expect(active).toContainText("3회 감지");
+    await expect(active).toContainText("예산 상한이 적용되지 않습니다");
+
+    // 예약 점검 구성 — 간격과 중단 여부
+    await expect(page.getByTestId("schedule-cost-verification")).toContainText(
+      "15분",
+    );
+    await expect(page.getByTestId("schedule-health-check")).toContainText(
+      "중단",
+    );
+    // 전달 채널이 없으면 그 사실을 말한다
+    await expect(page.getByTestId("alert-board")).toContainText(
+      "사람이 보고 있어야",
+    );
+  });
+
+  test("경보 없음 — 이상 없음으로 표시하고 지금 점검할 수 있다", async ({
+    page,
+  }) => {
+    await setMode("data");
+    await openPage(page);
+
+    await expect(page.getByTestId("alert-verdict")).toContainText("이상 없음");
+    await expect(page.getByTestId("active-alerts")).toHaveCount(0);
+    await expect(page.getByTestId("schedule-cost-verification")).toContainText(
+      "실행 이력 없음",
+    );
+
+    await page.getByTestId("run-checks").click();
+    await expect(page.getByTestId("schedule-cost-verification")).toContainText(
+      "10건 검사",
+    );
+  });
+
+  test("주의 경보만 있으면 배지도 '주의'로 — 배지와 목록이 어긋나지 않는다", async ({
+    page,
+  }) => {
+    await setMode("warn");
+    await openPage(page);
+
+    // 목록에 경보가 있는데 배지가 "이상 없음"이면 사람이 목록을 무시하게 된다
+    await expect(page.getByTestId("alert-verdict")).toContainText("주의 1건");
+    await expect(page.getByTestId("alert-verdict")).not.toContainText(
+      "이상 없음",
+    );
+    await expect(page.getByTestId("active-alerts")).toContainText(
+      "가격표에 없는 모델",
     );
   });
 });

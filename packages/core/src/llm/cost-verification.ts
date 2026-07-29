@@ -117,7 +117,7 @@ export function verifyCosts(
       model,
       count: group.length,
       message:
-        `가격표에 없는 모델입니다 — 비용이 집계되지 않아 **예산 상한이 적용되지 않습니다**. ` +
+        `가격표에 없는 모델입니다 — 비용이 집계되지 않아 예산 상한이 적용되지 않습니다. ` +
         `DEFAULT_LLM_PRICING에 ${model} 단가를 등록하세요.`,
       sampleIds: group.slice(0, 3).map((sample) => sample.id),
     });

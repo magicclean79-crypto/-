@@ -54,6 +54,14 @@ const positiveNumber = (label: string) => (value: string) => {
     : `${label}은(는) 0보다 큰 숫자여야 합니다 (받은 값: ${value}).`;
 };
 
+/** 0 초과 1 이하의 비율 (성공률 기준 등) */
+const ratio = (label: string) => (value: string) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 && parsed <= 1
+    ? null
+    : `${label}은(는) 0 초과 1 이하의 비율이어야 합니다 (받은 값: ${value}).`;
+};
+
 const oneOf = (allowed: string[]) => (value: string) =>
   allowed.includes(value)
     ? null
@@ -271,6 +279,86 @@ export const ENV_SPECS: EnvSpec[] = [
     description: "콘솔 설정 캐시 수명(ms) — 다중 인스턴스 전파 지연",
     validate: positiveNumber("ADMIN_SETTINGS_TTL_MS"),
     fallback: "10000",
+  },
+  // ── 모니터링 기준 (TASK-1302, CTO 결정 1301-②) ──
+  {
+    name: "LLM_MONITOR_HEALTHY_RATE",
+    category: "ops",
+    description: "정상 판정 성공률 하한 (0~1)",
+    validate: ratio("LLM_MONITOR_HEALTHY_RATE"),
+    fallback: "0.95 (확정 기본값)",
+  },
+  {
+    name: "LLM_MONITOR_DEGRADED_RATE",
+    category: "ops",
+    description: "저하 판정 성공률 하한 (0~1) — 이보다 낮으면 장애",
+    validate: ratio("LLM_MONITOR_DEGRADED_RATE"),
+    fallback: "0.5 (확정 기본값)",
+  },
+  {
+    name: "LLM_MONITOR_MIN_SAMPLES",
+    category: "ops",
+    description: "상태를 판정하기 위한 최소 호출 수",
+    validate: positiveNumber("LLM_MONITOR_MIN_SAMPLES"),
+    fallback: "5 (확정 기본값 — 미만이면 판정 보류)",
+  },
+  {
+    name: "LLM_MONITOR_P95_WARN_MS",
+    category: "ops",
+    description: "p95 지연 경고 기준(ms)",
+    validate: positiveNumber("LLM_MONITOR_P95_WARN_MS"),
+    fallback: "20000 (확정 기본값)",
+  },
+  // ── 예약 점검·경보 (TASK-1302) ──
+  {
+    name: "OPS_SCHEDULED_CHECKS",
+    category: "ops",
+    description: "예약 점검 전체 스위치 — off면 전부 중단",
+    fallback: "켜짐 (비용 검증·설정 검증·Health Check)",
+    productionAdvice: (value) =>
+      value && ["off", "false", "0"].includes(value.trim().toLowerCase())
+        ? "예약 점검이 꺼져 있습니다 — 예산 초과·Provider 장애를 자동으로 알 수 없습니다."
+        : null,
+  },
+  {
+    name: "OPS_CHECK_COST_INTERVAL",
+    category: "ops",
+    description: "비용 검증 점검 간격 (15m·1h·900000 등, off로 중단)",
+    fallback: "15m",
+  },
+  {
+    name: "OPS_CHECK_CONFIG_INTERVAL",
+    category: "ops",
+    description: "설정·Provider 키 검증 점검 간격 (off로 중단)",
+    fallback: "15m",
+  },
+  {
+    name: "OPS_CHECK_HEALTH_INTERVAL",
+    category: "ops",
+    description: "운영 상태 점검 간격 (off로 중단)",
+    fallback: "1h",
+  },
+  {
+    name: "ALERT_WEBHOOK_URL",
+    category: "ops",
+    description: "경보 전달 웹훅 주소 — 미설정이면 로그로만 남는다",
+    secret: true,
+    validate: (value) =>
+      /^https?:\/\//.test(value)
+        ? null
+        : "http(s) URL이어야 합니다.",
+    fallback: "로그만 (사람이 보고 있어야 알 수 있음)",
+    productionAdvice: (value) =>
+      value
+        ? null
+        : "경보 전달 채널이 없습니다 — 경보가 로그에만 남아 아무도 모를 수 있습니다.",
+  },
+  {
+    name: "ALERT_COOLDOWN_MS",
+    category: "ops",
+    description: "같은 경보 재알림 간격(ms) — 짧으면 사람이 경보를 무시하게 된다",
+    validate: positiveNumber("ALERT_COOLDOWN_MS"),
+    fallback: "1800000 (30분)",
   },
 ];
 

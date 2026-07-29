@@ -1,4 +1,9 @@
-import { monitorProduction, percentile } from "./production-monitor";
+import {
+  MONITOR_DEFAULTS,
+  monitorProduction,
+  percentile,
+  resolveMonitorOptions,
+} from "./production-monitor";
 import type { MonitorSample } from "./production-monitor";
 
 function sample(overrides: Partial<MonitorSample> = {}): MonitorSample {
@@ -133,5 +138,75 @@ describe("Production Monitoring (TASK-1301)", () => {
     expect(result.providers[0].status).toBe("healthy");
     expect(result.windowMinutes).toBe(15);
     expect(result.minSamples).toBe(3);
+  });
+
+  describe("resolveMonitorOptions (CTO 결정 1301-②)", () => {
+    it("미설정이면 확정 기본값 — Healthy 95% / Degraded 50% / 최소 표본 5 / p95 20초", () => {
+      expect(resolveMonitorOptions({})).toEqual({
+        minSamples: 5,
+        healthyRate: 0.95,
+        degradedRate: 0.5,
+        latencyWarnMs: 20_000,
+      });
+      expect(MONITOR_DEFAULTS.healthyRate).toBe(0.95);
+    });
+
+    it("환경변수로 조정할 수 있다", () => {
+      expect(
+        resolveMonitorOptions({
+          LLM_MONITOR_MIN_SAMPLES: "20",
+          LLM_MONITOR_HEALTHY_RATE: "0.99",
+          LLM_MONITOR_DEGRADED_RATE: "0.8",
+          LLM_MONITOR_P95_WARN_MS: "5000",
+        }),
+      ).toEqual({
+        minSamples: 20,
+        healthyRate: 0.99,
+        degradedRate: 0.8,
+        latencyWarnMs: 5_000,
+      });
+    });
+
+    it("해석할 수 없는 값은 기본값으로 되돌린다", () => {
+      expect(
+        resolveMonitorOptions({
+          LLM_MONITOR_MIN_SAMPLES: "abc",
+          LLM_MONITOR_HEALTHY_RATE: "-1",
+          LLM_MONITOR_DEGRADED_RATE: "",
+          LLM_MONITOR_P95_WARN_MS: "0",
+        }),
+      ).toEqual({
+        minSamples: 5,
+        healthyRate: 0.95,
+        degradedRate: 0.5,
+        latencyWarnMs: 20_000,
+      });
+      // 비율이 1을 넘으면 성립할 수 없는 기준이다
+      expect(
+        resolveMonitorOptions({ LLM_MONITOR_HEALTHY_RATE: "95" }).healthyRate,
+      ).toBe(0.95);
+    });
+
+    it("순서가 뒤집힌 기준은 둘 다 기본값으로 — 이상한 기준으로 조용히 판정하지 않는다", () => {
+      const resolved = resolveMonitorOptions({
+        LLM_MONITOR_HEALTHY_RATE: "0.5",
+        LLM_MONITOR_DEGRADED_RATE: "0.9",
+      });
+      expect(resolved.healthyRate).toBe(0.95);
+      expect(resolved.degradedRate).toBe(0.5);
+    });
+
+    it("해석된 기준이 실제 판정에 적용된다", () => {
+      const options = resolveMonitorOptions({
+        LLM_MONITOR_HEALTHY_RATE: "0.8",
+        LLM_MONITOR_MIN_SAMPLES: "3",
+      });
+      const result = monitorProduction(
+        [...many(8, { success: true }), ...many(2, { success: false })],
+        options,
+      );
+      expect(result.providers[0].status).toBe("healthy"); // 80% 기준이면 정상
+      expect(result.minSamples).toBe(3);
+    });
   });
 });

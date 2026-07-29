@@ -88,6 +88,12 @@ export interface MonitorOptions {
   latencyWarnMs?: number;
 }
 
+/**
+ * 기준 기본값 — **CTO 결정 1301-②로 공식 확정**된 값이다
+ * (Healthy 95% / Degraded 50% / 최소 표본 5 / p95 20초).
+ * 같은 결정에서 "향후 환경변수로 조정 가능하도록 설계"가 지시되어
+ * `resolveMonitorOptions`로 덮어쓸 수 있게 두되, 미설정 시 이 값이 그대로 쓰인다.
+ */
 const DEFAULTS = {
   windowMinutes: 60,
   minSamples: 5,
@@ -95,6 +101,65 @@ const DEFAULTS = {
   degradedRate: 0.5,
   latencyWarnMs: 20_000,
 };
+
+/** 모니터링 기준 환경변수 (TASK-1302, CTO 결정 1301-②) */
+export const MONITOR_OPTION_ENV = {
+  minSamples: "LLM_MONITOR_MIN_SAMPLES",
+  healthyRate: "LLM_MONITOR_HEALTHY_RATE",
+  degradedRate: "LLM_MONITOR_DEGRADED_RATE",
+  latencyWarnMs: "LLM_MONITOR_P95_WARN_MS",
+} as const;
+
+/** 확정 기본값 (표시·문서용) */
+export const MONITOR_DEFAULTS: Readonly<typeof DEFAULTS> = DEFAULTS;
+
+function positiveNumber(value: string | undefined, fallback: number): number {
+  if (value === undefined || value.trim().length === 0) {
+    return fallback;
+  }
+  const parsed = Number(value);
+  // 잘못 적은 값 때문에 판정 기준이 무너지는 것보다 기본값이 안전하다
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function ratio(value: string | undefined, fallback: number): number {
+  const parsed = positiveNumber(value, fallback);
+  return parsed > 1 ? fallback : parsed;
+}
+
+/**
+ * 환경에서 모니터링 기준을 읽는다 (CTO 결정 1301-②).
+ * 값이 없거나 해석할 수 없으면 확정 기본값을 쓴다.
+ * `degradedRate > healthyRate`처럼 순서가 뒤집힌 설정은 판정이 무의미해지므로
+ * 둘 다 기본값으로 되돌린다 — 조용히 이상한 기준으로 판정하지 않는다.
+ */
+export function resolveMonitorOptions(
+  env: Record<string, string | undefined>,
+): MonitorOptions {
+  const healthyRate = ratio(env[MONITOR_OPTION_ENV.healthyRate], DEFAULTS.healthyRate);
+  const degradedRate = ratio(
+    env[MONITOR_OPTION_ENV.degradedRate],
+    DEFAULTS.degradedRate,
+  );
+  const ordered = degradedRate <= healthyRate;
+
+  return {
+    minSamples: Math.max(
+      1,
+      Math.round(
+        positiveNumber(env[MONITOR_OPTION_ENV.minSamples], DEFAULTS.minSamples),
+      ),
+    ),
+    healthyRate: ordered ? healthyRate : DEFAULTS.healthyRate,
+    degradedRate: ordered ? degradedRate : DEFAULTS.degradedRate,
+    latencyWarnMs: Math.round(
+      positiveNumber(
+        env[MONITOR_OPTION_ENV.latencyWarnMs],
+        DEFAULTS.latencyWarnMs,
+      ),
+    ),
+  };
+}
 
 function round(value: number, digits: number): number {
   const factor = 10 ** digits;

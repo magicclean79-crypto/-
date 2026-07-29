@@ -5,6 +5,7 @@ import { AnalysisModule } from "./analysis/analysis.module";
 import { AdminSettingsModule } from "./admin/admin-settings.module";
 import { AdminModule } from "./admin/admin.module";
 import { HealthModule } from "./health/health.module";
+import { OpsModule } from "./ops/ops.module";
 import { AuthModule } from "./auth/auth.module";
 import { CompanyBrainModule } from "./company-brain/company-brain.module";
 import { ContentsModule } from "./contents/contents.module";
@@ -50,6 +51,7 @@ import { UploadsModule } from "./uploads/uploads.module";
     AdminSettingsModule,
     AdminModule,
     HealthModule,
+    OpsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

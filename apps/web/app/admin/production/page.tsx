@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import type {
+  AlertBoardDto,
+  AlertLevelDto,
   ApiKeyFormatStatusDto,
   CostVerificationDto,
   MonitorStatusDto,
@@ -51,6 +53,21 @@ function percent(value: number | null): string {
   return value === null ? "—" : `${(value * 100).toFixed(1)}%`;
 }
 
+const ALERT_STYLE: Record<AlertLevelDto, string> = {
+  warning: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
+  critical: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300",
+};
+
+function duration(ms: number): string {
+  if (ms % 3_600_000 === 0) {
+    return `${ms / 3_600_000}시간`;
+  }
+  if (ms % 60_000 === 0) {
+    return `${ms / 60_000}분`;
+  }
+  return `${Math.round(ms / 1000)}초`;
+}
+
 /**
  * Real Provider 운영 점검 (TASK-1301) — ADMIN 전용.
  *
@@ -65,9 +82,11 @@ export default function ProductionOpsPage() {
     useState<ProviderValidationReportDto | null>(null);
   const [cost, setCost] = useState<CostVerificationDto | null>(null);
   const [monitor, setMonitor] = useState<ProductionMonitorDto | null>(null);
+  const [board, setBoard] = useState<AlertBoardDto | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [liveRunning, setLiveRunning] = useState(false);
+  const [checkRunning, setCheckRunning] = useState(false);
 
   async function get<T>(path: string): Promise<T | null> {
     const response = await fetch(`${API_URL}${path}`, authFetchInit());
@@ -89,13 +108,15 @@ export default function ProductionOpsPage() {
       setLoading(true);
     }
     try {
-      const [nextValidation, nextCost, nextMonitor] = await Promise.all([
-        get<ProviderValidationReportDto>(
-          `/llm/providers/validate${live ? "?live=1" : ""}`,
-        ),
-        get<CostVerificationDto>("/llm/cost-verification?hours=24"),
-        get<ProductionMonitorDto>("/llm/monitoring?minutes=60"),
-      ]);
+      const [nextValidation, nextCost, nextMonitor, nextBoard] =
+        await Promise.all([
+          get<ProviderValidationReportDto>(
+            `/llm/providers/validate${live ? "?live=1" : ""}`,
+          ),
+          get<CostVerificationDto>("/llm/cost-verification?hours=24"),
+          get<ProductionMonitorDto>("/llm/monitoring?minutes=60"),
+          get<AlertBoardDto>("/ops/alerts"),
+        ]);
       if (nextValidation) {
         setError(null);
         setValidation(nextValidation);
@@ -106,11 +127,38 @@ export default function ProductionOpsPage() {
       if (nextMonitor) {
         setMonitor(nextMonitor);
       }
+      if (nextBoard) {
+        setBoard(nextBoard);
+      }
     } catch {
       setError("API 서버에 연결할 수 없습니다.");
     } finally {
       setLoading(false);
       setLiveRunning(false);
+    }
+  }
+
+  /** 예약을 기다리지 않고 지금 점검한다 (배포 직후 등) */
+  async function runChecks() {
+    setCheckRunning(true);
+    try {
+      const response = await fetch(`${API_URL}/ops/checks/run`, {
+        ...authFetchInit(),
+        method: "POST",
+      });
+      if (!response.ok) {
+        setError(
+          response.status === 401 || response.status === 403
+            ? "ADMIN 권한이 필요합니다 — 관리자 계정으로 로그인해 주세요."
+            : `점검 실행 실패 (HTTP ${response.status})`,
+        );
+        return;
+      }
+      await load(false);
+    } catch {
+      setError("API 서버에 연결할 수 없습니다.");
+    } finally {
+      setCheckRunning(false);
     }
   }
 
@@ -142,6 +190,122 @@ export default function ProductionOpsPage() {
         >
           {error}
         </div>
+      ) : null}
+
+      {board ? (
+        <section
+          data-testid="alert-board"
+          className={`rounded-xl border p-4 ${
+            board.ok
+              ? "border-zinc-200 dark:border-zinc-800"
+              : "border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950"
+          }`}
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-lg font-semibold">경보</h2>
+            <span
+              data-testid="alert-verdict"
+              className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                board.summary.critical > 0
+                  ? ALERT_STYLE.critical
+                  : board.summary.warning > 0
+                    ? ALERT_STYLE.warning
+                    : FORMAT_STYLE.ok
+              }`}
+            >
+              {/* 배지와 아래 목록이 어긋나면 안 된다 — 주의 경보가 있는데
+                  "이상 없음"이라고 하면 읽는 사람이 목록을 무시하게 된다 */}
+              {board.summary.critical > 0
+                ? `조치 필요 ${board.summary.critical}건`
+                : board.summary.warning > 0
+                  ? `주의 ${board.summary.warning}건`
+                  : "이상 없음"}
+            </span>
+            <span className="text-xs text-zinc-500">
+              활성 {board.summary.total}건 (심각 {board.summary.critical} · 주의{" "}
+              {board.summary.warning}) · 재알림 간격 {duration(board.cooldownMs)}
+            </span>
+            <button
+              type="button"
+              data-testid="run-checks"
+              disabled={checkRunning}
+              onClick={() => void runChecks()}
+              className="ml-auto rounded-lg border border-zinc-300 px-2.5 py-1 text-xs font-medium hover:bg-white/60 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+            >
+              {checkRunning ? "점검 중…" : "지금 점검"}
+            </button>
+          </div>
+          <p className="mt-1 text-xs text-zinc-500">
+            전달 채널:{" "}
+            {board.webhookConfigured
+              ? "웹훅 + 로그"
+              : "로그만 — 사람이 보고 있어야 알 수 있습니다"}
+          </p>
+
+          {board.active.length > 0 ? (
+            <ul data-testid="active-alerts" className="mt-3 space-y-2 text-sm">
+              {board.active.map((alert) => (
+                <li
+                  key={alert.key}
+                  data-testid={`alert-${alert.kind}`}
+                  className="rounded-lg border border-zinc-200 bg-white/60 p-3 dark:border-zinc-800 dark:bg-zinc-900/40"
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-xs font-medium ${ALERT_STYLE[alert.level]}`}
+                    >
+                      {alert.level === "critical" ? "심각" : "주의"}
+                    </span>
+                    <strong>{alert.title}</strong>
+                    <span className="text-xs text-zinc-500">
+                      {alert.occurrences}회 감지
+                    </span>
+                  </div>
+                  <p className="mt-1 text-sm">{alert.message}</p>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-3 text-sm text-zinc-500">활성 경보가 없습니다.</p>
+          )}
+
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="text-xs text-zinc-500">
+                <tr>
+                  <th className="py-1">예약 점검</th>
+                  <th className="py-1">간격</th>
+                  <th className="py-1">마지막 실행</th>
+                  <th className="py-1">결과</th>
+                </tr>
+              </thead>
+              <tbody>
+                {board.schedules.map((schedule) => (
+                  <tr
+                    key={schedule.job}
+                    data-testid={`schedule-${schedule.job}`}
+                    className="border-t border-zinc-100 dark:border-zinc-800"
+                  >
+                    <td className="py-1.5 font-medium">{schedule.job}</td>
+                    <td className="py-1.5 text-xs">
+                      {schedule.enabled ? duration(schedule.intervalMs) : "중단"}
+                    </td>
+                    <td className="py-1.5 text-xs text-zinc-500">
+                      {schedule.lastRunAt
+                        ? new Date(schedule.lastRunAt).toLocaleString("ko-KR")
+                        : "실행 이력 없음"}
+                    </td>
+                    <td className="py-1.5 text-xs">
+                      {schedule.lastResult
+                        ? `${schedule.lastResult.ok ? "정상" : "문제"} — ${schedule.lastResult.detail}`
+                        : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
       ) : null}
 
       {validation ? (
@@ -267,7 +431,9 @@ export default function ProductionOpsPage() {
             </span>
           </div>
           <p className="mt-1 text-xs text-zinc-500">
-            Health Check·Live Check 같은 진단 호출도 관측에 포함됩니다.
+            Health Check·Live Check 같은 진단 호출은 관측에서{" "}
+            <strong>제외</strong>됩니다 — 이 구간의 진단 호출{" "}
+            {monitor.diagnosticCalls}건.
           </p>
           <p className="mt-1 text-sm">
             호출 {monitor.totals.calls}회 · 성공률{" "}

@@ -24,7 +24,7 @@ interface ExecutionRow {
 }
 
 interface FindManyArgs {
-  where?: { createdAt?: { gte?: Date }; status?: string };
+  where?: { createdAt?: { gte?: Date }; status?: string; diagnostic?: boolean };
 }
 
 const ORIGINAL_ENV = { ...process.env };
@@ -32,14 +32,21 @@ const ORIGINAL_ENV = { ...process.env };
 async function build(options: {
   rows?: ExecutionRow[];
   available?: string[];
+  diagnosticCount?: number;
   health?: (provider: string) => Promise<unknown>;
 }) {
   const calls: FindManyArgs[] = [];
+  const countCalls: FindManyArgs[] = [];
   const prisma = {
     execution: {
       findMany: async (args: FindManyArgs) => {
         calls.push(args);
         return options.rows ?? [];
+      },
+      // 진단 호출 수 (TASK-1302, CTO 결정 1301-③)
+      count: async (args: FindManyArgs) => {
+        countCalls.push(args);
+        return options.diagnosticCount ?? 0;
       },
     },
   };
@@ -70,6 +77,7 @@ async function build(options: {
   return {
     service: moduleRef.get(ProviderProductionService),
     calls,
+    countCalls,
   };
 }
 
@@ -260,11 +268,18 @@ describe("Provider Production API (TASK-1301)", () => {
         },
       ];
 
-      const { service, calls } = await build({ rows });
+      const { service, calls, countCalls } = await build({
+        rows,
+        diagnosticCount: 4,
+      });
       const result = await service.monitor({ minutes: 30 });
 
       expect(result.windowMinutes).toBe(30);
       expect(calls[0].where?.status).toBeUndefined(); // 실패도 봐야 성공률이 나온다
+      // 진단 호출은 관측에서 제외하되 숨기지 않는다 (CTO 결정 1301-③)
+      expect(calls[0].where?.diagnostic).toBe(false);
+      expect(countCalls[0].where?.diagnostic).toBe(true);
+      expect(result.diagnosticCalls).toBe(4);
       expect(result.providers[0]).toMatchObject({
         provider: "openai",
         calls: 10,

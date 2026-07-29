@@ -18,6 +18,7 @@ const rows: Execution[] = [
     cost: "0" as unknown as Execution["cost"],
     latencyMs: 12,
     error: null,
+    diagnostic: false,
     createdAt: new Date("2026-07-28T02:00:00Z"),
   },
   {
@@ -31,6 +32,7 @@ const rows: Execution[] = [
     cost: null,
     latencyMs: 40,
     error: "모델 오류",
+    diagnostic: false,
     createdAt: new Date("2026-07-28T01:00:00Z"),
   },
 ];

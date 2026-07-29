@@ -30,6 +30,14 @@ export interface NewExecution {
   cost: number | null;
   latencyMs: number;
   error: string | null;
+  /**
+   * 진단 호출 여부 (TASK-1302, CTO 결정 1301-③).
+   *
+   * Health Check·Live Check는 Provider를 실제로 호출하지만 **사용자
+   * 트래픽이 아니다**. feature를 새로 만들지 않고(0601 승인의 4종 유지)
+   * 메타데이터 한 칸으로 구분해, 운영 통계에서 분리하되 이력에는 남긴다.
+   */
+  diagnostic?: boolean;
 }
 
 /** Execution Domain 모델 — 저장소와 무관한 순수 표현 */
@@ -144,8 +152,11 @@ export class ExecutionTracker {
     feature: string,
     fallback: { provider: string; model: string },
     run: () => Promise<T>,
+    /** 진단 호출이면 true (TASK-1302, CTO 결정 1301-③) */
+    options: { diagnostic?: boolean } = {},
   ): Promise<T> {
     const startedAt = this.now();
+    const diagnostic = options.diagnostic === true;
     try {
       const result = await run();
       await this.safeRecord({
@@ -158,6 +169,7 @@ export class ExecutionTracker {
         cost: estimateLlmCost(result.model, result.usage, this.pricing),
         latencyMs: this.now() - startedAt,
         error: null,
+        diagnostic,
       });
       return result;
     } catch (error) {
@@ -171,6 +183,7 @@ export class ExecutionTracker {
         cost: null,
         latencyMs: this.now() - startedAt,
         error: error instanceof Error ? error.message : String(error),
+        diagnostic,
       });
       throw error;
     }

@@ -366,10 +366,67 @@ model Execution {
   cost         Decimal?        @db.Decimal(12, 6) // 예상 비용(USD) — 가격표 없는 모델은 null
   latencyMs    Int
   error        String?
+  // 진단 호출(Health Check·Live Check) 여부 — CTO 결정 1301-③.
+  // feature를 새로 만들지 않고 메타데이터로 구분해 운영 통계에서 분리한다.
+  diagnostic   Boolean         @default(false)
   createdAt    DateTime        @default(now())
 
   @@index([feature, createdAt])
+  @@index([diagnostic, createdAt])
   @@map("executions")
+}
+
+// ── Production Automation & Alerting (TASK-1302, Sprint 13) ──
+
+enum AlertLevel {
+  WARNING
+  CRITICAL
+}
+
+enum AlertStatus {
+  ACTIVE
+  RESOLVED
+}
+
+/**
+ * 경보 1건 — `key`가 같으면 같은 문제로 본다(중복 알림 방지).
+ * 해소되면 RESOLVED로 남기고 지우지 않는다 — 언제 났다가 언제 풀렸는지가
+ * 사고 분석의 근거다.
+ */
+model Alert {
+  id            String      @id @default(cuid())
+  kind          String // budget | provider-failure | unpriced-model | configuration
+  key           String      @unique // 중복 판정 키 (예: provider-failure:openai)
+  level         AlertLevel
+  title         String
+  message       String
+  status        AlertStatus @default(ACTIVE)
+  /** 같은 경보가 다시 감지된 횟수 */
+  occurrences   Int         @default(1)
+  firstRaisedAt DateTime    @default(now())
+  lastRaisedAt  DateTime    @default(now())
+  /** 마지막으로 외부 채널에 알린 시각 (재알림 쿨다운 기준) */
+  notifiedAt    DateTime?
+  resolvedAt    DateTime?
+
+  @@index([status, lastRaisedAt])
+  @@map("alerts")
+}
+
+/** 예약 점검 실행 이력 — "언제 마지막으로 확인했는가"의 근거 */
+model CheckRun {
+  id           String   @id @default(cuid())
+  job          String // cost-verification | provider-validation | health-check
+  ok           Boolean
+  detail       String
+  alertsRaised Int      @default(0)
+  durationMs   Int
+  /** 예약 실행인지 수동 실행인지 */
+  trigger      String   @default("schedule")
+  createdAt    DateTime @default(now())
+
+  @@index([job, createdAt])
+  @@map("check_runs")
 }
 
 // ── Experiment Lifecycle & Sticky Assignment (TASK-1101, Sprint 11) ──

@@ -301,6 +301,9 @@ export class LlmService {
                 model: attemptRequest.model ?? gateway.defaultModel,
               },
               run,
+              // 진단 호출은 이력에 남기되 운영 통계에서 분리한다
+              // (TASK-1302, CTO 결정 1301-③)
+              { diagnostic: !counted },
             )
           : await run();
 

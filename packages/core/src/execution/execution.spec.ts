@@ -101,6 +101,40 @@ describe("ExecutionTracker", () => {
       cost: 0,
       latencyMs: 100,
       error: null,
+      // 일반 호출은 진단이 아니다 (TASK-1302, CTO 결정 1301-③)
+      diagnostic: false,
+    });
+  });
+
+  it("진단 호출은 diagnostic=true로 기록된다 (CTO 결정 1301-③)", async () => {
+    const store = new InMemoryExecutionStore();
+    const tracker = new ExecutionTracker(store, { now: fakeClock() });
+
+    await tracker.track(
+      "dev",
+      fallback,
+      async () => ({
+        provider: "mock",
+        model: "mock-llm-1",
+        usage: { inputTokens: 4, outputTokens: 2 },
+        text: "pong",
+      }),
+      { diagnostic: true },
+    );
+    // feature는 그대로 — 4종을 늘리지 않고 메타데이터로만 구분한다
+    expect(store.entries[0]).toMatchObject({
+      feature: "dev",
+      diagnostic: true,
+    });
+
+    await expect(
+      tracker.track("dev", fallback, async () => {
+        throw new Error("ping 실패");
+      }, { diagnostic: true }),
+    ).rejects.toThrow("ping 실패");
+    expect(store.entries[1]).toMatchObject({
+      status: "FAILED",
+      diagnostic: true,
     });
   });
 

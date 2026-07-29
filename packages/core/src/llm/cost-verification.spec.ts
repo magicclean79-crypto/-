@@ -47,7 +47,9 @@ describe("Cost Verification (TASK-1301)", () => {
     expect(result.unpricedCalls).toBe(2);
     const issue = result.issues.find((entry) => entry.kind === "unpriced")!;
     expect(issue).toMatchObject({ model: "gpt-5-preview", count: 2 });
+    // 화면에 평문으로 찍히므로 마크다운 강조를 넣지 않는다
     expect(issue.message).toContain("예산 상한이 적용되지 않습니다");
+    expect(issue.message).not.toContain("**");
     expect(issue.sampleIds).toEqual(["e1", "e2"]);
   });
 

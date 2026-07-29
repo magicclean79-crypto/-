@@ -11,6 +11,8 @@ let stubLifecycle = null;
 // 관리 콘솔 스텁 상태 (TASK-1201)
 let stubSettings = {};
 let stubAdminAudit = [];
+// 운영 자동화 스텁 상태 (TASK-1302)
+let stubChecksRan = false;
 
 const stats = (totals, groups) => ({
   range: { from: null, to: null },
@@ -201,6 +203,7 @@ const server = http.createServer((req, res) => {
       stubLifecycle = null;
       stubSettings = {};
       stubAdminAudit = [];
+      stubChecksRan = false;
       resetPublishing();
       resetUsers();
       res.end(JSON.stringify({ mode }));
@@ -652,6 +655,128 @@ const server = http.createServer((req, res) => {
     );
     return;
   }
+  // ── 운영 자동화·경보 (TASK-1302) ── ADMIN 전용
+  if (url.pathname === "/ops/alerts" || url.pathname === "/ops/checks/run") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    const healthy = mode === "data";
+
+    if (req.method === "POST" && url.pathname === "/ops/checks/run") {
+      stubChecksRan = true;
+      res.end(
+        JSON.stringify([
+          {
+            job: "cost-verification",
+            ok: healthy,
+            detail: "10건 검사 · 미산정 0건",
+            alertsRaised: 0,
+            durationMs: 12,
+            trigger: "manual",
+            notified: [],
+          },
+        ]),
+      );
+      return;
+    }
+
+    // mode=warn은 **주의 경보만** — 배지가 "이상 없음"으로 어긋나지 않는지 확인용
+    // (error 모드는 모든 요청을 500으로 만들어 화면 자체가 뜨지 않는다)
+    const criticalAlerts = mode === "warn" ? [] : [
+          {
+            id: "alert-1",
+            kind: "budget",
+            key: "budget:daily",
+            level: "critical",
+            title: "일 예산 초과",
+            message:
+              "일 지출 $12.0000 / 예산 $10 (120%) — 새 LLM 호출이 차단되고 있습니다.",
+            status: "ACTIVE",
+            occurrences: 3,
+            firstRaisedAt: new Date().toISOString(),
+            lastRaisedAt: new Date().toISOString(),
+            notifiedAt: new Date().toISOString(),
+            resolvedAt: null,
+          },
+        ];
+    const warningAlerts = [
+          {
+            id: "alert-2",
+            kind: "unpriced-model",
+            key: "unpriced-model:openai:gpt-5-preview",
+            level: "warning",
+            title: "가격표에 없는 모델 — gpt-5-preview",
+            message:
+              "openai/gpt-5-preview 호출 12건의 비용이 집계되지 않았습니다 — 예산 상한이 적용되지 않습니다.",
+            status: "ACTIVE",
+            occurrences: 1,
+            firstRaisedAt: new Date().toISOString(),
+            lastRaisedAt: new Date().toISOString(),
+            notifiedAt: new Date().toISOString(),
+            resolvedAt: null,
+          },
+        ];
+    const active = healthy ? [] : [...criticalAlerts, ...warningAlerts];
+
+    res.end(
+      JSON.stringify({
+        ok: active.every((alert) => alert.level !== "critical"),
+        summary: {
+          total: active.length,
+          critical: active.filter((alert) => alert.level === "critical").length,
+          warning: active.filter((alert) => alert.level === "warning").length,
+        },
+        active,
+        recent: active,
+        schedules: [
+          {
+            job: "cost-verification",
+            intervalMs: 900_000,
+            enabled: true,
+            source: "default",
+            env: "OPS_CHECK_COST_INTERVAL",
+            lastRunAt: stubChecksRan ? new Date().toISOString() : null,
+            lastResult: stubChecksRan
+              ? {
+                  id: "run-1",
+                  job: "cost-verification",
+                  ok: healthy,
+                  detail: "10건 검사 · 미산정 0건",
+                  alertsRaised: 0,
+                  durationMs: 12,
+                  trigger: "manual",
+                  createdAt: new Date().toISOString(),
+                }
+              : null,
+          },
+          {
+            job: "provider-validation",
+            intervalMs: 900_000,
+            enabled: true,
+            source: "default",
+            env: "OPS_CHECK_CONFIG_INTERVAL",
+            lastRunAt: null,
+            lastResult: null,
+          },
+          {
+            job: "health-check",
+            intervalMs: 3_600_000,
+            enabled: healthy,
+            source: healthy ? "default" : "disabled",
+            env: "OPS_CHECK_HEALTH_INTERVAL",
+            lastRunAt: null,
+            lastResult: null,
+          },
+        ],
+        webhookConfigured: healthy,
+        cooldownMs: 1_800_000,
+        checkedAt: new Date().toISOString(),
+      }),
+    );
+    return;
+  }
   // ── Real Provider 운영 점검 (TASK-1301) ── ADMIN 전용
   if (
     url.pathname === "/llm/providers/validate" ||
@@ -765,6 +890,7 @@ const server = http.createServer((req, res) => {
           cost: healthy ? 0.184213 : null,
           unpricedCalls: healthy ? 0 : 7,
         },
+        diagnosticCalls: 2,
         providers: [
           {
             provider: "openai",
