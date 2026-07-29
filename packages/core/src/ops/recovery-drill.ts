@@ -56,6 +56,31 @@ export interface DrillRequirementInput {
   createdAt: number;
   /** 이 요구를 충족한 리허설이 있는가 (api가 채운다) */
   satisfiedAt: number | null;
+  /**
+   * 취소된 시각 (CTO 결정 1901-②).
+   * **삭제는 금지한다** — 잘못 등록한 것도 기록으로 남아야 한다.
+   * 취소된 요구는 미해소로 세지 않는다.
+   */
+  cancelledAt?: number | null;
+}
+
+/**
+ * 같은 종류의 미해소 요구가 이미 있는가 (CTO 결정 1901-⑤).
+ *
+ * 중복 등록을 막는 이유는 목록이 지저분해져서가 아니다 — 같은 사건이 여러 건
+ * 쌓이면 **리허설 한 번으로 몇 건이 해소됐는지**가 흐려지고, 화면의 숫자가
+ * 실제 상태를 말하지 못하게 된다.
+ */
+export function hasPendingTrigger(
+  requirements: DrillRequirementInput[],
+  trigger: DrillTrigger,
+): boolean {
+  return requirements.some(
+    (entry) =>
+      entry.trigger === trigger &&
+      entry.satisfiedAt === null &&
+      (entry.cancelledAt ?? null) === null,
+  );
 }
 
 export interface DrillHealth {
@@ -103,7 +128,11 @@ export function judgeRecoveryDrill(
   const intervalMs = options.intervalMs ?? DEFAULT_DRILL_INTERVAL_MS;
   const graceMs = options.graceMs ?? DEFAULT_DRILL_GRACE_MS;
   const pending = (options.requirements ?? [])
-    .filter((entry) => entry.satisfiedAt === null)
+    // 취소된 요구는 미해소로 세지 않는다 (CTO 결정 1901-②)
+    .filter(
+      (entry) =>
+        entry.satisfiedAt === null && (entry.cancelledAt ?? null) === null,
+    )
     .map((entry) => entry.trigger);
   const pendingTriggers = [...new Set(pending)];
 

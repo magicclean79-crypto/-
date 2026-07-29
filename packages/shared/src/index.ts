@@ -1717,6 +1717,25 @@ export interface EnterpriseRecoveryDto {
   };
   /** 백업 소요 시간 (CTO 결정 1801-①) */
   performance: BackupPerformanceDto;
+  /** 백업 사슬·원격 사본·규모·저장소 표준 (TASK-2001) */
+  backupIntegrity: {
+    chain: {
+      status: DrStatusDto;
+      detail: string;
+      expected: number;
+      actual: number;
+      longestGapMs: number | null;
+    };
+    remote: { status: DrStatusDto; detail: string; verdict: string };
+    scale: {
+      status: DrStatusDto;
+      detail: string;
+      bytes: number | null;
+      reachedMilestone: number | null;
+      nextMilestone: number | null;
+    };
+    storageStandard: { status: DrStatusDto; detail: string; standard: boolean };
+  };
 }
 
 /** 복구 리허설 기록 1건 (TASK-1801, CTO 결정 1701-⑤) */
@@ -1739,6 +1758,10 @@ export interface DrillRequirementDto {
   registeredBy: string;
   /** 해소된 시각 — 미해소면 null */
   satisfiedAt: string | null;
+  /** 취소 (TASK-2001, CTO 결정 1901-② — 삭제는 금지) */
+  cancelledAt: string | null;
+  cancelledBy: string | null;
+  cancelReason: string | null;
   createdAt: string;
 }
 

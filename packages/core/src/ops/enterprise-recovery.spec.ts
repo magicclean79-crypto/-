@@ -316,6 +316,9 @@ describe("Enterprise Backup & Disaster Recovery (TASK-1701)", () => {
           drill: { status: "pass", detail: "" },
           backupBucketProtection: { status: "pass", detail: "" },
           backupPerformance: { status: "pass", detail: "" },
+          backupChain: { status: "pass", detail: "" },
+          remoteIntegrity: { status: "manual", detail: "" },
+          storageStandard: { status: "pass", detail: "" },
         },
       });
       const summary = summarizeDisasterRecovery(items);
@@ -335,6 +338,9 @@ describe("Enterprise Backup & Disaster Recovery (TASK-1701)", () => {
           drill: { status: "pass", detail: "" },
           backupBucketProtection: { status: "pass", detail: "" },
           backupPerformance: { status: "pass", detail: "" },
+          backupChain: { status: "pass", detail: "" },
+          remoteIntegrity: { status: "manual", detail: "" },
+          storageStandard: { status: "pass", detail: "" },
         },
       });
       expect(summarizeDisasterRecovery(items).recoverable).toBe(false);
@@ -354,11 +360,15 @@ describe("Enterprise Backup & Disaster Recovery (TASK-1701)", () => {
           drill: { status: "fail", detail: "" },
           backupBucketProtection: { status: "warn", detail: "" },
           backupPerformance: { status: "warn", detail: "" },
+          backupChain: { status: "pass", detail: "" },
+          remoteIntegrity: { status: "manual", detail: "" },
+          storageStandard: { status: "fail", detail: "" },
         },
       });
       const summary = summarizeDisasterRecovery(items);
       expect(summary.recoverable).toBe(true);
-      expect(summary.fail).toBe(2);
+      // 원격 복제·리허설·저장소 표준 실패는 지금의 복구를 막지 않는다
+      expect(summary.fail).toBe(3);
     });
   });
 

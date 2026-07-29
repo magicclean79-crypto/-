@@ -207,6 +207,12 @@ export interface DrState {
     backupBucketProtection: { status: DrStatus; detail: string };
     /** 백업 소요 시간 (CTO 결정 1801-①) */
     backupPerformance: { status: DrStatus; detail: string };
+    /** 백업 사슬 연속성 (TASK-2001) */
+    backupChain: { status: DrStatus; detail: string };
+    /** 원격 사본 무결성 (TASK-2001) */
+    remoteIntegrity: { status: DrStatus; detail: string };
+    /** 운영 저장소 표준 (CTO 결정 1901-③) */
+    storageStandard: { status: DrStatus; detail: string };
     /** 복구 목표 RPO·RTO */
     objectives: { status: DrStatus; detail: string };
     /** 복원 대상 분리 (CTO 결정 1601-②) */
@@ -274,6 +280,9 @@ export function buildDisasterRecoveryChecklist(state: DrState): DrItem[] {
       drill,
       backupBucketProtection,
       backupPerformance,
+      backupChain,
+      remoteIntegrity,
+      storageStandard,
     } = state.enterprise;
     items.push(
       {
@@ -321,6 +330,29 @@ export function buildDisasterRecoveryChecklist(state: DrState): DrItem[] {
         status: backupPerformance.status,
         detail: backupPerformance.detail,
         // 느린 백업은 복구를 막지 않는다 — 추세를 알리는 항목이다
+        critical: false,
+      },
+      {
+        id: "backup-chain",
+        title: "백업 사슬 연속성",
+        status: backupChain.status,
+        detail: backupChain.detail,
+        // 공백 구간은 **되돌아갈 수 없는 구간**이다 — 복구를 좌우한다
+        critical: true,
+      },
+      {
+        id: "remote-integrity",
+        title: "원격 사본 무결성",
+        status: remoteIntegrity.status,
+        detail: remoteIntegrity.detail,
+        // 로컬 덤프로 복구는 되므로 지금의 복구 가능성을 막지는 않는다
+        critical: false,
+      },
+      {
+        id: "storage-standard",
+        title: "운영 저장소 표준",
+        status: storageStandard.status,
+        detail: storageStandard.detail,
         critical: false,
       },
       {

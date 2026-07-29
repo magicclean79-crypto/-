@@ -182,6 +182,16 @@ export class StorageService implements OnModuleInit {
     return `${this.backupBucket}/${key}`;
   }
 
+  /** 백업 버킷에서 내려받는다 (TASK-2001 원격 사본 검증) */
+  async getBackupObject(key: string): Promise<Buffer> {
+    const stream = await this.client.getObject(this.backupBucket, key);
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) {
+      chunks.push(chunk as Buffer);
+    }
+    return Buffer.concat(chunks);
+  }
+
   /** 백업 버킷 보호 상태 — 이미지 버킷과 따로 본다 */
   async describeBackupProtection(): Promise<{
     versioning: ProtectionState;

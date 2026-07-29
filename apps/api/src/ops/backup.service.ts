@@ -7,19 +7,26 @@ import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import {
   DEFAULT_JOB_INTERVALS,
+  DEFAULT_CHAIN_WINDOW_MS,
   defaultRpoTargetMs,
   judgeBackup,
   judgeIntegrity,
   judgeOffsite,
   judgeRecoveryObjectives,
+  judgeBackupChain,
   judgeBackupPerformance,
+  judgeDatabaseScale,
+  judgeRemoteIntegrity,
   judgeRestore,
   judgeRestoreTarget,
   resolveSchedules,
 } from "@acos/core";
 import type {
+  BackupChain,
   BackupHealth,
   BackupPerformance,
+  DatabaseScale,
+  RemoteIntegrity,
   OffsiteHealth,
   RecoveryObjectives,
   RestoreHealth,
@@ -204,6 +211,70 @@ export class BackupService {
     return defaultRpoTargetMs(
       backup?.intervalMs ?? DEFAULT_JOB_INTERVALS.backup,
     );
+  }
+
+  /** 서버 기동 시각 — 그 이전 구간은 사슬 판정에서 제외한다 */
+  private readonly startedAt = Date.now();
+
+  /** 백업 예약 간격 — 사슬 판정의 기준 */
+  get backupIntervalMs(): number {
+    const backup = resolveSchedules(
+      process.env as Record<string, string | undefined>,
+    ).find((entry) => entry.job === "backup");
+    return backup?.intervalMs ?? DEFAULT_JOB_INTERVALS.backup;
+  }
+
+  /**
+   * 운영 데이터베이스 크기 (CTO 결정 1901-④).
+   *
+   * 덤프 크기와 다르다 — 덤프는 압축되고 인덱스를 담지 않는다. 재평가 기준은
+   * **운영 DB 크기**로 판단해야 한다.
+   */
+  async databaseSizeBytes(): Promise<number | null> {
+    try {
+      const rows = (await this.prisma.$queryRawUnsafe(
+        "SELECT pg_database_size(current_database()) AS size",
+      )) as { size: bigint | number }[];
+      const raw = rows[0]?.size;
+      return raw === undefined ? null : Number(raw);
+    } catch {
+      // 권한이 없거나 다른 엔진이면 모른다 — 0으로 채우지 않는다
+      return null;
+    }
+  }
+
+  /**
+   * 원격 사본 무결성 검증 (TASK-2001, CTO 결정 1701-④ 후속).
+   *
+   * 원격에서 **실제로 내려받아** 체크섬을 대조한다. 전송 비용이 들어
+   * **기본으로 돌리지 않는다** — 운영자가 명시적으로 실행한다.
+   */
+  async verifyRemoteCopy(): Promise<RemoteIntegrity> {
+    const [latest] = (await this.backupHistory(20)).filter(
+      (entry) => entry.ok && entry.offsite,
+    );
+    if (!latest || !latest.fileName) {
+      return judgeRemoteIntegrity(null);
+    }
+    try {
+      const key = `${this.offsitePrefix}${latest.fileName}`;
+      const buffer = await this.storage.getBackupObject(key);
+      const hash = createHash("sha256").update(buffer).digest("hex");
+      return judgeRemoteIntegrity({
+        found: true,
+        remoteChecksum: hash,
+        recordedChecksum: latest.checksum,
+      });
+    } catch (error) {
+      this.logger.error(
+        `원격 사본 검증 실패: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return judgeRemoteIntegrity({
+        found: false,
+        remoteChecksum: null,
+        recordedChecksum: latest.checksum,
+      });
+    }
   }
 
   get rtoTargetMs(): number {
@@ -581,6 +652,21 @@ export class BackupService {
     return rows.map(toBackupDto);
   }
 
+  /**
+   * 관측 창 안의 백업 기록 — **개수가 아니라 기간으로 읽는다.**
+   *
+   * 개수로 자르면 창 안의 오래된 쪽이 통째로 빠져 **없는 공백이 생긴다.**
+   * 20초 간격으로 돌리자 창 안 4320건 중 500건만 읽혀 21시간짜리 가짜 공백이
+   * 보고됐다(라이브 검증에서 드러난 결함).
+   */
+  async backupHistorySince(sinceMs: number): Promise<BackupRunDto[]> {
+    const rows = (await this.prisma.backupRun.findMany({
+      where: { createdAt: { gte: new Date(sinceMs) } },
+      orderBy: { createdAt: "desc" },
+    })) as BackupRow[];
+    return rows.map(toBackupDto);
+  }
+
   async restoreHistory(limit = 10): Promise<RestoreRunDto[]> {
     const rows = (await this.prisma.restoreRun.findMany({
       orderBy: { createdAt: "desc" },
@@ -601,11 +687,16 @@ export class BackupService {
     offsite: OffsiteHealth;
     objectives: RecoveryObjectives;
     performance: BackupPerformance;
+    chain: BackupChain;
+    scale: DatabaseScale;
   }> {
     const now = Date.now();
-    const [backups, restores] = await Promise.all([
+    const [backups, restores, chainRecords] = await Promise.all([
       this.backupHistory(20),
       this.restoreHistory(20),
+      // 사슬 판정은 관측 창 전체를 **기간으로** 읽는다 — 개수로 자르면
+      // 창 안의 오래된 쪽이 빠져 없는 공백이 생긴다
+      this.backupHistorySince(now - DEFAULT_CHAIN_WINDOW_MS),
     ]);
 
     const backup = judgeBackup(
@@ -656,6 +747,19 @@ export class BackupService {
           createdAt: new Date(entry.createdAt).getTime(),
         })),
       ),
+      // 백업 사슬 (TASK-2001) — 개별 백업이 모두 성공이어도 사슬은 끊길 수 있다
+      chain: judgeBackupChain(
+        chainRecords.map((entry) => ({
+          ok: entry.ok,
+          createdAt: new Date(entry.createdAt).getTime(),
+        })),
+        {
+          now,
+          intervalMs: this.backupIntervalMs,
+          startedAt: this.startedAt,
+        },
+      ),
+      scale: judgeDatabaseScale(await this.databaseSizeBytes()),
     };
   }
 

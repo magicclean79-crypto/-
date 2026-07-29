@@ -127,6 +127,9 @@ export default function OperationsPage() {
   const [drillBy, setDrillBy] = useState("");
   const [drillFindings, setDrillFindings] = useState("");
 
+  /** 사슬 판정은 여러 곳에서 쓰므로 한 번만 꺼낸다 */
+  const backupIntegrityChain = data?.enterprise.backupIntegrity.chain;
+
   async function load() {
     setLoading(true);
     try {
@@ -213,6 +216,50 @@ export default function OperationsPage() {
       );
       setDrillOpen(false);
       setDrillFindings("");
+      await load();
+    } catch {
+      setError("API 서버에 연결할 수 없습니다.");
+    } finally {
+      setRunning(null);
+    }
+  }
+
+  /**
+   * 리허설 요구 취소 (CTO 결정 1901-② — 삭제는 금지, 취소만 허용).
+   *
+   * 지운 요구는 왜 지웠는지 남지 않는다. 취소는 남는다.
+   */
+  async function cancelRequirement(id: string) {
+    const reason = window.prompt(
+      "취소 사유를 남기세요 (기록에 남습니다). 요구는 삭제되지 않고 취소로 표시됩니다.",
+    );
+    if (!reason?.trim()) {
+      return;
+    }
+    setRunning("요구 취소");
+    setNote(null);
+    try {
+      const response = await fetch(
+        `${API_URL}/ops/drills/requirements/${id}/cancel`,
+        {
+          ...authFetchInit(),
+          method: "POST",
+          headers: {
+            ...(authFetchInit().headers ?? {}),
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ cancelledBy: "admin", reason: reason.trim() }),
+        },
+      );
+      if (!response.ok) {
+        setError(
+          response.status === 401 || response.status === 403
+            ? "ADMIN 권한이 필요합니다 — 관리자 계정으로 로그인해 주세요."
+            : `요구 취소 실패 (HTTP ${response.status})`,
+        );
+        return;
+      }
+      setNote("요구를 취소했습니다 — 기록은 사유와 함께 남습니다.");
       await load();
     } catch {
       setError("API 서버에 연결할 수 없습니다.");
@@ -617,6 +664,96 @@ export default function OperationsPage() {
                 <p className="mt-1">{data.enterprise.performance.detail}</p>
               </li>
               <li
+                data-testid="backup-chain"
+                className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${DR_STYLE[backupIntegrityChain!.status]}`}
+                  >
+                    {DR_LABEL[backupIntegrityChain!.status]}
+                  </span>
+                  <strong>백업 사슬 연속성</strong>
+                  <span className="text-xs text-zinc-500">
+                    {backupIntegrityChain!.actual}/
+                    {backupIntegrityChain!.expected}회
+                  </span>
+                </div>
+                <p className="mt-1">{backupIntegrityChain!.detail}</p>
+                <p className="mt-1 text-xs text-zinc-500">
+                  개별 백업이 모두 성공이어도 사슬은 끊길 수 있습니다 —
+                  <strong> 돌지 않은 백업은 아무 데도 기록되지 않습니다.</strong>
+                </p>
+              </li>
+              <li
+                data-testid="remote-integrity"
+                className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${DR_STYLE[data.enterprise.backupIntegrity.remote.status]}`}
+                  >
+                    {DR_LABEL[data.enterprise.backupIntegrity.remote.status]}
+                  </span>
+                  <strong>원격 사본 무결성</strong>
+                  <button
+                    type="button"
+                    data-testid="verify-remote"
+                    disabled={running !== null}
+                    onClick={() =>
+                      void act(
+                        "/ops/backup/verify-remote",
+                        "원격 사본 검증",
+                        (result) => String(result.detail ?? ""),
+                      )
+                    }
+                    className="ml-auto rounded-lg border border-amber-400 px-2.5 py-1 text-xs font-medium text-amber-700 hover:bg-amber-50 disabled:opacity-50 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-950"
+                  >
+                    {running === "원격 사본 검증"
+                      ? "내려받는 중…"
+                      : "원격 사본 검증 (전송 비용)"}
+                  </button>
+                </div>
+                <p className="mt-1">
+                  {data.enterprise.backupIntegrity.remote.detail}
+                </p>
+              </li>
+              <li
+                data-testid="storage-standard"
+                className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${DR_STYLE[data.enterprise.backupIntegrity.storageStandard.status]}`}
+                  >
+                    {DR_LABEL[data.enterprise.backupIntegrity.storageStandard.status]}
+                  </span>
+                  <strong>운영 저장소 표준</strong>
+                </div>
+                <p className="mt-1">
+                  {data.enterprise.backupIntegrity.storageStandard.detail}
+                </p>
+              </li>
+              <li
+                data-testid="database-scale"
+                className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${DR_STYLE[data.enterprise.backupIntegrity.scale.status]}`}
+                  >
+                    {DR_LABEL[data.enterprise.backupIntegrity.scale.status]}
+                  </span>
+                  <strong>데이터베이스 규모</strong>
+                  <span className="text-xs text-zinc-500">
+                    재평가 기준 10 · 50 · 100GB
+                  </span>
+                </div>
+                <p className="mt-1">
+                  {data.enterprise.backupIntegrity.scale.detail}
+                </p>
+              </li>
+              <li
                 data-testid="backup-bucket-protection"
                 className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
               >
@@ -789,11 +926,46 @@ export default function OperationsPage() {
                   .join(" · ")}
                 <ul className="mt-2 list-inside list-disc text-xs">
                   {data.enterprise.drill.requirements
-                    .filter((entry) => entry.satisfiedAt === null)
+                    .filter(
+                      (entry) =>
+                        entry.satisfiedAt === null && entry.cancelledAt === null,
+                    )
                     .map((entry) => (
                       <li key={entry.id}>
                         {entry.description} ({entry.registeredBy},{" "}
                         {new Date(entry.createdAt).toLocaleDateString("ko-KR")})
+                        <button
+                          type="button"
+                          data-testid={`cancel-requirement-${entry.id}`}
+                          disabled={running !== null}
+                          onClick={() => void cancelRequirement(entry.id)}
+                          className="ml-2 rounded border border-red-300 px-1.5 py-0.5 text-[11px] font-medium hover:bg-red-100 disabled:opacity-50 dark:border-red-800 dark:hover:bg-red-900"
+                        >
+                          취소
+                        </button>
+                      </li>
+                    ))}
+                </ul>
+              </div>
+            ) : null}
+
+            {/* 취소된 요구도 보인다 — 삭제하지 않으므로 기록이 남는다 (결정 1901-②) */}
+            {data.enterprise.drill.requirements.some(
+              (entry) => entry.cancelledAt !== null,
+            ) ? (
+              <div
+                data-testid="cancelled-requirements"
+                className="mt-3 rounded-lg bg-zinc-50 p-3 text-xs text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400"
+              >
+                <strong>취소된 요구</strong> — 삭제하지 않고 사유와 함께
+                남깁니다.
+                <ul className="mt-2 list-inside list-disc">
+                  {data.enterprise.drill.requirements
+                    .filter((entry) => entry.cancelledAt !== null)
+                    .map((entry) => (
+                      <li key={entry.id}>
+                        {entry.description} — {entry.cancelReason} (
+                        {entry.cancelledBy})
                       </li>
                     ))}
                 </ul>

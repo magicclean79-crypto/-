@@ -22,6 +22,8 @@ let stubRestoreVerified = false;
 // 복구 리허설 스텁 상태 (TASK-1801)
 let stubDrills = [];
 let stubRequirements = [];
+// 백업 무결성 스텁 상태 (TASK-2001)
+let stubRemoteVerified = false;
 
 const stats = (totals, groups) => ({
   range: { from: null, to: null },
@@ -220,6 +222,7 @@ const server = http.createServer((req, res) => {
       stubRestoreVerified = false;
       stubDrills = [];
       stubRequirements = [];
+      stubRemoteVerified = false;
       resetPublishing();
       resetUsers();
       res.end(JSON.stringify({ mode }));
@@ -676,9 +679,11 @@ const server = http.createServer((req, res) => {
     url.pathname === "/ops/readiness" ||
     url.pathname === "/ops/backup/run" ||
     url.pathname === "/ops/backup/verify-restore" ||
+    url.pathname === "/ops/backup/verify-remote" ||
     url.pathname === "/ops/notifications/verify-smtp" ||
     url.pathname === "/ops/drills" ||
-    url.pathname === "/ops/drills/require"
+    url.pathname === "/ops/drills/require" ||
+    url.pathname.startsWith("/ops/drills/requirements/")
   ) {
     if (req.headers.authorization !== "Bearer stub-token") {
       res.statusCode = req.headers.authorization ? 403 : 401;
@@ -693,17 +698,83 @@ const server = http.createServer((req, res) => {
       req.on("data", (chunk) => (body += chunk));
       req.on("end", () => {
         const input = JSON.parse(body || "{}");
+        // 같은 Trigger가 미해소면 중복 등록하지 않는다 (CTO 결정 1901-⑤)
+        if (
+          stubRequirements.some(
+            (item) =>
+              item.trigger === input.trigger &&
+              item.satisfiedAt === null &&
+              item.cancelledAt === null,
+          )
+        ) {
+          res.statusCode = 409;
+          res.end(
+            JSON.stringify({
+              message: `같은 Trigger(${input.trigger})가 이미 미해소 상태입니다 — 중복 등록하지 않습니다. 리허설 1회로 함께 해소됩니다.`,
+            }),
+          );
+          return;
+        }
         const entry = {
           id: `req-${stubRequirements.length + 1}`,
           trigger: input.trigger,
           description: input.description,
           registeredBy: input.registeredBy,
           satisfiedAt: null,
+          cancelledAt: null,
+          cancelledBy: null,
+          cancelReason: null,
           createdAt: new Date().toISOString(),
         };
         stubRequirements.unshift(entry);
         res.statusCode = 201;
         res.end(JSON.stringify(entry));
+      });
+      return;
+    }
+
+    // 요구 취소 (TASK-2001, CTO 결정 1901-② — 삭제는 금지, 취소만 허용)
+    if (
+      req.method === "POST" &&
+      /^\/ops\/drills\/requirements\/[^/]+\/cancel$/.test(url.pathname)
+    ) {
+      const id = url.pathname.split("/")[4];
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        const input = JSON.parse(body || "{}");
+        const target = stubRequirements.find((item) => item.id === id);
+        if (!target) {
+          res.statusCode = 404;
+          res.end(JSON.stringify({ message: "요구를 찾을 수 없습니다." }));
+          return;
+        }
+        if (!input.cancelledBy || !input.reason) {
+          res.statusCode = 400;
+          res.end(
+            JSON.stringify({ message: "cancelledBy와 reason은 필수입니다." }),
+          );
+          return;
+        }
+        if (target.satisfiedAt !== null) {
+          res.statusCode = 409;
+          res.end(
+            JSON.stringify({
+              message: "이미 해소된 요구는 취소할 수 없습니다.",
+            }),
+          );
+          return;
+        }
+        const cancelled = {
+          ...target,
+          cancelledAt: new Date().toISOString(),
+          cancelledBy: input.cancelledBy,
+          cancelReason: input.reason,
+        };
+        stubRequirements = stubRequirements.map((item) =>
+          item.id === id ? cancelled : item,
+        );
+        res.end(JSON.stringify(cancelled));
       });
       return;
     }
@@ -733,7 +804,7 @@ const server = http.createServer((req, res) => {
           // 성공한 리허설만 변경 사건을 해소한다 (결정 1801-⑤)
           if (entry.ok) {
             stubRequirements = stubRequirements.map((item) =>
-              item.satisfiedAt === null
+              item.satisfiedAt === null && item.cancelledAt === null
                 ? { ...item, satisfiedAt: entry.createdAt }
                 : item,
             );
@@ -801,6 +872,31 @@ const server = http.createServer((req, res) => {
       return;
     }
 
+    // 원격 사본 무결성 검증 (TASK-2001) — 전송 비용이 들어 수동 실행이다
+    if (req.method === "POST" && url.pathname === "/ops/backup/verify-remote") {
+      stubRemoteVerified = healthy;
+      res.end(
+        JSON.stringify(
+          healthy
+            ? {
+                verdict: "ok",
+                status: "pass",
+                detail:
+                  "원격 사본이 기록된 체크섬과 일치합니다 (SHA-256 cccccccccccc…).",
+                key: "backups/acos-2026-07-29.dump",
+              }
+            : {
+                verdict: "missing",
+                status: "fail",
+                detail:
+                  "원격 사본을 찾을 수 없습니다 — 올렸다는 기록만 남아 있고 실제 사본은 없습니다.",
+                key: null,
+              },
+        ),
+      );
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/ops/notifications/verify-smtp") {
       res.end(
         JSON.stringify(
@@ -860,6 +956,34 @@ const server = http.createServer((req, res) => {
             },
           ]
         : [];
+
+    // 리허설 판정은 체크리스트와 enterprise가 같은 값을 써야 한다 —
+    // 두 자리가 갈라지면 상태와 설명이 모순된다
+    const pendingTriggers = [
+      ...new Set(
+        stubRequirements
+          .filter(
+            (item) => item.satisfiedAt === null && item.cancelledAt === null,
+          )
+          .map((item) => item.trigger),
+      ),
+    ];
+    const drillStatus =
+      stubDrills.length === 0
+        ? "manual"
+        : !stubDrills[0].ok
+          ? "fail"
+          : pendingTriggers.length > 0
+            ? "fail"
+            : "pass";
+    const drillDetail =
+      stubDrills.length === 0
+        ? "복구 리허설 기록이 없습니다 — 절차를 읽는 것과 해 보는 것은 다릅니다. 한 번 수행하고 결과를 남기세요."
+        : !stubDrills[0].ok
+          ? "마지막 복구 리허설이 실패했습니다 — 복구 절차가 지금 상태로는 동작하지 않습니다. 사고가 나기 전에 고치세요."
+          : pendingTriggers.length > 0
+            ? "변경 이후 리허설을 하지 않았습니다 — 마지막 리허설이 검증한 것은 지금의 시스템이 아닙니다. 주기와 무관하게 즉시 수행하세요 (CTO 결정 1801-⑤)."
+            : "마지막 복구 리허설 0일 전 — 다음 예정까지 90일 남았습니다.";
 
     const checklist = [
       {
@@ -939,18 +1063,8 @@ const server = http.createServer((req, res) => {
       {
         id: "drill",
         title: "복구 리허설 (분기 1회)",
-        status:
-          stubDrills.length === 0
-            ? "manual"
-            : stubDrills[0].ok
-              ? "pass"
-              : "fail",
-        detail:
-          stubDrills.length === 0
-            ? "복구 리허설 기록이 없습니다 — 절차를 읽는 것과 해 보는 것은 다릅니다. 한 번 수행하고 결과를 남기세요."
-            : stubDrills[0].ok
-              ? "마지막 복구 리허설 0일 전 — 다음 예정까지 90일 남았습니다."
-              : "마지막 복구 리허설이 실패했습니다 — 복구 절차가 지금 상태로는 동작하지 않습니다. 사고가 나기 전에 고치세요.",
+        status: drillStatus,
+        detail: drillDetail,
         critical: false,
       },
       {
@@ -969,6 +1083,33 @@ const server = http.createServer((req, res) => {
         detail: healthy
           ? "마지막 백업 1.2초 · 최근 중앙값 1.1초 (기준 2.0초 미만)."
           : "마지막 백업이 5.0초 걸렸습니다 — 기준 2.0초보다 깁니다. 아직 조치할 수준은 아니지만 추세를 보세요.",
+        critical: false,
+      },
+      // 백업 무결성 (TASK-2001)
+      {
+        id: "backup-chain",
+        title: "백업 사슬 연속성",
+        status: healthy ? "pass" : "fail",
+        detail: healthy
+          ? "최근 24시간에 24/24회 · 최대 공백 1.0시간 (한계 2.0시간)."
+          : "백업 사슬에 5.0시간 공백이 있습니다 (최근 24시간에 19/24회). 그 구간은 복구할 수 없습니다 — 개별 백업이 모두 성공이어도, 돌지 않은 백업은 아무 데도 기록되지 않습니다.",
+        critical: true,
+      },
+      {
+        id: "remote-integrity",
+        title: "원격 사본 무결성",
+        status: stubRemoteVerified ? "pass" : "manual",
+        detail: stubRemoteVerified
+          ? "원격 사본을 내려받아 대조했습니다 — SHA-256 일치 (cccccccccccc…)."
+          : "원격 사본을 내려받아 대조하지 않았습니다 — 전송 비용이 들어 기본으로 돌리지 않습니다. 필요할 때 수동으로 확인하세요.",
+        critical: false,
+      },
+      {
+        id: "storage-standard",
+        title: "운영 저장소 표준",
+        status: "pass",
+        detail:
+          "개발 저장소 (localhost) — 개발에서는 정상입니다. 운영 표준은 Amazon S3입니다.",
         critical: false,
       },
       {
@@ -1106,27 +1247,9 @@ const server = http.createServer((req, res) => {
             verdict: healthy ? "ok" : "not-configured",
           },
           drill: {
-            status:
-              stubDrills.length === 0
-                ? "manual"
-                : !stubDrills[0].ok
-                  ? "fail"
-                  : stubRequirements.some((item) => item.satisfiedAt === null)
-                    ? "fail"
-                    : "pass",
-            detail:
-              stubDrills.length === 0
-                ? "복구 리허설 기록이 없습니다 — 절차를 읽는 것과 해 보는 것은 다릅니다. 한 번 수행하고 결과를 남기세요."
-                : stubDrills[0].ok
-                  ? "마지막 복구 리허설 0일 전 — 다음 예정까지 90일 남았습니다."
-                  : "마지막 복구 리허설이 실패했습니다 — 복구 절차가 지금 상태로는 동작하지 않습니다. 사고가 나기 전에 고치세요.",
-            pendingTriggers: [
-              ...new Set(
-                stubRequirements
-                  .filter((item) => item.satisfiedAt === null)
-                  .map((item) => item.trigger),
-              ),
-            ],
+            status: drillStatus,
+            detail: drillDetail,
+            pendingTriggers,
             requirements: stubRequirements,
             ageMs: stubDrills.length === 0 ? null : 0,
             dueAt:
@@ -1160,6 +1283,40 @@ const server = http.createServer((req, res) => {
             latestMs: healthy ? 1_200 : 5_000,
             medianMs: healthy ? 1_100 : 5_000,
             slowStreak: 0,
+          },
+          // 백업 무결성 (TASK-2001)
+          backupIntegrity: {
+            chain: {
+              status: healthy ? "pass" : "fail",
+              detail: healthy
+                ? "최근 24시간에 24/24회 · 최대 공백 1.0시간 (한계 2.0시간)."
+                : "백업 사슬에 5.0시간 공백이 있습니다 (최근 24시간에 19/24회). 그 구간은 복구할 수 없습니다 — 개별 백업이 모두 성공이어도, 돌지 않은 백업은 아무 데도 기록되지 않습니다.",
+              expected: 24,
+              actual: healthy ? 24 : 19,
+              longestGapMs: healthy ? 3_600_000 : 18_000_000,
+            },
+            remote: {
+              status: stubRemoteVerified ? "pass" : "manual",
+              detail: stubRemoteVerified
+                ? "원격 사본을 내려받아 대조했습니다 — SHA-256 일치 (cccccccccccc…)."
+                : "원격 사본을 내려받아 대조하지 않았습니다 — 전송 비용이 들어 기본으로 돌리지 않습니다. 필요할 때 수동으로 확인하세요.",
+              verdict: stubRemoteVerified ? "ok" : "unchecked",
+            },
+            scale: {
+              status: healthy ? "pass" : "warn",
+              detail: healthy
+                ? "데이터베이스 2.0GB — 다음 재평가 기준 10.0GB까지 8.0GB 남았습니다."
+                : "데이터베이스가 60.0GB로 재평가 기준 50.0GB를 넘었습니다 — 백업 성능 기준(2초·10초·30초)을 실측으로 다시 재세요 (CTO 결정 1901-④). 기준을 자동으로 바꾸지는 않습니다.",
+              bytes: healthy ? 2 * 1024 ** 3 : 60 * 1024 ** 3,
+              reachedMilestone: healthy ? null : 50 * 1024 ** 3,
+              nextMilestone: healthy ? 10 * 1024 ** 3 : 100 * 1024 ** 3,
+            },
+            storageStandard: {
+              status: "pass",
+              detail:
+                "개발 저장소 (localhost) — 개발에서는 정상입니다. 운영 표준은 Amazon S3입니다.",
+              standard: false,
+            },
           },
         },
         redis: {

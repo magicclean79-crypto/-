@@ -231,6 +231,9 @@ function createPrismaStub() {
             id: `req-${seq}`,
             satisfiedAt: null,
             satisfiedBy: null,
+            cancelledAt: null,
+            cancelledBy: null,
+            cancelReason: null,
             createdAt: new Date(),
             ...args.data,
           };
@@ -239,10 +242,24 @@ function createPrismaStub() {
         },
         findMany: async () =>
           [...requirements].reverse().map((row) => ({ ...row })),
+        findUnique: async (args: { where: { id: string } }) => {
+          const found = requirements.find((row) => row.id === args.where.id);
+          return found ? { ...found } : null;
+        },
+        update: async (args: {
+          where: { id: string };
+          data: Record<string, unknown>;
+        }) => {
+          const index = requirements.findIndex(
+            (row) => row.id === args.where.id,
+          );
+          requirements[index] = { ...requirements[index], ...args.data };
+          return { ...requirements[index] };
+        },
         updateMany: async (args: { data: Record<string, unknown> }) => {
           let count = 0;
           requirements.forEach((row, index) => {
-            if (row.satisfiedAt === null) {
+            if (row.satisfiedAt === null && row.cancelledAt === null) {
               requirements[index] = { ...row, ...args.data };
               count += 1;
             }
@@ -266,8 +283,22 @@ function createPrismaStub() {
           backups.push(row as never);
           return { ...row };
         },
-        findMany: async () =>
-          [...backups].reverse().map((row) => ({ ...row })),
+        // `where`/`take`를 실제로 적용한다 — 무시하면 개수 제한 결함이 테스트를
+        // 통과해 버린다 (라이브 검증에서 드러난 결함의 회귀 방지)
+        findMany: async (args?: {
+          where?: { createdAt?: { gte?: Date } };
+          take?: number;
+        }) => {
+          const since = args?.where?.createdAt?.gte;
+          let rows = [...backups].reverse() as { createdAt: Date }[];
+          if (since) {
+            rows = rows.filter((row) => row.createdAt >= since);
+          }
+          if (typeof args?.take === "number") {
+            rows = rows.slice(0, args.take);
+          }
+          return rows.map((row) => ({ ...row }));
+        },
       },
       restoreRun: {
         create: async (args: { data: Record<string, unknown> }) => {
@@ -280,6 +311,10 @@ function createPrismaStub() {
           [...restores].reverse().map((row) => ({ ...row })),
       },
       $queryRaw: async () => [{ "?column?": 1 }],
+      $queryRawUnsafe: async (sql: string) =>
+        sql.includes("pg_database_size")
+          ? [{ size: BigInt(2 * 1024 ** 3) }]
+          : [],
       checkRun: {
         create: async (args: { data: Record<string, unknown> }) => {
           seq += 1;
@@ -2145,6 +2180,299 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
         .post("/ops/drills/require")
         .set("Authorization", "Bearer tok-editor")
         .send({ trigger: "dr-change", description: "x", registeredBy: "y" })
+        .expect(403);
+    });
+  });
+
+  describe("Enterprise Backup Integrity Platform (TASK-2001)", () => {
+    beforeEach(() => {
+      process.env.BACKUP_DIR = join(tmpdir(), "acos-backup-test");
+      process.env.DATABASE_URL = "postgresql://u:p@localhost:5432/acos";
+      process.env.BACKUP_RESTORE_DB_URL =
+        "postgresql://u:p@localhost:5432/acos_restore_check";
+      delete process.env.NODE_ENV;
+      process.env.S3_ENDPOINT = "http://localhost:9000";
+    });
+
+    const backupAt = (hoursAgo: number, id = `bk-${hoursAgo}`) => ({
+      id,
+      ok: true,
+      sizeBytes: BigInt(50_000),
+      fileName: `acos-${hoursAgo}.dump`,
+      durationMs: 300,
+      trigger: "schedule",
+      error: null,
+      checksum: "a".repeat(64),
+      integrityOk: true,
+      entries: 120,
+      offsiteKey: null,
+      createdAt: new Date(Date.now() - hoursAgo * 60 * 60 * 1000),
+    });
+
+    it("사슬에 공백이 있으면 복구 필수 항목이 실패한다", async () => {
+      const built = await build();
+      app = built.app;
+      // 24시간 중 3개뿐 — 개별 백업은 모두 성공이다
+      built.prisma.backups.push(backupAt(23), backupAt(22), backupAt(1));
+      const backups = built.app.get(BackupService);
+      // 기동 시각을 과거로 돌려 관측 창을 확보한다
+      Object.defineProperty(backups, "startedAt", {
+        value: Date.now() - 24 * 60 * 60 * 1000,
+      });
+
+      const response = await request(built.app.getHttpServer())
+        .get("/ops/readiness")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+
+      const item = response.body.checklist.find(
+        (entry: { id: string }) => entry.id === "backup-chain",
+      );
+      expect(item).toMatchObject({ status: "fail", critical: true });
+      expect(response.body.recoverable).toBe(false);
+      expect(response.body.enterprise.backupIntegrity.chain.actual).toBe(3);
+    });
+
+    it("창 안의 기록은 개수로 자르지 않는다 — 자르면 없는 공백이 생긴다", async () => {
+      // 20초 간격 라이브 검증에서 창 안 4320건 중 500건만 읽혀
+      // 21시간짜리 가짜 공백이 보고됐다
+      const built = await build();
+      app = built.app;
+      process.env.OPS_CHECK_BACKUP_INTERVAL = "60s";
+      const minute = 60 * 1000;
+      for (let index = 0; index < 1440; index += 1) {
+        built.prisma.backups.push({
+          ...backupAt(0, `bk-min-${index}`),
+          createdAt: new Date(Date.now() - index * minute),
+        } as never);
+      }
+      const backups = built.app.get(BackupService);
+      Object.defineProperty(backups, "startedAt", {
+        value: Date.now() - 24 * 60 * 60 * 1000,
+      });
+
+      const response = await request(built.app.getHttpServer())
+        .get("/ops/readiness")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+
+      delete process.env.OPS_CHECK_BACKUP_INTERVAL;
+      const chain = response.body.enterprise.backupIntegrity.chain;
+      // 500건으로 잘렸다면 창의 앞 15시간이 통째로 비어 공백으로 보고된다
+      expect(chain.actual).toBe(1440);
+      expect(chain.status).toBe("pass");
+    });
+
+    it("사슬 공백은 심각 경보를 만든다", async () => {
+      const built = await build();
+      app = built.app;
+      built.prisma.backups.push(backupAt(23), backupAt(1));
+      const backups = built.app.get(BackupService);
+      Object.defineProperty(backups, "startedAt", {
+        value: Date.now() - 24 * 60 * 60 * 1000,
+      });
+
+      await built.checks.watchdog();
+      const alert = built.prisma.alerts.get("backup-integrity:chain");
+      expect(alert).toMatchObject({ level: "CRITICAL", status: "ACTIVE" });
+      expect(alert!.message).toContain("복구할 수 없습니다");
+    });
+
+    it("원격 사본은 조회에서 내려받지 않는다 — 전송 비용이 든다", async () => {
+      const built = await build();
+      app = built.app;
+
+      const response = await request(built.app.getHttpServer())
+        .get("/ops/readiness")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+
+      expect(response.body.enterprise.backupIntegrity.remote).toMatchObject({
+        verdict: "unchecked",
+        status: "manual",
+      });
+      expect(
+        response.body.enterprise.backupIntegrity.remote.detail,
+      ).toContain("전송 비용");
+    });
+
+    it("데이터베이스 규모가 재평가 기준 아래면 통과한다 (CTO 결정 1901-④)", async () => {
+      const built = await build();
+      app = built.app;
+
+      const response = await request(built.app.getHttpServer())
+        .get("/ops/readiness")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+
+      const scale = response.body.enterprise.backupIntegrity.scale;
+      expect(scale.status).toBe("pass");
+      expect(scale.bytes).toBe(2 * 1024 ** 3);
+      expect(scale.nextMilestone).toBe(10 * 1024 ** 3);
+    });
+
+    it("운영에서 S3가 아니면 저장소 표준이 실패한다 (CTO 결정 1901-③)", async () => {
+      process.env.NODE_ENV = "production";
+      const built = await build();
+      app = built.app;
+
+      const response = await request(built.app.getHttpServer())
+        .get("/ops/readiness")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+
+      const item = response.body.checklist.find(
+        (entry: { id: string }) => entry.id === "storage-standard",
+      );
+      expect(item).toMatchObject({ status: "fail", critical: false });
+      expect(item.detail).toContain("Sprint 20부터 운영 표준은 Amazon S3");
+      // 표준 미달은 복구 가능 판정을 막지 않는다 — 차단 목록에 없어야 한다
+      const blockers = response.body.checklist
+        .filter((entry: { critical: boolean; status: string }) =>
+          entry.critical && entry.status === "fail",
+        )
+        .map((entry: { id: string }) => entry.id);
+      expect(blockers).not.toContain("storage-standard");
+      delete process.env.NODE_ENV;
+    });
+
+    it("개발에서는 개발 저장소가 정상이다", async () => {
+      const built = await build();
+      app = built.app;
+
+      const response = await request(built.app.getHttpServer())
+        .get("/ops/readiness")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+      expect(
+        response.body.enterprise.backupIntegrity.storageStandard.status,
+      ).toBe("pass");
+    });
+
+    it("같은 종류가 미해소면 중복 등록을 막는다 (CTO 결정 1901-⑤)", async () => {
+      const built = await build();
+      app = built.app;
+      const server = built.app.getHttpServer();
+
+      await request(server)
+        .post("/ops/drills/require")
+        .set("Authorization", "Bearer tok-admin")
+        .send({ trigger: "dr-change", description: "절차 변경", registeredBy: "A" })
+        .expect(201);
+      await request(server)
+        .post("/ops/drills/require")
+        .set("Authorization", "Bearer tok-admin")
+        .send({ trigger: "dr-change", description: "또 변경", registeredBy: "A" })
+        .expect(409);
+      // 다른 종류는 등록된다
+      await request(server)
+        .post("/ops/drills/require")
+        .set("Authorization", "Bearer tok-admin")
+        .send({ trigger: "pitr-adoption", description: "PITR", registeredBy: "A" })
+        .expect(201);
+    });
+
+    it("요구는 취소만 가능하고 기록은 남는다 (CTO 결정 1901-②)", async () => {
+      const built = await build();
+      app = built.app;
+      const server = built.app.getHttpServer();
+
+      const created = await request(server)
+        .post("/ops/drills/require")
+        .set("Authorization", "Bearer tok-admin")
+        .send({ trigger: "dr-change", description: "잘못 등록", registeredBy: "A" })
+        .expect(201);
+
+      await request(server)
+        .post(`/ops/drills/requirements/${created.body.id}/cancel`)
+        .set("Authorization", "Bearer tok-admin")
+        .send({ cancelledBy: "운영자 B", reason: "중복 등록이었음" })
+        .expect(200);
+
+      // 기록은 남는다 — 삭제하지 않는다
+      expect(built.prisma.requirements).toHaveLength(1);
+      expect(built.prisma.requirements[0].cancelReason).toBe("중복 등록이었음");
+
+      const response = await request(server)
+        .get("/ops/readiness")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+      // 취소된 요구는 미해소로 세지 않는다
+      expect(response.body.enterprise.drill.pendingTriggers).toEqual([]);
+    });
+
+    it("취소 후에는 같은 종류를 다시 등록할 수 있다", async () => {
+      const built = await build();
+      app = built.app;
+      const server = built.app.getHttpServer();
+
+      const created = await request(server)
+        .post("/ops/drills/require")
+        .set("Authorization", "Bearer tok-admin")
+        .send({ trigger: "dr-change", description: "1차", registeredBy: "A" })
+        .expect(201);
+      await request(server)
+        .post(`/ops/drills/requirements/${created.body.id}/cancel`)
+        .set("Authorization", "Bearer tok-admin")
+        .send({ cancelledBy: "A", reason: "오등록" })
+        .expect(200);
+      await request(server)
+        .post("/ops/drills/require")
+        .set("Authorization", "Bearer tok-admin")
+        .send({ trigger: "dr-change", description: "2차", registeredBy: "A" })
+        .expect(201);
+    });
+
+    it("취소 사유 없이는 취소할 수 없다 — 왜 취소했는지가 남아야 한다", async () => {
+      const built = await build();
+      app = built.app;
+      const server = built.app.getHttpServer();
+
+      const created = await request(server)
+        .post("/ops/drills/require")
+        .set("Authorization", "Bearer tok-admin")
+        .send({ trigger: "dr-change", description: "x", registeredBy: "A" })
+        .expect(201);
+      await request(server)
+        .post(`/ops/drills/requirements/${created.body.id}/cancel`)
+        .set("Authorization", "Bearer tok-admin")
+        .send({ cancelledBy: "A" })
+        .expect(400);
+    });
+
+    it("이미 해소된 요구는 취소할 수 없다", async () => {
+      const built = await build();
+      app = built.app;
+      const server = built.app.getHttpServer();
+
+      const created = await request(server)
+        .post("/ops/drills/require")
+        .set("Authorization", "Bearer tok-admin")
+        .send({ trigger: "dr-change", description: "x", registeredBy: "A" })
+        .expect(201);
+      await request(server)
+        .post("/ops/drills")
+        .set("Authorization", "Bearer tok-admin")
+        .send({ ok: true, performedBy: "A" })
+        .expect(201);
+
+      await request(server)
+        .post(`/ops/drills/requirements/${created.body.id}/cancel`)
+        .set("Authorization", "Bearer tok-admin")
+        .send({ cancelledBy: "A", reason: "늦음" })
+        .expect(409);
+    });
+
+    it("원격 사본 검증·취소 API도 ADMIN 전용", async () => {
+      const built = await build();
+      app = built.app;
+      const server = built.app.getHttpServer();
+
+      await request(server).post("/ops/backup/verify-remote").expect(401);
+      await request(server)
+        .post("/ops/drills/requirements/x/cancel")
+        .set("Authorization", "Bearer tok-editor")
+        .send({ cancelledBy: "a", reason: "b" })
         .expect(403);
     });
   });

@@ -25,6 +25,8 @@ export const ALERT_KINDS = [
   "recovery-drill",
   // 백업 소요 시간 (TASK-1901, CTO 결정 1801-①)
   "backup-performance",
+  // 백업 사슬·원격 사본·규모 (TASK-2001)
+  "backup-integrity",
 ] as const;
 
 export type AlertKind = (typeof ALERT_KINDS)[number];
@@ -440,6 +442,7 @@ export const ALERT_COOLDOWN_ENV: Record<AlertKind, string> = {
   // 리허설은 날 단위 사안이라 30분마다 다시 알릴 이유가 없다
   "recovery-drill": "ALERT_COOLDOWN_DRILL_MS",
   "backup-performance": "ALERT_COOLDOWN_BACKUP_PERF_MS",
+  "backup-integrity": "ALERT_COOLDOWN_BACKUP_INTEGRITY_MS",
 };
 
 /** 전체 기본값 환경변수 (종류별 값이 없을 때) */

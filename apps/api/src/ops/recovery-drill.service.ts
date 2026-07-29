@@ -1,5 +1,18 @@
-import { Injectable, Logger } from "@nestjs/common";
-import { DRILL_TRIGGERS, detectDrillAlert, judgeRecoveryDrill } from "@acos/core";
+import {
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnModuleInit,
+} from "@nestjs/common";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import {
+  DRILL_TRIGGERS,
+  detectDrillAlert,
+  hasPendingTrigger,
+  judgeRecoveryDrill,
+} from "@acos/core";
 import type {
   DetectedAlert,
   DrillHealth,
@@ -28,6 +41,9 @@ interface RequirementRow {
   registeredBy: string;
   satisfiedAt: Date | null;
   satisfiedBy: string | null;
+  cancelledAt: Date | null;
+  cancelledBy: string | null;
+  cancelReason: string | null;
   createdAt: Date;
 }
 
@@ -38,6 +54,9 @@ function toRequirementDto(row: RequirementRow): DrillRequirementDto {
     description: row.description,
     registeredBy: row.registeredBy,
     satisfiedAt: row.satisfiedAt?.toISOString() ?? null,
+    cancelledAt: row.cancelledAt?.toISOString() ?? null,
+    cancelledBy: row.cancelledBy ?? null,
+    cancelReason: row.cancelReason ?? null,
     createdAt: row.createdAt.toISOString(),
   };
 }
@@ -66,7 +85,7 @@ function toDto(row: DrillRow): RecoveryDrillDto {
  * 기록은 **지우지 않는다** — 언제 무엇이 어긋났는지가 다음 리허설의 입력이다.
  */
 @Injectable()
-export class RecoveryDrillService {
+export class RecoveryDrillService implements OnModuleInit {
   private readonly logger = new Logger(RecoveryDrillService.name);
 
   constructor(private readonly prisma: PrismaService) {}
@@ -130,6 +149,13 @@ export class RecoveryDrillService {
     description: string;
     registeredBy: string;
   }): Promise<DrillRequirementDto> {
+    // 같은 종류가 미해소면 중복 등록을 막는다 (CTO 결정 1901-⑤) —
+    // 같은 사건이 여러 건 쌓이면 리허설 한 번으로 몇 건이 해소됐는지 흐려진다
+    if (hasPendingTrigger(await this.requirementInputs(), input.trigger)) {
+      throw new ConflictException(
+        `${input.trigger} 요구가 이미 미해소 상태입니다 — 리허설을 수행하거나 기존 요구를 취소하세요.`,
+      );
+    }
     const row = (await this.prisma.drillRequirement.create({
       data: {
         trigger: input.trigger,
@@ -143,6 +169,114 @@ export class RecoveryDrillService {
     return toRequirementDto(row);
   }
 
+  /**
+   * 요구 취소 (CTO 결정 1901-②).
+   *
+   * **삭제하지 않는다** — 잘못 등록한 것도 기록으로 남아야 하고, 왜 취소했는지가
+   * 다음 판단의 근거가 된다. 이미 해소된 요구는 취소할 것이 없다.
+   */
+  async cancelRequirement(
+    id: string,
+    input: { cancelledBy: string; reason: string },
+  ): Promise<DrillRequirementDto> {
+    const existing = (await this.prisma.drillRequirement.findUnique({
+      where: { id },
+    })) as RequirementRow | null;
+    if (!existing) {
+      throw new NotFoundException("요구를 찾을 수 없습니다.");
+    }
+    if (existing.satisfiedAt !== null) {
+      throw new ConflictException(
+        "이미 리허설로 해소된 요구입니다 — 취소할 것이 없습니다.",
+      );
+    }
+    if (existing.cancelledAt !== null) {
+      throw new ConflictException("이미 취소된 요구입니다.");
+    }
+
+    const row = (await this.prisma.drillRequirement.update({
+      where: { id },
+      data: {
+        cancelledAt: new Date(),
+        cancelledBy: input.cancelledBy,
+        cancelReason: input.reason,
+      },
+    })) as RequirementRow;
+    this.logger.warn(
+      `리허설 요구 취소 (${existing.trigger}, ${input.cancelledBy}) — ${input.reason}`,
+    );
+    return toRequirementDto(row);
+  }
+
+  /**
+   * Major Migration 자동 등록 (CTO 결정 1901-①).
+   *
+   * **지정된 마이그레이션만** 리허설을 부른다 — 사소한 컬럼 추가까지 리허설을
+   * 부르면 규칙이 소음이 되고, 소음이 된 규칙은 지켜지지 않는다. 무엇이
+   * major인지는 `prisma/major-migrations.json`에 사람이 적는다.
+   *
+   * `dr-change`·`pitr-adoption`은 자동 등록하지 않는다 — 코드로는 알 수 없는
+   * 사건이라 운영자가 직접 등록한다.
+   */
+  async onModuleInit(): Promise<void> {
+    try {
+      const applied = await this.appliedMajorMigrations();
+      if (applied.length === 0) {
+        return;
+      }
+      if (hasPendingTrigger(await this.requirementInputs(), "db-major-change")) {
+        return;
+      }
+      const known = await this.requirements(100);
+      // 이미 이 마이그레이션으로 등록한 적이 있으면 다시 만들지 않는다
+      const marker = `major-migration:${applied[applied.length - 1]}`;
+      if (known.some((entry) => entry.description.includes(marker))) {
+        return;
+      }
+      await this.prisma.drillRequirement.create({
+        data: {
+          trigger: "db-major-change",
+          description: `Major Migration 적용 — ${marker}`,
+          registeredBy: "system",
+        },
+      });
+      this.logger.warn(
+        `Major Migration(${applied[applied.length - 1]}) 적용으로 복구 리허설 요구를 자동 등록했습니다 (CTO 결정 1901-①).`,
+      );
+    } catch (error) {
+      // 자동 등록 실패가 기동을 막지는 않는다 — 다만 조용히 넘기지도 않는다
+      this.logger.warn(
+        `Major Migration 확인 실패: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  /** 선언된 major 목록 중 실제로 적용된 것 */
+  private async appliedMajorMigrations(): Promise<string[]> {
+    const declared = await this.majorMigrationManifest();
+    if (declared.length === 0) {
+      return [];
+    }
+    const rows = (await this.prisma.$queryRawUnsafe(
+      `SELECT migration_name FROM _prisma_migrations WHERE finished_at IS NOT NULL ORDER BY finished_at ASC`,
+    )) as { migration_name: string }[];
+    const appliedNames = new Set(rows.map((row) => row.migration_name));
+    return declared.filter((name) => appliedNames.has(name));
+  }
+
+  private async majorMigrationManifest(): Promise<string[]> {
+    try {
+      const path = join(process.cwd(), "prisma", "major-migrations.json");
+      const parsed = JSON.parse(await readFile(path, "utf8")) as {
+        majorMigrations?: string[];
+      };
+      return Array.isArray(parsed.majorMigrations) ? parsed.majorMigrations : [];
+    } catch {
+      // 목록이 없으면 자동 등록할 것도 없다 — 오류가 아니다
+      return [];
+    }
+  }
+
   /** 성공한 리허설로 미해소 요구를 닫는다 */
   private async satisfyRequirements(
     drillId: string,
@@ -150,7 +284,8 @@ export class RecoveryDrillService {
   ): Promise<number> {
     try {
       const result = await this.prisma.drillRequirement.updateMany({
-        where: { satisfiedAt: null },
+        // 취소된 요구는 해소 대상이 아니다
+        where: { satisfiedAt: null, cancelledAt: null },
         data: { satisfiedAt: at, satisfiedBy: drillId },
       });
       if (result.count > 0) {
@@ -190,6 +325,7 @@ export class RecoveryDrillService {
           trigger: row.trigger as DrillTrigger,
           createdAt: row.createdAt.getTime(),
           satisfiedAt: row.satisfiedAt?.getTime() ?? null,
+          cancelledAt: row.cancelledAt?.getTime() ?? null,
         }));
     } catch {
       return [];

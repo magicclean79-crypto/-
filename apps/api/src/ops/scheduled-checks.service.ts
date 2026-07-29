@@ -4,8 +4,10 @@ import {
   detectBudgetAlerts,
   detectConfigurationAlerts,
   detectProviderAlerts,
+  detectBackupChainAlert,
   detectBackupPerformanceAlert,
   detectLockOutageAlert,
+  detectScaleAlert,
   detectSchedulerAlerts,
   detectUnpricedAlerts,
   isSchedulerStopped,
@@ -237,9 +239,19 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
     );
 
     // 백업 소요 시간 (TASK-1901, CTO 결정 1801-①)
+    const health = await this.backups.health();
     await this.alerts.sync(
       ["backup-performance"],
-      detectBackupPerformanceAlert((await this.backups.health()).performance),
+      detectBackupPerformanceAlert(health.performance),
+    );
+
+    // 백업 사슬·규모 (TASK-2001) — 원격 사본은 전송 비용이 들어 수동 실행만
+    await this.alerts.sync(
+      ["backup-integrity"],
+      [
+        ...detectBackupChainAlert(health.chain),
+        ...detectScaleAlert(health.scale),
+      ],
     );
   }
 

@@ -55,9 +55,9 @@ test.describe("운영 대시보드 (TASK-1601)", () => {
     const runbook = page.getByTestId("dr-item-runbook");
     await expect(runbook).toContainText("직접 확인");
     await expect(runbook).toContainText("disaster-recovery.md");
-    // 통과로 세지 않는다 — 리허설 기록 전에는 리허설도 직접 확인이다
+    // 통과로 세지 않는다 — 리허설·원격 사본 대조도 직접 확인이다
     await expect(page.getByTestId("dr-checklist")).toContainText(
-      "직접 확인 2",
+      "직접 확인 3",
     );
   });
 
@@ -330,5 +330,166 @@ test.describe("Enterprise Recovery Assurance (TASK-1901)", () => {
     await expect(protection).toContainText("직접 확인");
     await expect(protection).toContainText("운영 저장소 표준은 Amazon S3");
     await expect(protection).toContainText("MinIO·s3rver는 개발 전용");
+  });
+});
+
+/** 스텁에 리허설 요구를 직접 등록한다 (대시보드에는 등록 UI가 없다) */
+async function requireDrill(
+  trigger: string,
+  description: string,
+): Promise<number> {
+  const response = await fetch(`${STUB}/ops/drills/require`, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer stub-token",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ trigger, description, registeredBy: "운영자" }),
+  });
+  return response.status;
+}
+
+test.describe("Enterprise Backup Integrity Platform (TASK-2001)", () => {
+  test("백업 사슬 연속성을 개별 성공과 따로 판정한다", async ({ page }) => {
+    await setMode("data");
+    await openPage(page);
+
+    const chain = page.getByTestId("backup-chain");
+    await expect(chain).toContainText("통과");
+    await expect(chain).toContainText("24/24회");
+    await expect(chain).toContainText(
+      "개별 백업이 모두 성공이어도 사슬은 끊길 수 있습니다",
+    );
+  });
+
+  test("사슬 공백은 되돌아갈 수 없는 구간이라 복구 불가로 판정한다", async ({
+    page,
+  }) => {
+    await setMode("empty");
+    await openPage(page);
+
+    const chain = page.getByTestId("backup-chain");
+    await expect(chain).toContainText("실패");
+    await expect(chain).toContainText("5.0시간 공백");
+    await expect(chain).toContainText(
+      "돌지 않은 백업은 아무 데도 기록되지 않습니다",
+    );
+    // critical 항목이다 — 복구 가능성 판정을 바꾼다
+    await expect(page.getByTestId("dr-item-backup-chain")).toContainText(
+      "실패",
+    );
+    await expect(page.getByTestId("dr-verdict")).toContainText("복구 불가");
+  });
+
+  test("원격 사본 대조는 기본으로 돌지 않는다 — 전송 비용이 든다", async ({
+    page,
+  }) => {
+    await setMode("data");
+    await openPage(page);
+
+    const remote = page.getByTestId("remote-integrity");
+    await expect(remote).toContainText("직접 확인");
+    await expect(remote).toContainText("전송 비용");
+    await expect(page.getByTestId("verify-remote")).toContainText(
+      "원격 사본 검증 (전송 비용)",
+    );
+
+    await page.getByTestId("verify-remote").click();
+    await expect(page.getByTestId("operations-note")).toContainText(
+      "기록된 체크섬과 일치",
+    );
+    await expect(remote).toContainText("통과");
+    // 체크섬 전체를 늘어놓지 않는다
+    await expect(remote).not.toContainText("c".repeat(64));
+  });
+
+  test("원격에 사본이 없으면 올렸다는 기록만 남은 상태라고 말한다", async ({
+    page,
+  }) => {
+    await setMode("empty");
+    await openPage(page);
+
+    await page.getByTestId("verify-remote").click();
+    await expect(page.getByTestId("operations-note")).toContainText(
+      "올렸다는 기록만 남아 있고 실제 사본은 없습니다",
+    );
+  });
+
+  test("운영 저장소 표준은 Amazon S3이고, 개발 저장소는 개발에서 정상이다 (CTO 결정 1901-③)", async ({
+    page,
+  }) => {
+    await setMode("data");
+    await openPage(page);
+
+    const standard = page.getByTestId("storage-standard");
+    await expect(standard).toContainText("통과");
+    await expect(standard).toContainText("개발에서는 정상입니다");
+    await expect(standard).toContainText("운영 표준은 Amazon S3");
+  });
+
+  test("데이터베이스 규모는 재평가 신호로만 쓰고 기준을 자동으로 바꾸지 않는다 (CTO 결정 1901-④)", async ({
+    page,
+  }) => {
+    await setMode("data");
+    await openPage(page);
+
+    const scale = page.getByTestId("database-scale");
+    await expect(scale).toContainText("통과");
+    await expect(scale).toContainText("재평가 기준 10 · 50 · 100GB");
+    await expect(scale).toContainText("10.0GB까지");
+
+    await setMode("empty");
+    await openPage(page);
+    await expect(scale).toContainText("주의");
+    await expect(scale).toContainText("실측으로 다시 재세요");
+    await expect(scale).toContainText("자동으로 바꾸지는 않습니다");
+  });
+
+  test("같은 Trigger가 미해소면 중복 등록하지 않는다 (CTO 결정 1901-⑤)", async ({
+    page,
+  }) => {
+    await setMode("data");
+    expect(await requireDrill("dr-change", "복구 절차 개정")).toBe(201);
+    // 두 번째는 거절한다 — 리허설 1회로 함께 해소되므로 쌓을 이유가 없다
+    expect(await requireDrill("dr-change", "복구 절차 재개정")).toBe(409);
+    // 다른 Trigger는 별개다
+    expect(await requireDrill("pitr-adoption", "PITR 도입")).toBe(201);
+
+    await openPage(page);
+    const triggers = page.getByTestId("drill-triggers");
+    await expect(triggers).toContainText("재해 복구 절차 변경");
+    await expect(triggers).toContainText("PITR 도입");
+    await expect(triggers).not.toContainText("복구 절차 재개정");
+  });
+
+  test("요구는 삭제하지 않고 사유와 함께 취소로 남긴다 (CTO 결정 1901-②)", async ({
+    page,
+  }) => {
+    await setMode("data");
+    await openPage(page);
+
+    // 먼저 리허설을 통과시켜 둔다 — 그 뒤의 변경이 판정을 뒤집는지 본다
+    await page.getByTestId("record-drill").click();
+    await page.getByTestId("drill-performer").fill("운영자 D");
+    await page.getByTestId("drill-success").click();
+    await expect(page.getByTestId("dr-item-drill")).toContainText("통과");
+
+    expect(await requireDrill("dr-change", "복구 절차 개정")).toBe(201);
+    await page.reload();
+    await expect(page.getByTestId("dr-item-drill")).toContainText("실패");
+
+    page.once("dialog", (dialog) => void dialog.accept("절차 변경이 철회됨"));
+    await page.getByTestId("cancel-requirement-req-1").click();
+
+    await expect(page.getByTestId("operations-note")).toContainText(
+      "사유와 함께 남습니다",
+    );
+    // 목록에서 사라지지 않는다 — 취소 기록으로 남는다
+    const cancelled = page.getByTestId("cancelled-requirements");
+    await expect(cancelled).toContainText("복구 절차 개정");
+    await expect(cancelled).toContainText("절차 변경이 철회됨");
+    // 취소된 요구는 리허설을 붙잡지 않는다
+    await expect(page.getByTestId("drill-triggers")).toHaveCount(0);
+    await expect(page.getByTestId("dr-item-drill")).toContainText("통과");
   });
 });

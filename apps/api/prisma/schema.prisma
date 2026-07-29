@@ -571,6 +571,13 @@ model DrillRequirement {
   satisfiedAt DateTime?
   /** 충족한 리허설 id */
   satisfiedBy String?
+  /**
+   * 취소 (TASK-2001, CTO 결정 1901-②).
+   * **삭제는 금지한다** — 잘못 등록한 것도 기록으로 남아야 한다.
+   */
+  cancelledAt DateTime?
+  cancelledBy String?
+  cancelReason String?
   createdAt   DateTime  @default(now())
 
   @@index([satisfiedAt])

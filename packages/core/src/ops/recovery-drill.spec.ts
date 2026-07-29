@@ -2,6 +2,7 @@ import {
   DEFAULT_DRILL_GRACE_MS,
   DEFAULT_DRILL_INTERVAL_MS,
   detectDrillAlert,
+  hasPendingTrigger,
   judgeRecoveryDrill,
 } from "./recovery-drill";
 
@@ -220,6 +221,56 @@ describe("Recovery Drill (TASK-1801, CTO 결정 1701-⑤)", () => {
       });
       expect(alerts[0].message).toContain("데이터베이스 대규모 변경");
       expect(alerts[0].message).not.toContain("**");
+    });
+  });
+
+  describe("요구 취소·중복 금지 (CTO 결정 1901-②·⑤)", () => {
+    const recent = [{ ok: true, createdAt: now - 10 * DAY }];
+
+    it("취소된 요구는 미해소로 세지 않는다", () => {
+      const health = judgeRecoveryDrill(recent, {
+        now,
+        requirements: [
+          {
+            trigger: "dr-change",
+            createdAt: now - DAY,
+            satisfiedAt: null,
+            cancelledAt: now,
+          },
+        ],
+      });
+      expect(health.status).toBe("pass");
+      expect(health.pendingTriggers).toEqual([]);
+    });
+
+    it("같은 종류가 미해소면 중복으로 본다", () => {
+      const requirements = [
+        { trigger: "dr-change" as const, createdAt: now, satisfiedAt: null },
+      ];
+      expect(hasPendingTrigger(requirements, "dr-change")).toBe(true);
+      expect(hasPendingTrigger(requirements, "pitr-adoption")).toBe(false);
+    });
+
+    it("해소·취소된 요구는 중복으로 보지 않는다", () => {
+      expect(
+        hasPendingTrigger(
+          [{ trigger: "dr-change", createdAt: now, satisfiedAt: now }],
+          "dr-change",
+        ),
+      ).toBe(false);
+      expect(
+        hasPendingTrigger(
+          [
+            {
+              trigger: "dr-change",
+              createdAt: now,
+              satisfiedAt: null,
+              cancelledAt: now,
+            },
+          ],
+          "dr-change",
+        ),
+      ).toBe(false);
     });
   });
 

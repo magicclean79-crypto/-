@@ -1,0 +1,7 @@
+{
+  "$comment": "Major Migration 목록 (TASK-2001, CTO 결정 1901-①). 여기 적힌 마이그레이션이 적용되면 db-major-change 리허설 요구가 자동 등록된다. 사소한 마이그레이션까지 리허설을 부르지 않도록, 지정은 사람이 한다.",
+  "majorMigrations": [
+    "20260729180000_operational_readiness",
+    "20260729210000_enterprise_backup"
+  ]
+}

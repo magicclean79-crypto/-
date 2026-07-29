@@ -4,6 +4,7 @@ import {
   Controller,
   Get,
   HttpCode,
+  Param,
   Post,
   Query,
   UseGuards,
@@ -11,7 +12,9 @@ import {
 import {
   buildDisasterRecoveryChecklist,
   DRILL_TRIGGERS,
+  judgeRemoteIntegrity,
   judgeStorageProtection,
+  judgeStorageStandard,
   SCHEDULED_JOBS,
   summarizeAlerts,
   summarizeDisasterRecovery,
@@ -89,6 +92,7 @@ export class OpsController {
       drill,
       drillHistory,
       requirements,
+      remoteIntegrity,
     ] = await Promise.all([
       this.backups.health(),
       this.backups.backupHistory(10),
@@ -102,6 +106,9 @@ export class OpsController {
       this.drills.health(),
       this.drills.history(10),
       this.drills.requirements(10),
+      // 원격 사본 내려받기는 전송 비용이 들어 조회에서는 하지 않는다 —
+      // 마지막 수동 검증 결과가 없으면 "직접 확인"으로 남는다
+      Promise.resolve(judgeRemoteIntegrity(null)),
     ]);
 
     // 이미지 저장소 보호 상태 (CTO 결정 1601-④·1701-③) — 앱은 이미지를
@@ -118,6 +125,11 @@ export class OpsController {
       production,
       label: "백업 버킷",
     });
+    // 운영 저장소 표준 (CTO 결정 1901-③)
+    const storageStandard = judgeStorageStandard(
+      process.env.S3_ENDPOINT,
+      production,
+    );
     const targetSafety = this.backups.restoreTargetSafety;
     const restoreTarget = {
       status: (targetSafety.verdict === "same-as-production"
@@ -157,6 +169,18 @@ export class OpsController {
         backupPerformance: {
           status: health.performance.status,
           detail: health.performance.detail,
+        },
+        backupChain: {
+          status: health.chain.status,
+          detail: health.chain.detail,
+        },
+        remoteIntegrity: {
+          status: remoteIntegrity.status,
+          detail: remoteIntegrity.detail,
+        },
+        storageStandard: {
+          status: storageStandard.status,
+          detail: storageStandard.detail,
         },
       },
     });
@@ -227,6 +251,28 @@ export class OpsController {
           protection: { ...backupBucketProtection, ...backupProtection },
         },
         performance: health.performance,
+        backupIntegrity: {
+          chain: {
+            status: health.chain.status,
+            detail: health.chain.detail,
+            expected: health.chain.expected,
+            actual: health.chain.actual,
+            longestGapMs: health.chain.longestGapMs,
+          },
+          remote: {
+            status: remoteIntegrity.status,
+            detail: remoteIntegrity.detail,
+            verdict: remoteIntegrity.verdict,
+          },
+          scale: {
+            status: health.scale.status,
+            detail: health.scale.detail,
+            bytes: health.scale.bytes,
+            reachedMilestone: health.scale.reachedMilestone,
+            nextMilestone: health.scale.nextMilestone,
+          },
+          storageStandard,
+        },
       },
       checkedAt: new Date().toISOString(),
     };
@@ -342,6 +388,36 @@ export class OpsController {
       throw new BadRequestException("registeredBy는 필수입니다.");
     }
     return this.drills.requireDrill({ trigger, description, registeredBy });
+  }
+
+  /**
+   * 요구 취소 (CTO 결정 1901-②) — **삭제는 금지한다.**
+   * 왜 취소했는지가 다음 판단의 근거가 되므로 사유를 필수로 받는다.
+   */
+  @Post("drills/requirements/:id/cancel")
+  @HttpCode(200)
+  async cancelRequirement(
+    @Param("id") id: string,
+    @Body() body: { cancelledBy?: string; reason?: string },
+  ): Promise<DrillRequirementDto> {
+    const cancelledBy = body?.cancelledBy?.trim();
+    const reason = body?.reason?.trim();
+    if (!cancelledBy || !reason) {
+      throw new BadRequestException(
+        "cancelledBy와 reason은 필수입니다 — 왜 취소했는지가 남지 않으면 기록이 아닙니다.",
+      );
+    }
+    return this.drills.cancelRequirement(id, { cancelledBy, reason });
+  }
+
+  /**
+   * 원격 사본 무결성 검증 (TASK-2001).
+   * **내려받아 대조하므로 전송 비용이 든다** — 눌러야만 실행한다.
+   */
+  @Post("backup/verify-remote")
+  @HttpCode(200)
+  async verifyRemote() {
+    return this.backups.verifyRemoteCopy();
   }
 
   /** 변경 사건 목록 */
