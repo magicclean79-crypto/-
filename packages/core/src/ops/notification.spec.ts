@@ -1,15 +1,24 @@
 import {
+  DEFAULT_CHANNEL_POLICY,
+  decideQueueOutcome,
   decideRetry,
   DEFAULT_RETRY_POLICY,
   emailBody,
   isRetriable,
   retryDelayMs,
+  isDue,
+  resolveChannelPolicy,
   selectChannels,
   shouldNotify,
+  summarizeQueue,
   slackBody,
   webhookBody,
 } from "./notification";
-import type { ChannelConfig, NotificationPayload } from "./notification";
+import type {
+  ChannelConfig,
+  NotificationPayload,
+  QueueItemState,
+} from "./notification";
 
 function channel(overrides: Partial<ChannelConfig> = {}): ChannelConfig {
   return {
@@ -150,6 +159,128 @@ describe("Notification Center (TASK-1401)", () => {
         level: "critical",
         kind: "budget",
         key: "budget:daily",
+      });
+    });
+  });
+
+  describe("resolveChannelPolicy (CTO 결정 1401-④)", () => {
+    const ALL_ON = { slack: true, email: true, webhook: true };
+
+    it("운영 기본값 — Slack Warning 이상 / Email Critical 이상 / Webhook Warning 이상 / 해소 포함", () => {
+      const policy = resolveChannelPolicy({}, ALL_ON);
+      const byChannel = Object.fromEntries(
+        policy.map((entry) => [entry.channel, entry]),
+      );
+      expect(byChannel.slack).toMatchObject({ minLevel: "warning", resolved: true });
+      expect(byChannel.email).toMatchObject({ minLevel: "critical", resolved: true });
+      expect(byChannel.webhook).toMatchObject({ minLevel: "warning", resolved: true });
+      expect(DEFAULT_CHANNEL_POLICY.email.minLevel).toBe("critical");
+    });
+
+    it("환경변수로 변경할 수 있다", () => {
+      const policy = resolveChannelPolicy(
+        {
+          ALERT_SLACK_MIN_LEVEL: "critical",
+          ALERT_EMAIL_MIN_LEVEL: "warning",
+          ALERT_WEBHOOK_RESOLVED: "0",
+        },
+        ALL_ON,
+      );
+      const byChannel = Object.fromEntries(
+        policy.map((entry) => [entry.channel, entry]),
+      );
+      expect(byChannel.slack.minLevel).toBe("critical");
+      expect(byChannel.email.minLevel).toBe("warning");
+      expect(byChannel.webhook.resolved).toBe(false);
+    });
+
+    it("알 수 없는 값은 기본값으로 되돌린다", () => {
+      const policy = resolveChannelPolicy(
+        { ALERT_EMAIL_MIN_LEVEL: "urgent" },
+        ALL_ON,
+      );
+      expect(
+        policy.find((entry) => entry.channel === "email")!.minLevel,
+      ).toBe("critical");
+    });
+
+    it("주소가 없는 채널은 꺼진 상태로 온다", () => {
+      const policy = resolveChannelPolicy({}, {
+        slack: false,
+        email: false,
+        webhook: true,
+      });
+      expect(policy.filter((entry) => entry.enabled)).toHaveLength(1);
+    });
+
+    it("기본 정책에서 warning은 메일로 가지 않는다 — 메일은 쌓이면 안 읽는다", () => {
+      const policy = resolveChannelPolicy({}, ALL_ON);
+      expect(selectChannels(policy, "warning")).toEqual(["slack", "webhook"]);
+      expect(selectChannels(policy, "critical")).toEqual([
+        "slack",
+        "email",
+        "webhook",
+      ]);
+    });
+  });
+
+  describe("Persistent Queue (CTO 결정 1401-②)", () => {
+    const now = 1_000_000;
+
+    it("성공하면 sent", () => {
+      expect(decideQueueOutcome(1, { ok: true, status: 200 }, now)).toMatchObject({
+        outcome: "sent",
+      });
+    });
+
+    it("일시적 실패는 retry — 다음 시도 시각을 계산한다", () => {
+      expect(
+        decideQueueOutcome(1, { ok: false, status: 503 }, now),
+      ).toMatchObject({ outcome: "retry", nextAttemptAt: now + 1_000 });
+      expect(
+        decideQueueOutcome(3, { ok: false, status: null }, now).nextAttemptAt,
+      ).toBe(now + 4_000);
+    });
+
+    it("되돌릴 수 없는 실패는 즉시 Dead Letter", () => {
+      const decision = decideQueueOutcome(1, { ok: false, status: 404 }, now);
+      expect(decision.outcome).toBe("dead");
+      expect(decision.reason).toContain("설정을 고쳐야");
+    });
+
+    it("최대 시도를 소진하면 Dead Letter — 죽은 채널에 매달리지 않는다", () => {
+      expect(
+        decideQueueOutcome(4, { ok: false, status: 500 }, now).outcome,
+      ).toBe("dead");
+    });
+
+    it("isDue — 지금 보낼 수 있는 항목만 집어 간다", () => {
+      const item: QueueItemState = {
+        id: "q1",
+        channel: "slack",
+        attempts: 1,
+        status: "PENDING",
+        nextAttemptAt: now,
+      };
+      expect(isDue(item, now)).toBe(true);
+      expect(isDue({ ...item, nextAttemptAt: now + 1 }, now)).toBe(false);
+      // 이미 보냈거나 죽은 항목은 다시 집지 않는다
+      expect(isDue({ ...item, status: "SENT" }, now)).toBe(false);
+      expect(isDue({ ...item, status: "DEAD" }, now)).toBe(false);
+    });
+
+    it("summarizeQueue — 대기·성공·Dead Letter를 구분해 센다", () => {
+      const items: QueueItemState[] = [
+        { id: "1", channel: "slack", attempts: 1, status: "PENDING", nextAttemptAt: now },
+        { id: "2", channel: "slack", attempts: 1, status: "PENDING", nextAttemptAt: now + 10_000 },
+        { id: "3", channel: "email", attempts: 1, status: "SENT", nextAttemptAt: now },
+        { id: "4", channel: "webhook", attempts: 4, status: "DEAD", nextAttemptAt: now },
+      ];
+      expect(summarizeQueue(items, now)).toEqual({
+        pending: 2,
+        sent: 1,
+        dead: 1,
+        due: 1,
       });
     });
   });

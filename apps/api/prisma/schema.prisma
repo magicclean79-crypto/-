@@ -444,6 +444,42 @@ model NotificationDelivery {
   @@map("notification_deliveries")
 }
 
+enum NotificationQueueStatus {
+  PENDING
+  SENT
+  /** Dead Letter — 사람이 고쳐야 나간다. **지우지 않는다** */
+  DEAD
+}
+
+/**
+ * 알림 전송 큐 (TASK-1501, CTO 결정 1401-②).
+ *
+ * TASK-1401의 재시도는 프로세스 안에서만 돌아서, 인스턴스가 재시작하면
+ * 진행 중이던 재시도가 사라졌다. 큐에 담아 두면 **재시작을 견딘다**.
+ */
+model NotificationQueue {
+  id            String                  @id @default(cuid())
+  alertKey      String
+  channel       String // slack | email | webhook
+  level         String // warning | critical | resolved
+  /** 전송 본문 (채널 무관 표현) — 재시도 때 그대로 다시 쓴다 */
+  payload       Json
+  status        NotificationQueueStatus @default(PENDING)
+  attempts      Int                     @default(0)
+  /** 다음 시도 시각 — Retry Worker가 이 시각을 지난 항목만 집어 간다 */
+  nextAttemptAt DateTime                @default(now())
+  lastStatus    Int?
+  lastError     String?
+  sentAt        DateTime?
+  deadAt        DateTime?
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@index([alertKey, createdAt])
+  @@map("notification_queue")
+}
+
 /** 예약 점검 실행 이력 — "언제 마지막으로 확인했는가"의 근거 */
 model CheckRun {
   id           String   @id @default(cuid())

@@ -469,6 +469,28 @@ TASK-1302가 남긴 두 부채를 갚습니다: **예약 점검의 인스턴스�
 **배포 게이트**: 운영에서는 `GATE_STRICT`·`GATE_ALERTS`가 **기본 ON**입니다 —
 안전한 쪽이 기본이어야 사람이 잊었을 때 사고가 나지 않습니다.
 
+## 고가용·운영 신뢰성 (TASK-1501, Sprint 15)
+
+- **Scheduler Stopped Alert**: Redis 장애 시 **단일 모드로 자동 폴백하지
+  않습니다**(폴백하면 여러 인스턴스가 동시에 점검을 돌립니다). 대신 멈춘 사실을
+  critical로 알립니다. 감시자는 **잠금 없이** 돌아야 정작 알려야 할 때 알릴 수
+  있고, 간격의 3배를 넘겨야 멈춘 것으로 봅니다
+- **Persistent Notification Queue**: 경보를 큐에 담고 Retry Worker가 보냅니다 —
+  **재시작을 견딥니다**. 워커는 리더만 돌립니다(같은 알림이 여러 번 가지 않도록)
+- **Dead Letter Queue**: 4xx이거나 최대 시도를 소진하면 `DEAD`로 남기고
+  **지우지 않습니다**. 설정을 고친 뒤 `requeue`로 다시 보냅니다
+- **Alert Archive 예약화**: 네 번째 예약 점검으로 편입되어 **매일 04:00 UTC**에
+  돕니다. 그 시각 전에는 한 번도 안 돌았어도 돌지 않습니다
+- **운영 기본 채널 정책**: Slack Warning 이상 / **Email Critical 이상** /
+  Webhook Warning 이상 / 해소 포함 — 메일은 쌓이면 읽지 않게 되기 때문입니다.
+  환경변수로 전부 변경 가능합니다
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `GET` | `/ops/notifications/queue` | **큐 현황 (ADMIN)** — 대기·성공·Dead Letter |
+| `POST` | `/ops/notifications/queue/drain` | **지금 보내기 (ADMIN)** |
+| `POST` | `/ops/notifications/queue/requeue` | **Dead Letter 재시도 (ADMIN)** |
+
 ## Execution Domain (TASK-0601, Sprint 6)
 
 모든 LLM 호출(Content Generation · Analysis · Vision · 개발용 API)은 호출 1건당

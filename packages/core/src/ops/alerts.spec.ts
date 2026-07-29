@@ -2,6 +2,7 @@ import {
   DEFAULT_ALERT_COOLDOWN_MS,
   detectBudgetAlerts,
   detectConfigurationAlerts,
+  detectSchedulerAlerts,
   detectProviderAlerts,
   detectUnpricedAlerts,
   reconcileAlerts,
@@ -135,6 +136,56 @@ describe("Production Alerting (TASK-1302)", () => {
     });
   });
 
+  describe("Scheduler Stopped Alert (CTO 결정 1401-①)", () => {
+    const job = {
+      job: "cost-verification",
+      stopped: true,
+      lastRunAt: "2026-07-29T00:00:00.000Z",
+      interval: "15분",
+    };
+
+    it("멈춘 점검만 critical로 알린다", () => {
+      const alerts = detectSchedulerAlerts({
+        jobs: [job, { ...job, job: "health-check", stopped: false }],
+        lockUnavailable: false,
+      });
+      expect(alerts).toHaveLength(1);
+      expect(alerts[0]).toMatchObject({
+        kind: "scheduler-stopped",
+        key: "scheduler-stopped:cost-verification",
+        level: "critical",
+      });
+      expect(alerts[0].message).toContain("15분");
+    });
+
+    it("Redis를 못 쓰는 상황이면 원인을 함께 적는다", () => {
+      // 원인을 모르면 사람이 어디부터 봐야 할지 알 수 없다
+      const [alert] = detectSchedulerAlerts({
+        jobs: [job],
+        lockUnavailable: true,
+      });
+      expect(alert.message).toContain("분산 잠금(Redis)");
+      expect(alert.message).toContain("Redis 연결을 먼저 확인");
+    });
+
+    it("실행 이력이 없으면 그 사실을 말한다", () => {
+      const [alert] = detectSchedulerAlerts({
+        jobs: [{ ...job, lastRunAt: null }],
+        lockUnavailable: false,
+      });
+      expect(alert.message).toContain("실행 이력이 없습니다");
+    });
+
+    it("멈춘 점검이 없으면 경보도 없다", () => {
+      expect(
+        detectSchedulerAlerts({
+          jobs: [{ ...job, stopped: false }],
+          lockUnavailable: true,
+        }),
+      ).toEqual([]);
+    });
+  });
+
   describe("reconcileAlerts — 중복·해소 판정", () => {
     const now = 1_000_000;
     const cooldownMs = 60_000;
@@ -250,6 +301,7 @@ describe("Production Alerting (TASK-1302)", () => {
     it("미설정이면 전 종류 30분 — 공식 표준", () => {
       const resolved = resolveCooldowns({});
       expect(resolved.budget).toBe(DEFAULT_ALERT_COOLDOWN_MS);
+      expect(resolved["scheduler-stopped"]).toBe(DEFAULT_ALERT_COOLDOWN_MS);
       expect(DEFAULT_ALERT_COOLDOWN_MS).toBe(30 * 60 * 1000);
       expect(Object.values(resolved).every((ms) => ms === 1_800_000)).toBe(true);
     });

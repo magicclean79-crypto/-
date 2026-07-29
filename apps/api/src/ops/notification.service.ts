@@ -2,10 +2,12 @@ import { Injectable, Logger } from "@nestjs/common";
 import { createTransport } from "nodemailer";
 import type { Transporter } from "nodemailer";
 import {
+  CHANNEL_ENV,
   decideRetry,
   DEFAULT_RETRY_POLICY,
   emailBody,
   NOTIFICATION_CHANNELS,
+  resolveChannelPolicy,
   selectChannels,
   slackBody,
   webhookBody,
@@ -18,6 +20,7 @@ import type {
   RetryPolicy,
 } from "@acos/core";
 import type { NotificationChannelStatusDto } from "@acos/shared";
+
 import { PrismaService } from "../prisma/prisma.service";
 
 interface SendResult {
@@ -58,6 +61,11 @@ export class NotificationService {
     });
   }
 
+  /** 재시도 정책 (큐 워커와 공유) */
+  get retryPolicy(): RetryPolicy {
+    return this.policy;
+  }
+
   private get policy(): RetryPolicy {
     const attempts = Number(process.env.ALERT_RETRY_MAX_ATTEMPTS);
     return {
@@ -69,47 +77,20 @@ export class NotificationService {
     };
   }
 
-  private minLevel(env: string | undefined): "warning" | "critical" {
-    return (env ?? "").trim().toLowerCase() === "critical"
-      ? "critical"
-      : "warning";
-  }
-
-  private flag(env: string | undefined, fallback: boolean): boolean {
-    const value = (env ?? "").trim().toLowerCase();
-    if (value === "") {
-      return fallback;
-    }
-    return !["0", "off", "false", "no"].includes(value);
-  }
-
   /**
-   * 채널 구성 — 주소가 설정된 채널만 켜진다.
+   * 채널 구성 — 주소가 설정된 채널만 켜지고, 정책은 core가 해석한다.
+   * 기본값은 **CTO 결정 1401-④의 공식 정책**(Slack Warning 이상 /
+   * Email Critical 이상 / Webhook Warning 이상 / 해소 포함)이다.
    * 주소(웹훅 URL·SMTP·수신자)는 어떤 응답에도 담지 않는다.
    */
   channelConfigs(): ChannelConfig[] {
-    return [
-      {
-        channel: "slack",
-        enabled: Boolean(process.env.ALERT_SLACK_WEBHOOK_URL?.trim()),
-        minLevel: this.minLevel(process.env.ALERT_SLACK_MIN_LEVEL),
-        resolved: this.flag(process.env.ALERT_SLACK_RESOLVED, true),
-      },
-      {
-        channel: "email",
-        enabled:
-          Boolean(process.env.ALERT_EMAIL_TO?.trim()) &&
-          Boolean(process.env.SMTP_HOST?.trim()),
-        minLevel: this.minLevel(process.env.ALERT_EMAIL_MIN_LEVEL),
-        resolved: this.flag(process.env.ALERT_EMAIL_RESOLVED, true),
-      },
-      {
-        channel: "webhook",
-        enabled: Boolean(process.env.ALERT_WEBHOOK_URL?.trim()),
-        minLevel: this.minLevel(process.env.ALERT_WEBHOOK_MIN_LEVEL),
-        resolved: this.flag(process.env.ALERT_WEBHOOK_RESOLVED, true),
-      },
-    ];
+    return resolveChannelPolicy(process.env as Record<string, string | undefined>, {
+      slack: Boolean(process.env.ALERT_SLACK_WEBHOOK_URL?.trim()),
+      email:
+        Boolean(process.env.ALERT_EMAIL_TO?.trim()) &&
+        Boolean(process.env.SMTP_HOST?.trim()),
+      webhook: Boolean(process.env.ALERT_WEBHOOK_URL?.trim()),
+    });
   }
 
   /** 채널 현황 (주소는 노출하지 않는다) */
@@ -119,12 +100,7 @@ export class NotificationService {
       enabled: config.enabled,
       minLevel: config.minLevel,
       resolved: config.resolved,
-      env:
-        config.channel === "slack"
-          ? "ALERT_SLACK_WEBHOOK_URL"
-          : config.channel === "email"
-            ? "SMTP_HOST + ALERT_EMAIL_TO"
-            : "ALERT_WEBHOOK_URL",
+      env: CHANNEL_ENV[config.channel].target,
     }));
   }
 
@@ -190,6 +166,29 @@ export class NotificationService {
     return { ok: false, attempts: attempt, status: lastStatus, error: lastError };
   }
 
+  /**
+   * 채널 1회 전송 (재시도 없음) — 큐 워커가 재시도를 관리한다.
+   * 예외를 던지지 않고 결과로 돌려준다.
+   */
+  async sendOnce(
+    channel: NotificationChannel,
+    payload: NotificationPayload,
+  ): Promise<{ ok: boolean; status: number | null; error: string | null }> {
+    try {
+      const status = await this.send(channel, payload);
+      if (status === null || (status >= 200 && status < 300)) {
+        return { ok: true, status, error: null };
+      }
+      return { ok: false, status, error: `HTTP ${status}` };
+    } catch (error) {
+      return {
+        ok: false,
+        status: null,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
   /** 실제 전송 — 성공 시 상태 코드(메일은 null) */
   private async send(
     channel: NotificationChannel,
@@ -245,7 +244,7 @@ export class NotificationService {
     return this.mailer;
   }
 
-  private async record(
+  async record(
     channel: NotificationChannel,
     payload: NotificationPayload,
     result: SendResult,

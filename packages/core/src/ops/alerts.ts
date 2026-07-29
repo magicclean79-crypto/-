@@ -19,6 +19,8 @@ export const ALERT_KINDS = [
   "provider-failure",
   "unpriced-model",
   "configuration",
+  // 예약 점검 정지 (TASK-1501, CTO 결정 1401-①)
+  "scheduler-stopped",
 ] as const;
 
 export type AlertKind = (typeof ALERT_KINDS)[number];
@@ -214,6 +216,53 @@ export function detectConfigurationAlerts(input: {
   return alerts;
 }
 
+export interface SchedulerStateInput {
+  job: string;
+  /** 멈춘 것으로 판정되었는가 (core `isSchedulerStopped`) */
+  stopped: boolean;
+  /** 마지막 실행 (ISO) — 없으면 "실행 이력 없음" */
+  lastRunAt: string | null;
+  /** 간격 설명 (표시용) */
+  interval: string;
+}
+
+/**
+ * Scheduler Stopped Alert (TASK-1501, CTO 결정 1401-①).
+ *
+ * Redis 장애로 잠금을 못 잡으면 예약 점검이 아예 돌지 않는다. **단일 모드로
+ * 자동 폴백하지 않기로 했으므로**(중복 실행보다 안전하다), 멈춘 사실 자체를
+ * 알린다 — 조용히 안 도는 점검이 가장 위험하다.
+ *
+ * `lockUnavailable`이 참이면 원인을 함께 적는다. 원인을 모르면 사람이
+ * 어디부터 봐야 할지 알 수 없다.
+ */
+export function detectSchedulerAlerts(input: {
+  jobs: SchedulerStateInput[];
+  /** 분산 잠금을 쓰는데 지금 사용할 수 없는가 */
+  lockUnavailable: boolean;
+}): DetectedAlert[] {
+  const stopped = input.jobs.filter((job) => job.stopped);
+  if (stopped.length === 0) {
+    return [];
+  }
+
+  const cause = input.lockUnavailable
+    ? "분산 잠금(Redis)을 사용할 수 없습니다 — 잠금을 못 잡으면 예약 실행이 건너뛰어집니다. " +
+      "Redis 연결을 먼저 확인하세요."
+    : "예약 타이머가 돌지 않거나 점검이 계속 실패하고 있습니다. 서버 로그를 확인하세요.";
+
+  return stopped.map((job) => ({
+    kind: "scheduler-stopped" as const,
+    key: `scheduler-stopped:${job.job}`,
+    level: "critical" as const,
+    title: `예약 점검 정지 — ${job.job}`,
+    message:
+      `${job.interval} 주기인데 ` +
+      `${job.lastRunAt ? `마지막 실행이 ${job.lastRunAt}입니다` : "실행 이력이 없습니다"}. ` +
+      cause,
+  }));
+}
+
 // ── 중복·해소 판정 ───────────────────────────────────────────
 
 export interface ReconcileOptions {
@@ -336,6 +385,7 @@ export const ALERT_COOLDOWN_ENV: Record<AlertKind, string> = {
   "provider-failure": "ALERT_COOLDOWN_PROVIDER_MS",
   "unpriced-model": "ALERT_COOLDOWN_UNPRICED_MS",
   configuration: "ALERT_COOLDOWN_CONFIG_MS",
+  "scheduler-stopped": "ALERT_COOLDOWN_SCHEDULER_MS",
 };
 
 /** 전체 기본값 환경변수 (종류별 값이 없을 때) */

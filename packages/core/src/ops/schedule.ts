@@ -13,6 +13,8 @@ export const SCHEDULED_JOBS = [
   "cost-verification",
   "provider-validation",
   "health-check",
+  // 경보 보관 (TASK-1501, CTO 결정 1401-③) — 하루 1회 새벽
+  "alert-archive",
 ] as const;
 
 export type ScheduledJob = (typeof SCHEDULED_JOBS)[number];
@@ -25,7 +27,22 @@ export const DEFAULT_JOB_INTERVALS: Record<ScheduledJob, number> = {
   "provider-validation": 15 * 60 * 1000,
   // Health Check: **실제 Provider 호출 = 과금**. 그래서 가장 드물게 돈다
   "health-check": 60 * 60 * 1000,
+  // 보관은 하루 1회 — 간격이 아니라 **시각**으로 돈다 (아래 DAILY_JOBS)
+  "alert-archive": 24 * 60 * 60 * 1000,
 };
+
+/**
+ * 시각 기반으로 도는 점검 (CTO 결정 1401-③).
+ *
+ * 간격이 아니라 "하루 한 번, 정해진 시각"이다 — 보관은 트래픽이 적은 때
+ * 도는 편이 낫고, 간격 기반이면 재기동할 때마다 시점이 밀린다.
+ */
+export const DAILY_JOBS: Partial<Record<ScheduledJob, string>> = {
+  "alert-archive": "OPS_CHECK_ARCHIVE_AT",
+};
+
+/** 기본 실행 시각 (UTC) — 다른 시간 계산(예산 창)과 같은 기준 */
+export const DEFAULT_DAILY_AT = "04:00";
 
 const UNIT_MS: Record<string, number> = {
   ms: 1,
@@ -70,6 +87,8 @@ export interface JobSchedule {
   /** 값의 출처 (표시용) */
   source: "env" | "default" | "disabled";
   env: string;
+  /** 시각 기반 점검이면 자정 이후 분 (UTC) — 간격 기반이면 null */
+  dailyAtMinutes: number | null;
 }
 
 /** 점검별 간격 환경변수 */
@@ -77,7 +96,28 @@ export const JOB_INTERVAL_ENV: Record<ScheduledJob, string> = {
   "cost-verification": "OPS_CHECK_COST_INTERVAL",
   "provider-validation": "OPS_CHECK_CONFIG_INTERVAL",
   "health-check": "OPS_CHECK_HEALTH_INTERVAL",
+  "alert-archive": "OPS_CHECK_ARCHIVE_AT",
 };
+
+/**
+ * `HH:MM`을 자정 이후 분으로 바꾼다. 해석할 수 없으면 null —
+ * 호출부가 기본값으로 되돌린다(잘못 적은 값으로 엉뚱한 시각에 돌지 않게).
+ */
+export function parseDailyAt(value: string | undefined): number | null {
+  if (value === undefined) {
+    return null;
+  }
+  const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
+  if (!match) {
+    return null;
+  }
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours > 23 || minutes > 59) {
+    return null;
+  }
+  return hours * 60 + minutes;
+}
 
 /**
  * 환경에서 예약 점검 구성을 읽는다.
@@ -99,6 +139,8 @@ export function resolveSchedules(
     const jobOff =
       rawNormalized === "off" || rawNormalized === "false" || rawNormalized === "0";
 
+    const daily = DAILY_JOBS[job] !== undefined;
+
     if (allDisabled || jobOff) {
       return {
         job,
@@ -106,6 +148,20 @@ export function resolveSchedules(
         enabled: false,
         source: "disabled" as const,
         env: name,
+        dailyAtMinutes: daily ? parseDailyAt(DEFAULT_DAILY_AT) : null,
+      };
+    }
+
+    if (daily) {
+      // 해석할 수 없는 시각은 기본값으로 — 엉뚱한 시각에 돌지 않게
+      const minutes = parseDailyAt(raw) ?? parseDailyAt(DEFAULT_DAILY_AT)!;
+      return {
+        job,
+        intervalMs: DEFAULT_JOB_INTERVALS[job],
+        enabled: true,
+        source: raw === undefined ? ("default" as const) : ("env" as const),
+        env: name,
+        dailyAtMinutes: minutes,
       };
     }
 
@@ -115,13 +171,18 @@ export function resolveSchedules(
       enabled: true,
       source: raw === undefined ? ("default" as const) : ("env" as const),
       env: name,
+      dailyAtMinutes: null,
     };
   });
 }
 
 /**
  * 마지막 실행 시각을 보고 지금 돌려야 하는지 판단한다.
- * 한 번도 안 돌았으면 돌린다 — 기동 직후 상태를 모르는 채로 두지 않는다.
+ *
+ * - 간격 기반: 마지막 실행 이후 간격이 지났으면 실행
+ * - 시각 기반(하루 1회): 오늘의 그 시각을 지났고, 그 시각 이후로 아직 안
+ *   돌았으면 실행. **한 번도 안 돌았어도 시각 전이면 돌지 않는다** —
+ *   "새벽에 돌리라"는 지시를 기동 시점에 어기지 않기 위해서다.
  */
 export function shouldRun(
   schedule: JobSchedule,
@@ -131,8 +192,52 @@ export function shouldRun(
   if (!schedule.enabled) {
     return false;
   }
+
+  if (schedule.dailyAtMinutes !== null) {
+    const today = Date.UTC(
+      new Date(now).getUTCFullYear(),
+      new Date(now).getUTCMonth(),
+      new Date(now).getUTCDate(),
+    );
+    const dueAt = today + schedule.dailyAtMinutes * 60_000;
+    if (now < dueAt) {
+      return false;
+    }
+    return lastRunAt === null || lastRunAt < dueAt;
+  }
+
   if (lastRunAt === null) {
     return true;
   }
   return now - lastRunAt >= schedule.intervalMs;
+}
+
+/**
+ * 예약 점검이 **멈춘** 것으로 볼 것인가 (TASK-1501, CTO 결정 1401-①).
+ *
+ * Redis 장애로 잠금을 못 잡으면 예약 점검이 아예 돌지 않는다. 단일 모드로
+ * 자동 폴백하지 않기로 했으므로(중복 실행보다 안전하다), 대신 **멈춘 사실을
+ * 알린다** — 조용히 안 도는 점검이 가장 위험하다.
+ *
+ * 판정은 관대하게 한다: 간격의 `graceFactor`배(기본 3)를 넘겨야 멈춘 것으로
+ * 본다. 한 번 늦었다고 경보하면 사람이 경보를 무시하게 된다.
+ */
+export function isSchedulerStopped(
+  schedule: JobSchedule,
+  lastRunAt: number | null,
+  now: number,
+  options: { graceFactor?: number; startedAt?: number } = {},
+): boolean {
+  if (!schedule.enabled) {
+    return false; // 꺼 둔 것은 멈춘 것이 아니다
+  }
+  const grace = options.graceFactor ?? 3;
+  const window =
+    schedule.dailyAtMinutes !== null
+      ? DEFAULT_JOB_INTERVALS[schedule.job] * grace
+      : schedule.intervalMs * grace;
+
+  // 한 번도 안 돌았으면 기동 시점부터 센다 — 방금 뜬 서버를 장애라 하지 않는다
+  const reference = lastRunAt ?? options.startedAt ?? now;
+  return now - reference > window;
 }

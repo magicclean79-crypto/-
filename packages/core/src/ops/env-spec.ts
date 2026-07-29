@@ -419,6 +419,68 @@ export const ENV_SPECS: EnvSpec[] = [
     validate: positiveNumber("ALERT_ARCHIVE_AFTER_DAYS"),
     fallback: "90 (CTO 결정 1302-④)",
   },
+  // ── 고가용·운영 신뢰성 (TASK-1501) ──
+  {
+    name: "OPS_CHECK_ARCHIVE_AT",
+    category: "ops",
+    description: "경보 보관 실행 시각 HH:MM (UTC) — off로 중단",
+    fallback: "04:00 UTC (CTO 결정 1401-③)",
+  },
+  {
+    name: "OPS_SCHEDULER_WATCHDOG",
+    category: "ops",
+    description: "예약 점검 정지 감시 — off면 멈춰도 알리지 않는다",
+    fallback: "켜짐 (CTO 결정 1401-①)",
+    productionAdvice: (value) =>
+      value && ["off", "false", "0"].includes(value.trim().toLowerCase())
+        ? "예약 점검 정지 감시가 꺼져 있습니다 — 점검이 멈춰도 아무도 모릅니다."
+        : null,
+  },
+  {
+    name: "OPS_SCHEDULER_GRACE_FACTOR",
+    category: "ops",
+    description: "정지 판정 여유 배수 — 간격의 N배를 넘겨야 멈춘 것으로 본다",
+    validate: positiveNumber("OPS_SCHEDULER_GRACE_FACTOR"),
+    fallback: "3",
+  },
+  {
+    name: "ALERT_QUEUE_WORKER",
+    category: "ops",
+    description: "알림 Retry Worker — off면 큐에 쌓인 알림이 나가지 않는다",
+    fallback: "켜짐 (CTO 결정 1401-②)",
+    productionAdvice: (value) =>
+      value && ["off", "false", "0"].includes(value.trim().toLowerCase())
+        ? "알림 Retry Worker가 꺼져 있습니다 — 경보가 큐에만 쌓입니다."
+        : null,
+  },
+  {
+    name: "ALERT_QUEUE_INTERVAL_MS",
+    category: "ops",
+    description: "알림 큐 처리 주기(ms)",
+    validate: positiveNumber("ALERT_QUEUE_INTERVAL_MS"),
+    fallback: "10000 (10초)",
+  },
+  {
+    name: "ALERT_SLACK_MIN_LEVEL",
+    category: "ops",
+    description: "Slack 최소 심각도 (warning | critical)",
+    validate: oneOf(["warning", "critical"]),
+    fallback: "warning (CTO 결정 1401-④)",
+  },
+  {
+    name: "ALERT_EMAIL_MIN_LEVEL",
+    category: "ops",
+    description: "Email 최소 심각도 (warning | critical)",
+    validate: oneOf(["warning", "critical"]),
+    fallback: "critical (CTO 결정 1401-④ — 메일은 쌓이면 안 읽는다)",
+  },
+  {
+    name: "ALERT_WEBHOOK_MIN_LEVEL",
+    category: "ops",
+    description: "Webhook 최소 심각도 (warning | critical)",
+    validate: oneOf(["warning", "critical"]),
+    fallback: "warning (CTO 결정 1401-④)",
+  },
 ];
 
 export interface EnvIssue {

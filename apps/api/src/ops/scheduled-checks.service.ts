@@ -4,8 +4,11 @@ import {
   detectBudgetAlerts,
   detectConfigurationAlerts,
   detectProviderAlerts,
+  detectSchedulerAlerts,
   detectUnpricedAlerts,
+  isSchedulerStopped,
   resolveSchedules,
+  shouldRun,
   validateEnvironment,
 } from "@acos/core";
 import type { AlertKind, JobSchedule, ScheduledJob } from "@acos/core";
@@ -50,7 +53,19 @@ const JOB_ALERT_KINDS: Record<ScheduledJob, AlertKind[]> = {
   "cost-verification": ["budget", "unpriced-model"],
   "provider-validation": ["configuration"],
   "health-check": ["provider-failure"],
+  // 보관은 경보를 만들지 않는다 — 정리 작업이다
+  "alert-archive": [],
 };
+
+/** 사람이 읽는 주기 설명 (경보 문구용) */
+function describeInterval(schedule: JobSchedule): string {
+  if (schedule.dailyAtMinutes !== null) {
+    const hours = String(Math.floor(schedule.dailyAtMinutes / 60)).padStart(2, "0");
+    const minutes = String(schedule.dailyAtMinutes % 60).padStart(2, "0");
+    return `매일 ${hours}:${minutes} UTC`;
+  }
+  return `${Math.round(schedule.intervalMs / 1000)}초`;
+}
 
 /**
  * Scheduled Checks. (TASK-1302, Sprint 13)
@@ -77,8 +92,11 @@ const JOB_ALERT_KINDS: Record<ScheduledJob, AlertKind[]> = {
 @Injectable()
 export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ScheduledChecksService.name);
-  private readonly timers: NodeJS.Timeout[] = [];
+  private ticker: NodeJS.Timeout | null = null;
   private readonly running = new Set<ScheduledJob>();
+  /** 점검별 마지막 실행 (이 인스턴스 기준) */
+  private readonly lastRunAt = new Map<ScheduledJob, number>();
+  private startedAt = Date.now();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -97,28 +115,122 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
     return resolveSchedules(process.env as Record<string, string | undefined>);
   }
 
+  /**
+   * 단일 티커로 모든 점검을 돌린다 (TASK-1501).
+   *
+   * 점검마다 타이머를 두면 **시각 기반 점검**(보관, 결정 1401-③)을 표현할 수
+   * 없다. 짧은 주기로 한 번만 깨어나 각 점검의 `shouldRun`을 묻는 편이
+   * 간격·시각을 한 규칙으로 다룰 수 있다.
+   */
   onModuleInit(): void {
-    for (const schedule of this.schedules()) {
-      if (!schedule.enabled) {
-        continue;
-      }
-      const timer = setInterval(() => {
-        void this.run(schedule.job, "schedule");
-      }, schedule.intervalMs);
-      // 예약 점검이 프로세스를 붙잡고 있으면 안 된다
-      timer.unref?.();
-      this.timers.push(timer);
+    this.startedAt = Date.now();
+    const enabled = this.schedules().filter((schedule) => schedule.enabled);
+    if (enabled.length === 0) {
+      this.logger.warn("예약 점검이 모두 꺼져 있습니다.");
+      return;
+    }
+
+    this.ticker = setInterval(() => {
+      void this.tick();
+    }, this.tickIntervalMs);
+    this.ticker.unref?.();
+
+    for (const schedule of enabled) {
       this.logger.log(
-        `예약 점검 등록: ${schedule.job} — ${Math.round(schedule.intervalMs / 1000)}초 간격`,
+        `예약 점검 등록: ${schedule.job} — ${describeInterval(schedule)}`,
       );
     }
   }
 
-  onModuleDestroy(): void {
-    for (const timer of this.timers) {
-      clearInterval(timer);
+  /** 티커 주기 — 가장 짧은 간격보다 촘촘하되 최소 1초 */
+  get tickIntervalMs(): number {
+    const raw = Number(process.env.OPS_TICK_INTERVAL_MS);
+    if (Number.isFinite(raw) && raw > 0) {
+      return Math.round(raw);
     }
-    this.timers.length = 0;
+    const shortest = Math.min(
+      ...this.schedules()
+        .filter((schedule) => schedule.enabled && schedule.dailyAtMinutes === null)
+        .map((schedule) => schedule.intervalMs),
+      60_000,
+    );
+    return Math.max(1_000, Math.min(shortest, 60_000));
+  }
+
+  /** 한 바퀴 — 돌 때가 된 점검을 실행하고, 멈춘 점검을 감시한다 */
+  async tick(): Promise<void> {
+    const now = Date.now();
+    for (const schedule of this.schedules()) {
+      if (shouldRun(schedule, this.lastRunAt.get(schedule.job) ?? null, now)) {
+        await this.run(schedule.job, "schedule");
+      }
+    }
+    await this.watchdog();
+  }
+
+  /**
+   * Scheduler Stopped Alert (CTO 결정 1401-①).
+   *
+   * **잠금 없이 돈다** — 예약 점검이 멈춘 원인이 대개 잠금을 못 잡는 것이라,
+   * 감시까지 잠금을 요구하면 정작 알려야 할 때 알리지 못한다. 여러 인스턴스가
+   * 동시에 감지해도 경보 `key`가 같아 중복되지 않는다.
+   */
+  async watchdog(): Promise<void> {
+    if (!this.watchdogEnabled) {
+      return;
+    }
+    const now = Date.now();
+    const schedules = this.schedules();
+    const jobs = await Promise.all(
+      schedules.map(async (schedule) => {
+        const last = await this.lastRunTime(schedule.job);
+        return {
+          job: schedule.job,
+          stopped: isSchedulerStopped(schedule, last, now, {
+            startedAt: this.startedAt,
+            graceFactor: this.graceFactor,
+          }),
+          lastRunAt: last === null ? null : new Date(last).toISOString(),
+          interval: describeInterval(schedule),
+        };
+      }),
+    );
+
+    const detected = detectSchedulerAlerts({
+      jobs,
+      lockUnavailable: this.locks.distributed && !this.locks.healthy,
+    });
+    await this.alerts.sync(["scheduler-stopped"], detected);
+  }
+
+  private get watchdogEnabled(): boolean {
+    const value = (process.env.OPS_SCHEDULER_WATCHDOG ?? "").trim().toLowerCase();
+    return !["off", "false", "0"].includes(value);
+  }
+
+  private get graceFactor(): number {
+    const raw = Number(process.env.OPS_SCHEDULER_GRACE_FACTOR);
+    return Number.isFinite(raw) && raw > 0 ? raw : 3;
+  }
+
+  /** 마지막 실행 시각 — 인스턴스 메모리보다 DB가 진실이다(다중 인스턴스) */
+  private async lastRunTime(job: ScheduledJob): Promise<number | null> {
+    try {
+      const row = (await this.prisma.checkRun.findFirst({
+        where: { job },
+        orderBy: { createdAt: "desc" },
+      })) as CheckRunRow | null;
+      return row?.createdAt.getTime() ?? null;
+    } catch {
+      return this.lastRunAt.get(job) ?? null;
+    }
+  }
+
+  onModuleDestroy(): void {
+    if (this.ticker) {
+      clearInterval(this.ticker);
+      this.ticker = null;
+    }
   }
 
   /**
@@ -166,6 +278,7 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
     }
 
     this.running.add(job);
+    this.lastRunAt.set(job, Date.now());
     const startedAt = Date.now();
 
     try {
@@ -275,6 +388,18 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
       };
     }
 
+    if (job === "alert-archive") {
+      // 보관은 경보를 만들지 않는다 — 정리 작업이다 (CTO 결정 1401-③)
+      const result = await this.alerts.archive();
+      return {
+        ok: true,
+        detail:
+          `보관 ${result.archived}건 (해소 후 ${result.afterDays}일 경과, ` +
+          `검사 ${result.checked}건) — 삭제하지 않습니다`,
+        notified: [],
+      };
+    }
+
     // health-check — 이미 쌓인 Execution으로 판정한다 (새 호출을 만들지 않는다)
     const monitor = await this.production.monitor({ minutes: 60 });
     const detected = detectProviderAlerts(monitor.providers);
@@ -310,6 +435,7 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
   async coordination(): Promise<SchedulerCoordinationDto> {
     return {
       distributed: this.locks.distributed,
+      lockHealthy: this.locks.healthy,
       instance: this.locks.self,
       lockTtlMs: this.locks.ttlMs,
       leases: await this.locks.status(
@@ -330,6 +456,7 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
       results.push({
         job: schedule.job,
         intervalMs: schedule.intervalMs,
+        dailyAtMinutes: schedule.dailyAtMinutes,
         enabled: schedule.enabled,
         source: schedule.source,
         env: schedule.env,

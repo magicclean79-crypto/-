@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import type {
   AlertBoardDto,
+  NotificationQueueStatusDto,
   AlertLevelDto,
   ApiKeyFormatStatusDto,
   CostVerificationDto,
@@ -83,6 +84,7 @@ export default function ProductionOpsPage() {
   const [cost, setCost] = useState<CostVerificationDto | null>(null);
   const [monitor, setMonitor] = useState<ProductionMonitorDto | null>(null);
   const [board, setBoard] = useState<AlertBoardDto | null>(null);
+  const [queue, setQueue] = useState<NotificationQueueStatusDto | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [liveRunning, setLiveRunning] = useState(false);
@@ -109,7 +111,7 @@ export default function ProductionOpsPage() {
       setLoading(true);
     }
     try {
-      const [nextValidation, nextCost, nextMonitor, nextBoard] =
+      const [nextValidation, nextCost, nextMonitor, nextBoard, nextQueue] =
         await Promise.all([
           get<ProviderValidationReportDto>(
             `/llm/providers/validate${live ? "?live=1" : ""}`,
@@ -117,6 +119,7 @@ export default function ProductionOpsPage() {
           get<CostVerificationDto>("/llm/cost-verification?hours=24"),
           get<ProductionMonitorDto>("/llm/monitoring?minutes=60"),
           get<AlertBoardDto>("/ops/alerts"),
+          get<NotificationQueueStatusDto>("/ops/notifications/queue"),
         ]);
       if (nextValidation) {
         setError(null);
@@ -130,6 +133,9 @@ export default function ProductionOpsPage() {
       }
       if (nextBoard) {
         setBoard(nextBoard);
+      }
+      if (nextQueue) {
+        setQueue(nextQueue);
       }
     } catch {
       setError("API 서버에 연결할 수 없습니다.");
@@ -185,6 +191,39 @@ export default function ProductionOpsPage() {
           ? `${result.archived}건을 보관했습니다 (삭제하지 않습니다).`
           : "보관할 경보가 없습니다.",
       );
+      await load(false);
+    } catch {
+      setError("API 서버에 연결할 수 없습니다.");
+    } finally {
+      setCheckRunning(false);
+    }
+  }
+
+  /** 예약 워커를 기다리지 않고 지금 큐를 비운다 */
+  async function drainQueue() {
+    await post("/ops/notifications/queue/drain", "전송 실패");
+  }
+
+  /** Dead Letter 재시도 — 설정을 고친 뒤 다시 보낸다 */
+  async function requeueDead() {
+    await post("/ops/notifications/queue/requeue", "재시도 실패");
+  }
+
+  async function post(path: string, failure: string) {
+    setCheckRunning(true);
+    try {
+      const response = await fetch(`${API_URL}${path}`, {
+        ...authFetchInit(),
+        method: "POST",
+      });
+      if (!response.ok) {
+        setError(
+          response.status === 401 || response.status === 403
+            ? "ADMIN 권한이 필요합니다 — 관리자 계정으로 로그인해 주세요."
+            : `${failure} (HTTP ${response.status})`,
+        );
+        return;
+      }
       await load(false);
     } catch {
       setError("API 서버에 연결할 수 없습니다.");
@@ -289,7 +328,9 @@ export default function ProductionOpsPage() {
             {" · "}
             예약 조율:{" "}
             {board.coordination.distributed
-              ? `분산 (인스턴스 ${board.coordination.instance})`
+              ? board.coordination.lockHealthy
+                ? `분산 (인스턴스 ${board.coordination.instance})`
+                : "⛔ 분산 잠금을 쓸 수 없습니다 — 예약 점검이 돌지 않습니다"
               : "단일 인스턴스 — 여러 개 띄우면 점검이 중복 실행됩니다"}
           </p>
 
@@ -372,7 +413,11 @@ export default function ProductionOpsPage() {
                   >
                     <td className="py-1.5 font-medium">{schedule.job}</td>
                     <td className="py-1.5 text-xs">
-                      {schedule.enabled ? duration(schedule.intervalMs) : "중단"}
+                      {!schedule.enabled
+                        ? "중단"
+                        : schedule.dailyAtMinutes !== null
+                          ? `매일 ${String(Math.floor(schedule.dailyAtMinutes / 60)).padStart(2, "0")}:${String(schedule.dailyAtMinutes % 60).padStart(2, "0")} UTC`
+                          : duration(schedule.intervalMs)}
                     </td>
                     <td className="py-1.5 text-xs">
                       {(() => {
@@ -402,6 +447,73 @@ export default function ProductionOpsPage() {
               </tbody>
             </table>
           </div>
+        </section>
+      ) : null}
+
+      {queue ? (
+        <section
+          data-testid="notification-queue"
+          className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-lg font-semibold">알림 큐</h2>
+            <span
+              data-testid="queue-verdict"
+              className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                queue.dead > 0 ? ALERT_STYLE.critical : FORMAT_STYLE.ok
+              }`}
+            >
+              {queue.dead > 0
+                ? `전달 실패 ${queue.dead}건`
+                : "전달 실패 없음"}
+            </span>
+            <span className="text-xs text-zinc-500">
+              대기 {queue.pending} · 전송 완료 {queue.sent} · 지금 보낼 수 있음{" "}
+              {queue.due}
+              {queue.workerEnabled
+                ? ` · 워커 ${duration(queue.workerIntervalMs)}마다`
+                : " · ⛔ 워커 중단 — 큐에만 쌓입니다"}
+            </span>
+            <button
+              type="button"
+              data-testid="drain-queue"
+              disabled={checkRunning}
+              onClick={() => void drainQueue()}
+              className="ml-auto rounded-lg border border-zinc-300 px-2.5 py-1 text-xs font-medium hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+            >
+              지금 보내기
+            </button>
+            {queue.dead > 0 ? (
+              <button
+                type="button"
+                data-testid="requeue-dead"
+                disabled={checkRunning}
+                onClick={() => void requeueDead()}
+                className="rounded-lg border border-amber-400 px-2.5 py-1 text-xs font-medium text-amber-700 hover:bg-amber-50 disabled:opacity-50 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-950"
+              >
+                실패분 다시 보내기
+              </button>
+            ) : null}
+          </div>
+          <p className="mt-1 text-xs text-zinc-500">
+            전달하지 못한 알림은 지우지 않고 남깁니다 — 설정을 고친 뒤 다시 보낼
+            수 있습니다.
+          </p>
+
+          {queue.deadLetters.length > 0 ? (
+            <ul data-testid="dead-letters" className="mt-3 space-y-2 text-sm">
+              {queue.deadLetters.slice(0, 5).map((item) => (
+                <li
+                  key={item.id}
+                  className="rounded-lg bg-red-50 p-3 text-red-700 dark:bg-red-950 dark:text-red-300"
+                >
+                  <strong>{item.channel}</strong> — {item.title} (
+                  {item.attempts}회 시도)
+                  {item.lastError ? ` · ${item.lastError}` : ""}
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </section>
       ) : null}
 

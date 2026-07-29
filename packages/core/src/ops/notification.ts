@@ -219,3 +219,158 @@ export function webhookBody(payload: NotificationPayload): Record<string, unknow
     url: payload.url,
   };
 }
+
+// ── 운영 기본 채널 정책 (CTO 결정 1401-④) ────────────────────
+
+/**
+ * 공식 기본값: Slack은 Warning 이상, **Email은 Critical 이상**, Webhook은
+ * Warning 이상, 해소 알림은 전부 포함.
+ *
+ * 메일만 Critical인 이유는 분명하다 — 메일은 지우기 번거롭고 쌓이면 읽지
+ * 않게 된다. 채널마다 "얼마나 시끄러워도 되는가"가 다르다.
+ * 환경변수로 전부 바꿀 수 있다.
+ */
+export const DEFAULT_CHANNEL_POLICY: Record<
+  NotificationChannel,
+  { minLevel: "warning" | "critical"; resolved: boolean }
+> = {
+  slack: { minLevel: "warning", resolved: true },
+  email: { minLevel: "critical", resolved: true },
+  webhook: { minLevel: "warning", resolved: true },
+};
+
+/** 채널별 설정 환경변수 이름 */
+export const CHANNEL_ENV: Record<
+  NotificationChannel,
+  { minLevel: string; resolved: string; target: string }
+> = {
+  slack: {
+    minLevel: "ALERT_SLACK_MIN_LEVEL",
+    resolved: "ALERT_SLACK_RESOLVED",
+    target: "ALERT_SLACK_WEBHOOK_URL",
+  },
+  email: {
+    minLevel: "ALERT_EMAIL_MIN_LEVEL",
+    resolved: "ALERT_EMAIL_RESOLVED",
+    target: "SMTP_HOST + ALERT_EMAIL_TO",
+  },
+  webhook: {
+    minLevel: "ALERT_WEBHOOK_MIN_LEVEL",
+    resolved: "ALERT_WEBHOOK_RESOLVED",
+    target: "ALERT_WEBHOOK_URL",
+  },
+};
+
+function boolFlag(value: string | undefined, fallback: boolean): boolean {
+  const normalized = (value ?? "").trim().toLowerCase();
+  if (normalized === "") {
+    return fallback;
+  }
+  return !["0", "off", "false", "no"].includes(normalized);
+}
+
+/**
+ * 환경에서 채널 정책을 읽는다. 값이 없으면 **결정 1401-④의 공식 기본값**.
+ * 활성 여부는 주소가 설정되었는지로 판단하므로 호출부가 넘긴다.
+ */
+export function resolveChannelPolicy(
+  env: Record<string, string | undefined>,
+  enabled: Record<NotificationChannel, boolean>,
+): ChannelConfig[] {
+  return NOTIFICATION_CHANNELS.map((channel) => {
+    const spec = CHANNEL_ENV[channel];
+    const raw = (env[spec.minLevel] ?? "").trim().toLowerCase();
+    return {
+      channel,
+      enabled: enabled[channel],
+      minLevel:
+        raw === "critical"
+          ? ("critical" as const)
+          : raw === "warning"
+            ? ("warning" as const)
+            : DEFAULT_CHANNEL_POLICY[channel].minLevel,
+      resolved: boolFlag(
+        env[spec.resolved],
+        DEFAULT_CHANNEL_POLICY[channel].resolved,
+      ),
+    };
+  });
+}
+
+// ── Persistent Notification Queue (CTO 결정 1401-②) ──────────
+
+export type QueueStatus = "PENDING" | "SENT" | "DEAD";
+
+/** 큐에 담긴 전송 1건의 상태 (판정 입력) */
+export interface QueueItemState {
+  id: string;
+  channel: NotificationChannel;
+  attempts: number;
+  status: QueueStatus;
+  nextAttemptAt: number;
+}
+
+export type QueueOutcome = "sent" | "retry" | "dead";
+
+export interface QueueDecision {
+  outcome: QueueOutcome;
+  /** retry일 때 다음 시도 시각 (epoch ms) */
+  nextAttemptAt: number;
+  reason: string;
+}
+
+/**
+ * 전송 결과를 큐 항목의 다음 상태로 바꾼다.
+ *
+ * **Dead Letter Queue**로 보내는 경우는 둘이다:
+ * - 되돌릴 수 없는 실패(4xx) — 다시 보내도 같은 답이 온다
+ * - 최대 시도 소진 — 죽은 채널에 영원히 매달리지 않는다
+ *
+ * DLQ 항목은 **지우지 않는다**. 무엇이 전달되지 못했는지 남아 있어야
+ * 사람이 고친 뒤 다시 보낼 수 있다.
+ */
+export function decideQueueOutcome(
+  attempt: number,
+  result: { ok: boolean; status: number | null },
+  now: number,
+  policy: RetryPolicy = DEFAULT_RETRY_POLICY,
+): QueueDecision {
+  if (result.ok) {
+    return { outcome: "sent", nextAttemptAt: now, reason: "전송 성공" };
+  }
+  const decision = decideRetry(attempt, result.status, policy);
+  if (!decision.retry) {
+    return { outcome: "dead", nextAttemptAt: now, reason: decision.reason };
+  }
+  return {
+    outcome: "retry",
+    nextAttemptAt: now + decision.delayMs,
+    reason: decision.reason,
+  };
+}
+
+/** 지금 보낼 수 있는 항목인가 (Retry Worker가 집어 갈 대상) */
+export function isDue(item: QueueItemState, now: number): boolean {
+  return item.status === "PENDING" && item.nextAttemptAt <= now;
+}
+
+export interface QueueSummary {
+  pending: number;
+  sent: number;
+  /** Dead Letter — 사람이 고쳐야 나간다 */
+  dead: number;
+  /** 지금 보낼 수 있는 항목 수 */
+  due: number;
+}
+
+export function summarizeQueue(
+  items: QueueItemState[],
+  now: number,
+): QueueSummary {
+  return {
+    pending: items.filter((item) => item.status === "PENDING").length,
+    sent: items.filter((item) => item.status === "SENT").length,
+    dead: items.filter((item) => item.status === "DEAD").length,
+    due: items.filter((item) => isDue(item, now)).length,
+  };
+}

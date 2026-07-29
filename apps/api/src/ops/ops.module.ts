@@ -3,6 +3,7 @@ import { AuthModule } from "../auth/auth.module";
 import { LlmModule } from "../llm/llm.module";
 import { AlertService } from "./alert.service";
 import { DistributedLockService } from "./distributed-lock.service";
+import { NotificationQueueService } from "./notification-queue.service";
 import { NotificationService } from "./notification.service";
 import { OpsController } from "./ops.controller";
 import { ScheduledChecksService } from "./scheduled-checks.service";
@@ -20,12 +21,14 @@ import { ScheduledChecksService } from "./scheduled-checks.service";
     AlertService,
     ScheduledChecksService,
     NotificationService,
+    NotificationQueueService,
     DistributedLockService,
   ],
   exports: [
     AlertService,
     ScheduledChecksService,
     NotificationService,
+    NotificationQueueService,
     DistributedLockService,
   ],
 })

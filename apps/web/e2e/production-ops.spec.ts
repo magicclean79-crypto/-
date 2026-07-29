@@ -207,4 +207,50 @@ test.describe("Provider 운영 점검 (TASK-1301)", () => {
       "2건을 보관했습니다 (삭제하지 않습니다)",
     );
   });
+
+  test("알림 큐 — Dead Letter를 드러내고 다시 보낼 수 있다 (TASK-1501)", async ({
+    page,
+  }) => {
+    await setMode("empty");
+    await openPage(page);
+
+    const queue = page.getByTestId("notification-queue");
+    await expect(page.getByTestId("queue-verdict")).toContainText(
+      "전달 실패 2건",
+    );
+    // 전달 못 한 것을 지우지 않는다는 사실을 화면이 말한다
+    await expect(queue).toContainText("지우지 않고 남깁니다");
+    await expect(page.getByTestId("dead-letters")).toContainText("HTTP 404");
+    await expect(page.getByTestId("dead-letters")).toContainText("4회 시도");
+    // 워커가 꺼져 있으면 그 사실을 드러낸다
+    await expect(queue).toContainText("워커 중단");
+
+    await page.getByTestId("requeue-dead").click();
+    await expect(page.getByTestId("queue-verdict")).toContainText(
+      "전달 실패 없음",
+    );
+  });
+
+  test("보관이 예약 점검에 편입되어 시각으로 표시된다 (CTO 결정 1401-③)", async ({
+    page,
+  }) => {
+    await setMode("data");
+    await openPage(page);
+
+    await expect(page.getByTestId("schedule-alert-archive")).toContainText(
+      "매일 04:00 UTC",
+    );
+  });
+
+  test("분산 잠금을 쓸 수 없으면 예약 점검이 돌지 않는다고 말한다 (CTO 결정 1401-①)", async ({
+    page,
+  }) => {
+    await setMode("warn");
+    await openPage(page);
+
+    // 단일 모드로 조용히 내려가지 않는다 — 멈춘 사실을 드러낸다
+    await expect(page.getByTestId("alert-board")).toContainText(
+      "단일 인스턴스",
+    );
+  });
 });

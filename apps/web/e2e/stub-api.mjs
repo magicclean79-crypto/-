@@ -14,6 +14,8 @@ let stubAdminAudit = [];
 // 운영 자동화 스텁 상태 (TASK-1302)
 let stubChecksRan = false;
 let stubArchived = 0;
+let stubQueueDrained = false;
+let stubDeadRequeued = false;
 
 const stats = (totals, groups) => ({
   range: { from: null, to: null },
@@ -206,6 +208,8 @@ const server = http.createServer((req, res) => {
       stubAdminAudit = [];
       stubChecksRan = false;
       stubArchived = 0;
+      stubQueueDrained = false;
+      stubDeadRequeued = false;
       resetPublishing();
       resetUsers();
       res.end(JSON.stringify({ mode }));
@@ -663,7 +667,10 @@ const server = http.createServer((req, res) => {
     url.pathname === "/ops/checks/run" ||
     url.pathname === "/ops/alerts/archive" ||
     url.pathname === "/ops/alerts/history" ||
-    url.pathname === "/ops/notifications"
+    url.pathname === "/ops/notifications" ||
+    url.pathname === "/ops/notifications/queue" ||
+    url.pathname === "/ops/notifications/queue/drain" ||
+    url.pathname === "/ops/notifications/queue/requeue"
   ) {
     if (req.headers.authorization !== "Bearer stub-token") {
       res.statusCode = req.headers.authorization ? 403 : 401;
@@ -708,6 +715,70 @@ const server = http.createServer((req, res) => {
 
     if (url.pathname === "/ops/notifications") {
       res.end(JSON.stringify([]));
+      return;
+    }
+
+    // 알림 큐 (TASK-1501) — Retry Worker + Dead Letter Queue
+    if (req.method === "POST" && url.pathname === "/ops/notifications/queue/drain") {
+      stubQueueDrained = true;
+      res.end(
+        JSON.stringify({ processed: 1, sent: 1, retried: 0, dead: 0, skipped: null }),
+      );
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/ops/notifications/queue/requeue") {
+      stubDeadRequeued = true;
+      res.end(JSON.stringify({ requeued: 2 }));
+      return;
+    }
+    if (url.pathname === "/ops/notifications/queue") {
+      const dead =
+        healthy || stubDeadRequeued
+          ? []
+          : [
+              {
+                id: "q-1",
+                alertKey: "budget:daily",
+                channel: "slack",
+                level: "critical",
+                title: "일 예산 초과",
+                status: "DEAD",
+                attempts: 4,
+                nextAttemptAt: new Date().toISOString(),
+                lastStatus: 404,
+                lastError: "HTTP 404",
+                sentAt: null,
+                deadAt: new Date().toISOString(),
+                createdAt: new Date().toISOString(),
+              },
+              {
+                id: "q-2",
+                alertKey: "configuration:env:S3_BUCKET",
+                channel: "webhook",
+                level: "critical",
+                title: "설정 오류 — S3_BUCKET",
+                status: "DEAD",
+                attempts: 4,
+                nextAttemptAt: new Date().toISOString(),
+                lastStatus: null,
+                lastError: "connect ECONNREFUSED",
+                sentAt: null,
+                deadAt: new Date().toISOString(),
+                createdAt: new Date().toISOString(),
+              },
+            ];
+      res.end(
+        JSON.stringify({
+          pending: stubQueueDrained ? 0 : healthy ? 1 : 3,
+          sent: stubQueueDrained ? 4 : 3,
+          dead: dead.length,
+          due: stubQueueDrained ? 0 : 1,
+          workerEnabled: healthy,
+          workerIntervalMs: 10_000,
+          deadLetters: dead,
+          recent: dead,
+        }),
+      );
       return;
     }
 
@@ -781,6 +852,7 @@ const server = http.createServer((req, res) => {
           {
             job: "cost-verification",
             intervalMs: 900_000,
+            dailyAtMinutes: null,
             enabled: true,
             source: "default",
             env: "OPS_CHECK_COST_INTERVAL",
@@ -801,6 +873,7 @@ const server = http.createServer((req, res) => {
           {
             job: "provider-validation",
             intervalMs: 900_000,
+            dailyAtMinutes: null,
             enabled: true,
             source: "default",
             env: "OPS_CHECK_CONFIG_INTERVAL",
@@ -810,9 +883,20 @@ const server = http.createServer((req, res) => {
           {
             job: "health-check",
             intervalMs: 3_600_000,
+            dailyAtMinutes: null,
             enabled: healthy,
             source: healthy ? "default" : "disabled",
             env: "OPS_CHECK_HEALTH_INTERVAL",
+            lastRunAt: null,
+            lastResult: null,
+          },
+          {
+            job: "alert-archive",
+            intervalMs: 86_400_000,
+            dailyAtMinutes: 240,
+            enabled: true,
+            source: "default",
+            env: "OPS_CHECK_ARCHIVE_AT",
             lastRunAt: null,
             lastResult: null,
           },
@@ -866,6 +950,7 @@ const server = http.createServer((req, res) => {
             ],
         coordination: {
           distributed: healthy,
+          lockHealthy: healthy,
           instance: "pod-a-1234-abcd",
           lockTtlMs: 30_000,
           leases: [
@@ -885,6 +970,13 @@ const server = http.createServer((req, res) => {
             },
             {
               key: "scheduler:health-check",
+              owner: null,
+              self: false,
+              expiresAt: null,
+              remainingMs: 0,
+            },
+            {
+              key: "scheduler:alert-archive",
               owner: null,
               self: false,
               expiresAt: null,

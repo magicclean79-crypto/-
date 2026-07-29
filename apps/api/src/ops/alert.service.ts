@@ -21,6 +21,7 @@ import type {
   AlertLevelDto,
 } from "@acos/shared";
 import { PrismaService } from "../prisma/prisma.service";
+import { NotificationQueueService } from "./notification-queue.service";
 import { NotificationService } from "./notification.service";
 
 export interface AlertDelivery {
@@ -87,6 +88,7 @@ export class AlertService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationService,
+    private readonly queue: NotificationQueueService,
   ) {}
 
   get cooldownMs(): number {
@@ -233,7 +235,9 @@ export class AlertService {
     }
 
     try {
-      await this.notifications.notify({
+      // 큐에 담고 워커가 보낸다 (TASK-1501, CTO 결정 1401-②) —
+      // 인스턴스가 재시작해도 전송이 사라지지 않는다
+      await this.queue.enqueue({
         level: payload.resolved ? "resolved" : payload.level,
         kind: payload.kind,
         key: payload.key,
@@ -245,7 +249,7 @@ export class AlertService {
       });
     } catch (error) {
       this.logger.warn(
-        `알림 전송 실패: ${error instanceof Error ? error.message : String(error)}`,
+        `알림 적재 실패: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }

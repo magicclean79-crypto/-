@@ -57,6 +57,20 @@ export class DistributedLockService implements OnModuleInit, OnModuleDestroy {
     return this.client !== null;
   }
 
+  /**
+   * 잠금 저장소가 지금 쓸 수 있는가 (TASK-1501).
+   *
+   * **자동 폴백하지 않는다** (CTO 결정 1401-①) — Redis가 죽었다고 단일 모드로
+   * 내려가면 여러 인스턴스가 동시에 점검을 돌린다. 대신 이 값을 감시자에게
+   * 넘겨 **멈춘 사실을 알린다**.
+   */
+  get healthy(): boolean {
+    if (this.client === null) {
+      return true; // 단일 모드는 잠금이 필요 없다
+    }
+    return this.client.status === "ready";
+  }
+
   onModuleInit(): void {
     const url = process.env.REDIS_URL?.trim();
     if (!url) {

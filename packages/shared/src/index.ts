@@ -1374,6 +1374,8 @@ export const ALERT_KIND_VALUES = [
   "provider-failure",
   "unpriced-model",
   "configuration",
+  // 예약 점검 정지 (TASK-1501, CTO 결정 1401-①)
+  "scheduler-stopped",
 ] as const;
 
 export type AlertKindDto = (typeof ALERT_KIND_VALUES)[number];
@@ -1417,6 +1419,8 @@ export interface CheckRunDto {
 export interface JobScheduleDto {
   job: string;
   intervalMs: number;
+  /** 시각 기반 점검이면 자정 이후 분 (UTC) — 간격 기반이면 null */
+  dailyAtMinutes: number | null;
   enabled: boolean;
   /** env | default | disabled */
   source: string;
@@ -1513,6 +1517,8 @@ export interface LeaseStatusDto {
 export interface SchedulerCoordinationDto {
   /** Redis 기반 분산 조율을 쓰는가 — false면 단일 인스턴스 모드 */
   distributed: boolean;
+  /** 잠금 저장소를 지금 쓸 수 있는가 — false면 예약 점검이 돌지 않는다 */
+  lockHealthy: boolean;
   /** 이 인스턴스 식별자 */
   instance: string;
   lockTtlMs: number;
@@ -1547,4 +1553,38 @@ export interface AlertArchiveResultDto {
   /** 이 시각 이전에 해소된 것이 대상 */
   cutoff: string;
   checked: number;
+}
+
+// ── High Availability & Operations Reliability (TASK-1501, Sprint 15) ──
+
+/** 알림 큐 항목 1건 */
+export interface NotificationQueueDto {
+  id: string;
+  alertKey: string;
+  channel: string;
+  level: string;
+  title: string;
+  /** PENDING | SENT | DEAD */
+  status: string;
+  attempts: number;
+  nextAttemptAt: string;
+  lastStatus: number | null;
+  lastError: string | null;
+  sentAt: string | null;
+  deadAt: string | null;
+  createdAt: string;
+}
+
+/** 알림 큐 현황 (GET /ops/notifications/queue) */
+export interface NotificationQueueStatusDto {
+  pending: number;
+  sent: number;
+  /** Dead Letter — 사람이 고쳐야 나간다 */
+  dead: number;
+  /** 지금 보낼 수 있는 항목 수 */
+  due: number;
+  workerEnabled: boolean;
+  workerIntervalMs: number;
+  deadLetters: NotificationQueueDto[];
+  recent: NotificationQueueDto[];
 }

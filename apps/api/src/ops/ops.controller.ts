@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  Body,
   Controller,
   Get,
   HttpCode,
@@ -15,9 +16,11 @@ import type {
   AlertHistoryDto,
   CheckRunResultDto,
   NotificationDeliveryDto,
+  NotificationQueueStatusDto,
 } from "@acos/shared";
 import { AuthGuard, RequireRole } from "../auth/auth.guard";
 import { AlertService } from "./alert.service";
+import { NotificationQueueService } from "./notification-queue.service";
 import { NotificationService } from "./notification.service";
 import { ScheduledChecksService } from "./scheduled-checks.service";
 
@@ -36,6 +39,7 @@ export class OpsController {
     private readonly alerts: AlertService,
     private readonly checks: ScheduledChecksService,
     private readonly notifications: NotificationService,
+    private readonly queue: NotificationQueueService,
   ) {}
 
   /** 경보 현황 + 예약 점검 구성·마지막 결과 */
@@ -102,6 +106,40 @@ export class OpsController {
   @HttpCode(200)
   async archive(): Promise<AlertArchiveResultDto> {
     return this.alerts.archive();
+  }
+
+  /**
+   * 알림 큐 현황 (TASK-1501, CTO 결정 1401-②) — 대기·성공·**Dead Letter**.
+   * Dead Letter는 지우지 않는다 — 무엇이 전달되지 못했는지 남아 있어야
+   * 사람이 고친 뒤 다시 보낼 수 있다.
+   */
+  @Get("notifications/queue")
+  async queueStatus(): Promise<NotificationQueueStatusDto> {
+    return this.queue.status();
+  }
+
+  /** 큐를 지금 비운다 — 예약 워커를 기다리지 않고 확인할 때 */
+  @Post("notifications/queue/drain")
+  @HttpCode(200)
+  async drainQueue(): Promise<{
+    processed: number;
+    sent: number;
+    retried: number;
+    dead: number;
+    skipped: string | null;
+  }> {
+    // 수동 실행은 잠금을 요구하지 않는다 — 사람이 지금 확인하려는 것이다
+    return this.queue.drain({ force: true });
+  }
+
+  /**
+   * Dead Letter 재시도 — 설정을 고친 뒤 다시 보낸다.
+   * `ids`가 없으면 전부.
+   */
+  @Post("notifications/queue/requeue")
+  @HttpCode(200)
+  async requeue(@Body() body?: { ids?: string[] }): Promise<{ requeued: number }> {
+    return this.queue.requeue(body?.ids);
   }
 
   /** 최근 알림 전송 시도 — "왜 아무도 못 받았는가"를 추적한다 */
