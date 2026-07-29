@@ -250,9 +250,8 @@ test.describe("Provider 운영 점검 (TASK-1301)", () => {
     await setMode("data");
     await openPage(page);
 
-    await expect(page.getByTestId("schedule-backup")).toContainText(
-      "매일 03:00 로컬",
-    );
+    // 백업은 시각이 아니라 1시간 간격이다 (CTO 결정 1701-①)
+    await expect(page.getByTestId("schedule-backup")).toContainText("1시간");
     await expect(page.getByTestId("schedule-restore-verify")).toContainText(
       "매일 03:30 로컬",
     );

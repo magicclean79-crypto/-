@@ -117,6 +117,8 @@ export type ProtectionState = "enabled" | "disabled" | "unknown";
 export interface StorageProtectionInput {
   versioning: ProtectionState;
   replication: ProtectionState;
+  /** 운영 환경인가 — 운영에서는 Versioning이 필수다 (CTO 결정 1701-③) */
+  production?: boolean;
 }
 
 /**
@@ -128,9 +130,10 @@ export interface StorageProtectionInput {
  * 저장소가 알려 주지 않으면(`unknown`) `manual`이다 — 로컬 목업처럼 조회를
  * 지원하지 않는 저장소를 "정상"이라고 말하면 그 화면은 거짓이 된다.
  *
- * 꺼져 있어도 `fail`이 아닌 `warn`인 이유: 버전 관리는 **삭제·덮어쓰기로부터
- * 보호**하는 장치이지, 지금 이미지가 없다는 뜻이 아니다. 지금 당장의 복구
- * 가능성을 좌우하지는 않는다.
+ * **Versioning은 운영 필수, Replication은 운영 권장**이다 (CTO 결정 1701-③).
+ * 둘의 무게가 다른 이유: 버전 관리가 없으면 **실수 한 번으로 되돌릴 수 없게**
+ * 되지만, 복제가 없는 것은 리전 전체가 사라지는 훨씬 드문 사건에 대한
+ * 대비가 없다는 뜻이다. 개발 환경에서는 둘 다 권장에 머문다.
  */
 export function judgeStorageProtection(input: StorageProtectionInput): {
   status: DrStatus;
@@ -150,6 +153,17 @@ export function judgeStorageProtection(input: StorageProtectionInput): {
       detail: "버전 관리·복제가 모두 켜져 있습니다.",
     };
   }
+
+  // 운영에서 버전 관리가 꺼진 것은 권고 위반이 아니라 요건 미충족이다
+  if (input.production && input.versioning === "disabled") {
+    return {
+      status: "fail",
+      detail:
+        "버전 관리가 꺼져 있습니다 — 운영 필수입니다 (CTO 결정 1701-③). " +
+        "이미지를 지우거나 덮어쓰면 되돌릴 수 없습니다.",
+    };
+  }
+
   const off = [
     input.versioning === "disabled" ? "버전 관리" : null,
     input.replication === "disabled" ? "복제" : null,
@@ -166,8 +180,11 @@ export function judgeStorageProtection(input: StorageProtectionInput): {
 
 // ── 복구 목표 (RPO · RTO) ────────────────────────────────────
 
-/** 기본 RPO — 하루 1회 백업이므로 하루치 손실을 상한으로 본다 */
-export const DEFAULT_RPO_MS = 24 * 60 * 60 * 1000;
+/**
+ * 기본 RPO — 백업이 1시간 간격이므로 그 2배를 상한으로 본다
+ * (CTO 결정 1701-①). 실제 목표는 `defaultRpoTargetMs(간격)`으로 계산한다.
+ */
+export const DEFAULT_RPO_MS = 2 * 60 * 60 * 1000;
 
 /** 기본 RTO — 복원 자체는 30분 안에 끝나야 한다는 목표 */
 export const DEFAULT_RTO_MS = 30 * 60 * 1000;

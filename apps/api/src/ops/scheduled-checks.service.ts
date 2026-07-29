@@ -28,6 +28,7 @@ import { AlertService } from "./alert.service";
 import { BackupService } from "./backup.service";
 import { DistributedLockService } from "./distributed-lock.service";
 import { NotificationQueueService } from "./notification-queue.service";
+import { RecoveryDrillService } from "./recovery-drill.service";
 
 interface CheckRunRow {
   id: string;
@@ -116,6 +117,7 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
     private readonly alerts: AlertService,
     private readonly locks: DistributedLockService,
     private readonly backups: BackupService,
+    private readonly drills: RecoveryDrillService,
     private readonly production2: ProviderProductionService,
     private readonly queue: NotificationQueueService,
   ) {}
@@ -225,6 +227,13 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
       }),
     ];
     await this.alerts.sync(["scheduler-stopped"], detected);
+
+    // 복구 리허설 기한 (TASK-1801, CTO 결정 1701-⑤) — 종류가 다르므로
+    // 별도로 동기화한다. 예약 점검 경보와 섞으면 한쪽이 다른 쪽을 해소해 버린다.
+    await this.alerts.sync(
+      ["recovery-drill"],
+      await this.drills.detectAlerts(),
+    );
   }
 
   private get watchdogEnabled(): boolean {

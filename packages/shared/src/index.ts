@@ -1701,6 +1701,34 @@ export interface EnterpriseRecoveryDto {
     detail: string;
     verdict: "ok" | "same-as-production" | "not-configured";
   };
+  /** 복구 리허설 (TASK-1801) */
+  drill: RecoveryDrillStatusDto;
+  /** 백업 전용 버킷 — 이미지 버킷과 분리 (CTO 결정 1701-②) */
+  backupBucket: { name: string; separated: boolean };
+}
+
+/** 복구 리허설 기록 1건 (TASK-1801, CTO 결정 1701-⑤) */
+export interface RecoveryDrillDto {
+  id: string;
+  ok: boolean;
+  performedBy: string;
+  durationMs: number | null;
+  findings: string | null;
+  notes: string | null;
+  createdAt: string;
+}
+
+/** 복구 리허설 현황 */
+export interface RecoveryDrillStatusDto {
+  status: DrStatusDto;
+  detail: string;
+  /** 마지막 리허설 이후 경과 (ms) */
+  ageMs: number | null;
+  /** 다음 예정일 (ISO) */
+  dueAt: string | null;
+  overdueDays: number;
+  intervalDays: number;
+  history: RecoveryDrillDto[];
 }
 
 /** 운영 대시보드 (GET /ops/readiness) */

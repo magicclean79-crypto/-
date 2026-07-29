@@ -207,6 +207,8 @@ export interface DrState {
     objectives: { status: DrStatus; detail: string };
     /** 복원 대상 분리 (CTO 결정 1601-②) */
     restoreTarget: { status: DrStatus; detail: string };
+    /** 복구 리허설 (TASK-1801, CTO 결정 1701-⑤) */
+    drill: { status: DrStatus; detail: string };
   };
 }
 
@@ -265,6 +267,7 @@ export function buildDisasterRecoveryChecklist(state: DrState): DrItem[] {
       storageProtection,
       objectives,
       restoreTarget,
+      drill,
     } = state.enterprise;
     items.push(
       {
@@ -303,6 +306,15 @@ export function buildDisasterRecoveryChecklist(state: DrState): DrItem[] {
         title: "복구 목표 (RPO·RTO)",
         status: objectives.status,
         detail: objectives.detail,
+        critical: false,
+      },
+      {
+        id: "drill",
+        title: "복구 리허설 (분기 1회)",
+        status: drill.status,
+        detail: drill.detail,
+        // 리허설이 밀린 것과 지금 복구가 불가능한 것은 다르다 —
+        // 드러내되 복구 가능 판정을 막지는 않는다 (CTO 결정 1701-⑤)
         critical: false,
       },
     );

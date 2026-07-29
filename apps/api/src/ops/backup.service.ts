@@ -6,12 +6,15 @@ import { createReadStream } from "node:fs";
 import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import {
+  DEFAULT_JOB_INTERVALS,
+  defaultRpoTargetMs,
   judgeBackup,
   judgeIntegrity,
   judgeOffsite,
   judgeRecoveryObjectives,
   judgeRestore,
   judgeRestoreTarget,
+  resolveSchedules,
 } from "@acos/core";
 import type {
   BackupHealth,
@@ -183,11 +186,22 @@ export class BackupService {
       : 192 * 60 * 60 * 1000;
   }
 
+  /**
+   * 손실 한도 목표 — 지정하지 않으면 **백업 간격의 2배**를 쓴다
+   * (CTO 결정 1701-①). 간격을 바꿨는데 목표가 굳어 있으면 백업이 오래 멈춰도
+   * "정상"으로 보인다.
+   */
   get rpoTargetMs(): number {
     const raw = Number(process.env.BACKUP_RPO_HOURS);
-    return Number.isFinite(raw) && raw > 0
-      ? raw * 60 * 60 * 1000
-      : 24 * 60 * 60 * 1000;
+    if (Number.isFinite(raw) && raw > 0) {
+      return raw * 60 * 60 * 1000;
+    }
+    const backup = resolveSchedules(
+      process.env as Record<string, string | undefined>,
+    ).find((entry) => entry.job === "backup");
+    return defaultRpoTargetMs(
+      backup?.intervalMs ?? DEFAULT_JOB_INTERVALS.backup,
+    );
   }
 
   get rtoTargetMs(): number {
@@ -357,12 +371,9 @@ export class BackupService {
       return null;
     }
     try {
+      // 이미지 버킷이 아니라 **백업 전용 버킷**에 올린다 (CTO 결정 1701-②)
       const key = `${this.offsitePrefix}${name}`;
-      await this.storage.putObject(
-        key,
-        await readFile(path),
-        "application/octet-stream",
-      );
+      await this.storage.putBackupObject(key, await readFile(path));
       return key;
     } catch (error) {
       this.logger.error(

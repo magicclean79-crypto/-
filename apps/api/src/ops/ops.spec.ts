@@ -15,6 +15,7 @@ import { BackupService } from "./backup.service";
 import { DistributedLockService } from "./distributed-lock.service";
 import { NotificationQueueService } from "./notification-queue.service";
 import { NotificationService } from "./notification.service";
+import { RecoveryDrillService } from "./recovery-drill.service";
 import { OpsController } from "./ops.controller";
 import { ScheduledChecksService } from "./scheduled-checks.service";
 
@@ -87,6 +88,7 @@ function createPrismaStub() {
   }[] = [];
   const backups: Record<string, unknown>[] = [];
   const restores: Record<string, unknown>[] = [];
+  const drills: Record<string, unknown>[] = [];
   let seq = 0;
 
   return {
@@ -96,6 +98,7 @@ function createPrismaStub() {
     queue,
     backups,
     restores,
+    drills,
     stub: {
       alert: {
         findMany: async (args?: {
@@ -218,6 +221,15 @@ function createPrismaStub() {
           });
           return { count };
         },
+      },
+      recoveryDrill: {
+        create: async (args: { data: Record<string, unknown> }) => {
+          seq += 1;
+          const row = { id: `dr-${seq}`, createdAt: new Date(), ...args.data };
+          drills.push(row as never);
+          return { ...row };
+        },
+        findMany: async () => [...drills].reverse().map((row) => ({ ...row })),
       },
       backupRun: {
         create: async (args: { data: Record<string, unknown> }) => {
@@ -345,21 +357,28 @@ async function build(overrides: Overrides = {}) {
       NotificationQueueService,
       DistributedLockService,
       BackupService,
+      RecoveryDrillService,
       {
         provide: StorageService,
         useValue: {
           check: async () => "버킷 접근 정상",
           // 목업 저장소는 보호 상태를 알려 주지 않는다 — unknown이 정직한 답이다
+          bucket: "acos",
+          backupBucket: "acos-backups",
           describeProtection: async () => ({
             versioning: storageProtection.versioning,
             replication: storageProtection.replication,
           }),
-          putObject: async (key: string) => {
+          describeBackupProtection: async () => ({
+            versioning: storageProtection.versioning,
+            replication: storageProtection.replication,
+          }),
+          putBackupObject: async (key: string) => {
             offsiteUploads.push(key);
             if (storageProtection.uploadFails) {
               throw new Error("저장소 연결 실패");
             }
-            return `https://example.com/${key}`;
+            return `acos-backups/${key}`;
           },
         },
       },
@@ -1593,6 +1612,242 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
       expect(response.body.enterprise.integrity.detail).not.toContain(
         "c".repeat(64),
       );
+    });
+  });
+
+  describe("Enterprise Operations Platform (TASK-1801)", () => {
+    beforeEach(() => {
+      process.env.BACKUP_DIR = join(tmpdir(), "acos-backup-test");
+      process.env.DATABASE_URL = "postgresql://u:p@localhost:5432/acos";
+      process.env.BACKUP_RESTORE_DB_URL =
+        "postgresql://u:p@localhost:5432/acos_restore_check";
+      delete process.env.OPS_DRILL_INTERVAL_DAYS;
+      delete process.env.OPS_DRILL_GRACE_DAYS;
+      delete process.env.BACKUP_RPO_HOURS;
+      delete process.env.OPS_CHECK_BACKUP_INTERVAL;
+      delete process.env.NODE_ENV;
+    });
+
+    it("백업 예약이 1시간 간격이 되었다 (CTO 결정 1701-①)", async () => {
+      const built = await build();
+      app = built.app;
+      const backup = built.checks
+        .schedules()
+        .find((entry) => entry.job === "backup")!;
+      expect(backup.dailyAtMinutes).toBeNull();
+      expect(backup.intervalMs).toBe(60 * 60 * 1000);
+    });
+
+    it("손실 한도 목표가 백업 간격을 따라간다", async () => {
+      const built = await build();
+      app = built.app;
+      const backups = built.app.get(BackupService);
+      // 기본 1시간 간격 → 목표 2시간
+      expect(backups.rpoTargetMs).toBe(2 * 60 * 60 * 1000);
+
+      process.env.OPS_CHECK_BACKUP_INTERVAL = "15m";
+      expect(backups.rpoTargetMs).toBe(30 * 60 * 1000);
+
+      // 명시적으로 지정하면 그 값이 이긴다
+      process.env.BACKUP_RPO_HOURS = "6";
+      expect(backups.rpoTargetMs).toBe(6 * 60 * 60 * 1000);
+    });
+
+    it("원격 복제는 이미지 버킷이 아니라 백업 버킷에 올린다 (CTO 결정 1701-②)", async () => {
+      process.env.BACKUP_OFFSITE = "on";
+      const built = await build();
+      app = built.app;
+
+      await built.app.get(BackupService).backup("manual");
+      // putObject(이미지 경로)가 아니라 putBackupObject가 불린다
+      expect(offsiteUploads.every((key) => key.startsWith("backups/"))).toBe(true);
+
+      const response = await request(built.app.getHttpServer())
+        .get("/ops/readiness")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+      expect(response.body.enterprise.backupBucket).toMatchObject({
+        name: "acos-backups",
+        separated: true,
+      });
+      delete process.env.BACKUP_OFFSITE;
+    });
+
+    it("운영에서 버전 관리가 꺼져 있으면 복구 필수 항목이 실패한다 (CTO 결정 1701-③)", async () => {
+      process.env.NODE_ENV = "production";
+      const built = await build();
+      app = built.app;
+      storageProtection.versioning = "disabled";
+      storageProtection.replication = "enabled";
+
+      const response = await request(built.app.getHttpServer())
+        .get("/ops/readiness")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+
+      const item = response.body.checklist.find(
+        (entry: { id: string }) => entry.id === "storage-protection",
+      );
+      expect(item.status).toBe("fail");
+      expect(item.detail).toContain("운영 필수");
+      delete process.env.NODE_ENV;
+    });
+
+    it("운영에서도 조회 불가 저장소는 직접 확인으로 남는다 (CTO 결정 1701-③)", async () => {
+      process.env.NODE_ENV = "production";
+      const built = await build();
+      app = built.app;
+      // 기본 스텁은 unknown이다
+
+      const response = await request(built.app.getHttpServer())
+        .get("/ops/readiness")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+
+      expect(response.body.enterprise.storageProtection.status).toBe("manual");
+      delete process.env.NODE_ENV;
+    });
+
+    it("리허설 기록이 없으면 직접 확인으로 남고 경보하지 않는다", async () => {
+      const built = await build();
+      app = built.app;
+
+      const response = await request(built.app.getHttpServer())
+        .get("/ops/readiness")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+      expect(response.body.enterprise.drill.status).toBe("manual");
+      expect(response.body.enterprise.drill.intervalDays).toBe(90);
+
+      await built.checks.watchdog();
+      expect(built.prisma.alerts.get("recovery-drill:overdue")).toBeUndefined();
+    });
+
+    it("리허설을 기록하면 체크리스트가 통과로 바뀐다 (CTO 결정 1701-⑤)", async () => {
+      const built = await build();
+      app = built.app;
+
+      await request(built.app.getHttpServer())
+        .post("/ops/drills")
+        .set("Authorization", "Bearer tok-admin")
+        .send({ ok: true, performedBy: "운영자 A", durationMs: 900_000 })
+        .expect(201);
+
+      const response = await request(built.app.getHttpServer())
+        .get("/ops/readiness")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+      const item = response.body.checklist.find(
+        (entry: { id: string }) => entry.id === "drill",
+      );
+      expect(item).toMatchObject({ status: "pass", critical: false });
+      expect(response.body.enterprise.drill.history[0].performedBy).toBe(
+        "운영자 A",
+      );
+    });
+
+    it("실패한 리허설도 기록하고 심각 경보를 만든다", async () => {
+      const built = await build();
+      app = built.app;
+
+      await request(built.app.getHttpServer())
+        .post("/ops/drills")
+        .set("Authorization", "Bearer tok-admin")
+        .send({
+          ok: false,
+          performedBy: "운영자 B",
+          findings: "복원 대상 DB 권한이 없었다",
+        })
+        .expect(201);
+
+      await built.checks.watchdog();
+      const alert = built.prisma.alerts.get("recovery-drill:failed");
+      expect(alert).toMatchObject({ level: "CRITICAL", status: "ACTIVE" });
+      expect(alert!.message).toContain("사고가 나기 전에 고치세요");
+    });
+
+    it("기한을 넘기면 주의 경보를 만든다 — 지금 죽는 문제는 아니다", async () => {
+      process.env.OPS_DRILL_INTERVAL_DAYS = "1";
+      process.env.OPS_DRILL_GRACE_DAYS = "1";
+      const built = await build();
+      app = built.app;
+      built.prisma.drills.push({
+        id: "dr-old",
+        ok: true,
+        performedBy: "운영자 C",
+        durationMs: null,
+        findings: null,
+        notes: null,
+        createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
+      });
+
+      await built.checks.watchdog();
+      const alert = built.prisma.alerts.get("recovery-drill:overdue");
+      expect(alert).toMatchObject({ level: "WARNING" });
+      expect(alert!.message).not.toContain("**");
+    });
+
+    it("리허설 경보가 예약 점검 경보를 해소하지 않는다", async () => {
+      // 종류를 나눠 동기화하지 않으면 한쪽이 다른 쪽을 지운다
+      const built = await build();
+      app = built.app;
+      built.prisma.alerts.set("scheduler-stopped:cost-verification", {
+        id: "a-1",
+        kind: "scheduler-stopped",
+        key: "scheduler-stopped:cost-verification",
+        level: "CRITICAL",
+        title: "예약 점검 정지",
+        message: "멈춤",
+        status: "ACTIVE",
+        occurrences: 1,
+        firstRaisedAt: new Date(),
+        lastRaisedAt: new Date(),
+        notifiedAt: new Date(),
+        resolvedAt: null,
+        archivedAt: null,
+      });
+
+      await request(built.app.getHttpServer())
+        .post("/ops/drills")
+        .set("Authorization", "Bearer tok-admin")
+        .send({ ok: false, performedBy: "운영자 D" })
+        .expect(201);
+      await built.checks.watchdog();
+
+      expect(built.prisma.alerts.get("recovery-drill:failed")?.status).toBe(
+        "ACTIVE",
+      );
+    });
+
+    it("누가 했는지 없으면 기록을 거절한다", async () => {
+      const built = await build();
+      app = built.app;
+      const server = built.app.getHttpServer();
+
+      await request(server)
+        .post("/ops/drills")
+        .set("Authorization", "Bearer tok-admin")
+        .send({ ok: true })
+        .expect(400);
+      // 성공/실패를 안 적으면 기록의 핵심이 빠진다
+      await request(server)
+        .post("/ops/drills")
+        .set("Authorization", "Bearer tok-admin")
+        .send({ performedBy: "운영자 E" })
+        .expect(400);
+    });
+
+    it("리허설 API도 ADMIN 전용", async () => {
+      const built = await build();
+      app = built.app;
+      const server = built.app.getHttpServer();
+
+      await request(server).get("/ops/drills").expect(401);
+      await request(server)
+        .post("/ops/drills")
+        .set("Authorization", "Bearer tok-editor")
+        .send({ ok: true, performedBy: "x" })
+        .expect(403);
     });
   });
 });

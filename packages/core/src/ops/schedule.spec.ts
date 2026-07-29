@@ -1,6 +1,7 @@
 import {
   DEFAULT_GRACE_FACTOR,
   DEFAULT_JOB_INTERVALS,
+  defaultRpoTargetMs,
   isSchedulerStopped,
   resolveGraceFactor,
   parseDailyAt,
@@ -112,13 +113,34 @@ describe("Scheduled Checks (TASK-1302)", () => {
       expect(byJob["restore-verify"].enabled).toBe(true);
     });
 
-    it("점검별 기본 시각이 겹치지 않는다 (백업 → 복구 검증 → 보관)", () => {
+    it("시각 기반 점검의 기본 시각이 겹치지 않는다 (복구 검증 → 보관)", () => {
       const byJob = Object.fromEntries(
         resolveSchedules({}).map((entry) => [entry.job, entry]),
       );
-      expect(byJob.backup.dailyAtMinutes).toBe(3 * 60);
       expect(byJob["restore-verify"].dailyAtMinutes).toBe(3 * 60 + 30);
       expect(byJob["alert-archive"].dailyAtMinutes).toBe(4 * 60);
+    });
+
+    it("백업은 1시간 간격으로 돈다 (CTO 결정 1701-①)", () => {
+      // 하루 1회는 최대 24시간을 잃는다는 뜻이었다 — 시각이 아니라 간격이다
+      const backup = resolveSchedules({}).find(
+        (entry) => entry.job === "backup",
+      )!;
+      expect(backup.dailyAtMinutes).toBeNull();
+      expect(backup.intervalMs).toBe(60 * 60 * 1000);
+      expect(backup.env).toBe("OPS_CHECK_BACKUP_INTERVAL");
+
+      expect(
+        resolveSchedules({ OPS_CHECK_BACKUP_INTERVAL: "15m" }).find(
+          (entry) => entry.job === "backup",
+        )!.intervalMs,
+      ).toBe(15 * 60 * 1000);
+    });
+
+    it("손실 한도 기본 목표는 백업 간격의 2배다", () => {
+      // 간격만 바꾸고 목표를 그대로 두면, 백업이 오래 멈춰도 정상으로 보인다
+      expect(defaultRpoTargetMs(60 * 60 * 1000)).toBe(2 * 60 * 60 * 1000);
+      expect(defaultRpoTargetMs(15 * 60 * 1000)).toBe(30 * 60 * 1000);
     });
 
     it("보관은 시각 기반이다 (CTO 결정 1401-③ — 하루 1회 새벽)", () => {

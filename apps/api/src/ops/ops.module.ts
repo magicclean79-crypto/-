@@ -4,6 +4,7 @@ import { LlmModule } from "../llm/llm.module";
 import { StorageModule } from "../storage/storage.module";
 import { AlertService } from "./alert.service";
 import { BackupService } from "./backup.service";
+import { RecoveryDrillService } from "./recovery-drill.service";
 import { DistributedLockService } from "./distributed-lock.service";
 import { NotificationQueueService } from "./notification-queue.service";
 import { NotificationService } from "./notification.service";
@@ -26,6 +27,7 @@ import { ScheduledChecksService } from "./scheduled-checks.service";
     NotificationQueueService,
     DistributedLockService,
     BackupService,
+    RecoveryDrillService,
   ],
   exports: [
     AlertService,
@@ -34,6 +36,7 @@ import { ScheduledChecksService } from "./scheduled-checks.service";
     NotificationQueueService,
     DistributedLockService,
     BackupService,
+    RecoveryDrillService,
   ],
 })
 export class OpsModule {}

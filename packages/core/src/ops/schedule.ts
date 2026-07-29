@@ -33,11 +33,24 @@ export const DEFAULT_JOB_INTERVALS: Record<ScheduledJob, number> = {
   "health-check": 60 * 60 * 1000,
   // 보관은 하루 1회 — 간격이 아니라 **시각**으로 돈다 (아래 DAILY_JOBS)
   "alert-archive": 24 * 60 * 60 * 1000,
-  // 백업·복구 검증·스모크도 시각 기반 (TASK-1601)
-  backup: 24 * 60 * 60 * 1000,
+  // 백업은 **1시간 간격** (CTO 결정 1701-①) — 하루 1회는 최대 24시간을
+  // 잃는다는 뜻이었고, 덤프가 작아 자주 받는 편이 훨씬 싸다
+  backup: 60 * 60 * 1000,
+  // 복구 검증·스모크는 여전히 시각 기반 (TASK-1601)
   "restore-verify": 24 * 60 * 60 * 1000,
   "provider-smoke": 24 * 60 * 60 * 1000,
 };
+
+/**
+ * 손실 한도(RPO) 기본 목표는 **백업 간격의 2배** (TASK-1801).
+ *
+ * 한 번 걸러 실패해도 목표를 지킨다는 뜻이다. 간격을 바꿨는데 목표가 24시간에
+ * 그대로 묶여 있으면, 백업이 20시간 멈춰도 "정상"으로 보인다 — 설정과 판정이
+ * 어긋나면 화면이 거짓이 된다.
+ */
+export function defaultRpoTargetMs(backupIntervalMs: number): number {
+  return backupIntervalMs * 2;
+}
 
 /**
  * 기본이 **꺼짐**인 점검 (TASK-1601).
@@ -55,14 +68,12 @@ export const DEFAULT_DISABLED_JOBS: ScheduledJob[] = ["provider-smoke"];
  */
 export const DAILY_JOBS: Partial<Record<ScheduledJob, string>> = {
   "alert-archive": "OPS_CHECK_ARCHIVE_AT",
-  backup: "OPS_CHECK_BACKUP_AT",
   "restore-verify": "OPS_CHECK_RESTORE_AT",
   "provider-smoke": "OPS_CHECK_SMOKE_AT",
 };
 
 /** 점검별 기본 실행 시각 — 서로 겹치지 않게 둔다 (백업 → 복구 검증 → 보관) */
 export const DEFAULT_DAILY_TIMES: Partial<Record<ScheduledJob, string>> = {
-  backup: "03:00",
   "restore-verify": "03:30",
   "alert-archive": "04:00",
   "provider-smoke": "05:00",
@@ -129,7 +140,9 @@ export const JOB_INTERVAL_ENV: Record<ScheduledJob, string> = {
   "provider-validation": "OPS_CHECK_CONFIG_INTERVAL",
   "health-check": "OPS_CHECK_HEALTH_INTERVAL",
   "alert-archive": "OPS_CHECK_ARCHIVE_AT",
-  backup: "OPS_CHECK_BACKUP_AT",
+  // 시각(HH:MM)에서 간격으로 바뀌었다 (CTO 결정 1701-①) — 구 이름은
+  // env-spec이 "더 이상 쓰이지 않는다"고 경고한다
+  backup: "OPS_CHECK_BACKUP_INTERVAL",
   "restore-verify": "OPS_CHECK_RESTORE_AT",
   "provider-smoke": "OPS_CHECK_SMOKE_AT",
 };

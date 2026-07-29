@@ -116,6 +116,9 @@ export default function OperationsPage() {
   const [loading, setLoading] = useState(false);
   const [running, setRunning] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [drillOpen, setDrillOpen] = useState(false);
+  const [drillBy, setDrillBy] = useState("");
+  const [drillFindings, setDrillFindings] = useState("");
 
   async function load() {
     setLoading(true);
@@ -162,6 +165,47 @@ export default function OperationsPage() {
         return;
       }
       setNote(describe((await response.json()) as Record<string, unknown>));
+      await load();
+    } catch {
+      setError("API 서버에 연결할 수 없습니다.");
+    } finally {
+      setRunning(null);
+    }
+  }
+
+  /** 리허설 결과 기록 (CTO 결정 1701-⑤) — 실패도 남긴다 */
+  async function submitDrill(ok: boolean) {
+    setRunning("리허설 기록");
+    setNote(null);
+    try {
+      const response = await fetch(`${API_URL}/ops/drills`, {
+        ...authFetchInit(),
+        method: "POST",
+        headers: {
+          ...(authFetchInit().headers ?? {}),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          ok,
+          performedBy: drillBy.trim(),
+          findings: drillFindings.trim() || undefined,
+        }),
+      });
+      if (!response.ok) {
+        setError(
+          response.status === 401 || response.status === 403
+            ? "ADMIN 권한이 필요합니다 — 관리자 계정으로 로그인해 주세요."
+            : `리허설 기록 실패 (HTTP ${response.status})`,
+        );
+        return;
+      }
+      setNote(
+        ok
+          ? "복구 리허설을 성공으로 기록했습니다."
+          : "복구 리허설을 실패로 기록했습니다 — 절차를 고치세요.",
+      );
+      setDrillOpen(false);
+      setDrillFindings("");
       await load();
     } catch {
       setError("API 서버에 연결할 수 없습니다.");
@@ -549,6 +593,29 @@ export default function OperationsPage() {
                 </p>
               </li>
               <li
+                data-testid="backup-bucket"
+                className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                      data.enterprise.backupBucket.separated ? OK_STYLE : WARN_STYLE
+                    }`}
+                  >
+                    {data.enterprise.backupBucket.separated ? "분리됨" : "같은 버킷"}
+                  </span>
+                  <strong>백업 버킷</strong>
+                  <span className="text-xs text-zinc-500">
+                    {data.enterprise.backupBucket.name}
+                  </span>
+                </div>
+                <p className="mt-1">
+                  {data.enterprise.backupBucket.separated
+                    ? "이미지 버킷과 분리되어 있습니다 — 한 쪽이 사라져도 다른 쪽이 남습니다."
+                    : "이미지 버킷과 같습니다 — 그 버킷이 사라지면 이미지와 백업이 함께 사라집니다."}
+                </p>
+              </li>
+              <li
                 data-testid="restore-target"
                 className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
               >
@@ -563,6 +630,133 @@ export default function OperationsPage() {
                 <p className="mt-1">{data.enterprise.restoreTarget.detail}</p>
               </li>
             </ul>
+          </section>
+
+          <section
+            data-testid="recovery-drill"
+            className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800"
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-lg font-semibold">복구 리허설</h2>
+              <span
+                data-testid="drill-verdict"
+                className={`rounded-full px-2 py-0.5 text-xs font-medium ${DR_STYLE[data.enterprise.drill.status]}`}
+              >
+                {DR_LABEL[data.enterprise.drill.status]}
+              </span>
+              <span className="text-xs text-zinc-500">
+                {data.enterprise.drill.intervalDays}일마다 · 다음 예정{" "}
+                {data.enterprise.drill.dueAt
+                  ? new Date(data.enterprise.drill.dueAt).toLocaleDateString(
+                      "ko-KR",
+                    )
+                  : "미정"}
+                {data.enterprise.drill.overdueDays > 0
+                  ? ` · ${data.enterprise.drill.overdueDays}일 지남`
+                  : ""}
+              </span>
+              <button
+                type="button"
+                data-testid="record-drill"
+                disabled={running !== null}
+                onClick={() => setDrillOpen((open) => !open)}
+                className="ml-auto rounded-lg border border-zinc-300 px-2.5 py-1 text-xs font-medium hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+              >
+                {drillOpen ? "닫기" : "리허설 기록"}
+              </button>
+            </div>
+            <p className="mt-1 text-sm">{data.enterprise.drill.detail}</p>
+            <p className="mt-1 text-xs text-zinc-500">
+              리허설은 사람이 합니다 — 화면은 <strong>한 사실을 기록</strong>하고,
+              안 하면 드러나게 할 뿐입니다. 절차는
+              docs/operations/disaster-recovery.md.
+            </p>
+
+            {drillOpen ? (
+              <div
+                data-testid="drill-form"
+                className="mt-3 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
+              >
+                <label className="block text-xs text-zinc-500">
+                  수행자
+                  <input
+                    data-testid="drill-performer"
+                    value={drillBy}
+                    onChange={(event) => setDrillBy(event.target.value)}
+                    placeholder="이름 또는 계정"
+                    className="mt-1 w-full rounded-lg border border-zinc-300 px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+                  />
+                </label>
+                <label className="mt-2 block text-xs text-zinc-500">
+                  발견 사항 (절차의 어디가 어긋났는지)
+                  <textarea
+                    data-testid="drill-findings"
+                    value={drillFindings}
+                    onChange={(event) => setDrillFindings(event.target.value)}
+                    rows={2}
+                    className="mt-1 w-full rounded-lg border border-zinc-300 px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+                  />
+                </label>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    data-testid="drill-success"
+                    disabled={running !== null || drillBy.trim() === ""}
+                    onClick={() => void submitDrill(true)}
+                    className="rounded-lg border border-emerald-400 px-2.5 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50 dark:border-emerald-700 dark:text-emerald-300 dark:hover:bg-emerald-950"
+                  >
+                    성공으로 기록
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="drill-failure"
+                    disabled={running !== null || drillBy.trim() === ""}
+                    onClick={() => void submitDrill(false)}
+                    className="rounded-lg border border-red-400 px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-950"
+                  >
+                    실패로 기록
+                  </button>
+                  <span className="self-center text-xs text-zinc-500">
+                    실패한 리허설이 더 값집니다 — 사고 전에 절차가 깨진 것을
+                    알아낸 것입니다.
+                  </span>
+                </div>
+              </div>
+            ) : null}
+
+            {data.enterprise.drill.history.length > 0 ? (
+              <div className="mt-3 overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead className="text-xs text-zinc-500">
+                    <tr>
+                      <th className="py-1">시각</th>
+                      <th className="py-1">결과</th>
+                      <th className="py-1">수행자</th>
+                      <th className="py-1">발견 사항</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.enterprise.drill.history.map((entry) => (
+                      <tr
+                        key={entry.id}
+                        className="border-t border-zinc-100 dark:border-zinc-800"
+                      >
+                        <td className="py-1.5 text-xs">
+                          {new Date(entry.createdAt).toLocaleString("ko-KR")}
+                        </td>
+                        <td className="py-1.5 text-xs">
+                          {entry.ok ? "성공" : "실패"}
+                        </td>
+                        <td className="py-1.5 text-xs">{entry.performedBy}</td>
+                        <td className="py-1.5 text-xs">
+                          {entry.findings ?? "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
           </section>
 
           <section

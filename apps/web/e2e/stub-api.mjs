@@ -19,6 +19,8 @@ let stubDeadRequeued = false;
 // 운영 검증 스텁 상태 (TASK-1601)
 let stubBackupRan = false;
 let stubRestoreVerified = false;
+// 복구 리허설 스텁 상태 (TASK-1801)
+let stubDrills = [];
 
 const stats = (totals, groups) => ({
   range: { from: null, to: null },
@@ -215,6 +217,7 @@ const server = http.createServer((req, res) => {
       stubDeadRequeued = false;
       stubBackupRan = false;
       stubRestoreVerified = false;
+      stubDrills = [];
       resetPublishing();
       resetUsers();
       res.end(JSON.stringify({ mode }));
@@ -671,7 +674,8 @@ const server = http.createServer((req, res) => {
     url.pathname === "/ops/readiness" ||
     url.pathname === "/ops/backup/run" ||
     url.pathname === "/ops/backup/verify-restore" ||
-    url.pathname === "/ops/notifications/verify-smtp"
+    url.pathname === "/ops/notifications/verify-smtp" ||
+    url.pathname === "/ops/drills"
   ) {
     if (req.headers.authorization !== "Bearer stub-token") {
       res.statusCode = req.headers.authorization ? 403 : 401;
@@ -679,6 +683,37 @@ const server = http.createServer((req, res) => {
       return;
     }
     const healthy = mode === "data";
+
+    // 복구 리허설 (TASK-1801, CTO 결정 1701-⑤)
+    if (url.pathname === "/ops/drills") {
+      if (req.method === "POST") {
+        let body = "";
+        req.on("data", (chunk) => (body += chunk));
+        req.on("end", () => {
+          const input = JSON.parse(body || "{}");
+          if (typeof input.ok !== "boolean" || !input.performedBy) {
+            res.statusCode = 400;
+            res.end(JSON.stringify({ message: "ok와 performedBy는 필수입니다." }));
+            return;
+          }
+          const entry = {
+            id: `dr-${stubDrills.length + 1}`,
+            ok: input.ok,
+            performedBy: input.performedBy,
+            durationMs: input.durationMs ?? null,
+            findings: input.findings ?? null,
+            notes: input.notes ?? null,
+            createdAt: new Date().toISOString(),
+          };
+          stubDrills.unshift(entry);
+          res.statusCode = 201;
+          res.end(JSON.stringify(entry));
+        });
+        return;
+      }
+      res.end(JSON.stringify(stubDrills));
+      return;
+    }
 
     if (req.method === "POST" && url.pathname === "/ops/backup/run") {
       stubBackupRan = true;
@@ -870,6 +905,23 @@ const server = http.createServer((req, res) => {
         critical: false,
       },
       {
+        id: "drill",
+        title: "복구 리허설 (분기 1회)",
+        status:
+          stubDrills.length === 0
+            ? "manual"
+            : stubDrills[0].ok
+              ? "pass"
+              : "fail",
+        detail:
+          stubDrills.length === 0
+            ? "복구 리허설 기록이 없습니다 — 절차를 읽는 것과 해 보는 것은 다릅니다. 한 번 수행하고 결과를 남기세요."
+            : stubDrills[0].ok
+              ? "마지막 복구 리허설 0일 전 — 다음 예정까지 90일 남았습니다."
+              : "마지막 복구 리허설이 실패했습니다 — 복구 절차가 지금 상태로는 동작하지 않습니다. 사고가 나기 전에 고치세요.",
+        critical: false,
+      },
+      {
         id: "objectives",
         title: "복구 목표 (RPO·RTO)",
         status: healthy ? "pass" : "manual",
@@ -1002,6 +1054,32 @@ const server = http.createServer((req, res) => {
               ? "복원 대상이 운영 데이터베이스와 분리되어 있습니다."
               : "복원 검증 대상 DB가 없습니다 — 복원해 보지 않은 백업은 백업이 아닙니다.",
             verdict: healthy ? "ok" : "not-configured",
+          },
+          drill: {
+            status:
+              stubDrills.length === 0
+                ? "manual"
+                : stubDrills[0].ok
+                  ? "pass"
+                  : "fail",
+            detail:
+              stubDrills.length === 0
+                ? "복구 리허설 기록이 없습니다 — 절차를 읽는 것과 해 보는 것은 다릅니다. 한 번 수행하고 결과를 남기세요."
+                : stubDrills[0].ok
+                  ? "마지막 복구 리허설 0일 전 — 다음 예정까지 90일 남았습니다."
+                  : "마지막 복구 리허설이 실패했습니다 — 복구 절차가 지금 상태로는 동작하지 않습니다. 사고가 나기 전에 고치세요.",
+            ageMs: stubDrills.length === 0 ? null : 0,
+            dueAt:
+              stubDrills.length === 0
+                ? null
+                : new Date(Date.now() + 90 * 86_400_000).toISOString(),
+            overdueDays: 0,
+            intervalDays: 90,
+            history: stubDrills,
+          },
+          backupBucket: {
+            name: healthy ? "acos-backups" : "acos",
+            separated: healthy,
           },
         },
         redis: {
@@ -1260,11 +1338,11 @@ const server = http.createServer((req, res) => {
           },
           {
             job: "backup",
-            intervalMs: 86_400_000,
-            dailyAtMinutes: 180,
+            intervalMs: 3_600_000,
+            dailyAtMinutes: null,
             enabled: true,
             source: "default",
-            env: "OPS_CHECK_BACKUP_AT",
+            env: "OPS_CHECK_BACKUP_INTERVAL",
             lastRunAt: null,
             lastResult: null,
           },

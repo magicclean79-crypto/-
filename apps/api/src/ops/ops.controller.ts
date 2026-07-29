@@ -25,6 +25,7 @@ import type {
   NotificationDeliveryDto,
   NotificationQueueStatusDto,
   OperationsReadinessDto,
+  RecoveryDrillDto,
   SmtpValidationDto,
 } from "@acos/shared";
 import { AuthGuard, RequireRole } from "../auth/auth.guard";
@@ -35,6 +36,7 @@ import { BackupService } from "./backup.service";
 import { DistributedLockService } from "./distributed-lock.service";
 import { NotificationQueueService } from "./notification-queue.service";
 import { NotificationService } from "./notification.service";
+import { RecoveryDrillService } from "./recovery-drill.service";
 import { ScheduledChecksService } from "./scheduled-checks.service";
 
 /**
@@ -54,6 +56,7 @@ export class OpsController {
     private readonly notifications: NotificationService,
     private readonly queue: NotificationQueueService,
     private readonly backups: BackupService,
+    private readonly drills: RecoveryDrillService,
     private readonly locks: DistributedLockService,
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
@@ -76,6 +79,8 @@ export class OpsController {
       database,
       storage,
       protection,
+      drill,
+      drillHistory,
     ] = await Promise.all([
       this.backups.health(),
       this.backups.backupHistory(10),
@@ -85,10 +90,16 @@ export class OpsController {
       this.checkDatabase(),
       this.checkStorage(),
       this.describeStorageProtection(),
+      this.drills.health(),
+      this.drills.history(10),
     ]);
 
-    // 이미지 저장소 보호 상태 (CTO 결정 1601-④) — 앱은 이미지를 백업하지 않는다
-    const storageProtection = judgeStorageProtection(protection);
+    // 이미지 저장소 보호 상태 (CTO 결정 1601-④·1701-③) — 앱은 이미지를
+    // 백업하지 않는다. 운영에서는 Versioning이 필수, Replication은 권장이다.
+    const storageProtection = judgeStorageProtection({
+      ...protection,
+      production: process.env.NODE_ENV === "production",
+    });
     const targetSafety = this.backups.restoreTargetSafety;
     const restoreTarget = {
       status: (targetSafety.verdict === "same-as-production"
@@ -123,6 +134,7 @@ export class OpsController {
           detail: health.objectives.detail,
         },
         restoreTarget,
+        drill: { status: drill.status, detail: drill.detail },
       },
     });
     const summary = summarizeDisasterRecovery(checklist);
@@ -174,6 +186,20 @@ export class OpsController {
         storageProtection: { ...storageProtection, ...protection },
         objectives: health.objectives,
         restoreTarget: { ...restoreTarget, verdict: targetSafety.verdict },
+        drill: {
+          status: drill.status,
+          detail: drill.detail,
+          ageMs: drill.ageMs,
+          dueAt: drill.dueAt === null ? null : new Date(drill.dueAt).toISOString(),
+          overdueDays: drill.overdueDays,
+          intervalDays: Math.round(drill.intervalMs / (24 * 60 * 60 * 1000)),
+          history: drillHistory,
+        },
+        backupBucket: {
+          name: this.storage.backupBucket,
+          // 이미지 버킷과 같으면 한 쪽이 사라질 때 둘 다 사라진다 (결정 1701-②)
+          separated: this.storage.backupBucket !== this.storage.bucket,
+        },
       },
       checkedAt: new Date().toISOString(),
     };
@@ -210,6 +236,53 @@ export class OpsController {
   @HttpCode(200)
   async runRestoreVerify() {
     return this.backups.verifyRestore("manual");
+  }
+
+  /**
+   * 복구 리허설 기록 (TASK-1801, CTO 결정 1701-⑤).
+   *
+   * 리허설 자체는 사람이 한다 — 여기서는 **한 사실을 남긴다**.
+   * 실패한 리허설도 기록한다: 절차가 깨졌다는 것을 사고 전에 알아낸 것이다.
+   */
+  @Post("drills")
+  @HttpCode(201)
+  async recordDrill(
+    @Body()
+    body: {
+      ok?: boolean;
+      performedBy?: string;
+      durationMs?: number;
+      findings?: string;
+      notes?: string;
+    },
+  ): Promise<RecoveryDrillDto> {
+    if (typeof body?.ok !== "boolean") {
+      throw new BadRequestException(
+        "ok는 true/false여야 합니다 — 리허설이 성공했는지 실패했는지가 기록의 핵심입니다.",
+      );
+    }
+    const performedBy = body.performedBy?.trim();
+    if (!performedBy) {
+      throw new BadRequestException(
+        "performedBy는 필수입니다 — 누가 확인했는지 남지 않으면 기록이 아닙니다.",
+      );
+    }
+    return this.drills.record({
+      ok: body.ok,
+      performedBy,
+      durationMs:
+        typeof body.durationMs === "number" && body.durationMs >= 0
+          ? Math.round(body.durationMs)
+          : null,
+      findings: body.findings?.trim() || null,
+      notes: body.notes?.trim() || null,
+    });
+  }
+
+  /** 복구 리허설 이력 */
+  @Get("drills")
+  async drillHistory(@Query("limit") limit?: string): Promise<RecoveryDrillDto[]> {
+    return this.drills.history(Number(limit) || 20);
   }
 
   private async checkDatabase(): Promise<{ ok: boolean; detail: string }> {

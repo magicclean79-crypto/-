@@ -45,7 +45,10 @@ export interface EnvSpec {
    * 운영에서 이 값이 특정 상태여야 한다는 권고 —
    * 충족하지 못하면 warning으로 알린다.
    */
-  productionAdvice?: (value: string | undefined) => string | null;
+  productionAdvice?: (
+    value: string | undefined,
+    env?: Record<string, string | undefined>,
+  ) => string | null;
 }
 
 const positiveNumber = (label: string) => (value: string) => {
@@ -543,10 +546,22 @@ export const ENV_SPECS: EnvSpec[] = [
         : "복원 검증 대상 DB가 없습니다 — 복원해 보지 않은 백업은 백업이 아닙니다.",
   },
   {
+    name: "OPS_CHECK_BACKUP_INTERVAL",
+    category: "ops",
+    description: "백업 실행 간격 (15m · 1h 등) — off로 중단",
+    fallback: "1h (CTO 결정 1701-①)",
+  },
+  {
     name: "OPS_CHECK_BACKUP_AT",
     category: "ops",
-    description: "백업 실행 시각 HH:MM (운영 서버 로컬 시각) — off로 중단",
-    fallback: "03:00 로컬",
+    description:
+      "[사용 안 함] 백업은 시각이 아니라 간격으로 돕니다 — OPS_CHECK_BACKUP_INTERVAL을 쓰세요",
+    fallback: "무시됨",
+    // 값이 남아 있으면 운영자는 그 시각에 돈다고 믿는다 — 조용히 무시하면 안 된다
+    productionAdvice: (value) =>
+      value
+        ? "OPS_CHECK_BACKUP_AT은 더 이상 쓰이지 않습니다 — 백업은 OPS_CHECK_BACKUP_INTERVAL 간격으로 돕니다 (CTO 결정 1701-①)."
+        : null,
   },
   {
     name: "OPS_CHECK_RESTORE_AT",
@@ -590,10 +605,36 @@ export const ENV_SPECS: EnvSpec[] = [
         : "백업 원격 복제가 꺼져 있습니다 — 호스트가 사라지면 백업도 함께 사라집니다.",
   },
   {
+    name: "BACKUP_BUCKET",
+    category: "ops",
+    description:
+      "백업 전용 버킷 — 이미지 버킷과 분리해야 한 쪽이 사라져도 다른 쪽이 남는다",
+    fallback: "S3_BUCKET + '-backups'",
+    productionAdvice: (value, env) =>
+      value && env?.S3_BUCKET && value.trim() === env.S3_BUCKET.trim()
+        ? "백업 버킷이 이미지 버킷과 같습니다 — 그 버킷이 사라지면 이미지와 백업이 함께 사라집니다 (CTO 결정 1701-②)."
+        : null,
+  },
+  {
     name: "BACKUP_OFFSITE_PREFIX",
     category: "ops",
     description: "원격 복제 시 오브젝트 키 접두사",
     fallback: "backups/",
+  },
+  {
+    name: "OPS_DRILL_INTERVAL_DAYS",
+    category: "ops",
+    description:
+      "복구 리허설 주기(일) — 분기 1회가 운영 표준이다 (CTO 결정 1701-⑤)",
+    validate: positiveNumber("OPS_DRILL_INTERVAL_DAYS"),
+    fallback: "90",
+  },
+  {
+    name: "OPS_DRILL_GRACE_DAYS",
+    category: "ops",
+    description: "리허설 기한 초과 후 경보까지의 유예(일)",
+    validate: positiveNumber("OPS_DRILL_GRACE_DAYS"),
+    fallback: "14",
   },
   {
     name: "BACKUP_RPO_HOURS",
@@ -686,7 +727,7 @@ export function validateEnvironment(
         continue;
       }
       // 미설정이어도 운영 권고는 알린다 (예산 미설정 등)
-      const advice = production ? spec.productionAdvice?.(undefined) : null;
+      const advice = production ? spec.productionAdvice?.(undefined, env) : null;
       if (advice) {
         warnings.push(issue("warning", advice));
       }
@@ -700,7 +741,7 @@ export function validateEnvironment(
       continue;
     }
 
-    const advice = production ? spec.productionAdvice?.(value) : null;
+    const advice = production ? spec.productionAdvice?.(value, env) : null;
     if (advice) {
       warnings.push(issue("warning", advice));
     }

@@ -100,6 +100,46 @@ describe("Enterprise Backup & Disaster Recovery (TASK-1701)", () => {
       ).toBe("pass");
     });
 
+    it("운영에서 버전 관리가 꺼져 있으면 실패다 (CTO 결정 1701-③)", () => {
+      const result = judgeStorageProtection({
+        versioning: "disabled",
+        replication: "enabled",
+        production: true,
+      });
+      expect(result.status).toBe("fail");
+      expect(result.detail).toContain("운영 필수");
+    });
+
+    it("운영에서도 복제는 권장이다 — 실패로 세지 않는다", () => {
+      expect(
+        judgeStorageProtection({
+          versioning: "enabled",
+          replication: "disabled",
+          production: true,
+        }).status,
+      ).toBe("warn");
+    });
+
+    it("개발에서는 버전 관리가 꺼져도 주의에 머문다", () => {
+      expect(
+        judgeStorageProtection({
+          versioning: "disabled",
+          replication: "disabled",
+        }).status,
+      ).toBe("warn");
+    });
+
+    it("운영이어도 모르는 것은 실패가 아니라 직접 확인이다", () => {
+      // 조회 불가 저장소는 manual 유지 (CTO 결정 1701-③)
+      expect(
+        judgeStorageProtection({
+          versioning: "unknown",
+          replication: "unknown",
+          production: true,
+        }).status,
+      ).toBe("manual");
+    });
+
     it("꺼져 있으면 무엇이 꺼졌는지 이름을 말한다", () => {
       const result = judgeStorageProtection({
         versioning: "enabled",
@@ -258,6 +298,7 @@ describe("Enterprise Backup & Disaster Recovery (TASK-1701)", () => {
           storageProtection: { status: "pass", detail: "" },
           objectives: { status: "pass", detail: "" },
           restoreTarget: { status: "pass", detail: "" },
+          drill: { status: "pass", detail: "" },
         },
       });
       const summary = summarizeDisasterRecovery(items);
@@ -274,6 +315,7 @@ describe("Enterprise Backup & Disaster Recovery (TASK-1701)", () => {
           storageProtection: { status: "pass", detail: "" },
           objectives: { status: "pass", detail: "" },
           restoreTarget: { status: "fail", detail: "운영 DB와 같음" },
+          drill: { status: "pass", detail: "" },
         },
       });
       expect(summarizeDisasterRecovery(items).recoverable).toBe(false);
@@ -289,17 +331,19 @@ describe("Enterprise Backup & Disaster Recovery (TASK-1701)", () => {
           storageProtection: { status: "warn", detail: "" },
           objectives: { status: "warn", detail: "" },
           restoreTarget: { status: "pass", detail: "" },
+          // 리허설이 밀린 것과 지금 복구가 불가능한 것은 다르다 (결정 1701-⑤)
+          drill: { status: "fail", detail: "" },
         },
       });
       const summary = summarizeDisasterRecovery(items);
       expect(summary.recoverable).toBe(true);
-      expect(summary.fail).toBe(1);
+      expect(summary.fail).toBe(2);
     });
   });
 
-  describe("신선도 기본값 (CTO 결정 1601-⑤)", () => {
-    it("복구 목표 기본값은 RPO 24시간 · RTO 30분", () => {
-      expect(DEFAULT_RPO_MS).toBe(24 * 60 * 60 * 1000);
+  describe("복구 목표 기본값", () => {
+    it("백업이 1시간 간격이 되면서 RPO 기본값도 2시간이다 (CTO 결정 1701-①)", () => {
+      expect(DEFAULT_RPO_MS).toBe(2 * 60 * 60 * 1000);
       expect(DEFAULT_RTO_MS).toBe(30 * 60 * 1000);
     });
   });

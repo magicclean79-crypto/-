@@ -32,6 +32,15 @@ export class StorageService implements OnModuleInit {
 
   readonly bucket = process.env.S3_BUCKET ?? "acos";
 
+  /**
+   * 백업 전용 버킷 (TASK-1801, CTO 결정 1701-②).
+   *
+   * 이미지와 **다른 버킷**이 기본이다 — 같은 버킷에 두면 그 버킷이 사라질 때
+   * 이미지와 백업이 함께 사라져, 원격 복제의 목적을 절반만 달성한다.
+   */
+  readonly backupBucket =
+    process.env.BACKUP_BUCKET?.trim() || `${process.env.S3_BUCKET ?? "acos"}-backups`;
+
   constructor() {
     const endpoint = new URL(process.env.S3_ENDPOINT ?? DEFAULT_ENDPOINT);
     const useSSL = endpoint.protocol === "https:";
@@ -82,20 +91,22 @@ export class StorageService implements OnModuleInit {
    * 저장소가 조회를 지원하지 않으면(로컬 목업 등) **`unknown`으로 남긴다** —
    * 확인하지 못한 것을 "꺼져 있음"이라고 단정하면 그것도 거짓이다.
    */
-  async describeProtection(): Promise<{
+  async describeProtection(
+    bucket = this.bucket,
+  ): Promise<{
     versioning: ProtectionState;
     replication: ProtectionState;
   }> {
     const [versioning, replication] = await Promise.all([
-      this.readVersioning(),
-      this.readReplication(),
+      this.readVersioning(bucket),
+      this.readReplication(bucket),
     ]);
     return { versioning, replication };
   }
 
-  private async readVersioning(): Promise<ProtectionState> {
+  private async readVersioning(bucket: string): Promise<ProtectionState> {
     try {
-      const config = (await this.client.getBucketVersioning(this.bucket)) as
+      const config = (await this.client.getBucketVersioning(bucket)) as
         | { Status?: string }
         | undefined;
       const status = config?.Status?.trim().toLowerCase();
@@ -109,9 +120,9 @@ export class StorageService implements OnModuleInit {
     }
   }
 
-  private async readReplication(): Promise<ProtectionState> {
+  private async readReplication(bucket: string): Promise<ProtectionState> {
     try {
-      const config = (await this.client.getBucketReplication(this.bucket)) as
+      const config = (await this.client.getBucketReplication(bucket)) as
         | { Rule?: unknown }
         | undefined;
       const rules = config?.Rule;
@@ -151,6 +162,45 @@ export class StorageService implements OnModuleInit {
 
   publicUrl(key: string): string {
     return `${this.publicBase}/${this.bucket}/${key}`;
+  }
+
+  /**
+   * 백업 전용 버킷에 올린다 (CTO 결정 1701-②).
+   *
+   * 이미지 버킷과 정책이 다르다 — **공개 읽기 정책을 걸지 않는다.**
+   * 백업 덤프가 공개되면 데이터베이스 전체가 공개되는 것과 같다.
+   */
+  async putBackupObject(key: string, buffer: Buffer): Promise<string> {
+    await this.ensureBackupBucket();
+    await this.client.putObject(
+      this.backupBucket,
+      key,
+      buffer,
+      buffer.length,
+      { "Content-Type": "application/octet-stream" },
+    );
+    return `${this.backupBucket}/${key}`;
+  }
+
+  /** 백업 버킷 보호 상태 — 이미지 버킷과 따로 본다 */
+  async describeBackupProtection(): Promise<{
+    versioning: ProtectionState;
+    replication: ProtectionState;
+  }> {
+    return this.describeProtection(this.backupBucket);
+  }
+
+  private backupBucketReady = false;
+
+  private async ensureBackupBucket(): Promise<void> {
+    if (this.backupBucketReady) {
+      return;
+    }
+    if (!(await this.client.bucketExists(this.backupBucket))) {
+      await this.client.makeBucket(this.backupBucket);
+    }
+    // 공개 정책을 걸지 않는다 — 백업은 공개 대상이 아니다
+    this.backupBucketReady = true;
   }
 
   async putObject(

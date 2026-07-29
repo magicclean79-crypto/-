@@ -531,6 +531,29 @@ model RestoreRun {
   @@map("restore_runs")
 }
 
+/**
+ * 복구 리허설 기록 (TASK-1801, CTO 결정 1701-⑤).
+ *
+ * 분기 1회 실제 복구를 해 보고 결과를 남긴다. 절차를 읽는 것과 해 보는 것은
+ * 다르고, 기록하지 않으면 "했다"는 말만 남는다.
+ */
+model RecoveryDrill {
+  id          String   @id @default(cuid())
+  /** 절차대로 복구에 성공했는가 */
+  ok          Boolean
+  /** 수행자 (감사용) */
+  performedBy String
+  /** 소요 시간 — 실제 RTO의 근거 */
+  durationMs  Int?
+  /** 발견 사항 — 절차의 어디가 어긋났는지 */
+  findings    String?
+  notes       String?
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("recovery_drills")
+}
+
 /** 예약 점검 실행 이력 — "언제 마지막으로 확인했는가"의 근거 */
 model CheckRun {
   id           String   @id @default(cuid())

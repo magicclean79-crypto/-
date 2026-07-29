@@ -7,3 +7,4 @@ export * from "./notification";
 export * from "./alert-archive";
 export * from "./disaster-recovery";
 export * from "./enterprise-recovery";
+export * from "./recovery-drill";
