@@ -217,6 +217,53 @@ export default function HealthDashboardPage() {
             </div>
           </section>
 
+          {/* 스키마 적용 주체·상태 (TASK-2301, CTO 결정 2201-①) */}
+          <section
+            data-testid="migration-governance"
+            className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800"
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-sm font-semibold">스키마 적용</h2>
+              <span
+                className={`rounded-full px-2 py-0.5 text-xs ${STATUS_STYLE[data.migrations.status]}`}
+              >
+                {STATUS_LABEL[data.migrations.status]}
+              </span>
+              <span className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:bg-zinc-900">
+                {data.migrations.appliedBy === "operator"
+                  ? "운영 담당자 수행"
+                  : "개발자 수행"}
+              </span>
+            </div>
+            <p className="mt-2 text-xs text-zinc-500">
+              {data.migrations.detail}
+            </p>
+            {data.migrations.pending.length > 0 ? (
+              <ul
+                data-testid="pending-migrations"
+                className="mt-2 list-inside list-disc font-mono text-xs text-red-600 dark:text-red-400"
+              >
+                {data.migrations.pending.map((name) => (
+                  <li key={name}>{name}</li>
+                ))}
+              </ul>
+            ) : null}
+            {data.migrations.unknown.length > 0 ? (
+              <ul
+                data-testid="unknown-migrations"
+                className="mt-2 list-inside list-disc font-mono text-xs text-amber-700 dark:text-amber-300"
+              >
+                {data.migrations.unknown.map((name) => (
+                  <li key={name}>{name}</li>
+                ))}
+              </ul>
+            ) : null}
+            <p className="mt-2 text-xs text-zinc-500">
+              애플리케이션은 스키마를 적용하지 않습니다 — 검증만 합니다 (CTO
+              결정 2201-①).
+            </p>
+          </section>
+
           {data.environment.errors.length > 0 ||
           data.environment.warnings.length > 0 ? (
             <section

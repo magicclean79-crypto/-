@@ -7,6 +7,9 @@ import { WriteProtectionGuard } from "../auth/write-protection.guard";
 import { LlmBudgetService } from "../llm/llm-budget.service";
 import { LlmService } from "../llm/llm.service";
 import { PrismaService } from "../prisma/prisma.service";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
+import { resolveProvisioningPolicy } from "@acos/core";
 import { StorageService } from "../storage/storage.service";
 import { HealthController } from "./health.controller";
 import { ReadinessService } from "./readiness.service";
@@ -23,20 +26,52 @@ describe("Production Readiness (TASK-1202)", () => {
   let app: INestApplication;
   let readiness: ReadinessService;
 
+  /** 실제 서비스가 읽는 것과 같은 목록 — 대조가 실제로 이뤄지는지 보려면 필요하다 */
+  const migrationDirs = readdirSync(
+    join(process.cwd(), "prisma", "migrations"),
+    { withFileTypes: true },
+  )
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+
   const state = {
     dbOk: true,
     storageOk: true,
+    /** 미적용 마이그레이션 (TASK-2301) — 디렉터리에는 있고 적용 기록에는 없는 것 */
     pending: 0,
+    /** 적용 중 실패·롤백 건수 */
+    failed: 0,
     admins: 1,
     providers: ["mock", "openai"],
+    /** 운영 표준 배포 체크리스트 입력 (TASK-2301, CTO 결정 2201-④) */
+    bucketExists: true,
+    backupBucketExists: true,
+    versioning: "enabled" as "enabled" | "disabled" | "unknown",
+    backups: 1,
+    restores: 1,
   };
 
   beforeAll(async () => {
     const prisma = {
       $queryRaw: async (strings: TemplateStringsArray) => {
         const sql = strings.join(" ");
+        // 적용 기록 조회 — 실제 서비스와 같이 **목록**을 돌려준다.
+        // 실패 행 수만 세면 미적용을 알 수 없다는 것이 이번 TASK의 요지다.
+        if (sql.includes("migration_name")) {
+          // readiness.service가 읽는 디렉터리 수만큼 적용됐다고 보고,
+          // state.pending개는 빼서 미적용 상황을 만든다
+          return migrationDirs
+            .slice(0, Math.max(0, migrationDirs.length - state.pending))
+            .map((name) => ({ migration_name: name }));
+        }
         if (sql.includes("_prisma_migrations")) {
-          return [{ count: BigInt(state.pending) }];
+          return [{ count: BigInt(state.failed) }];
+        }
+        if (sql.includes("backup_runs")) {
+          return [
+            { backups: BigInt(state.backups), restores: BigInt(state.restores) },
+          ];
         }
         if (!state.dbOk) {
           throw new Error("connection refused");
@@ -58,6 +93,31 @@ describe("Production Readiness (TASK-1202)", () => {
               if (!state.storageOk) throw new Error("버킷을 찾을 수 없습니다");
               return "버킷 접근 정상 (acos)";
             },
+            bucket: "acos",
+            backupBucket: "acos-backups",
+            get provisioning() {
+              return resolveProvisioningPolicy(
+                process.env as Record<string, string | undefined>,
+              );
+            },
+            bucketExists: async (bucket = "acos") => {
+              const exists =
+                bucket === "acos-backups"
+                  ? state.backupBucketExists
+                  : state.bucketExists;
+              if (exists === null) {
+                throw new Error("조회 실패");
+              }
+              return exists;
+            },
+            describeProtection: async () => ({
+              versioning: state.versioning,
+              replication: state.versioning,
+            }),
+            describeBackupProtection: async () => ({
+              versioning: state.versioning,
+              replication: state.versioning,
+            }),
           },
         },
         {
@@ -240,5 +300,147 @@ describe("Production Readiness (TASK-1202)", () => {
       .get("/health/ready")
       .set("Authorization", "Bearer tok-editor")
       .expect(403);
+  });
+
+  describe("Enterprise Deployment Governance (TASK-2301)", () => {
+    beforeEach(() => {
+      state.dbOk = true;
+      state.storageOk = true;
+      state.pending = 0;
+      state.failed = 0;
+      state.admins = 1;
+      state.bucketExists = true;
+      state.backupBucketExists = true;
+      state.versioning = "enabled";
+      state.backups = 1;
+      state.restores = 1;
+    });
+
+    const report = async () => (await asAdmin("/health/ready").expect(200)).body;
+
+    it("적용하지 않은 마이그레이션을 목록 대조로 잡아낸다 (CTO 결정 2201-①)", async () => {
+      // 적용하지 않은 마이그레이션은 실패 행조차 남기지 않는다 —
+      // failed=0인데도 미적용이 있는 상황이 거짓 통과의 원인이었다
+      state.pending = 2;
+      state.failed = 0;
+
+      const body = await report();
+      expect(body.pendingMigrations).toBe(2);
+      expect(body.migrations.status).toBe("fail");
+      expect(body.migrations.pending).toHaveLength(2);
+      expect(
+        body.summary.blockers.map((item: { id: string }) => item.id),
+      ).toContain("migrations");
+    });
+
+    it("운영에서는 적용 주체가 운영 담당자다", async () => {
+      process.env.NODE_ENV = "production";
+      const body = await report();
+      expect(body.migrations.appliedBy).toBe("operator");
+      expect(
+        body.checklist.find((item: { id: string }) => item.id === "migrations")
+          .title,
+      ).toContain("운영 담당자 수행");
+    });
+
+    it("전부 적용됐으면 통과하고 미적용 0으로 보고한다", async () => {
+      const body = await report();
+      expect(body.migrations.status).toBe("pass");
+      expect(body.pendingMigrations).toBe(0);
+    });
+
+    it("운영 표준 다섯 항목이 배포 체크리스트에 있다 (CTO 결정 2201-④)", async () => {
+      const ids = (await report()).checklist.map(
+        (item: { id: string }) => item.id,
+      );
+      for (const id of ["bucket", "iam", "versioning", "backup-bucket", "readiness"]) {
+        expect(ids).toContain(id);
+      }
+    });
+
+    it("운영에서 버킷이 없으면 배포를 막는다", async () => {
+      process.env.NODE_ENV = "production";
+      state.bucketExists = false;
+
+      const body = await report();
+      expect(
+        body.summary.blockers.map((item: { id: string }) => item.id),
+      ).toContain("bucket");
+      expect(
+        body.checklist.find((item: { id: string }) => item.id === "bucket")
+          .detail,
+      ).toContain("운영 담당자가 버킷을 만들어야 합니다");
+    });
+
+    it("운영에서 백업 버킷이 없으면 배포를 막는다", async () => {
+      process.env.NODE_ENV = "production";
+      state.backupBucketExists = false;
+
+      expect(
+        (await report()).summary.blockers.map((item: { id: string }) => item.id),
+      ).toContain("backup-bucket");
+    });
+
+    it("운영에서 버전 관리가 꺼져 있으면 배포를 막는다", async () => {
+      process.env.NODE_ENV = "production";
+      state.versioning = "disabled";
+
+      expect(
+        (await report()).summary.blockers.map((item: { id: string }) => item.id),
+      ).toContain("versioning");
+    });
+
+    it("보호 상태를 읽지 못하면 IAM 권한을 의심하되 배포를 막지 않는다", async () => {
+      process.env.NODE_ENV = "production";
+      state.versioning = "unknown";
+
+      const body = await report();
+      const iam = body.checklist.find(
+        (item: { id: string }) => item.id === "iam",
+      );
+      expect(iam.status).toBe("warn");
+      expect(iam.detail).toContain("s3:GetBucketVersioning");
+      expect(
+        body.summary.blockers.map((item: { id: string }) => item.id),
+      ).not.toContain("iam");
+    });
+
+    it("복원해 본 적이 없으면 복구 불가로 보고 운영 배포를 막는다", async () => {
+      process.env.NODE_ENV = "production";
+      state.restores = 0;
+
+      const body = await report();
+      const readinessItem = body.checklist.find(
+        (item: { id: string }) => item.id === "readiness",
+      );
+      expect(readinessItem.status).toBe("fail");
+      expect(readinessItem.detail).toContain("되살릴 수 없습니다");
+      expect(
+        body.summary.blockers.map((item: { id: string }) => item.id),
+      ).toContain("readiness");
+    });
+
+    it("개발에서는 같은 상태로도 배포를 막지 않는다", async () => {
+      delete process.env.NODE_ENV;
+      state.bucketExists = false;
+      state.backupBucketExists = false;
+      state.versioning = "disabled";
+      state.restores = 0;
+
+      const body = await report();
+      const ids = body.summary.blockers.map((item: { id: string }) => item.id);
+      for (const id of ["bucket", "backup-bucket", "versioning", "readiness"]) {
+        expect(ids).not.toContain(id);
+      }
+    });
+
+    it("버킷 조회가 실패하면 통과로 세지 않는다", async () => {
+      state.bucketExists = null as unknown as boolean;
+      expect(
+        (await report()).checklist.find(
+          (item: { id: string }) => item.id === "bucket",
+        ).status,
+      ).toBe("manual");
+    });
   });
 });

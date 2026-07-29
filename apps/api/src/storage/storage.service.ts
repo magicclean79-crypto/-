@@ -91,6 +91,17 @@ export class StorageService implements OnModuleInit {
   }
 
   /**
+   * 버킷 존재 확인 (TASK-2301, CTO 결정 2201-④).
+   *
+   * **만들지 않고 있는지만 본다** — 배포 체크리스트가 준비 여부를 확인하는
+   * 용도다. 조회 자체가 실패하면 예외로 올려 호출자가 `직접 확인`으로
+   * 남길 수 있게 한다(모르는 것을 "없음"으로 단정하지 않는다).
+   */
+  async bucketExists(bucket = this.bucket): Promise<boolean> {
+    return this.client.bucketExists(bucket);
+  }
+
+  /**
    * 저장소 접근 점검 (TASK-1202) — 버킷 존재 확인.
    * 실패는 예외로 올린다 (호출자가 사유를 그대로 보고한다).
    */

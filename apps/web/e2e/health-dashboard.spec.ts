@@ -84,3 +84,71 @@ test.describe("Health Dashboard (TASK-1202)", () => {
     );
   });
 });
+
+test.describe("Enterprise Deployment Governance (TASK-2301)", () => {
+  test("운영 표준 다섯 항목이 배포 체크리스트에 보인다 (CTO 결정 2201-④)", async ({
+    page,
+  }) => {
+    await setMode("data");
+    await openDashboard(page);
+
+    const section = page.getByTestId("checklist-section");
+    for (const title of [
+      "이미지 버킷 준비",
+      "저장소 접근 권한 (IAM)",
+      "이미지 버킷 버전 관리",
+      "백업 버킷 준비·분리",
+      "재해 복구 판정 (복구 가능 여부)",
+    ]) {
+      await expect(section).toContainText(title);
+    }
+  });
+
+  test("준비되지 않으면 무엇을 누가 해야 하는지 말한다", async ({ page }) => {
+    await setMode("empty");
+    await openDashboard(page);
+
+    const section = page.getByTestId("checklist-section");
+    await expect(section).toContainText("운영 담당자가 버킷을 만들어야 합니다");
+    await expect(section).toContainText("s3:GetBucketVersioning");
+    await expect(section).toContainText("지금 무너지면 되살릴 수 없습니다");
+  });
+
+  test("스키마 적용 주체가 드러난다 (CTO 결정 2201-①)", async ({ page }) => {
+    await setMode("data");
+    await openDashboard(page);
+
+    const panel = page.getByTestId("migration-governance");
+    await expect(panel).toContainText("스키마 적용");
+    await expect(panel).toContainText("운영 담당자 수행");
+    await expect(panel).toContainText(
+      "애플리케이션은 스키마를 적용하지 않습니다",
+    );
+  });
+
+  test("미적용 마이그레이션 이름을 그대로 보여준다", async ({ page }) => {
+    await setMode("empty");
+    await openDashboard(page);
+
+    const pending = page.getByTestId("pending-migrations");
+    await expect(pending).toContainText("20260801000000_requirement_cancel");
+    await expect(pending).toContainText("20260802000000_remote_verify");
+  });
+
+  test("전부 적용됐으면 목록을 띄우지 않는다", async ({ page }) => {
+    await setMode("data");
+    await openDashboard(page);
+    await expect(page.getByTestId("pending-migrations")).toHaveCount(0);
+  });
+
+  test("준비되지 않은 항목이 배포를 막는다", async ({ page }) => {
+    await setMode("empty");
+    await openDashboard(page);
+
+    await expect(page.getByTestId("readiness-verdict")).toContainText(
+      "배포 불가",
+    );
+    const blockers = page.getByTestId("checklist-section");
+    await expect(blockers).toContainText("배포 차단");
+  });
+});

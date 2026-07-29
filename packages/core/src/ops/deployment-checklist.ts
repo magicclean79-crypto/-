@@ -1,4 +1,6 @@
 import type { EnvValidationResult } from "./env-spec";
+import type { MigrationGovernance } from "./migration-governance";
+import type { ProtectionState } from "./enterprise-recovery";
 
 /**
  * Deployment Checklist. (TASK-1202, Sprint 12)
@@ -25,8 +27,13 @@ export interface DeploymentState {
   environment: EnvValidationResult;
   /** DB 연결 가능 여부 */
   database: { ok: boolean; detail: string };
-  /** 미적용 마이그레이션 수 (알 수 없으면 null) */
-  pendingMigrations: number | null;
+  /**
+   * 스키마 적용 상태 (TASK-2301, CTO 결정 2201-①).
+   *
+   * 실패 행만 세는 것으로는 **미적용을 알 수 없다** — 적용하지 않은
+   * 마이그레이션은 실패 행조차 남기지 않는다. 그래서 목록 대조 결과를 받는다.
+   */
+  migrations: MigrationGovernance;
   /** 이미지 저장소 접근 가능 여부 */
   storage: { ok: boolean; detail: string };
   /** 실제 호출 가능한 Provider 목록 */
@@ -41,6 +48,26 @@ export interface DeploymentState {
   adminUserExists: boolean;
   /** 운영 환경인가 */
   production: boolean;
+  /**
+   * 운영 표준 배포 체크리스트 항목 (TASK-2301, CTO 결정 2201-④).
+   *
+   * 운영에서 애플리케이션은 이것들을 **만들지 않고 검증만 한다** —
+   * 그래서 배포 전에 사람이 준비했는지 확인하는 것이 절차의 일부가 된다.
+   */
+  operations: {
+    /** 버킷·IAM 준비 주체 — 운영은 `external` */
+    provisioningMode: "managed" | "external";
+    /** 이미지 버킷 이름·존재 */
+    bucket: { name: string; exists: boolean | null };
+    /** 백업 버킷 이름·존재·이미지 버킷과 분리 여부 */
+    backupBucket: { name: string; exists: boolean | null; separated: boolean };
+    /** 이미지 버킷 보호 상태 */
+    versioning: ProtectionState;
+    /** 백업 버킷 보호 상태 */
+    backupVersioning: ProtectionState;
+    /** 재해 복구 판정 — 복구 가능한가 (알 수 없으면 null) */
+    recoverable: boolean | null;
+  };
 }
 
 /**
@@ -80,20 +107,13 @@ export function buildDeploymentChecklist(
 
   items.push({
     id: "migrations",
-    title: "마이그레이션 적용",
+    title:
+      state.migrations.appliedBy === "operator"
+        ? "마이그레이션 적용 (운영 담당자 수행)"
+        : "마이그레이션 적용",
     blocking: true,
-    status:
-      state.pendingMigrations === null
-        ? "manual"
-        : state.pendingMigrations === 0
-          ? "pass"
-          : "fail",
-    detail:
-      state.pendingMigrations === null
-        ? "적용 상태를 확인할 수 없습니다 — `pnpm prisma:migrate deploy` 실행 여부를 직접 확인하세요."
-        : state.pendingMigrations === 0
-          ? "미적용 마이그레이션 없음."
-          : `미적용 마이그레이션 ${state.pendingMigrations}건 — 배포 전에 적용하세요.`,
+    status: state.migrations.status,
+    detail: state.migrations.detail,
   });
 
   items.push({
@@ -156,6 +176,134 @@ export function buildDeploymentChecklist(
       : state.production
         ? "Failover가 비활성입니다 — 단일 Provider 장애가 곧 서비스 중단입니다."
         : "Failover 미설정 (개발 환경에서는 무방 — 운영 전에 설정하세요).",
+  });
+
+
+  // ── 운영 표준 배포 체크리스트 (TASK-2301, CTO 결정 2201-④) ──────────
+  //
+  // 운영에서 애플리케이션은 버킷·IAM·스키마를 **만들지 않고 검증만 한다**
+  // (결정 2201-①). 그러면 "누가 준비했는지"를 배포 전에 확인하는 일이
+  // 절차의 일부가 되어야 한다 — 확인하지 않으면 준비되지 않은 채로 뜬다.
+  const ops = state.operations;
+  const external = ops.provisioningMode === "external";
+
+  items.push({
+    id: "bucket",
+    title: "이미지 버킷 준비",
+    // 운영에서는 앱이 만들지 않으므로, 없으면 배포해도 업로드가 죽는다
+    blocking: state.production,
+    status:
+      ops.bucket.exists === null
+        ? "manual"
+        : ops.bucket.exists
+          ? "pass"
+          : state.production
+            ? "fail"
+            : "warn",
+    detail:
+      ops.bucket.exists === null
+        ? `버킷 존재를 확인하지 못했습니다 (${ops.bucket.name}) — 저장소에 접근할 수 없습니다.`
+        : ops.bucket.exists
+          ? `${ops.bucket.name} 확인됨.`
+          : external
+            ? `${ops.bucket.name}이(가) 없습니다 — 운영 담당자가 버킷을 만들어야 합니다. 애플리케이션은 만들지 않습니다 (CTO 결정 2101-④).`
+            : `${ops.bucket.name}이(가) 없습니다 — 개발에서는 기동 시 자동으로 만듭니다.`,
+  });
+
+  items.push({
+    id: "iam",
+    title: "저장소 접근 권한 (IAM)",
+    blocking: false,
+    // 보호 상태를 읽을 수 없다는 것은 대개 **조회 권한이 없다**는 뜻이다
+    status:
+      ops.versioning === "unknown" || ops.backupVersioning === "unknown"
+        ? state.production
+          ? "warn"
+          : "pass"
+        : "pass",
+    detail:
+      ops.versioning === "unknown" || ops.backupVersioning === "unknown"
+        ? state.production
+          ? "버킷 보호 상태를 읽지 못했습니다 — s3:GetBucketVersioning · s3:GetReplicationConfiguration 권한을 확인하세요. 저장소가 S3인 것과 상태를 읽을 수 있는 것은 다릅니다."
+          : "개발 저장소는 보호 상태 조회를 지원하지 않습니다 — 개발에서는 정상입니다."
+        : "보호 상태를 읽을 수 있습니다 — 조회 권한이 부여되어 있습니다.",
+  });
+
+  items.push({
+    id: "versioning",
+    title: "이미지 버킷 버전 관리",
+    // 운영 필수 (CTO 결정 1701-③)
+    blocking: state.production && ops.versioning === "disabled",
+    status:
+      ops.versioning === "enabled"
+        ? "pass"
+        : ops.versioning === "unknown"
+          ? "manual"
+          : state.production
+            ? "fail"
+            : "warn",
+    detail:
+      ops.versioning === "enabled"
+        ? "버전 관리가 켜져 있습니다."
+        : ops.versioning === "unknown"
+          ? "버전 관리 상태를 알 수 없습니다 — 제공자 콘솔에서 직접 확인하세요."
+          : "버전 관리가 꺼져 있습니다 — 실수로 덮어쓴 이미지를 되돌릴 수 없습니다 (운영 필수, CTO 결정 1701-③).",
+  });
+
+  items.push({
+    id: "backup-bucket",
+    title: "백업 버킷 준비·분리",
+    blocking: state.production,
+    status:
+      ops.backupBucket.exists === null
+        ? "manual"
+        : !ops.backupBucket.exists
+          ? state.production
+            ? "fail"
+            : "warn"
+          : !ops.backupBucket.separated
+            ? state.production
+              ? "fail"
+              : "warn"
+            : ops.backupVersioning === "enabled"
+              ? "pass"
+              : ops.backupVersioning === "unknown"
+                ? "manual"
+                : "warn",
+    detail:
+      ops.backupBucket.exists === null
+        ? `백업 버킷 존재를 확인하지 못했습니다 (${ops.backupBucket.name}).`
+        : !ops.backupBucket.exists
+          ? `${ops.backupBucket.name}이(가) 없습니다 — ${external ? "운영 담당자가 만들어야 합니다" : "기동 시 자동으로 만듭니다"}.`
+          : !ops.backupBucket.separated
+            ? "백업 버킷이 이미지 버킷과 같습니다 — 그 버킷이 사라지면 이미지와 백업이 함께 사라집니다 (CTO 결정 1701-②)."
+            : ops.backupVersioning === "enabled"
+              ? `${ops.backupBucket.name} 분리됨 · 버전 관리 켜짐.`
+              : ops.backupVersioning === "unknown"
+                ? `${ops.backupBucket.name} 분리됨 — 버전 관리 상태는 직접 확인하세요.`
+                : `${ops.backupBucket.name} 분리됨 — 버전 관리가 꺼져 있습니다.`,
+  });
+
+  items.push({
+    id: "readiness",
+    title: "재해 복구 판정 (복구 가능 여부)",
+    // 지금 무너지면 되살릴 수 없는 상태로 배포하지 않는다.
+    // 복구 리허설은 여기에 들어오지 않는다 — 배포 게이트가 아니다 (결정 1801-②).
+    blocking: state.production,
+    status:
+      ops.recoverable === null
+        ? "manual"
+        : ops.recoverable
+          ? "pass"
+          : state.production
+            ? "fail"
+            : "warn",
+    detail:
+      ops.recoverable === null
+        ? "재해 복구 판정을 확인하지 못했습니다 — /ops/readiness를 직접 확인하세요."
+        : ops.recoverable
+          ? "복구 가능 — 복구 필수 항목에 실패가 없습니다."
+          : "복구 불가 — 지금 무너지면 되살릴 수 없습니다. /ops/readiness에서 실패 항목을 먼저 해결하세요.",
   });
 
   // 자동 판정이 불가능한 항목은 정직하게 manual로 남긴다

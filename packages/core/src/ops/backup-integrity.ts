@@ -540,6 +540,19 @@ export function judgeRecordedRemoteIntegrity(
   };
 }
 
+/**
+ * 원격 사본 실패 경보 (CTO 결정 2201-②).
+ *
+ * **자동 재업로드도, 자동 복구도 하지 않는다.** 경보만 내고 사람이 복구한다.
+ *
+ * 자동으로 다시 올리면 두 가지가 위험하다: 지금 로컬에 있는 덤프가 온전한지
+ * 확인하지 않은 채 원격을 덮어쓰게 되고, **틀린 사본을 더 확실하게** 만들 수
+ * 있다. 그리고 원격이 사라진 이유(수명 주기 정책·권한·사람의 삭제)를 모르는
+ * 채로 다시 올리면 같은 일이 반복된다.
+ *
+ * 그래서 경보 문구에 **복구는 수동**임과 절차 위치를 적는다 — 무엇을 해야
+ * 하는지 적지 않은 경보는 읽어도 할 일이 없다.
+ */
 export function detectRemoteIntegrityAlert(
   remote: RemoteIntegrity,
 ): DetectedAlert[] {
@@ -553,7 +566,10 @@ export function detectRemoteIntegrityAlert(
       level: "critical",
       title:
         remote.verdict === "missing" ? "원격 사본 없음" : "원격 사본 불일치",
-      message: remote.detail,
+      message:
+        `${remote.detail} 자동으로 다시 올리지 않습니다 — ` +
+        "먼저 로컬 덤프가 온전한지 확인하고, 원격이 사라진 이유를 파악한 뒤 " +
+        "사람이 복구하세요 (docs/operations/disaster-recovery.md).",
     },
   ];
 }

@@ -629,6 +629,26 @@ const server = http.createServer((req, res) => {
           { name: "storage", ok: ready, detail: ready ? "버킷 접근 정상 (acos)" : "접근 실패: 버킷을 찾을 수 없습니다", latencyMs: 12 },
         ],
         pendingMigrations: ready ? 0 : 2,
+        // 스키마 적용 상태 (TASK-2301, CTO 결정 2201-①)
+        migrations: ready
+          ? {
+              status: "pass",
+              detail: "마이그레이션 34건 모두 적용됨.",
+              pending: [],
+              unknown: [],
+              appliedBy: "operator",
+            }
+          : {
+              status: "fail",
+              detail:
+                "미적용 마이그레이션 2건: 20260801000000_requirement_cancel, 20260802000000_remote_verify — 운영 담당자가 `pnpm prisma:migrate deploy`를 실행해야 합니다. 애플리케이션은 스키마를 적용하지 않습니다 (CTO 결정 2201-①).",
+              pending: [
+                "20260801000000_requirement_cancel",
+                "20260802000000_remote_verify",
+              ],
+              unknown: [],
+              appliedBy: "operator",
+            },
         providers: { available: ready ? ["mock", "openai"] : ["mock"], default: "mock" },
         checklist: ready
           ? [
@@ -638,6 +658,11 @@ const server = http.createServer((req, res) => {
               { id: "storage", title: "이미지 저장소 접근", status: "pass", detail: "버킷 접근 정상 (acos)", blocking: true },
               { id: "admin-user", title: "관리자 계정", status: "pass", detail: "ADMIN 계정이 존재합니다.", blocking: true },
               { id: "provider", title: "실제 Provider 연결", status: "pass", detail: "사용 가능: openai (기본 mock)", blocking: false },
+              { id: "bucket", title: "이미지 버킷 준비", status: "pass", detail: "acos 확인됨.", blocking: true },
+              { id: "iam", title: "저장소 접근 권한 (IAM)", status: "pass", detail: "보호 상태를 읽을 수 있습니다 — 조회 권한이 부여되어 있습니다.", blocking: false },
+              { id: "versioning", title: "이미지 버킷 버전 관리", status: "pass", detail: "버전 관리가 켜져 있습니다.", blocking: false },
+              { id: "backup-bucket", title: "백업 버킷 준비·분리", status: "pass", detail: "acos-backups 분리됨 · 버전 관리 켜짐.", blocking: true },
+              { id: "readiness", title: "재해 복구 판정 (복구 가능 여부)", status: "pass", detail: "복구 가능 — 복구 필수 항목에 실패가 없습니다.", blocking: true },
               { id: "smoke", title: "실 Provider 스모크 (배포 직후 1회)", status: "manual", detail: "node scripts/real-provider-smoke.mjs 실행", blocking: false },
             ]
           : [
@@ -647,21 +672,29 @@ const server = http.createServer((req, res) => {
               { id: "storage", title: "이미지 저장소 접근", status: "fail", detail: "접근 실패: 버킷을 찾을 수 없습니다", blocking: true },
               { id: "provider", title: "실제 Provider 연결", status: "fail", detail: "mock만 사용 가능합니다 — 운영에서는 실제 Provider 키가 필요합니다.", blocking: true },
               { id: "budget", title: "비용 예산 설정", status: "warn", detail: "예산이 없습니다 — 비용 폭주를 막을 상한이 없습니다.", blocking: false },
+              { id: "bucket", title: "이미지 버킷 준비", status: "fail", detail: "acos이(가) 없습니다 — 운영 담당자가 버킷을 만들어야 합니다. 애플리케이션은 만들지 않습니다 (CTO 결정 2101-④).", blocking: true },
+              { id: "iam", title: "저장소 접근 권한 (IAM)", status: "warn", detail: "버킷 보호 상태를 읽지 못했습니다 — s3:GetBucketVersioning · s3:GetReplicationConfiguration 권한을 확인하세요. 저장소가 S3인 것과 상태를 읽을 수 있는 것은 다릅니다.", blocking: false },
+              { id: "versioning", title: "이미지 버킷 버전 관리", status: "manual", detail: "버전 관리 상태를 알 수 없습니다 — 제공자 콘솔에서 직접 확인하세요.", blocking: false },
+              { id: "backup-bucket", title: "백업 버킷 준비·분리", status: "fail", detail: "acos-backups이(가) 없습니다 — 운영 담당자가 만들어야 합니다.", blocking: true },
+              { id: "readiness", title: "재해 복구 판정 (복구 가능 여부)", status: "fail", detail: "복구 불가 — 지금 무너지면 되살릴 수 없습니다. /ops/readiness에서 실패 항목을 먼저 해결하세요.", blocking: true },
               { id: "smoke", title: "실 Provider 스모크 (배포 직후 1회)", status: "manual", detail: "node scripts/real-provider-smoke.mjs 실행", blocking: false },
             ],
         summary: ready
-          ? { ready: true, pass: 6, fail: 0, warn: 0, manual: 1, blockers: [] }
+          ? { ready: true, pass: 11, fail: 0, warn: 0, manual: 1, blockers: [] }
           : {
               ready: false,
               pass: 1,
-              fail: 4,
-              warn: 1,
-              manual: 1,
+              fail: 7,
+              warn: 2,
+              manual: 2,
               blockers: [
                 { id: "env", title: "환경변수 검증", status: "fail", detail: "필수/형식 오류 1건 — S3_BUCKET", blocking: true },
                 { id: "migrations", title: "마이그레이션 적용", status: "fail", detail: "미적용 마이그레이션 2건 — 배포 전에 적용하세요.", blocking: true },
                 { id: "storage", title: "이미지 저장소 접근", status: "fail", detail: "접근 실패: 버킷을 찾을 수 없습니다", blocking: true },
                 { id: "provider", title: "실제 Provider 연결", status: "fail", detail: "mock만 사용 가능합니다 — 운영에서는 실제 Provider 키가 필요합니다.", blocking: true },
+                { id: "bucket", title: "이미지 버킷 준비", status: "fail", detail: "acos이(가) 없습니다 — 운영 담당자가 버킷을 만들어야 합니다.", blocking: true },
+                { id: "backup-bucket", title: "백업 버킷 준비·분리", status: "fail", detail: "acos-backups이(가) 없습니다 — 운영 담당자가 만들어야 합니다.", blocking: true },
+                { id: "readiness", title: "재해 복구 판정 (복구 가능 여부)", status: "fail", detail: "복구 불가 — 지금 무너지면 되살릴 수 없습니다.", blocking: true },
               ],
             },
         configuration: [

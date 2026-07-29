@@ -24,6 +24,13 @@ export interface ProvisioningPolicy {
   mayCreateBucket: boolean;
   /** 버킷 정책을 걸어도 되는가 */
   maySetPolicy: boolean;
+  /**
+   * 스키마를 적용해도 되는가 (TASK-2301, CTO 결정 2201-①).
+   *
+   * 운영에서는 **아니다** — 여러 인스턴스가 동시에 뜰 때 누가 적용하는지 알 수
+   * 없고, 배포를 되돌릴 때 스키마는 되돌아가지 않는다.
+   */
+  mayApplyMigrations: boolean;
   detail: string;
 }
 
@@ -43,10 +50,12 @@ export function resolveProvisioningPolicy(
       mode: "external",
       mayCreateBucket: false,
       maySetPolicy: false,
+      mayApplyMigrations: false,
       detail:
-        "운영에서는 버킷과 접근 권한을 운영 담당자가 준비합니다 — 애플리케이션은 " +
-        "환경변수로 받은 버킷을 읽고 쓰기만 하며, 만들거나 정책을 바꾸지 " +
-        "않습니다 (CTO 결정 2101-④).",
+        // 이 문구는 로그와 화면에 그대로 나간다 — 마크다운을 쓰지 않는다
+        "운영에서는 저장소·접근 권한·데이터베이스 스키마를 모두 운영 담당자가 " +
+        "준비합니다. 애플리케이션은 환경변수로 받은 것을 읽고 쓰며 검증만 하고, " +
+        "만들거나 바꾸지 않습니다 (CTO 결정 2101-④ · 2201-①).",
     };
   }
 
@@ -54,9 +63,13 @@ export function resolveProvisioningPolicy(
     mode: "managed",
     mayCreateBucket: true,
     maySetPolicy: true,
+    // 개발에서도 스키마는 사람이 적용한다 — 기동이 스키마를 바꾸면
+    // 브랜치를 옮길 때마다 데이터가 조용히 달라진다
+    mayApplyMigrations: false,
     detail:
       "개발에서는 애플리케이션이 버킷을 만들고 공개 읽기 정책을 겁니다 — " +
-      "개발자가 손으로 준비하게 하지 않습니다. 운영에서는 하지 않습니다.",
+      "개발자가 손으로 준비하게 하지 않습니다. 운영에서는 하지 않습니다. " +
+      "데이터베이스 스키마는 어느 환경에서도 애플리케이션이 적용하지 않습니다.",
   };
 }
 

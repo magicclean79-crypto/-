@@ -1236,6 +1236,19 @@ export interface ReadinessReportDto {
   components: ComponentHealthDto[];
   /** 미적용 마이그레이션 수 (확인 불가면 null) */
   pendingMigrations: number | null;
+  /**
+   * 스키마 적용 상태 (TASK-2301, CTO 결정 2201-①).
+   *
+   * `appliedBy`는 **적용 주체**입니다 — 운영에서는 항상 `operator`이며,
+   * 애플리케이션은 검증만 합니다.
+   */
+  migrations: {
+    status: ChecklistStatusDto;
+    detail: string;
+    pending: string[];
+    unknown: string[];
+    appliedBy: "operator" | "developer";
+  };
   providers: { available: string[]; default: string };
   checklist: ChecklistItemDto[];
   summary: ReadinessSummaryDto;
