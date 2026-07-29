@@ -599,3 +599,103 @@ TASK-1301이 만든 점검들은 **사람이 화면을 열어야** 결과를 볼
 | `POST` | `/ops/checks/run` | **점검 수동 실행 (ADMIN)** — `?job=`으로 하나만, 없으면 전부 |
 
 웹: **`/admin/production`** 상단 "경보" 섹션 (지금 점검 버튼 포함).
+
+
+## Production Operations Platform (TASK-1401, Sprint 14)
+
+TASK-1302가 남긴 두 부채를 갚는다: **예약 점검이 인스턴스마다 중복 실행**되던
+것과, **알림이 한 번 실패하면 아무도 모르는 채로 끝나던** 것.
+
+### Distributed Scheduler · Leader Election · Distributed Lock
+
+예약 실행은 **잠금을 잡은 인스턴스만** 수행한다 (CTO 결정 1302-②).
+수동 실행(`POST /ops/checks/run`)은 사람이 지금 확인하려는 것이므로 잠금을
+요구하지 않는다.
+
+| 항목 | 값 |
+| --- | --- |
+| 저장소 | Redis (`REDIS_URL`) — 미설정 시 **단일 인스턴스 모드** |
+| 잠금 이름 | `acos:lock:scheduler:<job>` |
+| 임차 수명 | `OPS_LOCK_TTL_MS` (기본 30초) |
+| 갱신 시점 | 남은 수명이 TTL의 1/3 이하 |
+
+- **임차는 반드시 만료된다.** 리더가 죽으면 락이 영원히 잠기는 것이 가장 나쁜
+  실패다 — TTL 없는 락은 쓰지 않는다. 리더가 사라지면 다른 인스턴스가 TTL 안에
+  인계받는다.
+- **만료 직전이 아니라 미리 갱신한다.** 만료 직전에 갱신하면 네트워크 지연 한
+  번에 리더십을 잃는다.
+- **소유자만 갱신·해제한다.** Redis Lua 스크립트로 값을 비교한 뒤에만 바꾼다 —
+  비교 없이 지우면 남의 임차를 해제해 **리더가 둘이 된다**.
+- **Redis가 끊기면 잠그지 못한 것으로 본다.** 잠금 여부를 모르는 채 "잡았다"고
+  하면 중복 실행이 조용히 일어난다.
+- 단일 인스턴스 모드는 **숨기지 않는다** — `/ops/alerts`의 `coordination.distributed`와
+  화면에 그대로 드러난다. 다중 인스턴스인데 단일 모드로 돌고 있으면 그것이
+  바로 사고다.
+
+판정 로직(`decideLease`/`ownsLease`/`renewAfter`)은 core 순수 함수라 시계를
+흉내 내지 않고 테스트한다.
+
+### Notification Center — Slack · Email · Webhook
+
+| 채널 | 설정 | 최소 심각도 | 해소 알림 |
+| --- | --- | --- | --- |
+| Slack | `ALERT_SLACK_WEBHOOK_URL` | `ALERT_SLACK_MIN_LEVEL` | `ALERT_SLACK_RESOLVED` |
+| Email | `SMTP_HOST` + `ALERT_EMAIL_TO` | `ALERT_EMAIL_MIN_LEVEL` | `ALERT_EMAIL_RESOLVED` |
+| Webhook | `ALERT_WEBHOOK_URL` | `ALERT_WEBHOOK_MIN_LEVEL` | `ALERT_WEBHOOK_RESOLVED` |
+
+- **채널 하나가 죽어도 나머지는 보낸다** — 알림 체계가 단일 장애점이 되면 안 된다.
+- **심각도로 채널을 고를 수 있다** — 모든 warning을 밤중에 슬랙으로 받으면
+  사람이 알림을 끈다. 해소 알림은 심각도와 **별도 스위치**다("critical만
+  받겠다"는 사람도 해소는 받고 싶을 수 있다).
+- **주소는 어떤 응답에도 담지 않는다** — 웹훅 URL·수신자도 비밀이다.
+
+### Webhook Retry
+
+- 지수 백오프(1s → 2s → 4s …, 상한 30초), 최대 시도 `ALERT_RETRY_MAX_ATTEMPTS`
+  (기본 4회, **최초 시도 포함**).
+- **되돌릴 수 없는 실패는 재시도하지 않는다** — 4xx(429 제외)는 같은 요청을 다시
+  보내도 같은 답이 온다. 매달려 있어 봐야 로그만 늘어난다.
+- 네트워크 오류·5xx·429만 재시도한다.
+- **모든 시도 결과를 `notification_deliveries`에 남긴다** — 채널·시도 횟수·마지막
+  오류. "왜 아무도 못 받았는가"를 나중에 추적할 수 있어야 한다.
+- 전송 실패가 **경보 감지를 실패시키지 않는다** (TASK-1302의 태도 유지).
+
+### Alert History & Archive (CTO 결정 1302-④)
+
+**경보는 삭제하지 않는다.** 해소 후 `ALERT_ARCHIVE_AFTER_DAYS`(기본 90일)가
+지나면 `ARCHIVED`로 옮겨 현황에서 비켜 두되 이력에는 남긴다.
+
+- **활성 경보는 절대 보관하지 않는다** — 아직 문제가 있는데 화면에서 사라지면
+  그게 사고다.
+- **해소 시각을 모르는 것은 건드리지 않는다** — 유예가 지났는지 알 수 없다.
+- 이력 요약은 종류별 발생 횟수와 **평균 해소 시간**을 낸다. 경보가 많은 것보다
+  **오래 방치되는 것**이 더 나쁜 신호이고, 건수만 세면 그게 안 보인다.
+
+### 종류별 재알림 간격 (CTO 결정 1302-①)
+
+`종류별 값 ?? ALERT_COOLDOWN_MS ?? 30분` — 설정 우선순위(1201-①)와 같은 결이다.
+
+| 종류 | 환경변수 |
+| --- | --- |
+| 예산 | `ALERT_COOLDOWN_BUDGET_MS` |
+| Provider 장애 | `ALERT_COOLDOWN_PROVIDER_MS` |
+| 미산정 모델 | `ALERT_COOLDOWN_UNPRICED_MS` |
+| 설정 | `ALERT_COOLDOWN_CONFIG_MS` |
+
+### API
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `GET` | `/ops/alerts/history` | **경보 이력 (ADMIN)** — 보관 포함, 종류·심각도·상태·기간 필터, 평균 해소 시간 |
+| `POST` | `/ops/alerts/archive` | **보관 정리 (ADMIN)** — 유예가 지난 해소 경보를 `ARCHIVED`로 (삭제 아님) |
+| `GET` | `/ops/notifications` | **전송 시도 이력 (ADMIN)** |
+| `POST` | `/ops/notifications/test` | **채널 시험 (ADMIN)** — **실제로 전송한다** |
+
+`GET /ops/alerts`에 `channels`·`deliveries`·`coordination`·`cooldownByKind`가 추가됐다.
+
+### 배포 게이트 운영 기본값 (CTO 결정 1302-③)
+
+`NODE_ENV=production`(또는 `GATE_ENV=production`)에서는 `GATE_STRICT`·
+`GATE_ALERTS`가 **켜진 상태가 기본**이고, 끄려면 명시적으로 `=0`을 넘겨야 한다 —
+안전한 쪽이 기본이어야 사람이 잊었을 때 사고가 나지 않는다. 그 외 환경에서는
+꺼짐이 기본이다(개발·스테이징 반복 배포를 막지 않는다).

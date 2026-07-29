@@ -1,11 +1,27 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { reconcileAlerts } from "@acos/core";
-import type { AlertState, DetectedAlert } from "@acos/core";
-import type { AlertDto, AlertLevelDto } from "@acos/shared";
+import {
+  DEFAULT_ALERT_COOLDOWN_MS,
+  matchesFilter,
+  planArchive,
+  reconcileAlerts,
+  resolveArchiveAfterDays,
+  resolveCooldowns,
+  summarizeHistory,
+} from "@acos/core";
+import type {
+  AlertKind,
+  AlertState,
+  DetectedAlert,
+  HistoryFilter,
+} from "@acos/core";
+import type {
+  AlertArchiveResultDto,
+  AlertDto,
+  AlertHistoryDto,
+  AlertLevelDto,
+} from "@acos/shared";
 import { PrismaService } from "../prisma/prisma.service";
-
-/** 같은 경보를 다시 알리기까지의 기본 간격 — 30분 */
-const DEFAULT_COOLDOWN_MS = 30 * 60 * 1000;
+import { NotificationService } from "./notification.service";
 
 export interface AlertDelivery {
   key: string;
@@ -24,12 +40,13 @@ interface AlertRow {
   level: "WARNING" | "CRITICAL";
   title: string;
   message: string;
-  status: "ACTIVE" | "RESOLVED";
+  status: "ACTIVE" | "RESOLVED" | "ARCHIVED";
   occurrences: number;
   firstRaisedAt: Date;
   lastRaisedAt: Date;
   notifiedAt: Date | null;
   resolvedAt: Date | null;
+  archivedAt: Date | null;
 }
 
 function toDto(row: AlertRow): AlertDto {
@@ -46,6 +63,7 @@ function toDto(row: AlertRow): AlertDto {
     lastRaisedAt: row.lastRaisedAt.toISOString(),
     notifiedAt: row.notifiedAt?.toISOString() ?? null,
     resolvedAt: row.resolvedAt?.toISOString() ?? null,
+    archivedAt: row.archivedAt?.toISOString() ?? null,
   };
 }
 
@@ -66,15 +84,24 @@ function toDto(row: AlertRow): AlertDto {
 export class AlertService {
   private readonly logger = new Logger(AlertService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationService,
+  ) {}
 
   get cooldownMs(): number {
     const raw = Number(process.env.ALERT_COOLDOWN_MS);
-    return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_COOLDOWN_MS;
+    return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_ALERT_COOLDOWN_MS;
   }
 
+  /** 종류별 재알림 간격 (CTO 결정 1302-①) */
+  get cooldownByKind(): Record<AlertKind, number> {
+    return resolveCooldowns(process.env as Record<string, string | undefined>);
+  }
+
+  /** 외부 채널이 하나라도 설정되어 있는가 (주소는 노출하지 않는다) */
   get webhookConfigured(): boolean {
-    return Boolean(process.env.ALERT_WEBHOOK_URL?.trim());
+    return this.notifications.channelConfigs().some((config) => config.enabled);
   }
 
   /**
@@ -95,13 +122,15 @@ export class AlertService {
     const states: AlertState[] = rows.map((row) => ({
       key: row.key,
       level: LEVEL_FROM_DB[row.level],
-      status: row.status,
+      // 보관된 경보는 해소된 것으로 본다 — 같은 문제가 다시 나면 새 사건이다
+      status: row.status === "ARCHIVED" ? "RESOLVED" : row.status,
       notifiedAt: row.notifiedAt?.getTime() ?? null,
     }));
 
     const now = Date.now();
     const decisions = reconcileAlerts(detected, states, {
       cooldownMs: this.cooldownMs,
+      cooldownByKind: this.cooldownByKind,
       now,
     });
 
@@ -116,6 +145,8 @@ export class AlertService {
         });
         await this.deliver({
           level: "warning",
+          kind: row?.kind ?? "unknown",
+          key: decision.key,
           title: `해소 — ${row?.title ?? decision.key}`,
           message: decision.reason,
           resolved: true,
@@ -148,6 +179,7 @@ export class AlertService {
           message: alert.message,
           status: "ACTIVE",
           resolvedAt: null,
+          archivedAt: null,
           lastRaisedAt: new Date(now),
           // 해소됐다가 재발한 경우는 새 사건이므로 횟수를 다시 센다
           occurrences:
@@ -163,6 +195,8 @@ export class AlertService {
       }
       await this.deliver({
         level: alert.level,
+        kind: alert.kind,
+        key: alert.key,
         title: alert.title,
         message: alert.message,
         resolved: false,
@@ -178,9 +212,15 @@ export class AlertService {
     return deliveries;
   }
 
-  /** 로그 + (설정 시) 웹훅 — 웹훅 실패는 점검을 실패시키지 않는다 */
+  /**
+   * 로그(항상) + Notification Center(채널별 재시도).
+   * 전송 실패가 점검을 실패시키지 않는다 — 알림 채널이 죽었다고 감지까지
+   * 멈추면 상황이 더 나빠진다.
+   */
   private async deliver(payload: {
     level: AlertLevelDto;
+    kind: string;
+    key: string;
     title: string;
     message: string;
     resolved: boolean;
@@ -192,29 +232,20 @@ export class AlertService {
       this.logger.error(line);
     }
 
-    const url = process.env.ALERT_WEBHOOK_URL?.trim();
-    if (!url) {
-      return;
-    }
     try {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          service: "ai-product-content-os",
-          environment: process.env.NODE_ENV ?? "development",
-          level: payload.resolved ? "resolved" : payload.level,
-          title: payload.title,
-          message: payload.message,
-          at: new Date().toISOString(),
-        }),
+      await this.notifications.notify({
+        level: payload.resolved ? "resolved" : payload.level,
+        kind: payload.kind,
+        key: payload.key,
+        title: payload.title,
+        message: payload.message,
+        at: new Date().toISOString(),
+        environment: process.env.NODE_ENV ?? "development",
+        url: this.notifications.alertUrl(),
       });
-      if (!response.ok) {
-        this.logger.warn(`경보 웹훅 실패 — HTTP ${response.status}`);
-      }
     } catch (error) {
       this.logger.warn(
-        `경보 웹훅 실패 — ${error instanceof Error ? error.message : String(error)}`,
+        `알림 전송 실패: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }
@@ -233,5 +264,86 @@ export class AlertService {
       take: limit,
     })) as AlertRow[];
     return rows.map(toDto);
+  }
+
+  /**
+   * Alert History (TASK-1401) — 보관된 것까지 포함한 전체 이력과 요약.
+   * 필터는 저장소에 넘기고, core의 순수 필터로 한 번 더 거른다
+   * (저장소가 지원하지 않는 조합도 같은 규칙으로 동작하게).
+   */
+  async history(
+    filter: HistoryFilter & { limit?: number } = {},
+  ): Promise<AlertHistoryDto> {
+    const rows = (await this.prisma.alert.findMany({
+      orderBy: { lastRaisedAt: "desc" },
+      take: Math.min(Math.max(filter.limit ?? 100, 1), 500),
+      ...(filter.kind ? { where: { kind: filter.kind } } : {}),
+    })) as AlertRow[];
+
+    const entries = rows.map((row) => ({
+      row,
+      entry: {
+        key: row.key,
+        kind: row.kind,
+        level: LEVEL_FROM_DB[row.level],
+        status: row.status,
+        firstRaisedAt: row.firstRaisedAt.getTime(),
+        lastRaisedAt: row.lastRaisedAt.getTime(),
+        resolvedAt: row.resolvedAt?.getTime() ?? null,
+        occurrences: row.occurrences,
+      },
+    })).filter(({ entry }) => matchesFilter(entry, filter));
+
+    return {
+      entries: entries.map(({ row }) => toDto(row)),
+      summary: summarizeHistory(entries.map(({ entry }) => entry)),
+      archiveAfterDays: this.archiveAfterDays,
+      checkedAt: new Date().toISOString(),
+    };
+  }
+
+  get archiveAfterDays(): number {
+    return resolveArchiveAfterDays(
+      process.env as Record<string, string | undefined>,
+    );
+  }
+
+  /**
+   * Alert Archive (TASK-1401, CTO 결정 1302-④).
+   * **삭제하지 않는다** — 해소 후 유예(기본 90일)가 지난 경보를 `ARCHIVED`로
+   * 옮겨 현황에서 비켜 두되 이력에는 남긴다.
+   */
+  async archive(): Promise<AlertArchiveResultDto> {
+    const afterDays = this.archiveAfterDays;
+    const rows = (await this.prisma.alert.findMany({
+      where: { status: "RESOLVED" },
+    })) as AlertRow[];
+
+    const plan = planArchive(
+      rows.map((row) => ({
+        key: row.key,
+        status: row.status,
+        resolvedAt: row.resolvedAt?.getTime() ?? null,
+      })),
+      { afterDays, now: Date.now() },
+    );
+
+    if (plan.archive.length > 0) {
+      await this.prisma.alert.updateMany({
+        where: { key: { in: plan.archive } },
+        data: { status: "ARCHIVED", archivedAt: new Date() },
+      });
+      this.logger.log(
+        `경보 ${plan.archive.length}건을 보관했습니다 (해소 후 ${afterDays}일 경과) — 삭제하지 않습니다.`,
+      );
+    }
+
+    return {
+      archived: plan.archive.length,
+      keys: plan.archive,
+      afterDays,
+      cutoff: new Date(plan.cutoff).toISOString(),
+      checked: plan.checked,
+    };
   }
 }

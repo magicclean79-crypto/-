@@ -13,6 +13,7 @@ let stubSettings = {};
 let stubAdminAudit = [];
 // 운영 자동화 스텁 상태 (TASK-1302)
 let stubChecksRan = false;
+let stubArchived = 0;
 
 const stats = (totals, groups) => ({
   range: { from: null, to: null },
@@ -204,6 +205,7 @@ const server = http.createServer((req, res) => {
       stubSettings = {};
       stubAdminAudit = [];
       stubChecksRan = false;
+      stubArchived = 0;
       resetPublishing();
       resetUsers();
       res.end(JSON.stringify({ mode }));
@@ -656,13 +658,58 @@ const server = http.createServer((req, res) => {
     return;
   }
   // ── 운영 자동화·경보 (TASK-1302) ── ADMIN 전용
-  if (url.pathname === "/ops/alerts" || url.pathname === "/ops/checks/run") {
+  if (
+    url.pathname === "/ops/alerts" ||
+    url.pathname === "/ops/checks/run" ||
+    url.pathname === "/ops/alerts/archive" ||
+    url.pathname === "/ops/alerts/history" ||
+    url.pathname === "/ops/notifications"
+  ) {
     if (req.headers.authorization !== "Bearer stub-token") {
       res.statusCode = req.headers.authorization ? 403 : 401;
       res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
       return;
     }
     const healthy = mode === "data";
+
+    // Alert Archive (TASK-1401) — 삭제가 아니라 보관
+    if (req.method === "POST" && url.pathname === "/ops/alerts/archive") {
+      stubArchived = healthy ? 0 : 2;
+      res.end(
+        JSON.stringify({
+          archived: stubArchived,
+          keys: healthy ? [] : ["budget:old", "configuration:env:S3_BUCKET"],
+          afterDays: 90,
+          cutoff: new Date().toISOString(),
+          checked: 5,
+        }),
+      );
+      return;
+    }
+
+    if (url.pathname === "/ops/alerts/history") {
+      res.end(
+        JSON.stringify({
+          entries: [],
+          summary: {
+            total: 3,
+            active: 1,
+            resolved: 1,
+            archived: 1,
+            byKind: [{ kind: "budget", alerts: 2, occurrences: 5 }],
+            meanTimeToResolveMs: 3_600_000,
+          },
+          archiveAfterDays: 90,
+          checkedAt: new Date().toISOString(),
+        }),
+      );
+      return;
+    }
+
+    if (url.pathname === "/ops/notifications") {
+      res.end(JSON.stringify([]));
+      return;
+    }
 
     if (req.method === "POST" && url.pathname === "/ops/checks/run") {
       stubChecksRan = true;
@@ -772,6 +819,79 @@ const server = http.createServer((req, res) => {
         ],
         webhookConfigured: healthy,
         cooldownMs: 1_800_000,
+        cooldownByKind: {
+          budget: 1_800_000,
+          "provider-failure": 1_800_000,
+          "unpriced-model": 86_400_000,
+          configuration: 1_800_000,
+        },
+        // 알림 채널 (TASK-1401) — 주소는 담지 않는다
+        channels: [
+          {
+            channel: "slack",
+            enabled: healthy,
+            minLevel: "warning",
+            resolved: true,
+            env: "ALERT_SLACK_WEBHOOK_URL",
+          },
+          {
+            channel: "email",
+            enabled: false,
+            minLevel: "critical",
+            resolved: true,
+            env: "SMTP_HOST + ALERT_EMAIL_TO",
+          },
+          {
+            channel: "webhook",
+            enabled: healthy,
+            minLevel: "warning",
+            resolved: false,
+            env: "ALERT_WEBHOOK_URL",
+          },
+        ],
+        deliveries: healthy
+          ? []
+          : [
+              {
+                id: "nd-1",
+                alertKey: "budget:daily",
+                channel: "slack",
+                level: "critical",
+                ok: false,
+                attempts: 4,
+                status: 500,
+                error: "HTTP 500",
+                createdAt: new Date().toISOString(),
+              },
+            ],
+        coordination: {
+          distributed: healthy,
+          instance: "pod-a-1234-abcd",
+          lockTtlMs: 30_000,
+          leases: [
+            {
+              key: "scheduler:cost-verification",
+              owner: healthy ? "pod-a-1234-abcd" : null,
+              self: healthy,
+              expiresAt: healthy ? new Date().toISOString() : null,
+              remainingMs: healthy ? 25_000 : 0,
+            },
+            {
+              key: "scheduler:provider-validation",
+              owner: healthy ? "pod-b-5678-efgh" : null,
+              self: false,
+              expiresAt: healthy ? new Date().toISOString() : null,
+              remainingMs: healthy ? 20_000 : 0,
+            },
+            {
+              key: "scheduler:health-check",
+              owner: null,
+              self: false,
+              expiresAt: null,
+              remainingMs: 0,
+            },
+          ],
+        },
         checkedAt: new Date().toISOString(),
       }),
     );

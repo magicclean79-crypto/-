@@ -22,6 +22,8 @@ const PRODUCTION_ENV: Record<string, string> = {
   LLM_FAILOVER_PRIORITY: "openai",
   // 경보 전달 채널 (TASK-1302) — 없으면 경보가 로그에만 남는다
   ALERT_WEBHOOK_URL: "https://hooks.example.com/acos",
+  // 분산 잠금 (TASK-1401) — 없으면 다중 인스턴스에서 점검이 중복 실행된다
+  REDIS_URL: "redis://cache:6379",
 };
 
 describe("Environment Validation (TASK-1202)", () => {

@@ -87,6 +87,7 @@ export default function ProductionOpsPage() {
   const [loading, setLoading] = useState(false);
   const [liveRunning, setLiveRunning] = useState(false);
   const [checkRunning, setCheckRunning] = useState(false);
+  const [archiveNote, setArchiveNote] = useState<string | null>(null);
 
   async function get<T>(path: string): Promise<T | null> {
     const response = await fetch(`${API_URL}${path}`, authFetchInit());
@@ -162,6 +163,36 @@ export default function ProductionOpsPage() {
     }
   }
 
+  /** 해소 후 유예가 지난 경보를 보관으로 옮긴다 — 삭제하지 않는다 */
+  async function archiveAlerts() {
+    setCheckRunning(true);
+    try {
+      const response = await fetch(`${API_URL}/ops/alerts/archive`, {
+        ...authFetchInit(),
+        method: "POST",
+      });
+      if (!response.ok) {
+        setError(
+          response.status === 401 || response.status === 403
+            ? "ADMIN 권한이 필요합니다 — 관리자 계정으로 로그인해 주세요."
+            : `보관 실패 (HTTP ${response.status})`,
+        );
+        return;
+      }
+      const result = (await response.json()) as { archived: number };
+      setArchiveNote(
+        result.archived > 0
+          ? `${result.archived}건을 보관했습니다 (삭제하지 않습니다).`
+          : "보관할 경보가 없습니다.",
+      );
+      await load(false);
+    } catch {
+      setError("API 서버에 연결할 수 없습니다.");
+    } finally {
+      setCheckRunning(false);
+    }
+  }
+
   useEffect(() => {
     void load(false);
   }, []);
@@ -227,20 +258,46 @@ export default function ProductionOpsPage() {
             </span>
             <button
               type="button"
+              data-testid="archive-alerts"
+              disabled={checkRunning}
+              onClick={() => void archiveAlerts()}
+              className="ml-auto rounded-lg border border-zinc-300 px-2.5 py-1 text-xs font-medium hover:bg-white/60 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+            >
+              보관 정리
+            </button>
+            <button
+              type="button"
               data-testid="run-checks"
               disabled={checkRunning}
               onClick={() => void runChecks()}
-              className="ml-auto rounded-lg border border-zinc-300 px-2.5 py-1 text-xs font-medium hover:bg-white/60 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+              className="rounded-lg border border-zinc-300 px-2.5 py-1 text-xs font-medium hover:bg-white/60 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
             >
               {checkRunning ? "점검 중…" : "지금 점검"}
             </button>
           </div>
           <p className="mt-1 text-xs text-zinc-500">
             전달 채널:{" "}
-            {board.webhookConfigured
-              ? "웹훅 + 로그"
+            {board.channels.filter((entry) => entry.enabled).length > 0
+              ? board.channels
+                  .filter((entry) => entry.enabled)
+                  .map(
+                    (entry) =>
+                      `${entry.channel}(${entry.minLevel === "critical" ? "심각만" : "전체"}${entry.resolved ? "·해소 포함" : ""})`,
+                  )
+                  .join(" · ") + " + 로그"
               : "로그만 — 사람이 보고 있어야 알 수 있습니다"}
+            {" · "}
+            예약 조율:{" "}
+            {board.coordination.distributed
+              ? `분산 (인스턴스 ${board.coordination.instance})`
+              : "단일 인스턴스 — 여러 개 띄우면 점검이 중복 실행됩니다"}
           </p>
+
+          {archiveNote ? (
+            <p data-testid="archive-note" className="mt-2 text-xs text-zinc-500">
+              {archiveNote}
+            </p>
+          ) : null}
 
           {board.active.length > 0 ? (
             <ul data-testid="active-alerts" className="mt-3 space-y-2 text-sm">
@@ -269,12 +326,39 @@ export default function ProductionOpsPage() {
             <p className="mt-3 text-sm text-zinc-500">활성 경보가 없습니다.</p>
           )}
 
+          {board.deliveries.length > 0 ? (
+            <details className="mt-3" data-testid="delivery-history">
+              <summary className="cursor-pointer text-sm text-zinc-500">
+                최근 알림 전송 {board.deliveries.length}건 (실패{" "}
+                {board.deliveries.filter((entry) => !entry.ok).length}건)
+              </summary>
+              <table className="mt-2 w-full text-left text-sm">
+                <tbody>
+                  {board.deliveries.map((entry) => (
+                    <tr
+                      key={entry.id}
+                      className="border-t border-zinc-100 dark:border-zinc-800"
+                    >
+                      <td className="py-1 text-xs">{entry.channel}</td>
+                      <td className="py-1 text-xs">{entry.alertKey}</td>
+                      <td className="py-1 text-xs">
+                        {entry.ok ? "성공" : "실패"} · {entry.attempts}회 시도
+                        {entry.error ? ` · ${entry.error}` : ""}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </details>
+          ) : null}
+
           <div className="mt-4 overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead className="text-xs text-zinc-500">
                 <tr>
                   <th className="py-1">예약 점검</th>
                   <th className="py-1">간격</th>
+                  <th className="py-1">리더</th>
                   <th className="py-1">마지막 실행</th>
                   <th className="py-1">결과</th>
                 </tr>
@@ -289,6 +373,19 @@ export default function ProductionOpsPage() {
                     <td className="py-1.5 font-medium">{schedule.job}</td>
                     <td className="py-1.5 text-xs">
                       {schedule.enabled ? duration(schedule.intervalMs) : "중단"}
+                    </td>
+                    <td className="py-1.5 text-xs">
+                      {(() => {
+                        const lease = board.coordination.leases.find(
+                          (entry) => entry.key === `scheduler:${schedule.job}`,
+                        );
+                        if (!board.coordination.distributed) {
+                          return "단일";
+                        }
+                        return lease?.self
+                          ? "이 인스턴스"
+                          : (lease?.owner ?? "없음");
+                      })()}
                     </td>
                     <td className="py-1.5 text-xs text-zinc-500">
                       {schedule.lastRunAt

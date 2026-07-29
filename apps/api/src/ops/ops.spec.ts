@@ -8,6 +8,8 @@ import { LlmBudgetService } from "../llm/llm-budget.service";
 import { ProviderProductionService } from "../llm/provider-production.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { AlertService } from "./alert.service";
+import { DistributedLockService } from "./distributed-lock.service";
+import { NotificationService } from "./notification.service";
 import { OpsController } from "./ops.controller";
 import { ScheduledChecksService } from "./scheduled-checks.service";
 
@@ -32,6 +34,7 @@ interface AlertRow {
   lastRaisedAt: Date;
   notifiedAt: Date | null;
   resolvedAt: Date | null;
+  archivedAt: Date | null;
 }
 
 interface CheckRunRow {
@@ -51,11 +54,23 @@ const OFF = { budget: null, spend: 0, ratio: null, status: "off" as const };
 function createPrismaStub() {
   const alerts = new Map<string, AlertRow>();
   const runs: CheckRunRow[] = [];
+  const deliveries: {
+    id: string;
+    alertKey: string;
+    channel: string;
+    level: string;
+    ok: boolean;
+    attempts: number;
+    status: number | null;
+    error: string | null;
+    createdAt: Date;
+  }[] = [];
   let seq = 0;
 
   return {
     alerts,
     runs,
+    deliveries,
     stub: {
       alert: {
         findMany: async (args?: {
@@ -91,6 +106,7 @@ function createPrismaStub() {
             lastRaisedAt: new Date(),
             resolvedAt: null,
             notifiedAt: null,
+            archivedAt: null,
             ...args.create,
           } as AlertRow;
           alerts.set(args.where.key, created);
@@ -105,6 +121,29 @@ function createPrismaStub() {
           alerts.set(args.where.key, next);
           return { ...next };
         },
+        updateMany: async (args: {
+          where: { key: { in: string[] } };
+          data: Record<string, unknown>;
+        }) => {
+          let count = 0;
+          for (const key of args.where.key.in) {
+            const existing = alerts.get(key);
+            if (existing) {
+              alerts.set(key, { ...existing, ...args.data } as AlertRow);
+              count += 1;
+            }
+          }
+          return { count };
+        },
+      },
+      notificationDelivery: {
+        create: async (args: { data: Record<string, unknown> }) => {
+          seq += 1;
+          const row = { id: `nd-${seq}`, createdAt: new Date(), ...args.data };
+          deliveries.push(row as never);
+          return { ...row };
+        },
+        findMany: async () => deliveries.map((row) => ({ ...row })),
       },
       checkRun: {
         create: async (args: { data: Record<string, unknown> }) => {
@@ -195,6 +234,8 @@ async function build(overrides: Overrides = {}) {
     providers: [
       AlertService,
       ScheduledChecksService,
+      NotificationService,
+      DistributedLockService,
       { provide: PrismaService, useValue: prisma.stub },
       { provide: ProviderProductionService, useValue: production },
       { provide: LlmBudgetService, useValue: budget },
@@ -227,6 +268,11 @@ const ORIGINAL_ENV = { ...process.env };
 
 describe("Production Automation & Alerting (TASK-1302)", () => {
   let app: INestApplication | null = null;
+
+  beforeEach(() => {
+    // 테스트에서 실제 전송을 기다리지 않는다 — 재시도 로직은 core에서 검증
+    process.env.ALERT_RETRY_MAX_ATTEMPTS = "1";
+  });
 
   afterEach(async () => {
     await app?.close();
@@ -469,7 +515,8 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
     });
 
     it("GET /ops/alerts — 경보 현황·점검 구성, 웹훅 주소는 노출하지 않는다", async () => {
-      process.env.ALERT_WEBHOOK_URL = "https://hooks.example.com/very-secret";
+      // 즉시 실패하는 주소 — 네트워크를 타지 않으면서 "설정됨"은 참이다
+      process.env.ALERT_WEBHOOK_URL = "http://127.0.0.1:1/very-secret";
       const built = await build({
         budget: {
           daily: { budget: 10, spend: 12, ratio: 1.2, status: "exceeded" },
@@ -523,6 +570,207 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
         .post("/ops/checks/run?job=nope")
         .set("Authorization", "Bearer tok-admin")
         .expect(400);
+    });
+  });
+
+  describe("Production Operations Platform (TASK-1401)", () => {
+    it("경보 알림이 채널로 나가고, 전송 시도가 기록된다", async () => {
+      // 즉시 실패하는 주소 — 실패도 기록되어야 한다는 것이 요점이다
+      process.env.ALERT_WEBHOOK_URL = "http://127.0.0.1:1/hook";
+      const built = await build({
+        budget: {
+          daily: { budget: 10, spend: 12, ratio: 1.2, status: "exceeded" },
+        },
+      });
+      app = built.app;
+
+      await built.checks.run("cost-verification", "manual");
+
+      expect(built.prisma.deliveries).toHaveLength(1);
+      expect(built.prisma.deliveries[0]).toMatchObject({
+        alertKey: "budget:daily",
+        channel: "webhook",
+        level: "critical",
+        ok: false,
+      });
+      // 전송 실패가 경보 저장을 막지 않는다
+      expect(built.prisma.alerts.get("budget:daily")?.status).toBe("ACTIVE");
+    });
+
+    it("채널이 하나도 없으면 전송을 시도하지 않는다 (로그만)", async () => {
+      delete process.env.ALERT_WEBHOOK_URL;
+      delete process.env.ALERT_SLACK_WEBHOOK_URL;
+      delete process.env.SMTP_HOST;
+      const built = await build({
+        budget: {
+          daily: { budget: 10, spend: 12, ratio: 1.2, status: "exceeded" },
+        },
+      });
+      app = built.app;
+
+      await built.checks.run("cost-verification", "manual");
+      expect(built.prisma.deliveries).toEqual([]);
+    });
+
+    it("종류별 재알림 간격이 적용된다 (CTO 결정 1302-①)", async () => {
+      process.env.ALERT_COOLDOWN_MS = "1";
+      process.env.ALERT_COOLDOWN_BUDGET_MS = "3600000";
+      const built = await build({
+        budget: {
+          daily: { budget: 10, spend: 12, ratio: 1.2, status: "exceeded" },
+        },
+      });
+      app = built.app;
+
+      const first = await built.checks.run("cost-verification", "manual");
+      expect(first.alertsRaised).toBe(1);
+      // 전체 기본은 1ms(경과)이지만 budget은 1시간이라 억제된다
+      const second = await built.checks.run("cost-verification", "manual");
+      expect(second.alertsRaised).toBe(0);
+    });
+
+    it("예약 실행은 잠금을 잡은 인스턴스만 수행한다 (수동 실행은 잠금 무관)", async () => {
+      const built = await build();
+      app = built.app;
+      const locks = built.app.get(DistributedLockService) as unknown as {
+        acquire: (key: string) => Promise<boolean>;
+      };
+      const asked: string[] = [];
+      locks.acquire = async (key: string) => {
+        asked.push(key);
+        return false; // 다른 인스턴스가 리더
+      };
+
+      const scheduled = await built.checks.run("health-check", "schedule");
+      expect(scheduled.detail).toContain("다른 인스턴스");
+      expect(asked).toEqual(["scheduler:health-check"]);
+      // 잠금을 못 잡았으면 실행 이력도 남기지 않는다 (정상 동작이라 소음이다)
+      expect(built.prisma.runs).toEqual([]);
+
+      // 수동 실행은 사람이 지금 확인하려는 것이므로 잠금을 요구하지 않는다
+      const manual = await built.checks.run("health-check", "manual");
+      expect(manual.detail).not.toContain("다른 인스턴스");
+      expect(built.prisma.runs).toHaveLength(1);
+    });
+
+    it("REDIS_URL이 없으면 단일 인스턴스 모드임을 드러낸다", async () => {
+      delete process.env.REDIS_URL;
+      const built = await build();
+      app = built.app;
+
+      const coordination = await built.checks.coordination();
+      expect(coordination.distributed).toBe(false);
+      expect(coordination.instance).toMatch(/-\d+-[0-9a-f]+$/);
+      expect(coordination.leases).toHaveLength(3);
+      // 단일 모드에서는 내가 항상 리더다
+      expect(coordination.leases.every((lease) => lease.self)).toBe(true);
+    });
+
+    it("GET /ops/alerts/history — 이력 요약과 평균 해소 시간", async () => {
+      const built = await build({
+        budget: {
+          daily: { budget: 10, spend: 12, ratio: 1.2, status: "exceeded" },
+        },
+      });
+      app = built.app;
+      await built.checks.run("cost-verification", "manual");
+
+      const response = await request(built.app.getHttpServer())
+        .get("/ops/alerts/history")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+
+      expect(response.body.entries).toHaveLength(1);
+      expect(response.body.summary).toMatchObject({ total: 1, active: 1 });
+      expect(response.body.summary.byKind[0]).toMatchObject({ kind: "budget" });
+      expect(response.body.archiveAfterDays).toBe(90);
+    });
+
+    it("POST /ops/alerts/archive — 유예가 지난 해소 경보만 보관하고 삭제하지 않는다", async () => {
+      const built = await build({
+        budget: {
+          daily: { budget: 10, spend: 12, ratio: 1.2, status: "exceeded" },
+        },
+      });
+      app = built.app;
+      await built.checks.run("cost-verification", "manual");
+
+      // 오래전에 해소된 것으로 만든다
+      const row = built.prisma.alerts.get("budget:daily")!;
+      built.prisma.alerts.set("budget:daily", {
+        ...row,
+        status: "RESOLVED",
+        resolvedAt: new Date(Date.now() - 100 * 24 * 60 * 60 * 1000),
+      });
+
+      const response = await request(built.app.getHttpServer())
+        .post("/ops/alerts/archive")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+
+      expect(response.body).toMatchObject({ archived: 1, afterDays: 90 });
+      // 삭제가 아니라 보관 — 이력은 남는다 (CTO 결정 1302-④)
+      expect(built.prisma.alerts.get("budget:daily")).toMatchObject({
+        status: "ARCHIVED",
+      });
+      expect(built.prisma.alerts.size).toBe(1);
+    });
+
+    it("최근 해소된 경보는 보관하지 않는다", async () => {
+      const built = await build({
+        budget: {
+          daily: { budget: 10, spend: 12, ratio: 1.2, status: "exceeded" },
+        },
+      });
+      app = built.app;
+      await built.checks.run("cost-verification", "manual");
+      const row = built.prisma.alerts.get("budget:daily")!;
+      built.prisma.alerts.set("budget:daily", {
+        ...row,
+        status: "RESOLVED",
+        resolvedAt: new Date(),
+      });
+
+      const result = await built.alerts.archive();
+      expect(result.archived).toBe(0);
+    });
+
+    it("GET /ops/alerts — 채널·조율 현황을 담되 주소는 노출하지 않는다", async () => {
+      process.env.ALERT_SLACK_WEBHOOK_URL = "http://127.0.0.1:1/slack-secret";
+      const built = await build();
+      app = built.app;
+
+      const response = await request(built.app.getHttpServer())
+        .get("/ops/alerts")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+
+      const slack = response.body.channels.find(
+        (entry: { channel: string }) => entry.channel === "slack",
+      );
+      expect(slack).toMatchObject({ enabled: true, env: "ALERT_SLACK_WEBHOOK_URL" });
+      expect(JSON.stringify(response.body)).not.toContain("slack-secret");
+      expect(response.body.coordination).toMatchObject({ distributed: false });
+      expect(response.body.cooldownByKind.budget).toBeGreaterThan(0);
+    });
+
+    it("알림·이력·보관 API도 ADMIN 전용", async () => {
+      const built = await build();
+      app = built.app;
+      const server = built.app.getHttpServer();
+
+      for (const path of ["/ops/alerts/history", "/ops/notifications"]) {
+        await request(server).get(path).expect(401);
+        await request(server)
+          .get(path)
+          .set("Authorization", "Bearer tok-editor")
+          .expect(403);
+      }
+      await request(server).post("/ops/alerts/archive").expect(401);
+      await request(server)
+        .post("/ops/notifications/test")
+        .set("Authorization", "Bearer tok-editor")
+        .expect(403);
     });
   });
 });

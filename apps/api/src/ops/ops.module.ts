@@ -2,6 +2,8 @@ import { Module } from "@nestjs/common";
 import { AuthModule } from "../auth/auth.module";
 import { LlmModule } from "../llm/llm.module";
 import { AlertService } from "./alert.service";
+import { DistributedLockService } from "./distributed-lock.service";
+import { NotificationService } from "./notification.service";
 import { OpsController } from "./ops.controller";
 import { ScheduledChecksService } from "./scheduled-checks.service";
 
@@ -14,7 +16,17 @@ import { ScheduledChecksService } from "./scheduled-checks.service";
 @Module({
   imports: [AuthModule, LlmModule],
   controllers: [OpsController],
-  providers: [AlertService, ScheduledChecksService],
-  exports: [AlertService, ScheduledChecksService],
+  providers: [
+    AlertService,
+    ScheduledChecksService,
+    NotificationService,
+    DistributedLockService,
+  ],
+  exports: [
+    AlertService,
+    ScheduledChecksService,
+    NotificationService,
+    DistributedLockService,
+  ],
 })
 export class OpsModule {}

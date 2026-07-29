@@ -18,17 +18,36 @@
  *   GATE_EMAIL=admin@acos.local GATE_PASSWORD=... \
  *     node scripts/deployment-gate.mjs
  *
- * 옵션:
- *   GATE_ALLOW_WARN=1   경고(warn)가 있어도 통과시킨다 (기본: 통과 — 경고는
- *                       배포를 막지 않는다. blocking 실패만 막는다)
- *   GATE_STRICT=1       직접 확인(manual) 항목이 있으면 배포를 막는다
- *   GATE_ALERTS=1       활성 critical 경보가 있으면 배포를 막는다
+ * 옵션 (CTO 결정 1302-③ — **운영에서는 둘 다 기본 ON**):
+ *   GATE_STRICT   직접 확인(manual) 항목이 있으면 배포를 막는다
+ *   GATE_ALERTS   활성 critical 경보가 있으면 배포를 막는다
+ *
+ * 운영(`NODE_ENV=production` 또는 `GATE_ENV=production`)에서는 두 옵션이
+ * 켜진 상태가 기본이고, 끄려면 명시적으로 `=0`을 넘겨야 한다 — 안전한 쪽이
+ * 기본이어야 사람이 잊었을 때 사고가 나지 않는다.
+ * 그 외 환경에서는 꺼짐이 기본이다(개발·스테이징 반복 배포를 막지 않는다).
+ *
+ * 경고(warn)는 배포를 막지 않는다 — blocking 실패만 막는다.
  */
 const API_BASE = process.env.API_BASE ?? "http://localhost:4000";
 const GATE_EMAIL = process.env.GATE_EMAIL ?? "admin@acos.local";
 const GATE_PASSWORD = process.env.GATE_PASSWORD ?? "admin1234";
-const STRICT = process.env.GATE_STRICT === "1";
-const CHECK_ALERTS = process.env.GATE_ALERTS === "1";
+// 운영에서는 안전한 쪽이 기본 (CTO 결정 1302-③)
+const PRODUCTION =
+  (process.env.GATE_ENV ?? process.env.NODE_ENV ?? "").toLowerCase() ===
+  "production";
+
+/** 명시하지 않으면 운영은 ON, 그 외는 OFF */
+function gateFlag(name) {
+  const raw = (process.env[name] ?? "").trim().toLowerCase();
+  if (raw === "") {
+    return PRODUCTION;
+  }
+  return !["0", "off", "false", "no"].includes(raw);
+}
+
+const STRICT = gateFlag("GATE_STRICT");
+const CHECK_ALERTS = gateFlag("GATE_ALERTS");
 
 let authToken = "";
 let authCookie = "";
@@ -69,7 +88,11 @@ async function login() {
 }
 
 async function main() {
-  console.log(`# Deployment Gate — ${API_BASE}`);
+  console.log(
+    `# Deployment Gate — ${API_BASE}` +
+      ` (STRICT=${STRICT ? "on" : "off"} · ALERTS=${CHECK_ALERTS ? "on" : "off"}` +
+      `${PRODUCTION ? " · 운영 기본값" : ""})`,
+  );
 
   if (!(await login())) {
     // 판정할 수 없다 — 통과로 처리하지 않는다
@@ -115,7 +138,8 @@ async function main() {
 
   if (STRICT && manual.length > 0) {
     fail(
-      `GATE_STRICT=1 — 직접 확인 항목 ${manual.length}건이 남아 있습니다.`,
+      `GATE_STRICT — 직접 확인 항목 ${manual.length}건이 남아 있습니다 ` +
+        "(확인 후 GATE_STRICT=0으로 넘기거나, 확인 절차를 마치세요).",
       1,
     );
     blocked = true;

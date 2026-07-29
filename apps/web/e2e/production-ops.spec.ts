@@ -162,4 +162,49 @@ test.describe("Provider 운영 점검 (TASK-1301)", () => {
       "가격표에 없는 모델",
     );
   });
+
+  test("알림 채널·예약 조율 현황을 보여준다 (TASK-1401)", async ({ page }) => {
+    await setMode("data");
+    await openPage(page);
+
+    const board = page.getByTestId("alert-board");
+    // 채널 구성 — 주소가 아니라 어떤 채널이 무엇을 받는지
+    await expect(board).toContainText("slack(전체·해소 포함)");
+    await expect(board).toContainText("webhook(전체)");
+    // 분산 조율 여부를 드러낸다
+    await expect(board).toContainText("분산 (인스턴스 pod-a-1234-abcd)");
+    // 점검별 리더
+    await expect(page.getByTestId("schedule-cost-verification")).toContainText(
+      "이 인스턴스",
+    );
+    await expect(page.getByTestId("schedule-provider-validation")).toContainText(
+      "pod-b-5678-efgh",
+    );
+  });
+
+  test("단일 인스턴스 모드와 전송 실패를 드러낸다", async ({ page }) => {
+    await setMode("empty");
+    await openPage(page);
+
+    const board = page.getByTestId("alert-board");
+    // 다중 인스턴스에서 중복 실행된다는 사실을 숨기지 않는다
+    await expect(board).toContainText("단일 인스턴스");
+    await expect(board).toContainText("로그만");
+
+    // 알림이 실패한 사실이 보인다 — 이것이 TASK-1302의 구멍이었다
+    const deliveries = page.getByTestId("delivery-history");
+    await expect(deliveries).toContainText("실패 1건");
+    await deliveries.click();
+    await expect(deliveries).toContainText("4회 시도");
+  });
+
+  test("보관 정리는 삭제가 아님을 말한다 (CTO 결정 1302-④)", async ({ page }) => {
+    await setMode("empty");
+    await openPage(page);
+
+    await page.getByTestId("archive-alerts").click();
+    await expect(page.getByTestId("archive-note")).toContainText(
+      "2건을 보관했습니다 (삭제하지 않습니다)",
+    );
+  });
 });

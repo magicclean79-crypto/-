@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import {
+  SCHEDULED_JOBS,
   detectBudgetAlerts,
   detectConfigurationAlerts,
   detectProviderAlerts,
@@ -8,11 +9,17 @@ import {
   validateEnvironment,
 } from "@acos/core";
 import type { AlertKind, JobSchedule, ScheduledJob } from "@acos/core";
-import type { CheckRunDto, CheckRunResultDto, JobScheduleDto } from "@acos/shared";
+import type {
+  CheckRunDto,
+  CheckRunResultDto,
+  JobScheduleDto,
+  SchedulerCoordinationDto,
+} from "@acos/shared";
 import { LlmBudgetService } from "../llm/llm-budget.service";
 import { ProviderProductionService } from "../llm/provider-production.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { AlertService } from "./alert.service";
+import { DistributedLockService } from "./distributed-lock.service";
 
 interface CheckRunRow {
   id: string;
@@ -78,7 +85,13 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
     private readonly production: ProviderProductionService,
     private readonly budget: LlmBudgetService,
     private readonly alerts: AlertService,
+    private readonly locks: DistributedLockService,
   ) {}
+
+  /** 점검 1건의 잠금 이름 */
+  static lockKey(job: ScheduledJob): string {
+    return `scheduler:${job}`;
+  }
 
   schedules(): JobSchedule[] {
     return resolveSchedules(process.env as Record<string, string | undefined>);
@@ -110,8 +123,13 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * 점검 1회 실행.
+   *
    * **겹쳐 돌지 않는다** — 간격보다 오래 걸리는 점검이 쌓이면 DB와 Provider에
-   * 부하가 곱으로 붙는다.
+   * 부하가 곱으로 붙는다(프로세스 내부).
+   *
+   * **인스턴스끼리도 겹치지 않는다** (TASK-1401, CTO 결정 1302-②) —
+   * 예약 실행은 분산 잠금을 잡은 인스턴스만 수행한다. 수동 실행은 사람이
+   * 지금 확인하려는 것이므로 잠금을 요구하지 않는다.
    */
   async run(
     job: ScheduledJob,
@@ -128,6 +146,25 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
         notified: [],
       };
     }
+
+    if (trigger === "schedule") {
+      const leader = await this.locks.acquire(
+        ScheduledChecksService.lockKey(job),
+      );
+      if (!leader) {
+        // 다른 인스턴스가 맡았다 — 이력을 남기지 않는다(정상 동작이라 소음이다)
+        return {
+          job,
+          ok: true,
+          detail: "다른 인스턴스가 이 점검을 맡고 있어 건너뜁니다.",
+          alertsRaised: 0,
+          durationMs: 0,
+          trigger,
+          notified: [],
+        };
+      }
+    }
+
     this.running.add(job);
     const startedAt = Date.now();
 
@@ -267,6 +304,18 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
         `점검 이력 기록 실패: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
+  }
+
+  /** 예약 실행 조율 현황 (TASK-1401) */
+  async coordination(): Promise<SchedulerCoordinationDto> {
+    return {
+      distributed: this.locks.distributed,
+      instance: this.locks.self,
+      lockTtlMs: this.locks.ttlMs,
+      leases: await this.locks.status(
+        SCHEDULED_JOBS.map((job) => ScheduledChecksService.lockKey(job)),
+      ),
+    };
   }
 
   /** 점검 구성 + 마지막 실행 결과 */

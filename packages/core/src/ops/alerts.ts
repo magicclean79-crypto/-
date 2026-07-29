@@ -219,6 +219,8 @@ export function detectConfigurationAlerts(input: {
 export interface ReconcileOptions {
   /** 같은 경보를 다시 알리기까지의 최소 간격 (ms) */
   cooldownMs: number;
+  /** 종류별 간격 (CTO 결정 1302-①) — 없는 종류는 cooldownMs를 쓴다 */
+  cooldownByKind?: Partial<Record<AlertKind, number>>;
   now: number;
 }
 
@@ -270,7 +272,9 @@ export function reconcileAlerts(
 
     const elapsed =
       state.notifiedAt === null ? Infinity : options.now - state.notifiedAt;
-    if (elapsed >= options.cooldownMs) {
+    const cooldownMs =
+      options.cooldownByKind?.[alert.kind] ?? options.cooldownMs;
+    if (elapsed >= cooldownMs) {
       decisions.push({
         key: alert.key,
         action: "repeat",
@@ -319,4 +323,47 @@ export function summarizeAlerts(alerts: { level: AlertLevel }[]): {
     warning: alerts.length - critical,
     ok: critical === 0,
   };
+}
+
+// ── 재알림 간격 (CTO 결정 1302-①) ─────────────────────────────
+
+/** 기본 재알림 간격 — 30분을 공식 표준으로 유지한다 */
+export const DEFAULT_ALERT_COOLDOWN_MS = 30 * 60 * 1000;
+
+/** 종류별 재알림 간격 환경변수 — 결정 1302-①이 허용한 확장 */
+export const ALERT_COOLDOWN_ENV: Record<AlertKind, string> = {
+  budget: "ALERT_COOLDOWN_BUDGET_MS",
+  "provider-failure": "ALERT_COOLDOWN_PROVIDER_MS",
+  "unpriced-model": "ALERT_COOLDOWN_UNPRICED_MS",
+  configuration: "ALERT_COOLDOWN_CONFIG_MS",
+};
+
+/** 전체 기본값 환경변수 (종류별 값이 없을 때) */
+export const ALERT_COOLDOWN_DEFAULT_ENV = "ALERT_COOLDOWN_MS";
+
+function positiveMs(value: string | undefined, fallback: number): number {
+  if (value === undefined || value.trim().length === 0) {
+    return fallback;
+  }
+  const parsed = Number(value);
+  // 잘못 적은 값 때문에 경보가 폭주하는 것보다 기본값이 안전하다
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : fallback;
+}
+
+/**
+ * 종류별 재알림 간격을 해석한다.
+ * `종류별 값 ?? 전체 기본값 ?? 30분` — 설정 우선순위(1201-①)와 같은 결이다.
+ */
+export function resolveCooldowns(
+  env: Record<string, string | undefined>,
+): Record<AlertKind, number> {
+  const base = positiveMs(
+    env[ALERT_COOLDOWN_DEFAULT_ENV],
+    DEFAULT_ALERT_COOLDOWN_MS,
+  );
+  const result = {} as Record<AlertKind, number>;
+  for (const kind of ALERT_KINDS) {
+    result[kind] = positiveMs(env[ALERT_COOLDOWN_ENV[kind]], base);
+  }
+  return result;
 }

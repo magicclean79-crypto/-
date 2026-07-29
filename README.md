@@ -438,6 +438,37 @@ API_BASE=https://api.example.com GATE_EMAIL=... GATE_PASSWORD=... \
   node scripts/deployment-gate.mjs || exit 1
 ```
 
+## 운영 플랫폼 (TASK-1401, Sprint 14)
+
+TASK-1302가 남긴 두 부채를 갚습니다: **예약 점검의 인스턴스별 중복 실행**과
+**알림이 한 번 실패하면 아무도 모르는 채로 끝나던** 문제.
+
+- **Distributed Scheduler / Leader Election / Lock**: 예약 실행은 Redis 잠금을
+  잡은 인스턴스만 수행합니다(`REDIS_URL`). 임차는 **반드시 만료**되어(기본 30초)
+  리더가 죽어도 다른 인스턴스가 인계받고, **소유자 확인 후에만** 갱신·해제해
+  리더가 둘이 되지 않습니다. Redis가 없으면 단일 인스턴스 모드이며 **그 사실을
+  화면에 드러냅니다**
+- **Notification Center**: Slack · Email · Webhook. 채널마다 최소 심각도와 해소
+  알림 여부를 따로 정합니다 — 모든 warning을 밤중에 받으면 사람이 알림을 끕니다.
+  **주소는 어떤 응답에도 담지 않습니다**
+- **Webhook Retry**: 지수 백오프(최대 4회). **4xx는 재시도하지 않습니다** —
+  같은 요청은 같은 답을 받습니다. 모든 시도 결과를 기록해 "왜 아무도 못
+  받았는가"를 추적할 수 있습니다
+- **Alert History / Archive**: **삭제하지 않습니다**. 해소 후 90일이 지나면
+  보관으로 옮기고, 활성 경보는 절대 보관하지 않습니다. 이력 요약은 종류별
+  발생 횟수와 **평균 해소 시간**을 냅니다 — 경보가 많은 것보다 오래 방치되는
+  것이 더 나쁜 신호입니다
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `GET` | `/ops/alerts/history` | **경보 이력 (ADMIN)** — 보관 포함·평균 해소 시간 |
+| `POST` | `/ops/alerts/archive` | **보관 정리 (ADMIN)** — 삭제가 아닙니다 |
+| `GET` | `/ops/notifications` | **전송 시도 이력 (ADMIN)** |
+| `POST` | `/ops/notifications/test` | **채널 시험 (ADMIN)** — 실제로 전송합니다 |
+
+**배포 게이트**: 운영에서는 `GATE_STRICT`·`GATE_ALERTS`가 **기본 ON**입니다 —
+안전한 쪽이 기본이어야 사람이 잊었을 때 사고가 나지 않습니다.
+
 ## Execution Domain (TASK-0601, Sprint 6)
 
 모든 LLM 호출(Content Generation · Analysis · Vision · 개발용 API)은 호출 1건당

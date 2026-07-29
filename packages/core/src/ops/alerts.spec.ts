@@ -1,9 +1,11 @@
 import {
+  DEFAULT_ALERT_COOLDOWN_MS,
   detectBudgetAlerts,
   detectConfigurationAlerts,
   detectProviderAlerts,
   detectUnpricedAlerts,
   reconcileAlerts,
+  resolveCooldowns,
   summarizeAlerts,
 } from "./alerts";
 import type { AlertState, DetectedAlert } from "./alerts";
@@ -241,6 +243,59 @@ describe("Production Alerting (TASK-1302)", () => {
         warning: 0,
         ok: true,
       });
+    });
+  });
+
+  describe("resolveCooldowns (CTO 결정 1302-①)", () => {
+    it("미설정이면 전 종류 30분 — 공식 표준", () => {
+      const resolved = resolveCooldowns({});
+      expect(resolved.budget).toBe(DEFAULT_ALERT_COOLDOWN_MS);
+      expect(DEFAULT_ALERT_COOLDOWN_MS).toBe(30 * 60 * 1000);
+      expect(Object.values(resolved).every((ms) => ms === 1_800_000)).toBe(true);
+    });
+
+    it("전체 기본값을 바꾸면 전 종류에 적용된다", () => {
+      const resolved = resolveCooldowns({ ALERT_COOLDOWN_MS: "600000" });
+      expect(resolved["provider-failure"]).toBe(600_000);
+      expect(resolved.configuration).toBe(600_000);
+    });
+
+    it("종류별 값이 전체 기본값보다 우선한다", () => {
+      const resolved = resolveCooldowns({
+        ALERT_COOLDOWN_MS: "600000",
+        ALERT_COOLDOWN_BUDGET_MS: "60000",
+        ALERT_COOLDOWN_UNPRICED_MS: "86400000",
+      });
+      expect(resolved.budget).toBe(60_000);
+      expect(resolved["unpriced-model"]).toBe(86_400_000);
+      expect(resolved["provider-failure"]).toBe(600_000);
+    });
+
+    it("해석할 수 없는 값은 기본값으로 — 경보 폭주보다 안전하다", () => {
+      const resolved = resolveCooldowns({
+        ALERT_COOLDOWN_MS: "abc",
+        ALERT_COOLDOWN_BUDGET_MS: "0",
+        ALERT_COOLDOWN_CONFIG_MS: "-1",
+      });
+      expect(resolved.budget).toBe(DEFAULT_ALERT_COOLDOWN_MS);
+      expect(resolved.configuration).toBe(DEFAULT_ALERT_COOLDOWN_MS);
+    });
+
+    it("종류별 간격이 실제 억제 판정에 쓰인다", () => {
+      const now = 1_000_000;
+      const state: AlertState = {
+        key: "provider-failure:openai",
+        level: "warning",
+        status: "ACTIVE",
+        notifiedAt: now - 120_000,
+      };
+      // 전체 기본은 60초(경과) 이지만 provider는 10분(미경과)
+      const [decision] = reconcileAlerts([alert()], [state], {
+        cooldownMs: 60_000,
+        cooldownByKind: { "provider-failure": 600_000 },
+        now,
+      });
+      expect(decision.action).toBe("suppress");
     });
   });
 });

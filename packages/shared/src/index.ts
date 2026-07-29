@@ -1378,7 +1378,7 @@ export const ALERT_KIND_VALUES = [
 
 export type AlertKindDto = (typeof ALERT_KIND_VALUES)[number];
 export type AlertLevelDto = "warning" | "critical";
-export type AlertStatusDto = "ACTIVE" | "RESOLVED";
+export type AlertStatusDto = "ACTIVE" | "RESOLVED" | "ARCHIVED";
 
 /** 경보 1건 — key가 같으면 같은 문제로 본다 */
 export interface AlertDto {
@@ -1396,6 +1396,8 @@ export interface AlertDto {
   /** 마지막으로 외부 채널에 알린 시각 (없으면 아직 알리지 않음) */
   notifiedAt: string | null;
   resolvedAt: string | null;
+  /** 보관 시각 (TASK-1401, CTO 결정 1302-④) — 삭제하지 않는다 */
+  archivedAt: string | null;
 }
 
 /** 예약 점검 1회 실행 이력 */
@@ -1437,8 +1439,15 @@ export interface AlertBoardDto {
   schedules: JobScheduleDto[];
   /** 외부 알림 채널 구성 여부 (URL은 노출하지 않는다) */
   webhookConfigured: boolean;
-  /** 같은 경보 재알림 간격 (ms) */
+  /** 같은 경보 재알림 간격 (ms) — 종류별 (CTO 결정 1302-①) */
   cooldownMs: number;
+  cooldownByKind: Record<string, number>;
+  /** 알림 채널 현황 (TASK-1401) */
+  channels: NotificationChannelStatusDto[];
+  /** 최근 전송 시도 (TASK-1401) */
+  deliveries: NotificationDeliveryDto[];
+  /** 예약 실행 조율 현황 (TASK-1401) */
+  coordination: SchedulerCoordinationDto;
   checkedAt: string;
 }
 
@@ -1457,4 +1466,85 @@ export interface CheckRunResultDto {
     level: AlertLevelDto | null;
     title: string;
   }[];
+}
+
+// ── Production Operations Platform (TASK-1401, Sprint 14) ──
+
+export type NotificationChannelDto = "slack" | "email" | "webhook";
+
+/** 알림 채널 구성 — 주소(웹훅 URL·SMTP·수신자)는 노출하지 않는다 */
+export interface NotificationChannelStatusDto {
+  channel: NotificationChannelDto;
+  enabled: boolean;
+  /** 이 채널이 받을 최소 심각도 */
+  minLevel: "warning" | "critical";
+  /** 해소 알림도 받는가 */
+  resolved: boolean;
+  /** 설정 환경변수 이름 (값이 아니라 이름만) */
+  env: string;
+}
+
+/** 알림 전송 시도 1건 — "왜 아무도 못 받았는가"의 근거 */
+export interface NotificationDeliveryDto {
+  id: string;
+  alertKey: string;
+  channel: string;
+  level: string;
+  ok: boolean;
+  /** 총 시도 횟수 (최초 1회 포함) */
+  attempts: number;
+  status: number | null;
+  error: string | null;
+  createdAt: string;
+}
+
+/** 분산 잠금 임차 상태 */
+export interface LeaseStatusDto {
+  key: string;
+  /** 현재 리더 (만료됐으면 null) */
+  owner: string | null;
+  /** 내가 리더인가 */
+  self: boolean;
+  expiresAt: string | null;
+  remainingMs: number;
+}
+
+/** 예약 실행 조율 현황 */
+export interface SchedulerCoordinationDto {
+  /** Redis 기반 분산 조율을 쓰는가 — false면 단일 인스턴스 모드 */
+  distributed: boolean;
+  /** 이 인스턴스 식별자 */
+  instance: string;
+  lockTtlMs: number;
+  leases: LeaseStatusDto[];
+}
+
+/** 경보 이력 요약 */
+export interface AlertHistorySummaryDto {
+  total: number;
+  active: number;
+  resolved: number;
+  archived: number;
+  byKind: { kind: string; alerts: number; occurrences: number }[];
+  /** 해소까지 걸린 평균 시간 (ms) — 해소된 것이 없으면 null */
+  meanTimeToResolveMs: number | null;
+}
+
+/** 경보 이력 (GET /ops/alerts/history) */
+export interface AlertHistoryDto {
+  entries: AlertDto[];
+  summary: AlertHistorySummaryDto;
+  /** 보관 유예 (일) */
+  archiveAfterDays: number;
+  checkedAt: string;
+}
+
+/** 보관 실행 결과 (POST /ops/alerts/archive) */
+export interface AlertArchiveResultDto {
+  archived: number;
+  keys: string[];
+  afterDays: number;
+  /** 이 시각 이전에 해소된 것이 대상 */
+  cutoff: string;
+  checked: number;
 }

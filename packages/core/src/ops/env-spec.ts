@@ -356,9 +356,68 @@ export const ENV_SPECS: EnvSpec[] = [
   {
     name: "ALERT_COOLDOWN_MS",
     category: "ops",
-    description: "같은 경보 재알림 간격(ms) — 짧으면 사람이 경보를 무시하게 된다",
+    description:
+      "같은 경보 재알림 간격(ms) — 짧으면 사람이 경보를 무시하게 된다. " +
+      "종류별로는 ALERT_COOLDOWN_BUDGET/PROVIDER/UNPRICED/CONFIG_MS",
     validate: positiveNumber("ALERT_COOLDOWN_MS"),
-    fallback: "1800000 (30분)",
+    fallback: "1800000 (30분, 공식 표준)",
+  },
+  // ── 운영 플랫폼 (TASK-1401) ──
+  {
+    name: "REDIS_URL",
+    category: "ops",
+    description: "분산 잠금·리더 선출용 Redis 주소 — 없으면 단일 인스턴스 모드",
+    secret: true,
+    validate: (value) =>
+      /^rediss?:\/\//.test(value) ? null : "redis:// 또는 rediss:// 주소여야 합니다.",
+    fallback: "단일 인스턴스 모드 (다중 인스턴스면 점검이 중복 실행됨)",
+    productionAdvice: (value) =>
+      value
+        ? null
+        : "분산 잠금이 없습니다 — 인스턴스를 여러 개 띄우면 예약 점검이 중복 실행됩니다.",
+  },
+  {
+    name: "OPS_LOCK_TTL_MS",
+    category: "ops",
+    description: "분산 잠금 임차 수명(ms) — 리더가 죽어도 이 시간 뒤 재선출된다",
+    validate: positiveNumber("OPS_LOCK_TTL_MS"),
+    fallback: "30000 (30초)",
+  },
+  {
+    name: "ALERT_SLACK_WEBHOOK_URL",
+    category: "ops",
+    description: "Slack Incoming Webhook 주소",
+    secret: true,
+    validate: (value) =>
+      /^https?:\/\//.test(value) ? null : "http(s) URL이어야 합니다.",
+    fallback: "Slack 알림 없음",
+  },
+  {
+    name: "SMTP_HOST",
+    category: "ops",
+    description: "경보 메일 발송 SMTP 호스트 (ALERT_EMAIL_TO와 함께 필요)",
+    fallback: "메일 알림 없음",
+  },
+  {
+    name: "ALERT_EMAIL_TO",
+    category: "ops",
+    description: "경보 메일 수신자",
+    secret: true,
+    fallback: "메일 알림 없음",
+  },
+  {
+    name: "ALERT_RETRY_MAX_ATTEMPTS",
+    category: "ops",
+    description: "알림 전송 최대 시도 횟수 (최초 1회 포함)",
+    validate: positiveNumber("ALERT_RETRY_MAX_ATTEMPTS"),
+    fallback: "4",
+  },
+  {
+    name: "ALERT_ARCHIVE_AFTER_DAYS",
+    category: "ops",
+    description: "해소된 경보를 보관으로 옮기기까지의 일수 (삭제하지 않는다)",
+    validate: positiveNumber("ALERT_ARCHIVE_AFTER_DAYS"),
+    fallback: "90 (CTO 결정 1302-④)",
   },
 ];
 

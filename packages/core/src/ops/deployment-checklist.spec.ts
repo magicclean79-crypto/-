@@ -22,6 +22,7 @@ const READY: DeploymentState = {
       LLM_DAILY_BUDGET_USD: "50",
       LLM_FAILOVER_PRIORITY: "openai",
       ALERT_WEBHOOK_URL: "https://hooks.example.com/acos",
+      REDIS_URL: "redis://cache:6379",
     },
   ),
   database: { ok: true, detail: "연결 정상" },

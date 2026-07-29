@@ -386,6 +386,8 @@ enum AlertLevel {
 enum AlertStatus {
   ACTIVE
   RESOLVED
+  // 해소 후 유예(기본 90일)가 지나면 보관 — **삭제하지 않는다**(CTO 결정 1302-④)
+  ARCHIVED
 }
 
 /**
@@ -409,8 +411,37 @@ model Alert {
   notifiedAt    DateTime?
   resolvedAt    DateTime?
 
+  archivedAt    DateTime?
+
   @@index([status, lastRaisedAt])
+  @@index([kind, lastRaisedAt])
   @@map("alerts")
+}
+
+/**
+ * 알림 전송 시도 1건 (TASK-1401).
+ *
+ * 전송이 **실패한 사실 자체가 알려지지 않는 것**이 TASK-1302의 구멍이었다.
+ * 채널·시도 횟수·마지막 오류를 남겨 "왜 아무도 못 받았는가"를 추적한다.
+ */
+model NotificationDelivery {
+  id         String   @id @default(cuid())
+  /** 경보 키 (alerts.key) — 삭제 연쇄를 만들지 않으려 FK를 걸지 않는다 */
+  alertKey   String
+  channel    String // slack | email | webhook
+  level      String // warning | critical | resolved
+  /** 최종 성공 여부 */
+  ok         Boolean
+  /** 총 시도 횟수 (최초 1회 포함) */
+  attempts   Int      @default(1)
+  /** 마지막 응답 상태 — 네트워크 오류면 null */
+  status     Int?
+  error      String?
+  createdAt  DateTime @default(now())
+
+  @@index([alertKey, createdAt])
+  @@index([channel, createdAt])
+  @@map("notification_deliveries")
 }
 
 /** 예약 점검 실행 이력 — "언제 마지막으로 확인했는가"의 근거 */
