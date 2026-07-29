@@ -554,6 +554,29 @@ model RecoveryDrill {
   @@map("recovery_drills")
 }
 
+/**
+ * 리허설을 즉시 요구하는 변경 사건 (TASK-1901, CTO 결정 1801-⑤).
+ *
+ * 90일 주기는 "아무것도 바뀌지 않았을 때"의 간격이다. DR 절차·DB·백업 방식이
+ * 크게 바뀌면 마지막 리허설이 검증한 것은 지금의 시스템이 아니다.
+ */
+model DrillRequirement {
+  id          String    @id @default(cuid())
+  /** dr-change | db-major-change | pitr-adoption */
+  trigger     String
+  /** 무엇이 바뀌었는지 */
+  description String
+  registeredBy String
+  /** 이 요구를 충족한 리허설 시각 — 미해소면 null */
+  satisfiedAt DateTime?
+  /** 충족한 리허설 id */
+  satisfiedBy String?
+  createdAt   DateTime  @default(now())
+
+  @@index([satisfiedAt])
+  @@map("drill_requirements")
+}
+
 /** 예약 점검 실행 이력 — "언제 마지막으로 확인했는가"의 근거 */
 model CheckRun {
   id           String   @id @default(cuid())

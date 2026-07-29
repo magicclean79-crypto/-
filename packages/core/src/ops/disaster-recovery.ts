@@ -203,6 +203,10 @@ export interface DrState {
     offsite: { status: DrStatus; detail: string };
     /** 이미지 저장소 보호 상태 (CTO 결정 1601-④) */
     storageProtection: { status: DrStatus; detail: string };
+    /** 백업 버킷 보호 상태 (CTO 결정 1801-③) */
+    backupBucketProtection: { status: DrStatus; detail: string };
+    /** 백업 소요 시간 (CTO 결정 1801-①) */
+    backupPerformance: { status: DrStatus; detail: string };
     /** 복구 목표 RPO·RTO */
     objectives: { status: DrStatus; detail: string };
     /** 복원 대상 분리 (CTO 결정 1601-②) */
@@ -268,6 +272,8 @@ export function buildDisasterRecoveryChecklist(state: DrState): DrItem[] {
       objectives,
       restoreTarget,
       drill,
+      backupBucketProtection,
+      backupPerformance,
     } = state.enterprise;
     items.push(
       {
@@ -299,6 +305,22 @@ export function buildDisasterRecoveryChecklist(state: DrState): DrItem[] {
         title: "이미지 저장소 보호 (버전 관리·복제)",
         status: storageProtection.status,
         detail: storageProtection.detail,
+        critical: false,
+      },
+      {
+        id: "backup-bucket-protection",
+        title: "백업 버킷 보호 (버전 관리·복제)",
+        status: backupBucketProtection.status,
+        detail: backupBucketProtection.detail,
+        // 이미지 버킷과 같은 규칙 — 드러내되 지금의 복구를 막지는 않는다
+        critical: false,
+      },
+      {
+        id: "backup-performance",
+        title: "백업 소요 시간",
+        status: backupPerformance.status,
+        detail: backupPerformance.detail,
+        // 느린 백업은 복구를 막지 않는다 — 추세를 알리는 항목이다
         critical: false,
       },
       {

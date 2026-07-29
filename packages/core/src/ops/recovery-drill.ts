@@ -29,6 +29,35 @@ export interface DrillRecordInput {
   createdAt: number;
 }
 
+/**
+ * 주기와 무관하게 **즉시 추가 리허설**을 요구하는 사건 (CTO 결정 1801-⑤).
+ *
+ * 90일이라는 주기는 "아무것도 바뀌지 않았을 때"의 간격이다. 절차나 데이터가
+ * 크게 바뀌면 **마지막 리허설이 검증한 것은 지금의 시스템이 아니다** —
+ * 달력이 아니라 변경이 리허설을 부른다.
+ */
+export const DRILL_TRIGGERS = [
+  "dr-change",
+  "db-major-change",
+  "pitr-adoption",
+] as const;
+
+export type DrillTrigger = (typeof DRILL_TRIGGERS)[number];
+
+export const DRILL_TRIGGER_LABEL: Record<DrillTrigger, string> = {
+  "dr-change": "재해 복구 절차 변경",
+  "db-major-change": "데이터베이스 대규모 변경",
+  "pitr-adoption": "PITR 도입",
+};
+
+export interface DrillRequirementInput {
+  trigger: DrillTrigger;
+  /** 사건이 등록된 시각 */
+  createdAt: number;
+  /** 이 요구를 충족한 리허설이 있는가 (api가 채운다) */
+  satisfiedAt: number | null;
+}
+
 export interface DrillHealth {
   status: DrStatus;
   detail: string;
@@ -39,6 +68,13 @@ export interface DrillHealth {
   /** 기한을 넘긴 일수 — 넘기지 않았으면 0 */
   overdueDays: number;
   intervalMs: number;
+  /** 아직 리허설로 해소되지 않은 변경 사건 (CTO 결정 1801-⑤) */
+  pendingTriggers: DrillTrigger[];
+  /**
+   * 마지막 리허설이 실패했는가 — 밀린 것과 구분한다.
+   * 경보 종류를 고를 때 `detail` 문구를 읽어 추측하지 않기 위해 둔다.
+   */
+  lastFailed: boolean;
 }
 
 function days(ms: number): number {
@@ -56,10 +92,20 @@ function days(ms: number): number {
  */
 export function judgeRecoveryDrill(
   records: DrillRecordInput[],
-  options: { now: number; intervalMs?: number; graceMs?: number },
+  options: {
+    now: number;
+    intervalMs?: number;
+    graceMs?: number;
+    /** 미해소 변경 사건 (CTO 결정 1801-⑤) */
+    requirements?: DrillRequirementInput[];
+  },
 ): DrillHealth {
   const intervalMs = options.intervalMs ?? DEFAULT_DRILL_INTERVAL_MS;
   const graceMs = options.graceMs ?? DEFAULT_DRILL_GRACE_MS;
+  const pending = (options.requirements ?? [])
+    .filter((entry) => entry.satisfiedAt === null)
+    .map((entry) => entry.trigger);
+  const pendingTriggers = [...new Set(pending)];
 
   if (records.length === 0) {
     return {
@@ -71,6 +117,8 @@ export function judgeRecoveryDrill(
       dueAt: null,
       overdueDays: 0,
       intervalMs,
+      pendingTriggers,
+      lastFailed: false,
     };
   }
 
@@ -87,12 +135,32 @@ export function judgeRecoveryDrill(
       dueAt: latest.createdAt + intervalMs,
       overdueDays: 0,
       intervalMs,
+      pendingTriggers,
+      lastFailed: true,
     };
   }
 
   const ageMs = options.now - latest.createdAt;
   const dueAt = latest.createdAt + intervalMs;
   const overdueMs = options.now - dueAt;
+
+  // 변경 사건은 **주기보다 우선한다** (CTO 결정 1801-⑤) — 마지막 리허설이
+  // 검증한 것은 변경 이전의 시스템이므로, 달력상 기한이 남았어도 유효하지 않다
+  if (pendingTriggers.length > 0) {
+    return {
+      status: "fail",
+      detail:
+        `${pendingTriggers.map((trigger) => DRILL_TRIGGER_LABEL[trigger]).join("·")} 이후 ` +
+        "리허설을 하지 않았습니다 — 마지막 리허설이 검증한 것은 지금의 시스템이 " +
+        "아닙니다. 주기와 무관하게 즉시 수행하세요 (CTO 결정 1801-⑤).",
+      ageMs,
+      dueAt,
+      overdueDays: Math.max(0, days(overdueMs)),
+      intervalMs,
+      pendingTriggers,
+      lastFailed: false,
+    };
+  }
 
   if (overdueMs > graceMs) {
     return {
@@ -104,6 +172,8 @@ export function judgeRecoveryDrill(
       dueAt,
       overdueDays: days(overdueMs),
       intervalMs,
+      pendingTriggers,
+      lastFailed: false,
     };
   }
 
@@ -115,6 +185,8 @@ export function judgeRecoveryDrill(
       dueAt,
       overdueDays: days(overdueMs),
       intervalMs,
+      pendingTriggers,
+      lastFailed: false,
     };
   }
 
@@ -127,6 +199,8 @@ export function judgeRecoveryDrill(
     dueAt,
     overdueDays: 0,
     intervalMs,
+    pendingTriggers,
+    lastFailed: false,
   };
 }
 
@@ -139,14 +213,30 @@ export function judgeRecoveryDrill(
  * 리허설이 **실패**한 경우는 다르다: 절차가 깨진 것이 확인됐으므로 `critical`.
  */
 export function detectDrillAlert(health: DrillHealth): DetectedAlert[] {
-  if (health.status === "fail" && health.overdueDays === 0) {
-    // 밀린 게 아니라 해 보니 안 되더라는 뜻
+  // 판정과 **같은 순서**로 본다 — judge가 실패를 먼저 보는데 여기서 변경 사건을
+  // 먼저 보면, 제목은 "변경 후 미수행"인데 본문은 실패 이야기가 된다.
+  // 상태와 설명이 어긋나면 읽는 사람이 어느 쪽을 믿어야 할지 알 수 없다.
+  if (health.lastFailed) {
     return [
       {
         kind: "recovery-drill",
         key: "recovery-drill:failed",
         level: "critical",
         title: "복구 리허설 실패",
+        message: health.detail,
+      },
+    ];
+  }
+
+  // 변경 사건 미해소는 별도 경보다 (CTO 결정 1801-⑤) — 달력이 아니라
+  // 변경이 부른 것이므로 문구도 원인을 그대로 적는다
+  if (health.pendingTriggers.length > 0) {
+    return [
+      {
+        kind: "recovery-drill",
+        key: "recovery-drill:trigger",
+        level: "warning",
+        title: "변경 후 복구 리허설 미수행",
         message: health.detail,
       },
     ];

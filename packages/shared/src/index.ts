@@ -1704,7 +1704,19 @@ export interface EnterpriseRecoveryDto {
   /** 복구 리허설 (TASK-1801) */
   drill: RecoveryDrillStatusDto;
   /** 백업 전용 버킷 — 이미지 버킷과 분리 (CTO 결정 1701-②) */
-  backupBucket: { name: string; separated: boolean };
+  backupBucket: {
+    name: string;
+    separated: boolean;
+    /** 백업 버킷 보호 상태 (CTO 결정 1801-③) */
+    protection: {
+      status: DrStatusDto;
+      detail: string;
+      versioning: ProtectionStateDto;
+      replication: ProtectionStateDto;
+    };
+  };
+  /** 백업 소요 시간 (CTO 결정 1801-①) */
+  performance: BackupPerformanceDto;
 }
 
 /** 복구 리허설 기록 1건 (TASK-1801, CTO 결정 1701-⑤) */
@@ -1718,6 +1730,28 @@ export interface RecoveryDrillDto {
   createdAt: string;
 }
 
+/** 리허설을 요구하는 변경 사건 (TASK-1901, CTO 결정 1801-⑤) */
+export interface DrillRequirementDto {
+  id: string;
+  /** dr-change | db-major-change | pitr-adoption */
+  trigger: string;
+  description: string;
+  registeredBy: string;
+  /** 해소된 시각 — 미해소면 null */
+  satisfiedAt: string | null;
+  createdAt: string;
+}
+
+/** 백업 소요 시간 (TASK-1901, CTO 결정 1801-①) */
+export interface BackupPerformanceDto {
+  level: "normal" | "warning" | "alert" | "critical";
+  status: DrStatusDto;
+  detail: string;
+  latestMs: number | null;
+  medianMs: number | null;
+  slowStreak: number;
+}
+
 /** 복구 리허설 현황 */
 export interface RecoveryDrillStatusDto {
   status: DrStatusDto;
@@ -1729,6 +1763,9 @@ export interface RecoveryDrillStatusDto {
   overdueDays: number;
   intervalDays: number;
   history: RecoveryDrillDto[];
+  /** 아직 해소되지 않은 변경 사건 (TASK-1901) */
+  pendingTriggers: string[];
+  requirements: DrillRequirementDto[];
 }
 
 /** 운영 대시보드 (GET /ops/readiness) */

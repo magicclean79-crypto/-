@@ -183,9 +183,7 @@ test.describe("Enterprise 백업·재해 복구 (TASK-1701)", () => {
     const protection = page.getByTestId("storage-protection");
     await expect(protection).toContainText("직접 확인");
     await expect(protection).toContainText("버전 관리 확인 불가");
-    await expect(protection).toContainText(
-      "애플리케이션은 이미지를 백업하지 않습니다",
-    );
+    await expect(protection).toContainText("운영 저장소 표준은 Amazon S3");
   });
 
   test("원격 복제가 꺼져 있으면 백업이 함께 사라진다고 말한다", async ({
@@ -276,5 +274,61 @@ test.describe("Enterprise Operations Platform (TASK-1801)", () => {
     await expect(page.getByTestId("backup-bucket")).toContainText(
       "함께 사라집니다",
     );
+  });
+});
+
+test.describe("Enterprise Recovery Assurance (TASK-1901)", () => {
+  test("백업 소요 시간에 기준이 붙는다 (CTO 결정 1801-①)", async ({ page }) => {
+    await setMode("data");
+    await openPage(page);
+
+    const performance = page.getByTestId("backup-performance");
+    await expect(performance).toContainText("통과");
+    await expect(performance).toContainText(
+      "2초 미만 정상 · 2~10초 주의 · 10초 3회 연속 경보 · 30초 심각",
+    );
+    await expect(performance).toContainText("1.2초");
+  });
+
+  test("2~10초는 주의로 드러내되 조치 수준은 아니라고 말한다", async ({
+    page,
+  }) => {
+    await setMode("empty");
+    await openPage(page);
+
+    const performance = page.getByTestId("backup-performance");
+    await expect(performance).toContainText("주의");
+    await expect(performance).toContainText("아직 조치할 수준은 아니지만");
+  });
+
+  test("백업 버킷도 이미지 버킷과 같이 보호 상태를 판정한다 (CTO 결정 1801-③)", async ({
+    page,
+  }) => {
+    await setMode("data");
+    await openPage(page);
+
+    await expect(page.getByTestId("backup-bucket-protection")).toContainText(
+      "통과",
+    );
+    await expect(page.getByTestId("backup-bucket-protection")).toContainText(
+      "백업 버킷",
+    );
+    // 두 항목이 체크리스트에 모두 있다
+    await expect(page.getByTestId("dr-item-storage-protection")).toBeVisible();
+    await expect(
+      page.getByTestId("dr-item-backup-bucket-protection"),
+    ).toBeVisible();
+  });
+
+  test("조회 불가 저장소는 백업 버킷도 '직접 확인'으로 남는다 (CTO 결정 1801-④)", async ({
+    page,
+  }) => {
+    await setMode("empty");
+    await openPage(page);
+
+    const protection = page.getByTestId("backup-bucket-protection");
+    await expect(protection).toContainText("직접 확인");
+    await expect(protection).toContainText("운영 저장소 표준은 Amazon S3");
+    await expect(protection).toContainText("MinIO·s3rver는 개발 전용");
   });
 });

@@ -9,7 +9,8 @@ const PRODUCTION_ENV: Record<string, string> = {
   NODE_ENV: "production",
   WEB_URL: "https://acos.example.com",
   DATABASE_URL: "postgresql://user:pw@db:5432/acos",
-  S3_ENDPOINT: "https://s3.example.com",
+  // 운영 저장소 표준은 Amazon S3다 (CTO 결정 1801-④)
+  S3_ENDPOINT: "https://s3.ap-northeast-2.amazonaws.com",
   S3_BUCKET: "acos",
   S3_ACCESS_KEY: "key",
   S3_SECRET_KEY: "secret",

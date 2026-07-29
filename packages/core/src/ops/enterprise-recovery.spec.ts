@@ -88,7 +88,8 @@ describe("Enterprise Backup & Disaster Recovery (TASK-1701)", () => {
         replication: "unknown",
       });
       expect(result.status).toBe("manual");
-      expect(result.detail).toContain("애플리케이션은 이미지를 백업하지 않습니다");
+      expect(result.detail).toContain("운영 저장소 표준은 Amazon S3이며");
+      expect(result.detail).toContain("MinIO·s3rver는 개발 전용");
     });
 
     it("둘 다 켜져 있으면 통과", () => {
@@ -148,6 +149,20 @@ describe("Enterprise Backup & Disaster Recovery (TASK-1701)", () => {
       expect(result.status).toBe("warn");
       expect(result.detail).toContain("복제가 꺼져 있습니다");
       expect(result.detail).not.toContain("버전 관리·복제가 꺼져");
+    });
+
+    it("버킷 이름 뒤에 조사를 붙이지 않는다 — '버킷가'처럼 어긋난다", () => {
+      // 라벨은 임의의 이름이 들어오므로 받침을 가정할 수 없다
+      for (const label of ["백업 버킷", "이미지 저장소"]) {
+        const result = judgeStorageProtection({
+          versioning: "unknown",
+          replication: "unknown",
+          label,
+        });
+        expect(result.detail).toContain(`${label} —`);
+        expect(result.detail).not.toContain(`${label}가`);
+        expect(result.detail).not.toContain(`${label}이 `);
+      }
     });
 
     it("하나라도 모르면 나머지가 켜져 있어도 직접 확인이다", () => {
@@ -299,6 +314,8 @@ describe("Enterprise Backup & Disaster Recovery (TASK-1701)", () => {
           objectives: { status: "pass", detail: "" },
           restoreTarget: { status: "pass", detail: "" },
           drill: { status: "pass", detail: "" },
+          backupBucketProtection: { status: "pass", detail: "" },
+          backupPerformance: { status: "pass", detail: "" },
         },
       });
       const summary = summarizeDisasterRecovery(items);
@@ -316,6 +333,8 @@ describe("Enterprise Backup & Disaster Recovery (TASK-1701)", () => {
           objectives: { status: "pass", detail: "" },
           restoreTarget: { status: "fail", detail: "운영 DB와 같음" },
           drill: { status: "pass", detail: "" },
+          backupBucketProtection: { status: "pass", detail: "" },
+          backupPerformance: { status: "pass", detail: "" },
         },
       });
       expect(summarizeDisasterRecovery(items).recoverable).toBe(false);
@@ -333,6 +352,8 @@ describe("Enterprise Backup & Disaster Recovery (TASK-1701)", () => {
           restoreTarget: { status: "pass", detail: "" },
           // 리허설이 밀린 것과 지금 복구가 불가능한 것은 다르다 (결정 1701-⑤)
           drill: { status: "fail", detail: "" },
+          backupBucketProtection: { status: "warn", detail: "" },
+          backupPerformance: { status: "warn", detail: "" },
         },
       });
       const summary = summarizeDisasterRecovery(items);

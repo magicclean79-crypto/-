@@ -121,9 +121,31 @@ export const ENV_SPECS: EnvSpec[] = [
   {
     name: "S3_ENDPOINT",
     category: "storage",
-    description: "이미지 저장소(S3 호환) 엔드포인트",
+    description:
+      "이미지 저장소 엔드포인트 — 운영 표준은 Amazon S3다 (CTO 결정 1801-④)",
     requiredInProduction: true,
     validate: urlLike,
+    // MinIO·s3rver는 개발 전용이다. 버전 관리·복제 조회를 지원하지 않아
+    // 운영에서 쓰면 보호 상태를 영영 "직접 확인"으로만 볼 수 있다.
+    productionAdvice: (value) => {
+      if (!value) {
+        return null;
+      }
+      let host: string;
+      try {
+        host = new URL(value).hostname.toLowerCase();
+      } catch {
+        return null;
+      }
+      if (host.endsWith("amazonaws.com")) {
+        return null;
+      }
+      return (
+        `운영 저장소 표준은 Amazon S3입니다 (CTO 결정 1801-④) — 지금 값은 ${host}입니다. ` +
+        "MinIO·s3rver는 개발 전용이며, 버전 관리·복제 조회를 지원하지 않아 " +
+        "보호 상태를 자동으로 확인할 수 없습니다."
+      );
+    },
   },
   {
     name: "S3_BUCKET",

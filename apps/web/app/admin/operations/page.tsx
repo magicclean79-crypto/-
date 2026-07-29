@@ -100,6 +100,13 @@ const PROTECTION_LABEL: Record<ProtectionStateDto, string> = {
   unknown: "확인 불가",
 };
 
+/** 리허설을 즉시 부르는 변경 사건 (CTO 결정 1801-⑤) */
+const TRIGGER_LABEL: Record<string, string> = {
+  "dr-change": "재해 복구 절차 변경",
+  "db-major-change": "데이터베이스 대규모 변경",
+  "pitr-adoption": "PITR 도입",
+};
+
 /**
  * 운영 대시보드 (TASK-1601) — ADMIN 전용.
  *
@@ -593,6 +600,53 @@ export default function OperationsPage() {
                 </p>
               </li>
               <li
+                data-testid="backup-performance"
+                className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${DR_STYLE[data.enterprise.performance.status]}`}
+                  >
+                    {DR_LABEL[data.enterprise.performance.status]}
+                  </span>
+                  <strong>백업 소요 시간</strong>
+                  <span className="text-xs text-zinc-500">
+                    2초 미만 정상 · 2~10초 주의 · 10초 3회 연속 경보 · 30초 심각
+                  </span>
+                </div>
+                <p className="mt-1">{data.enterprise.performance.detail}</p>
+              </li>
+              <li
+                data-testid="backup-bucket-protection"
+                className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${DR_STYLE[data.enterprise.backupBucket.protection.status]}`}
+                  >
+                    {DR_LABEL[data.enterprise.backupBucket.protection.status]}
+                  </span>
+                  <strong>백업 버킷 보호</strong>
+                  <span className="text-xs text-zinc-500">
+                    버전 관리{" "}
+                    {
+                      PROTECTION_LABEL[
+                        data.enterprise.backupBucket.protection.versioning
+                      ]
+                    }{" "}
+                    · 복제{" "}
+                    {
+                      PROTECTION_LABEL[
+                        data.enterprise.backupBucket.protection.replication
+                      ]
+                    }
+                  </span>
+                </div>
+                <p className="mt-1">
+                  {data.enterprise.backupBucket.protection.detail}
+                </p>
+              </li>
+              <li
                 data-testid="backup-bucket"
                 className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
               >
@@ -721,6 +775,28 @@ export default function OperationsPage() {
                     알아낸 것입니다.
                   </span>
                 </div>
+              </div>
+            ) : null}
+
+            {data.enterprise.drill.pendingTriggers.length > 0 ? (
+              <div
+                data-testid="drill-triggers"
+                className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950 dark:text-red-300"
+              >
+                <strong>변경 후 리허설 미수행</strong> —{" "}
+                {data.enterprise.drill.pendingTriggers
+                  .map((trigger) => TRIGGER_LABEL[trigger] ?? trigger)
+                  .join(" · ")}
+                <ul className="mt-2 list-inside list-disc text-xs">
+                  {data.enterprise.drill.requirements
+                    .filter((entry) => entry.satisfiedAt === null)
+                    .map((entry) => (
+                      <li key={entry.id}>
+                        {entry.description} ({entry.registeredBy},{" "}
+                        {new Date(entry.createdAt).toLocaleDateString("ko-KR")})
+                      </li>
+                    ))}
+                </ul>
               </div>
             ) : null}
 

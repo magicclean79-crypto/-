@@ -21,6 +21,7 @@ let stubBackupRan = false;
 let stubRestoreVerified = false;
 // 복구 리허설 스텁 상태 (TASK-1801)
 let stubDrills = [];
+let stubRequirements = [];
 
 const stats = (totals, groups) => ({
   range: { from: null, to: null },
@@ -218,6 +219,7 @@ const server = http.createServer((req, res) => {
       stubBackupRan = false;
       stubRestoreVerified = false;
       stubDrills = [];
+      stubRequirements = [];
       resetPublishing();
       resetUsers();
       res.end(JSON.stringify({ mode }));
@@ -675,7 +677,8 @@ const server = http.createServer((req, res) => {
     url.pathname === "/ops/backup/run" ||
     url.pathname === "/ops/backup/verify-restore" ||
     url.pathname === "/ops/notifications/verify-smtp" ||
-    url.pathname === "/ops/drills"
+    url.pathname === "/ops/drills" ||
+    url.pathname === "/ops/drills/require"
   ) {
     if (req.headers.authorization !== "Bearer stub-token") {
       res.statusCode = req.headers.authorization ? 403 : 401;
@@ -683,6 +686,27 @@ const server = http.createServer((req, res) => {
       return;
     }
     const healthy = mode === "data";
+
+    // 변경 후 추가 리허설 요구 (TASK-1901, CTO 결정 1801-⑤)
+    if (req.method === "POST" && url.pathname === "/ops/drills/require") {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        const input = JSON.parse(body || "{}");
+        const entry = {
+          id: `req-${stubRequirements.length + 1}`,
+          trigger: input.trigger,
+          description: input.description,
+          registeredBy: input.registeredBy,
+          satisfiedAt: null,
+          createdAt: new Date().toISOString(),
+        };
+        stubRequirements.unshift(entry);
+        res.statusCode = 201;
+        res.end(JSON.stringify(entry));
+      });
+      return;
+    }
 
     // 복구 리허설 (TASK-1801, CTO 결정 1701-⑤)
     if (url.pathname === "/ops/drills") {
@@ -706,6 +730,14 @@ const server = http.createServer((req, res) => {
             createdAt: new Date().toISOString(),
           };
           stubDrills.unshift(entry);
+          // 성공한 리허설만 변경 사건을 해소한다 (결정 1801-⑤)
+          if (entry.ok) {
+            stubRequirements = stubRequirements.map((item) =>
+              item.satisfiedAt === null
+                ? { ...item, satisfiedAt: entry.createdAt }
+                : item,
+            );
+          }
           res.statusCode = 201;
           res.end(JSON.stringify(entry));
         });
@@ -901,7 +933,7 @@ const server = http.createServer((req, res) => {
         status: healthy ? "pass" : "manual",
         detail: healthy
           ? "버전 관리·복제가 모두 켜져 있습니다."
-          : "저장소가 버전 관리·복제 상태를 알려 주지 않습니다 — 제공자 콘솔에서 직접 확인하세요 (애플리케이션은 이미지를 백업하지 않습니다).",
+          : "이미지 저장소 — 버전 관리·복제 상태를 알려 주지 않습니다. 제공자 콘솔에서 직접 확인하세요. 운영 저장소 표준은 Amazon S3이며, MinIO·s3rver는 개발 전용이라 조회를 지원하지 않습니다 (CTO 결정 1801-④).",
         critical: false,
       },
       {
@@ -919,6 +951,24 @@ const server = http.createServer((req, res) => {
             : stubDrills[0].ok
               ? "마지막 복구 리허설 0일 전 — 다음 예정까지 90일 남았습니다."
               : "마지막 복구 리허설이 실패했습니다 — 복구 절차가 지금 상태로는 동작하지 않습니다. 사고가 나기 전에 고치세요.",
+        critical: false,
+      },
+      {
+        id: "backup-bucket-protection",
+        title: "백업 버킷 보호 (버전 관리·복제)",
+        status: healthy ? "pass" : "manual",
+        detail: healthy
+          ? "백업 버킷: 버전 관리·복제가 모두 켜져 있습니다."
+          : "백업 버킷 — 버전 관리·복제 상태를 알려 주지 않습니다. 제공자 콘솔에서 직접 확인하세요.",
+        critical: false,
+      },
+      {
+        id: "backup-performance",
+        title: "백업 소요 시간",
+        status: healthy ? "pass" : "warn",
+        detail: healthy
+          ? "마지막 백업 1.2초 · 최근 중앙값 1.1초 (기준 2.0초 미만)."
+          : "마지막 백업이 5.0초 걸렸습니다 — 기준 2.0초보다 깁니다. 아직 조치할 수준은 아니지만 추세를 보세요.",
         critical: false,
       },
       {
@@ -1032,7 +1082,7 @@ const server = http.createServer((req, res) => {
             status: healthy ? "pass" : "manual",
             detail: healthy
               ? "버전 관리·복제가 모두 켜져 있습니다."
-              : "저장소가 버전 관리·복제 상태를 알려 주지 않습니다 — 제공자 콘솔에서 직접 확인하세요 (애플리케이션은 이미지를 백업하지 않습니다).",
+              : "이미지 저장소 — 버전 관리·복제 상태를 알려 주지 않습니다. 제공자 콘솔에서 직접 확인하세요. 운영 저장소 표준은 Amazon S3이며, MinIO·s3rver는 개발 전용이라 조회를 지원하지 않습니다 (CTO 결정 1801-④).",
             versioning: healthy ? "enabled" : "unknown",
             replication: healthy ? "enabled" : "unknown",
           },
@@ -1059,15 +1109,25 @@ const server = http.createServer((req, res) => {
             status:
               stubDrills.length === 0
                 ? "manual"
-                : stubDrills[0].ok
-                  ? "pass"
-                  : "fail",
+                : !stubDrills[0].ok
+                  ? "fail"
+                  : stubRequirements.some((item) => item.satisfiedAt === null)
+                    ? "fail"
+                    : "pass",
             detail:
               stubDrills.length === 0
                 ? "복구 리허설 기록이 없습니다 — 절차를 읽는 것과 해 보는 것은 다릅니다. 한 번 수행하고 결과를 남기세요."
                 : stubDrills[0].ok
                   ? "마지막 복구 리허설 0일 전 — 다음 예정까지 90일 남았습니다."
                   : "마지막 복구 리허설이 실패했습니다 — 복구 절차가 지금 상태로는 동작하지 않습니다. 사고가 나기 전에 고치세요.",
+            pendingTriggers: [
+              ...new Set(
+                stubRequirements
+                  .filter((item) => item.satisfiedAt === null)
+                  .map((item) => item.trigger),
+              ),
+            ],
+            requirements: stubRequirements,
             ageMs: stubDrills.length === 0 ? null : 0,
             dueAt:
               stubDrills.length === 0
@@ -1080,6 +1140,26 @@ const server = http.createServer((req, res) => {
           backupBucket: {
             name: healthy ? "acos-backups" : "acos",
             separated: healthy,
+            // 백업 버킷도 같은 규칙으로 판정한다 (결정 1801-③)
+            protection: {
+              status: healthy ? "pass" : "manual",
+              detail: healthy
+                ? "백업 버킷: 버전 관리·복제가 모두 켜져 있습니다."
+                : "백업 버킷 — 버전 관리·복제 상태를 알려 주지 않습니다. 제공자 콘솔에서 직접 확인하세요. 운영 저장소 표준은 Amazon S3이며, MinIO·s3rver는 개발 전용이라 조회를 지원하지 않습니다 (CTO 결정 1801-④).",
+              versioning: healthy ? "enabled" : "unknown",
+              replication: healthy ? "enabled" : "unknown",
+            },
+          },
+          // 백업 소요 시간 (결정 1801-①)
+          performance: {
+            level: healthy ? "normal" : "warning",
+            status: healthy ? "pass" : "warn",
+            detail: healthy
+              ? "마지막 백업 1.2초 · 최근 중앙값 1.1초 (기준 2.0초 미만)."
+              : "마지막 백업이 5.0초 걸렸습니다 — 기준 2.0초보다 깁니다. 아직 조치할 수준은 아니지만 추세를 보세요.",
+            latestMs: healthy ? 1_200 : 5_000,
+            medianMs: healthy ? 1_100 : 5_000,
+            slowStreak: 0,
           },
         },
         redis: {

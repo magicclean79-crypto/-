@@ -89,6 +89,7 @@ function createPrismaStub() {
   const backups: Record<string, unknown>[] = [];
   const restores: Record<string, unknown>[] = [];
   const drills: Record<string, unknown>[] = [];
+  const requirements: Record<string, unknown>[] = [];
   let seq = 0;
 
   return {
@@ -99,6 +100,7 @@ function createPrismaStub() {
     backups,
     restores,
     drills,
+    requirements,
     stub: {
       alert: {
         findMany: async (args?: {
@@ -216,6 +218,32 @@ function createPrismaStub() {
             const idOk = !args.where.id || args.where.id.in.includes(row.id);
             if (statusOk && idOk) {
               queue[index] = { ...row, ...args.data } as never;
+              count += 1;
+            }
+          });
+          return { count };
+        },
+      },
+      drillRequirement: {
+        create: async (args: { data: Record<string, unknown> }) => {
+          seq += 1;
+          const row = {
+            id: `req-${seq}`,
+            satisfiedAt: null,
+            satisfiedBy: null,
+            createdAt: new Date(),
+            ...args.data,
+          };
+          requirements.push(row as never);
+          return { ...row };
+        },
+        findMany: async () =>
+          [...requirements].reverse().map((row) => ({ ...row })),
+        updateMany: async (args: { data: Record<string, unknown> }) => {
+          let count = 0;
+          requirements.forEach((row, index) => {
+            if (row.satisfiedAt === null) {
+              requirements[index] = { ...row, ...args.data };
               count += 1;
             }
           });
@@ -1435,7 +1463,8 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
         (entry: { id: string }) => entry.id === "storage-protection",
       );
       expect(item).toMatchObject({ status: "manual", critical: false });
-      expect(item.detail).toContain("애플리케이션은 이미지를 백업하지 않습니다");
+      expect(item.detail).toContain("운영 저장소 표준은 Amazon S3이며");
+      expect(item.detail).not.toContain("저장소가 버전");
       expect(response.body.enterprise.storageProtection).toMatchObject({
         versioning: "unknown",
         replication: "unknown",
@@ -1847,6 +1876,275 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
         .post("/ops/drills")
         .set("Authorization", "Bearer tok-editor")
         .send({ ok: true, performedBy: "x" })
+        .expect(403);
+    });
+  });
+
+  describe("Enterprise Recovery Assurance (TASK-1901)", () => {
+    beforeEach(() => {
+      process.env.BACKUP_DIR = join(tmpdir(), "acos-backup-test");
+      process.env.DATABASE_URL = "postgresql://u:p@localhost:5432/acos";
+      process.env.BACKUP_RESTORE_DB_URL =
+        "postgresql://u:p@localhost:5432/acos_restore_check";
+      delete process.env.NODE_ENV;
+      delete process.env.OPS_DRILL_INTERVAL_DAYS;
+    });
+
+    const backupRun = (durationMs: number, minutesAgo: number) => ({
+      id: `bk-${minutesAgo}`,
+      ok: true,
+      sizeBytes: BigInt(50_000),
+      fileName: "acos.dump",
+      durationMs,
+      trigger: "schedule",
+      error: null,
+      checksum: "a".repeat(64),
+      integrityOk: true,
+      entries: 120,
+      offsiteKey: null,
+      createdAt: new Date(Date.now() - minutesAgo * 60_000),
+    });
+
+    it("백업 소요 시간이 체크리스트에 들어온다 (CTO 결정 1801-①)", async () => {
+      const built = await build();
+      app = built.app;
+      built.prisma.backups.push(backupRun(900, 1));
+
+      const response = await request(built.app.getHttpServer())
+        .get("/ops/readiness")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+
+      const item = response.body.checklist.find(
+        (entry: { id: string }) => entry.id === "backup-performance",
+      );
+      expect(item).toMatchObject({ status: "pass", critical: false });
+      expect(response.body.enterprise.performance).toMatchObject({
+        level: "normal",
+        latestMs: 900,
+      });
+    });
+
+    it("10초 초과가 연속 3회면 경보를 만든다", async () => {
+      const built = await build();
+      app = built.app;
+      built.prisma.backups.push(
+        backupRun(12_000, 1),
+        backupRun(11_000, 2),
+        backupRun(15_000, 3),
+      );
+
+      await built.checks.watchdog();
+      const alert = built.prisma.alerts.get("backup-performance:duration");
+      expect(alert).toMatchObject({ level: "WARNING", status: "ACTIVE" });
+      expect(alert!.message).toContain("3회 연속");
+    });
+
+    it("30초를 넘기면 한 번만으로 심각 경보", async () => {
+      const built = await build();
+      app = built.app;
+      built.prisma.backups.push(backupRun(35_000, 1));
+
+      await built.checks.watchdog();
+      expect(built.prisma.alerts.get("backup-performance:duration")).toMatchObject({
+        level: "CRITICAL",
+      });
+    });
+
+    it("2~10초는 경보하지 않는다 — 화면에만 드러낸다", async () => {
+      const built = await build();
+      app = built.app;
+      built.prisma.backups.push(backupRun(5_000, 1));
+
+      await built.checks.watchdog();
+      expect(
+        built.prisma.alerts.get("backup-performance:duration"),
+      ).toBeUndefined();
+
+      const response = await request(built.app.getHttpServer())
+        .get("/ops/readiness")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+      expect(response.body.enterprise.performance.level).toBe("warning");
+    });
+
+    it("백업 성능 경보가 예약 점검 경보를 해소하지 않는다", async () => {
+      const built = await build();
+      app = built.app;
+      built.prisma.backups.push(backupRun(35_000, 1));
+      built.prisma.alerts.set("scheduler-stopped:cost-verification", {
+        id: "a-1",
+        kind: "scheduler-stopped",
+        key: "scheduler-stopped:cost-verification",
+        level: "CRITICAL",
+        title: "예약 점검 정지",
+        message: "멈춤",
+        status: "ACTIVE",
+        occurrences: 1,
+        firstRaisedAt: new Date(),
+        lastRaisedAt: new Date(),
+        notifiedAt: new Date(),
+        resolvedAt: null,
+        archivedAt: null,
+      });
+
+      await built.checks.watchdog();
+      expect(built.prisma.alerts.get("backup-performance:duration")?.status).toBe(
+        "ACTIVE",
+      );
+    });
+
+    it("백업 버킷도 보호 체크리스트에 들어온다 (CTO 결정 1801-③)", async () => {
+      const built = await build();
+      app = built.app;
+      storageProtection.versioning = "enabled";
+      storageProtection.replication = "disabled";
+
+      const response = await request(built.app.getHttpServer())
+        .get("/ops/readiness")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+
+      const ids = response.body.checklist.map((entry: { id: string }) => entry.id);
+      expect(ids).toContain("storage-protection");
+      expect(ids).toContain("backup-bucket-protection");
+
+      // 어느 버킷 이야기인지 문구로 구분된다
+      const backupItem = response.body.checklist.find(
+        (entry: { id: string }) => entry.id === "backup-bucket-protection",
+      );
+      expect(backupItem.detail).toContain("백업 버킷");
+      expect(response.body.enterprise.backupBucket.protection).toMatchObject({
+        versioning: "enabled",
+        replication: "disabled",
+      });
+    });
+
+    it("변경 사건을 등록하면 기한이 남아도 리허설이 실패로 바뀐다 (CTO 결정 1801-⑤)", async () => {
+      const built = await build();
+      app = built.app;
+      const server = built.app.getHttpServer();
+
+      await request(server)
+        .post("/ops/drills")
+        .set("Authorization", "Bearer tok-admin")
+        .send({ ok: true, performedBy: "운영자 A" })
+        .expect(201);
+      await request(server)
+        .post("/ops/drills/require")
+        .set("Authorization", "Bearer tok-admin")
+        .send({
+          trigger: "dr-change",
+          description: "복구 절차에서 복원 대상 DB가 바뀜",
+          registeredBy: "운영자 A",
+        })
+        .expect(201);
+
+      const response = await request(server)
+        .get("/ops/readiness")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+      expect(response.body.enterprise.drill.status).toBe("fail");
+      expect(response.body.enterprise.drill.pendingTriggers).toEqual([
+        "dr-change",
+      ]);
+      expect(response.body.enterprise.drill.detail).toContain(
+        "재해 복구 절차 변경",
+      );
+    });
+
+    it("성공한 리허설이 변경 사건을 해소한다 — 실패한 리허설은 해소하지 않는다", async () => {
+      const built = await build();
+      app = built.app;
+      const server = built.app.getHttpServer();
+
+      await request(server)
+        .post("/ops/drills/require")
+        .set("Authorization", "Bearer tok-admin")
+        .send({
+          trigger: "pitr-adoption",
+          description: "PITR 도입",
+          registeredBy: "운영자 B",
+        })
+        .expect(201);
+
+      // 실패한 리허설은 "확인했다"가 아니라 "안 되더라"는 뜻이다
+      await request(server)
+        .post("/ops/drills")
+        .set("Authorization", "Bearer tok-admin")
+        .send({ ok: false, performedBy: "운영자 B" })
+        .expect(201);
+      expect(built.prisma.requirements[0].satisfiedAt).toBeNull();
+
+      await request(server)
+        .post("/ops/drills")
+        .set("Authorization", "Bearer tok-admin")
+        .send({ ok: true, performedBy: "운영자 B" })
+        .expect(201);
+      expect(built.prisma.requirements[0].satisfiedAt).not.toBeNull();
+
+      const response = await request(server)
+        .get("/ops/readiness")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+      expect(response.body.enterprise.drill.status).toBe("pass");
+    });
+
+    it("변경 사건 경보는 리허설 실패 경보와 섞이지 않는다", async () => {
+      const built = await build();
+      app = built.app;
+      const server = built.app.getHttpServer();
+
+      await request(server)
+        .post("/ops/drills")
+        .set("Authorization", "Bearer tok-admin")
+        .send({ ok: false, performedBy: "운영자 C" })
+        .expect(201);
+      await request(server)
+        .post("/ops/drills/require")
+        .set("Authorization", "Bearer tok-admin")
+        .send({
+          trigger: "db-major-change",
+          description: "테이블 대규모 변경",
+          registeredBy: "운영자 C",
+        })
+        .expect(201);
+
+      await built.checks.watchdog();
+      // 실패가 더 무겁다 — 제목과 본문이 어긋나면 안 된다
+      const failed = built.prisma.alerts.get("recovery-drill:failed");
+      expect(failed).toMatchObject({ level: "CRITICAL", status: "ACTIVE" });
+      expect(failed!.message).toContain("사고가 나기 전에 고치세요");
+      expect(built.prisma.alerts.get("recovery-drill:trigger")).toBeUndefined();
+    });
+
+    it("알 수 없는 종류·설명 누락은 거절한다", async () => {
+      const built = await build();
+      app = built.app;
+      const server = built.app.getHttpServer();
+
+      await request(server)
+        .post("/ops/drills/require")
+        .set("Authorization", "Bearer tok-admin")
+        .send({ trigger: "무엇인가", description: "x", registeredBy: "y" })
+        .expect(400);
+      await request(server)
+        .post("/ops/drills/require")
+        .set("Authorization", "Bearer tok-admin")
+        .send({ trigger: "dr-change", registeredBy: "y" })
+        .expect(400);
+    });
+
+    it("변경 사건 API도 ADMIN 전용", async () => {
+      const built = await build();
+      app = built.app;
+      const server = built.app.getHttpServer();
+
+      await request(server).get("/ops/drills/requirements").expect(401);
+      await request(server)
+        .post("/ops/drills/require")
+        .set("Authorization", "Bearer tok-editor")
+        .send({ trigger: "dr-change", description: "x", registeredBy: "y" })
         .expect(403);
     });
   });

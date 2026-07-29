@@ -1,7 +1,12 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { detectDrillAlert, judgeRecoveryDrill } from "@acos/core";
-import type { DetectedAlert, DrillHealth } from "@acos/core";
-import type { RecoveryDrillDto } from "@acos/shared";
+import { DRILL_TRIGGERS, detectDrillAlert, judgeRecoveryDrill } from "@acos/core";
+import type {
+  DetectedAlert,
+  DrillHealth,
+  DrillRequirementInput,
+  DrillTrigger,
+} from "@acos/core";
+import type { DrillRequirementDto, RecoveryDrillDto } from "@acos/shared";
 import { PrismaService } from "../prisma/prisma.service";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -14,6 +19,27 @@ interface DrillRow {
   findings: string | null;
   notes: string | null;
   createdAt: Date;
+}
+
+interface RequirementRow {
+  id: string;
+  trigger: string;
+  description: string;
+  registeredBy: string;
+  satisfiedAt: Date | null;
+  satisfiedBy: string | null;
+  createdAt: Date;
+}
+
+function toRequirementDto(row: RequirementRow): DrillRequirementDto {
+  return {
+    id: row.id,
+    trigger: row.trigger,
+    description: row.description,
+    registeredBy: row.registeredBy,
+    satisfiedAt: row.satisfiedAt?.toISOString() ?? null,
+    createdAt: row.createdAt.toISOString(),
+  };
 }
 
 function toDto(row: DrillRow): RecoveryDrillDto {
@@ -82,12 +108,92 @@ export class RecoveryDrillService {
 
     if (input.ok) {
       this.logger.log(`복구 리허설 기록 (${input.performedBy}) — 성공`);
+      // 성공한 리허설만 변경 사건을 해소한다 (CTO 결정 1801-⑤) —
+      // 실패한 리허설은 "확인했다"가 아니라 "안 되더라"는 뜻이다
+      await this.satisfyRequirements(row.id, row.createdAt);
     } else {
       this.logger.error(
         `복구 리허설 실패 기록 (${input.performedBy}) — ${input.findings ?? "발견 사항 없음"}`,
       );
     }
     return toDto(row);
+  }
+
+  /**
+   * 변경 사건 등록 (CTO 결정 1801-⑤).
+   *
+   * DR 절차·DB·백업 방식이 크게 바뀌면 **주기와 무관하게** 리허설을 다시
+   * 해야 한다 — 마지막 리허설이 검증한 것은 지금의 시스템이 아니기 때문이다.
+   */
+  async requireDrill(input: {
+    trigger: DrillTrigger;
+    description: string;
+    registeredBy: string;
+  }): Promise<DrillRequirementDto> {
+    const row = (await this.prisma.drillRequirement.create({
+      data: {
+        trigger: input.trigger,
+        description: input.description,
+        registeredBy: input.registeredBy,
+      },
+    })) as RequirementRow;
+    this.logger.warn(
+      `변경 후 리허설 요구 등록 (${input.trigger}) — ${input.description}`,
+    );
+    return toRequirementDto(row);
+  }
+
+  /** 성공한 리허설로 미해소 요구를 닫는다 */
+  private async satisfyRequirements(
+    drillId: string,
+    at: Date,
+  ): Promise<number> {
+    try {
+      const result = await this.prisma.drillRequirement.updateMany({
+        where: { satisfiedAt: null },
+        data: { satisfiedAt: at, satisfiedBy: drillId },
+      });
+      if (result.count > 0) {
+        this.logger.log(
+          `변경 후 리허설 요구 ${result.count}건이 해소됐습니다.`,
+        );
+      }
+      return result.count;
+    } catch (error) {
+      this.logger.warn(
+        `리허설 요구 해소 실패: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return 0;
+    }
+  }
+
+  async requirements(limit = 20): Promise<DrillRequirementDto[]> {
+    const rows = (await this.prisma.drillRequirement.findMany({
+      orderBy: { createdAt: "desc" },
+      take: limit,
+    })) as RequirementRow[];
+    return rows.map(toRequirementDto);
+  }
+
+  private async requirementInputs(): Promise<DrillRequirementInput[]> {
+    try {
+      const rows = (await this.prisma.drillRequirement.findMany({
+        orderBy: { createdAt: "desc" },
+        take: 50,
+      })) as RequirementRow[];
+      return rows
+        // 알 수 없는 종류는 버린다 — 판정에 넣으면 이름을 못 붙인다
+        .filter((row) =>
+          (DRILL_TRIGGERS as readonly string[]).includes(row.trigger),
+        )
+        .map((row) => ({
+          trigger: row.trigger as DrillTrigger,
+          createdAt: row.createdAt.getTime(),
+          satisfiedAt: row.satisfiedAt?.getTime() ?? null,
+        }));
+    } catch {
+      return [];
+    }
   }
 
   async history(limit = 10): Promise<RecoveryDrillDto[]> {
@@ -101,7 +207,10 @@ export class RecoveryDrillService {
   /** 리허설 상태 판정 (core 순수 로직) */
   async health(): Promise<DrillHealth> {
     try {
-      const rows = await this.history(20);
+      const [rows, requirements] = await Promise.all([
+        this.history(20),
+        this.requirementInputs(),
+      ]);
       return judgeRecoveryDrill(
         rows.map((entry) => ({
           ok: entry.ok,
@@ -111,6 +220,7 @@ export class RecoveryDrillService {
           now: Date.now(),
           intervalMs: this.intervalMs,
           graceMs: this.graceMs,
+          requirements,
         },
       );
     } catch (error) {
@@ -125,6 +235,8 @@ export class RecoveryDrillService {
         dueAt: null,
         overdueDays: 0,
         intervalMs: this.intervalMs,
+        pendingTriggers: [],
+        lastFailed: false,
       };
     }
   }

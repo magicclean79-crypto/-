@@ -119,6 +119,13 @@ export interface StorageProtectionInput {
   replication: ProtectionState;
   /** 운영 환경인가 — 운영에서는 Versioning이 필수다 (CTO 결정 1701-③) */
   production?: boolean;
+  /**
+   * 무엇을 담는 버킷인가 — 문구에 쓴다 (CTO 결정 1801-③).
+   * 이미지와 백업 버킷을 같은 규칙으로 판정하되, **어느 쪽 이야기인지는
+   * 분명해야** 한다. "버전 관리가 꺼져 있습니다"만 두 번 나오면 어느 버킷을
+   * 고쳐야 할지 알 수 없다.
+   */
+  label?: string;
 }
 
 /**
@@ -139,18 +146,22 @@ export function judgeStorageProtection(input: StorageProtectionInput): {
   status: DrStatus;
   detail: string;
 } {
+  const what = input.label ?? "이미지 저장소";
+
   if (input.versioning === "unknown" || input.replication === "unknown") {
     return {
       status: "manual",
+      // 조사를 붙이면 이름에 따라 "버킷가"처럼 어긋난다 — 문장을 나눈다
       detail:
-        "저장소가 버전 관리·복제 상태를 알려 주지 않습니다 — 제공자 콘솔에서 " +
-        "직접 확인하세요 (애플리케이션은 이미지를 백업하지 않습니다).",
+        `${what} — 버전 관리·복제 상태를 알려 주지 않습니다. 제공자 콘솔에서 ` +
+        "직접 확인하세요. 운영 저장소 표준은 Amazon S3이며, MinIO·s3rver는 " +
+        "개발 전용이라 조회를 지원하지 않습니다 (CTO 결정 1801-④).",
     };
   }
   if (input.versioning === "enabled" && input.replication === "enabled") {
     return {
       status: "pass",
-      detail: "버전 관리·복제가 모두 켜져 있습니다.",
+      detail: `${what}: 버전 관리·복제가 모두 켜져 있습니다.`,
     };
   }
 
@@ -159,8 +170,8 @@ export function judgeStorageProtection(input: StorageProtectionInput): {
     return {
       status: "fail",
       detail:
-        "버전 관리가 꺼져 있습니다 — 운영 필수입니다 (CTO 결정 1701-③). " +
-        "이미지를 지우거나 덮어쓰면 되돌릴 수 없습니다.",
+        `${what}의 버전 관리가 꺼져 있습니다 — 운영 필수입니다 ` +
+        "(CTO 결정 1701-③). 지우거나 덮어쓰면 되돌릴 수 없습니다.",
     };
   }
 
@@ -173,8 +184,7 @@ export function judgeStorageProtection(input: StorageProtectionInput): {
   return {
     status: "warn",
     detail:
-      `${off}가 꺼져 있습니다 — 이미지를 지우거나 덮어쓰면 되돌릴 수 없습니다. ` +
-      "DB만 복원하면 이미지 참조가 깨질 수 있습니다.",
+      `${what}의 ${off}가 꺼져 있습니다 — 지우거나 덮어쓰면 되돌릴 수 없습니다.`,
   };
 }
 

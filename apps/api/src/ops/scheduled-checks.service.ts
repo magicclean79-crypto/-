@@ -4,6 +4,7 @@ import {
   detectBudgetAlerts,
   detectConfigurationAlerts,
   detectProviderAlerts,
+  detectBackupPerformanceAlert,
   detectLockOutageAlert,
   detectSchedulerAlerts,
   detectUnpricedAlerts,
@@ -233,6 +234,12 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
     await this.alerts.sync(
       ["recovery-drill"],
       await this.drills.detectAlerts(),
+    );
+
+    // 백업 소요 시간 (TASK-1901, CTO 결정 1801-①)
+    await this.alerts.sync(
+      ["backup-performance"],
+      detectBackupPerformanceAlert((await this.backups.health()).performance),
     );
   }
 

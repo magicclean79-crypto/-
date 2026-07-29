@@ -8,3 +8,4 @@ export * from "./alert-archive";
 export * from "./disaster-recovery";
 export * from "./enterprise-recovery";
 export * from "./recovery-drill";
+export * from "./backup-performance";

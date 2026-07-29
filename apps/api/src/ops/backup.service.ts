@@ -12,12 +12,14 @@ import {
   judgeIntegrity,
   judgeOffsite,
   judgeRecoveryObjectives,
+  judgeBackupPerformance,
   judgeRestore,
   judgeRestoreTarget,
   resolveSchedules,
 } from "@acos/core";
 import type {
   BackupHealth,
+  BackupPerformance,
   OffsiteHealth,
   RecoveryObjectives,
   RestoreHealth,
@@ -598,6 +600,7 @@ export class BackupService {
     integrity: ReturnType<typeof judgeIntegrity>;
     offsite: OffsiteHealth;
     objectives: RecoveryObjectives;
+    performance: BackupPerformance;
   }> {
     const now = Date.now();
     const [backups, restores] = await Promise.all([
@@ -645,6 +648,14 @@ export class BackupService {
         rpoTargetMs: this.rpoTargetMs,
         rtoTargetMs: this.rtoTargetMs,
       }),
+      // 백업 소요 시간 (CTO 결정 1801-①) — 관측만 하던 값에 기준을 붙였다
+      performance: judgeBackupPerformance(
+        backups.map((entry) => ({
+          ok: entry.ok,
+          durationMs: entry.durationMs,
+          createdAt: new Date(entry.createdAt).getTime(),
+        })),
+      ),
     };
   }
 

@@ -11,7 +11,8 @@ const READY: DeploymentState = {
       NODE_ENV: "production",
       WEB_URL: "https://acos.example.com",
       DATABASE_URL: "postgresql://user:pw@db:5432/acos",
-      S3_ENDPOINT: "https://s3.example.com",
+      // 운영 저장소 표준은 Amazon S3다 (CTO 결정 1801-④)
+      S3_ENDPOINT: "https://s3.ap-northeast-2.amazonaws.com",
       S3_BUCKET: "acos",
       S3_ACCESS_KEY: "key",
       S3_SECRET_KEY: "secret",
@@ -144,6 +145,15 @@ describe("Deployment Checklist (TASK-1202)", () => {
     }
   });
 
+  it("복구 리허설은 배포 체크리스트에 들어가지 않는다 (CTO 결정 1801-②)", () => {
+    // 운영 표준이지만 배포를 막지는 않는다 — 경보로만 다룬다.
+    // 배포 게이트에 넣으면 리허설이 밀렸다는 이유로 긴급 배포가 막힌다.
+    const ids = buildDeploymentChecklist(READY).map((entry) => entry.id);
+    expect(ids).not.toContain("drill");
+    expect(ids).not.toContain("recovery-drill");
+    expect(ids).not.toContain("backup-performance");
+  });
+
   it("환경 경고만 있으면 warn으로 통과시킨다", () => {
     const items = buildDeploymentChecklist({
       ...READY,
@@ -151,7 +161,8 @@ describe("Deployment Checklist (TASK-1202)", () => {
         NODE_ENV: "production",
         WEB_URL: "http://localhost:3000",
         DATABASE_URL: "postgresql://user:pw@db:5432/acos",
-        S3_ENDPOINT: "https://s3.example.com",
+        // 운영 저장소 표준은 Amazon S3다 (CTO 결정 1801-④)
+      S3_ENDPOINT: "https://s3.ap-northeast-2.amazonaws.com",
         S3_BUCKET: "acos",
         S3_ACCESS_KEY: "key",
         S3_SECRET_KEY: "secret",

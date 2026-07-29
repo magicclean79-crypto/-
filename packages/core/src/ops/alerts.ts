@@ -23,6 +23,8 @@ export const ALERT_KINDS = [
   "scheduler-stopped",
   // 복구 리허설 (TASK-1801, CTO 결정 1701-⑤)
   "recovery-drill",
+  // 백업 소요 시간 (TASK-1901, CTO 결정 1801-①)
+  "backup-performance",
 ] as const;
 
 export type AlertKind = (typeof ALERT_KINDS)[number];
@@ -437,6 +439,7 @@ export const ALERT_COOLDOWN_ENV: Record<AlertKind, string> = {
   "scheduler-stopped": "ALERT_COOLDOWN_SCHEDULER_MS",
   // 리허설은 날 단위 사안이라 30분마다 다시 알릴 이유가 없다
   "recovery-drill": "ALERT_COOLDOWN_DRILL_MS",
+  "backup-performance": "ALERT_COOLDOWN_BACKUP_PERF_MS",
 };
 
 /** 전체 기본값 환경변수 (종류별 값이 없을 때) */

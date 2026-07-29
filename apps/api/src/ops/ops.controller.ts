@@ -10,12 +10,17 @@ import {
 } from "@nestjs/common";
 import {
   buildDisasterRecoveryChecklist,
+  DRILL_TRIGGERS,
   judgeStorageProtection,
   SCHEDULED_JOBS,
   summarizeAlerts,
   summarizeDisasterRecovery,
 } from "@acos/core";
-import type { ProtectionState, ScheduledJob } from "@acos/core";
+import type {
+  DrillTrigger as ScheduledDrillTrigger,
+  ProtectionState,
+  ScheduledJob,
+} from "@acos/core";
 import type {
   DrStatusDto,
   AlertArchiveResultDto,
@@ -24,6 +29,7 @@ import type {
   CheckRunResultDto,
   NotificationDeliveryDto,
   NotificationQueueStatusDto,
+  DrillRequirementDto,
   OperationsReadinessDto,
   RecoveryDrillDto,
   SmtpValidationDto,
@@ -79,8 +85,10 @@ export class OpsController {
       database,
       storage,
       protection,
+      backupProtection,
       drill,
       drillHistory,
+      requirements,
     ] = await Promise.all([
       this.backups.health(),
       this.backups.backupHistory(10),
@@ -90,15 +98,25 @@ export class OpsController {
       this.checkDatabase(),
       this.checkStorage(),
       this.describeStorageProtection(),
+      this.describeStorageProtection(true),
       this.drills.health(),
       this.drills.history(10),
+      this.drills.requirements(10),
     ]);
 
     // 이미지 저장소 보호 상태 (CTO 결정 1601-④·1701-③) — 앱은 이미지를
     // 백업하지 않는다. 운영에서는 Versioning이 필수, Replication은 권장이다.
+    const production = process.env.NODE_ENV === "production";
     const storageProtection = judgeStorageProtection({
       ...protection,
-      production: process.env.NODE_ENV === "production",
+      production,
+      label: "이미지 저장소",
+    });
+    // 백업 버킷도 같은 규칙으로 판정한다 (CTO 결정 1801-③)
+    const backupBucketProtection = judgeStorageProtection({
+      ...backupProtection,
+      production,
+      label: "백업 버킷",
     });
     const targetSafety = this.backups.restoreTargetSafety;
     const restoreTarget = {
@@ -135,6 +153,11 @@ export class OpsController {
         },
         restoreTarget,
         drill: { status: drill.status, detail: drill.detail },
+        backupBucketProtection,
+        backupPerformance: {
+          status: health.performance.status,
+          detail: health.performance.detail,
+        },
       },
     });
     const summary = summarizeDisasterRecovery(checklist);
@@ -194,24 +217,30 @@ export class OpsController {
           overdueDays: drill.overdueDays,
           intervalDays: Math.round(drill.intervalMs / (24 * 60 * 60 * 1000)),
           history: drillHistory,
+          pendingTriggers: drill.pendingTriggers,
+          requirements,
         },
         backupBucket: {
           name: this.storage.backupBucket,
           // 이미지 버킷과 같으면 한 쪽이 사라질 때 둘 다 사라진다 (결정 1701-②)
           separated: this.storage.backupBucket !== this.storage.bucket,
+          protection: { ...backupBucketProtection, ...backupProtection },
         },
+        performance: health.performance,
       },
       checkedAt: new Date().toISOString(),
     };
   }
 
   /** 저장소가 알려 주지 않으면 unknown으로 남긴다 — 모르는 것을 통과로 세지 않는다 */
-  private async describeStorageProtection(): Promise<{
+  private async describeStorageProtection(backupBucket = false): Promise<{
     versioning: ProtectionState;
     replication: ProtectionState;
   }> {
     try {
-      return await this.storage.describeProtection();
+      return backupBucket
+        ? await this.storage.describeBackupProtection()
+        : await this.storage.describeProtection();
     } catch {
       return { versioning: "unknown", replication: "unknown" };
     }
@@ -283,6 +312,44 @@ export class OpsController {
   @Get("drills")
   async drillHistory(@Query("limit") limit?: string): Promise<RecoveryDrillDto[]> {
     return this.drills.history(Number(limit) || 20);
+  }
+
+  /**
+   * 변경 후 추가 리허설 요구 등록 (TASK-1901, CTO 결정 1801-⑤).
+   *
+   * **달력이 아니라 변경이 리허설을 부른다** — DR 절차·DB·백업 방식이 크게
+   * 바뀌면 마지막 리허설이 검증한 것은 지금의 시스템이 아니다.
+   */
+  @Post("drills/require")
+  @HttpCode(201)
+  async requireDrill(
+    @Body() body: { trigger?: string; description?: string; registeredBy?: string },
+  ): Promise<DrillRequirementDto> {
+    const trigger = body?.trigger?.trim() as ScheduledDrillTrigger | undefined;
+    if (!trigger || !(DRILL_TRIGGERS as readonly string[]).includes(trigger)) {
+      throw new BadRequestException(
+        `trigger는 ${DRILL_TRIGGERS.join(" | ")} 중 하나여야 합니다.`,
+      );
+    }
+    const description = body.description?.trim();
+    if (!description) {
+      throw new BadRequestException(
+        "description은 필수입니다 — 무엇이 바뀌었는지 남지 않으면 다음 리허설이 무엇을 확인해야 할지 알 수 없습니다.",
+      );
+    }
+    const registeredBy = body.registeredBy?.trim();
+    if (!registeredBy) {
+      throw new BadRequestException("registeredBy는 필수입니다.");
+    }
+    return this.drills.requireDrill({ trigger, description, registeredBy });
+  }
+
+  /** 변경 사건 목록 */
+  @Get("drills/requirements")
+  async drillRequirements(
+    @Query("limit") limit?: string,
+  ): Promise<DrillRequirementDto[]> {
+    return this.drills.requirements(Number(limit) || 20);
   }
 
   private async checkDatabase(): Promise<{ ok: boolean; detail: string }> {
