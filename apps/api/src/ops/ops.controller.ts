@@ -12,9 +12,10 @@ import {
 import {
   buildDisasterRecoveryChecklist,
   DRILL_TRIGGERS,
-  judgeRemoteIntegrity,
+  judgeRecordedRemoteIntegrity,
   judgeStorageProtection,
   judgeStorageStandard,
+  resolveSchedules,
   SCHEDULED_JOBS,
   summarizeAlerts,
   summarizeDisasterRecovery,
@@ -92,7 +93,6 @@ export class OpsController {
       drill,
       drillHistory,
       requirements,
-      remoteIntegrity,
     ] = await Promise.all([
       this.backups.health(),
       this.backups.backupHistory(10),
@@ -106,10 +106,19 @@ export class OpsController {
       this.drills.health(),
       this.drills.history(10),
       this.drills.requirements(10),
-      // 원격 사본 내려받기는 전송 비용이 들어 조회에서는 하지 않는다 —
-      // 마지막 수동 검증 결과가 없으면 "직접 확인"으로 남는다
-      Promise.resolve(judgeRemoteIntegrity(null)),
     ]);
+
+    // 조회는 원격에서 내려받지 않는다 — **기록된 대조 결과**를 읽는다.
+    // 주 1회 예약(CTO 결정 2001-②)이 실제 내려받기를 담당한다.
+    const remoteVerifyIntervalMs = this.backups.remoteVerifyIntervalMs;
+    const remoteVerifyScheduled =
+      resolveSchedules(process.env as Record<string, string | undefined>).find(
+        (entry) => entry.job === "remote-verify",
+      )?.enabled ?? false;
+    const remoteIntegrity = judgeRecordedRemoteIntegrity(health.remoteRecord, {
+      now: Date.now(),
+      intervalMs: remoteVerifyIntervalMs,
+    });
 
     // 이미지 저장소 보호 상태 (CTO 결정 1601-④·1701-③) — 앱은 이미지를
     // 백업하지 않는다. 운영에서는 Versioning이 필수, Replication은 권장이다.
@@ -243,6 +252,8 @@ export class OpsController {
           history: drillHistory,
           pendingTriggers: drill.pendingTriggers,
           requirements,
+          // 재기동 후 자동 등록을 확인할 수 있어야 한다 (CTO 결정 2001-④)
+          autoRegistration: this.drills.lastAutoRegistration(),
         },
         backupBucket: {
           name: this.storage.backupBucket,
@@ -258,11 +269,20 @@ export class OpsController {
             expected: health.chain.expected,
             actual: health.chain.actual,
             longestGapMs: health.chain.longestGapMs,
+            windowMs: health.chainWindow.windowMs,
+            windowSource: health.chainWindow.source,
+            windowDetail: health.chainWindow.detail,
           },
           remote: {
             status: remoteIntegrity.status,
             detail: remoteIntegrity.detail,
             verdict: remoteIntegrity.verdict,
+            checkedAt:
+              health.remoteRecord === null
+                ? null
+                : new Date(health.remoteRecord.checkedAt).toISOString(),
+            intervalMs: remoteVerifyIntervalMs,
+            scheduled: remoteVerifyScheduled,
           },
           scale: {
             status: health.scale.status,

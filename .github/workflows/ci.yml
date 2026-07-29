@@ -1,0 +1,43 @@
+# CI. (TASK-2101, Sprint 21)
+#
+# 품질 게이트(Build / Lint / Test)와 **Major Migration 교차 검증**
+# (CTO 결정 2001-③)을 돌린다. 교차 검증은 build 뒤에 둔다 — 검증 로직이
+# `@acos/core`에 있고, 순수 로직은 한 곳에만 둔다는 규칙을 스크립트에서도
+# 지키기 때문이다.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  quality-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      # 매니페스트와 `_major_` 파일명 규칙이 어긋나면 막는다.
+      # 지정이 조용히 사라지면 대규모 변경 후에도 리허설이 요구되지 않는다.
+      - name: Major Migration 교차 검증
+        run: pnpm check:major-migrations
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Test
+        run: pnpm test

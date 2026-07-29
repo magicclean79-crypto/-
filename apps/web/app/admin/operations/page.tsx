@@ -680,6 +680,15 @@ export default function OperationsPage() {
                   </span>
                 </div>
                 <p className="mt-1">{backupIntegrityChain!.detail}</p>
+                {/* 창을 올렸다면 숨기지 않는다 (CTO 결정 2001-①) */}
+                {backupIntegrityChain!.windowSource === "clamped" ? (
+                  <p
+                    data-testid="chain-window-clamped"
+                    className="mt-1 text-xs text-amber-700 dark:text-amber-300"
+                  >
+                    {backupIntegrityChain!.windowDetail}
+                  </p>
+                ) : null}
                 <p className="mt-1 text-xs text-zinc-500">
                   개별 백업이 모두 성공이어도 사슬은 끊길 수 있습니다 —
                   <strong> 돌지 않은 백업은 아무 데도 기록되지 않습니다.</strong>
@@ -716,6 +725,11 @@ export default function OperationsPage() {
                 </div>
                 <p className="mt-1">
                   {data.enterprise.backupIntegrity.remote.detail}
+                </p>
+                <p className="mt-1 text-xs text-zinc-500">
+                  {data.enterprise.backupIntegrity.remote.scheduled
+                    ? `자동 대조 주기 ${span(data.enterprise.backupIntegrity.remote.intervalMs)} — 마지막 백업 1건만 내려받습니다.`
+                    : "자동 대조가 예약되어 있지 않습니다 — 운영에서만 주 1회 자동으로 돕니다 (전송 비용)."}
                 </p>
               </li>
               <li
@@ -914,6 +928,52 @@ export default function OperationsPage() {
                 </div>
               </div>
             ) : null}
+
+            {/* 재기동 후 자동 등록 확인 (CTO 결정 2001-④) — Runbook의 확인
+                절차가 이 칸을 본다. 로그를 뒤지게 만들면 아무도 확인하지 않는다 */}
+            <div
+              data-testid="auto-registration"
+              className="mt-3 rounded-lg border border-zinc-200 p-3 text-xs dark:border-zinc-800"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span
+                  className={`rounded-full px-2 py-0.5 font-medium ${
+                    data.enterprise.drill.autoRegistration.registered === null
+                      ? DR_STYLE.manual
+                      : data.enterprise.drill.autoRegistration.registered
+                        ? DR_STYLE.warn
+                        : DR_STYLE.pass
+                  }`}
+                >
+                  {data.enterprise.drill.autoRegistration.registered === null
+                    ? "확인 불가"
+                    : data.enterprise.drill.autoRegistration.registered
+                      ? "등록됨"
+                      : "등록 없음"}
+                </span>
+                <strong>기동 시 Major Migration 자동 등록</strong>
+                <span className="text-zinc-500">
+                  {data.enterprise.drill.autoRegistration.checkedAt === null
+                    ? "확인 기록 없음"
+                    : new Date(
+                        data.enterprise.drill.autoRegistration.checkedAt,
+                      ).toLocaleString("ko-KR")}
+                </span>
+              </div>
+              <p className="mt-1">
+                {data.enterprise.drill.autoRegistration.detail}
+              </p>
+              {data.enterprise.drill.autoRegistration.applied.length > 0 ? (
+                <p className="mt-1 text-zinc-500">
+                  적용된 Major Migration:{" "}
+                  {data.enterprise.drill.autoRegistration.applied.join(" · ")}
+                </p>
+              ) : null}
+              <p className="mt-1 text-zinc-500">
+                자동 등록은 <strong>기동 시 1회</strong>만 일어납니다 — 재기동
+                후 이 칸을 확인하세요 (CTO 결정 2001-④).
+              </p>
+            </div>
 
             {data.enterprise.drill.pendingTriggers.length > 0 ? (
               <div

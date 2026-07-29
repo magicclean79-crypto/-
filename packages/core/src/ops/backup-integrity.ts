@@ -45,7 +45,65 @@ export const DEFAULT_CHAIN_WINDOW_MS = 24 * 60 * 60 * 1000;
  */
 export const DEFAULT_CHAIN_GAP_FACTOR = 2;
 
+/**
+ * 관측 창의 **최소 배수** (CTO 결정 2001-①).
+ *
+ * 창이 간격의 4배도 안 되면 창 안에 백업이 서너 개뿐이라, 한 번만 걸러도
+ * 판정이 뒤집힌다. 표본이 없는 판정은 판정이 아니라 잡음이다.
+ */
+export const MIN_CHAIN_WINDOW_INTERVAL_FACTOR = 4;
+
+export interface ChainWindowResolution {
+  windowMs: number;
+  /** 설정을 그대로 썼는가 · 기본값인가 · 최소값으로 올렸는가 */
+  source: "env" | "default" | "clamped";
+  detail: string;
+}
+
+/**
+ * 관측 창 해석 (CTO 결정 2001-①).
+ *
+ * `BACKUP_CHAIN_WINDOW_HOURS`로 설정하고, 기본은 24시간이다.
+ * **최소는 백업 간격 × 4** — 그보다 짧으면 조용히 늘린다. 설정을 거절하고
+ * 판정을 멈추는 것보다, 판정할 수 있는 창으로 올리고 **올렸다고 말하는**
+ * 편이 낫다.
+ */
+export function resolveChainWindowMs(
+  raw: string | undefined,
+  intervalMs: number,
+): ChainWindowResolution {
+  const minimumMs = intervalMs * MIN_CHAIN_WINDOW_INTERVAL_FACTOR;
+  const trimmed = (raw ?? "").trim();
+  const parsed = trimmed.length > 0 ? Number(trimmed) : Number.NaN;
+  const configured = Number.isFinite(parsed) && parsed > 0;
+  const requestedMs = configured
+    ? Math.round(parsed * 60 * 60 * 1000)
+    : DEFAULT_CHAIN_WINDOW_MS;
+
+  if (requestedMs < minimumMs) {
+    return {
+      windowMs: minimumMs,
+      source: "clamped",
+      // 조사를 붙이지 않는다 — 단위가 초·분·시간·일로 바뀌면 받침이 달라져
+      // "2.0시간로" 같은 문장이 나온다 (라이브 검증에서 드러난 결함)
+      detail:
+        `설정한 관측 창 ${hours(requestedMs)} — 백업 간격 ${hours(intervalMs)}의 ` +
+        `4배에 못 미쳐 판정할 표본이 없습니다. 최소 ${hours(minimumMs)}까지 올렸습니다.`,
+    };
+  }
+
+  return {
+    windowMs: requestedMs,
+    source: configured ? "env" : "default",
+    detail: `관측 창 ${hours(requestedMs)}${configured ? "" : " (기본값)"}.`,
+  };
+}
+
 function hours(ms: number): string {
+  // 이틀이 넘으면 "336.0시간"보다 "14.0일"이 읽힌다
+  if (ms >= 48 * 60 * 60 * 1000) {
+    return `${(ms / (24 * 60 * 60 * 1000)).toFixed(1)}일`;
+  }
   if (ms >= 60 * 60 * 1000) {
     return `${(ms / (60 * 60 * 1000)).toFixed(1)}시간`;
   }
@@ -261,6 +319,81 @@ export function judgeRemoteIntegrity(
     verdict: "ok",
     status: "pass",
     detail: `원격 사본을 내려받아 대조했습니다 — SHA-256 일치 (${input.remoteChecksum.slice(0, 12)}…).`,
+  };
+}
+
+/** 자동 대조 주기 — 주 1회 (CTO 결정 2001-②) */
+export const DEFAULT_REMOTE_VERIFY_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * 대조 결과가 **낡았다**고 볼 시점 — 주기의 2배.
+ *
+ * 한 번 걸러도 낡았다고 하지 않는다(사슬 판정과 같은 태도). 두 번 거르면
+ * 예약이 멎은 것이므로, 지난 성공을 그대로 통과로 두면 안 된다.
+ */
+export const REMOTE_VERIFY_STALE_FACTOR = 2;
+
+export interface RemoteRecord {
+  verdict: RemoteVerdict;
+  checkedAt: number;
+  /** 대조한 백업 파일명 — 어느 백업을 봤는지 밝힌다 */
+  fileName: string | null;
+}
+
+/**
+ * 기록된 자동 대조 결과 판정 (CTO 결정 2001-②).
+ *
+ * 주 1회 자동 대조가 돌면 그 결과가 남는다. 화면은 **마지막에 무엇을 봤는지**를
+ * 말해야 한다 — "확인하지 않았습니다"가 계속 떠 있으면 자동화를 넣은 의미가
+ * 없다.
+ *
+ * 다만 **낡은 성공을 통과로 두지 않는다.** 예약이 멎어 두 주기를 넘겼다면
+ * 그때의 `ok`는 지금의 사실이 아니다.
+ */
+export function judgeRecordedRemoteIntegrity(
+  record: RemoteRecord | null,
+  options: { now: number; intervalMs?: number },
+): RemoteIntegrity {
+  if (record === null) {
+    return judgeRemoteIntegrity(null);
+  }
+
+  const intervalMs = options.intervalMs ?? DEFAULT_REMOTE_VERIFY_INTERVAL_MS;
+  const ageMs = options.now - record.checkedAt;
+  const where = record.fileName ? ` (${record.fileName})` : "";
+
+  if (record.verdict === "missing" || record.verdict === "mismatch") {
+    // 실패는 낡아도 실패다 — 시간이 지났다고 사본이 돌아오지 않는다
+    return {
+      verdict: record.verdict,
+      status: "fail",
+      detail:
+        record.verdict === "missing"
+          ? `원격에 사본이 없습니다${where} — ${hours(ageMs)} 전 대조에서 확인했습니다. ` +
+            "저장소 수명 주기 정책이나 삭제 여부를 확인하세요."
+          : `원격 사본이 기록된 체크섬과 다릅니다${where} — ${hours(ageMs)} 전 대조에서 ` +
+            "확인했습니다. 이 사본으로는 복구를 장담할 수 없습니다.",
+    };
+  }
+
+  if (record.verdict !== "ok") {
+    return judgeRemoteIntegrity(null);
+  }
+
+  if (ageMs > intervalMs * REMOTE_VERIFY_STALE_FACTOR) {
+    return {
+      verdict: "unchecked",
+      status: "manual",
+      detail:
+        `마지막 원격 대조가 ${hours(ageMs)} 전입니다${where} — 주 1회 자동 대조가 ` +
+        "두 번 걸렀습니다. 그때의 결과를 지금의 사실로 둘 수 없습니다.",
+    };
+  }
+
+  return {
+    verdict: "ok",
+    status: "pass",
+    detail: `원격 사본이 기록된 체크섬과 일치합니다${where} — ${hours(ageMs)} 전 대조.`,
   };
 }
 

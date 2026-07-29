@@ -1,6 +1,7 @@
 import {
   DEFAULT_GRACE_FACTOR,
   DEFAULT_JOB_INTERVALS,
+  PRODUCTION_ONLY_JOBS,
   defaultRpoTargetMs,
   isSchedulerStopped,
   resolveGraceFactor,
@@ -85,7 +86,7 @@ describe("Scheduled Checks (TASK-1302)", () => {
       expect(byJob["cost-verification"].enabled).toBe(true);
     });
 
-    it("선언된 점검 7종을 빠짐없이 돌려준다", () => {
+    it("선언된 점검 8종을 빠짐없이 돌려준다", () => {
       expect(resolveSchedules({}).map((entry) => entry.job).sort()).toEqual([
         "alert-archive",
         "backup",
@@ -93,6 +94,7 @@ describe("Scheduled Checks (TASK-1302)", () => {
         "health-check",
         "provider-smoke",
         "provider-validation",
+        "remote-verify",
         "restore-verify",
       ]);
     });
@@ -316,5 +318,44 @@ describe("Scheduled Checks (TASK-1302)", () => {
         isSchedulerStopped(schedule, now - 120_000, now, { graceFactor: 1 }),
       ).toBe(true);
     });
+  });
+});
+
+describe("원격 사본 대조 예약 (TASK-2101, CTO 결정 2001-②)", () => {
+  const find = (env: Record<string, string | undefined>) =>
+    resolveSchedules(env).find((entry) => entry.job === "remote-verify")!;
+
+  it("운영에서는 주 1회로 켜진다", () => {
+    const schedule = find({ NODE_ENV: "production" });
+    expect(schedule.enabled).toBe(true);
+    expect(schedule.intervalMs).toBe(7 * 24 * 60 * 60 * 1000);
+  });
+
+  it("운영이 아니면 꺼진다 — 개발이 전송 비용을 낼 이유가 없다", () => {
+    expect(find({}).enabled).toBe(false);
+    expect(find({ NODE_ENV: "development" }).source).toBe("disabled");
+  });
+
+  it("운영이 아니어도 명시하면 켤 수 있다 — 스테이징에서 한 번 돌려 볼 길", () => {
+    const schedule = find({ OPS_CHECK_REMOTE_VERIFY_INTERVAL: "1d" });
+    expect(schedule.enabled).toBe(true);
+    expect(schedule.intervalMs).toBe(24 * 60 * 60 * 1000);
+    expect(schedule.source).toBe("env");
+  });
+
+  it("운영에서도 off로 끌 수 있다", () => {
+    expect(
+      find({ NODE_ENV: "production", OPS_CHECK_REMOTE_VERIFY_INTERVAL: "off" })
+        .enabled,
+    ).toBe(false);
+  });
+
+  it("주 단위를 일(day)로 적을 수 있다 — 168h로 적게 만들지 않는다", () => {
+    expect(parseIntervalMs("7d", 0)).toBe(7 * 24 * 60 * 60 * 1000);
+    expect(parseIntervalMs("1d", 0)).toBe(24 * 60 * 60 * 1000);
+  });
+
+  it("PRODUCTION_ONLY_JOBS에 들어 있다", () => {
+    expect(PRODUCTION_ONLY_JOBS).toContain("remote-verify");
   });
 });

@@ -7,9 +7,9 @@ import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import {
   DEFAULT_JOB_INTERVALS,
-  DEFAULT_CHAIN_WINDOW_MS,
   defaultRpoTargetMs,
   judgeBackup,
+  resolveChainWindowMs,
   judgeIntegrity,
   judgeOffsite,
   judgeRecoveryObjectives,
@@ -25,8 +25,10 @@ import type {
   BackupChain,
   BackupHealth,
   BackupPerformance,
+  ChainWindowResolution,
   DatabaseScale,
   RemoteIntegrity,
+  RemoteRecord,
   OffsiteHealth,
   RecoveryObjectives,
   RestoreHealth,
@@ -225,6 +227,29 @@ export class BackupService {
   }
 
   /**
+   * 사슬 관측 창 (TASK-2101, CTO 결정 2001-①).
+   *
+   * `BACKUP_CHAIN_WINDOW_HOURS`로 설정하되 **간격의 4배 미만이면 올린다** —
+   * 표본이 없는 판정은 판정이 아니다. 올렸다는 사실은 숨기지 않는다.
+   */
+  get chainWindow(): ChainWindowResolution {
+    return resolveChainWindowMs(
+      process.env.BACKUP_CHAIN_WINDOW_HOURS,
+      this.backupIntervalMs,
+    );
+  }
+
+  /** 원격 대조 예약 간격 — 낡음 판정의 기준 (CTO 결정 2001-②) */
+  get remoteVerifyIntervalMs(): number {
+    const schedule = resolveSchedules(
+      process.env as Record<string, string | undefined>,
+    ).find((entry) => entry.job === "remote-verify");
+    return (
+      schedule?.intervalMs ?? DEFAULT_JOB_INTERVALS["remote-verify"]
+    );
+  }
+
+  /**
    * 운영 데이터베이스 크기 (CTO 결정 1901-④).
    *
    * 덤프 크기와 다르다 — 덤프는 압축되고 인덱스를 담지 않는다. 재평가 기준은
@@ -244,10 +269,13 @@ export class BackupService {
   }
 
   /**
-   * 원격 사본 무결성 검증 (TASK-2001, CTO 결정 1701-④ 후속).
+   * 원격 사본 무결성 검증 (TASK-2001, CTO 결정 1701-④ 후속 · 2001-②).
    *
-   * 원격에서 **실제로 내려받아** 체크섬을 대조한다. 전송 비용이 들어
-   * **기본으로 돌리지 않는다** — 운영자가 명시적으로 실행한다.
+   * 원격에서 **실제로 내려받아** 체크섬을 대조한다. **마지막 백업 1건만**
+   * 본다 — 전송 비용이 드는 확인을 이력 전체에 돌릴 이유가 없다.
+   *
+   * TASK-2101부터 **결과를 남긴다.** 남기지 않으면 주 1회 자동 대조를 돌려도
+   * 화면은 계속 "확인하지 않았습니다"라고 말한다.
    */
   async verifyRemoteCopy(): Promise<RemoteIntegrity> {
     const [latest] = (await this.backupHistory(20)).filter(
@@ -256,11 +284,12 @@ export class BackupService {
     if (!latest || !latest.fileName) {
       return judgeRemoteIntegrity(null);
     }
+    let result: RemoteIntegrity;
     try {
       const key = `${this.offsitePrefix}${latest.fileName}`;
       const buffer = await this.storage.getBackupObject(key);
       const hash = createHash("sha256").update(buffer).digest("hex");
-      return judgeRemoteIntegrity({
+      result = judgeRemoteIntegrity({
         found: true,
         remoteChecksum: hash,
         recordedChecksum: latest.checksum,
@@ -269,11 +298,58 @@ export class BackupService {
       this.logger.error(
         `원격 사본 검증 실패: ${error instanceof Error ? error.message : String(error)}`,
       );
-      return judgeRemoteIntegrity({
+      result = judgeRemoteIntegrity({
         found: false,
         remoteChecksum: null,
         recordedChecksum: latest.checksum,
       });
+    }
+    await this.recordRemoteVerdict(latest.id, result.verdict);
+    return result;
+  }
+
+  private async recordRemoteVerdict(
+    id: string,
+    verdict: RemoteIntegrity["verdict"],
+  ): Promise<void> {
+    try {
+      await this.prisma.backupRun.update({
+        where: { id },
+        data: { remoteCheckedAt: new Date(), remoteVerdict: verdict },
+      });
+    } catch (error) {
+      // 기록 실패가 대조 결과를 무효로 만들지는 않는다 — 다만 조용히 넘기지 않는다
+      this.logger.warn(
+        `원격 대조 결과 기록 실패: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  /**
+   * 마지막으로 기록된 원격 대조 결과 (CTO 결정 2001-②).
+   *
+   * 판정은 core가 한다 — 여기서는 **읽어 오기만** 한다.
+   */
+  async lastRemoteRecord(): Promise<RemoteRecord | null> {
+    try {
+      const row = (await this.prisma.backupRun.findFirst({
+        where: { remoteCheckedAt: { not: null } },
+        orderBy: { remoteCheckedAt: "desc" },
+      })) as {
+        fileName: string | null;
+        remoteCheckedAt: Date | null;
+        remoteVerdict: string | null;
+      } | null;
+      if (!row?.remoteCheckedAt || !row.remoteVerdict) {
+        return null;
+      }
+      return {
+        verdict: row.remoteVerdict as RemoteRecord["verdict"],
+        checkedAt: row.remoteCheckedAt.getTime(),
+        fileName: row.fileName,
+      };
+    } catch {
+      return null;
     }
   }
 
@@ -689,14 +765,18 @@ export class BackupService {
     performance: BackupPerformance;
     chain: BackupChain;
     scale: DatabaseScale;
+    chainWindow: ChainWindowResolution;
+    remoteRecord: RemoteRecord | null;
   }> {
     const now = Date.now();
-    const [backups, restores, chainRecords] = await Promise.all([
+    const chainWindow = this.chainWindow;
+    const [backups, restores, chainRecords, remoteRecord] = await Promise.all([
       this.backupHistory(20),
       this.restoreHistory(20),
       // 사슬 판정은 관측 창 전체를 **기간으로** 읽는다 — 개수로 자르면
       // 창 안의 오래된 쪽이 빠져 없는 공백이 생긴다
-      this.backupHistorySince(now - DEFAULT_CHAIN_WINDOW_MS),
+      this.backupHistorySince(now - chainWindow.windowMs),
+      this.lastRemoteRecord(),
     ]);
 
     const backup = judgeBackup(
@@ -756,10 +836,13 @@ export class BackupService {
         {
           now,
           intervalMs: this.backupIntervalMs,
+          windowMs: chainWindow.windowMs,
           startedAt: this.startedAt,
         },
       ),
       scale: judgeDatabaseScale(await this.databaseSizeBytes()),
+      chainWindow,
+      remoteRecord,
     };
   }
 

@@ -60,6 +60,10 @@ const ALERT_STYLE: Record<AlertLevelDto, string> = {
 };
 
 function duration(ms: number): string {
+  // 주 1회 대조(CTO 결정 2001-②)를 "168시간"이라고 적으면 읽히지 않는다
+  if (ms % 86_400_000 === 0) {
+    return `${ms / 86_400_000}일`;
+  }
   if (ms % 3_600_000 === 0) {
     return `${ms / 3_600_000}시간`;
   }

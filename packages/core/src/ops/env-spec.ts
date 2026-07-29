@@ -688,6 +688,21 @@ export const ENV_SPECS: EnvSpec[] = [
     validate: positiveNumber("RESTORE_MAX_AGE_HOURS"),
     fallback: "192 (8일 — CTO 결정 1601-⑤)",
   },
+  {
+    name: "BACKUP_CHAIN_WINDOW_HOURS",
+    category: "ops",
+    description:
+      "백업 사슬을 판정하는 관측 창(시간) — 최소는 백업 간격의 4배이며, 그보다 짧게 두면 자동으로 올립니다",
+    validate: positiveNumber("BACKUP_CHAIN_WINDOW_HOURS"),
+    fallback: "24 (CTO 결정 2001-①)",
+  },
+  {
+    name: "OPS_CHECK_REMOTE_VERIFY_INTERVAL",
+    category: "ops",
+    description:
+      "원격 사본 대조 간격 (1h · 7d 등) — 저장소에서 실제로 내려받으므로 전송 비용이 듭니다. 운영이 아니면 기본은 꺼짐입니다",
+    fallback: "운영 7일 · 그 외 꺼짐 (CTO 결정 2001-②)",
+  },
 ];
 
 export interface EnvIssue {

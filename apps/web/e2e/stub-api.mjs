@@ -882,7 +882,7 @@ const server = http.createServer((req, res) => {
                 verdict: "ok",
                 status: "pass",
                 detail:
-                  "원격 사본이 기록된 체크섬과 일치합니다 (SHA-256 cccccccccccc…).",
+                  "원격 사본을 내려받아 대조했습니다 — SHA-256 일치 (cccccccccccc…).",
                 key: "backups/acos-2026-07-29.dump",
               }
             : {
@@ -1251,6 +1251,22 @@ const server = http.createServer((req, res) => {
             detail: drillDetail,
             pendingTriggers,
             requirements: stubRequirements,
+            // 기동 시 자동 등록 결과 (TASK-2101, CTO 결정 2001-④)
+            autoRegistration: healthy
+              ? {
+                  checkedAt: new Date().toISOString(),
+                  applied: ["20260729210000_enterprise_backup"],
+                  registered: true,
+                  detail:
+                    "20260729210000_enterprise_backup 적용으로 복구 리허설 요구를 자동 등록했습니다.",
+                }
+              : {
+                  checkedAt: new Date().toISOString(),
+                  applied: [],
+                  registered: null,
+                  detail:
+                    "Major Migration을 확인하지 못했습니다: relation \"_prisma_migrations\" does not exist",
+                },
             ageMs: stubDrills.length === 0 ? null : 0,
             dueAt:
               stubDrills.length === 0
@@ -1294,13 +1310,24 @@ const server = http.createServer((req, res) => {
               expected: 24,
               actual: healthy ? 24 : 19,
               longestGapMs: healthy ? 3_600_000 : 18_000_000,
+              // 관측 창 (TASK-2101, CTO 결정 2001-①) — 문제 상태에서는
+              // 간격의 4배에 못 미쳐 올린 경우를 보여준다
+              windowMs: healthy ? 24 * 3_600_000 : 24 * 3_600_000,
+              windowSource: healthy ? "default" : "clamped",
+              windowDetail: healthy
+                ? "관측 창 24.0시간 (기본값)."
+                : "관측 창을 12.0시간로 두면 백업 간격(6.0시간)의 4배에 못 미쳐 판정할 표본이 없습니다 — 24.0시간로 올렸습니다.",
             },
             remote: {
               status: stubRemoteVerified ? "pass" : "manual",
               detail: stubRemoteVerified
-                ? "원격 사본을 내려받아 대조했습니다 — SHA-256 일치 (cccccccccccc…)."
+                ? "원격 사본이 기록된 체크섬과 일치합니다 (acos-2026-07-29.dump) — 0초 전 대조."
                 : "원격 사본을 내려받아 대조하지 않았습니다 — 전송 비용이 들어 기본으로 돌리지 않습니다. 필요할 때 수동으로 확인하세요.",
               verdict: stubRemoteVerified ? "ok" : "unchecked",
+              // TASK-2101 — 기록된 대조 결과와 주 1회 예약 (CTO 결정 2001-②)
+              checkedAt: stubRemoteVerified ? new Date().toISOString() : null,
+              intervalMs: 7 * 24 * 60 * 60 * 1000,
+              scheduled: healthy,
             },
             scale: {
               status: healthy ? "pass" : "warn",
@@ -1601,6 +1628,17 @@ const server = http.createServer((req, res) => {
             enabled: false,
             source: "disabled",
             env: "OPS_CHECK_SMOKE_AT",
+            lastRunAt: null,
+            lastResult: null,
+          },
+          // 원격 사본 대조 (TASK-2101, CTO 결정 2001-②) — 운영에서만 주 1회
+          {
+            job: "remote-verify",
+            intervalMs: 7 * 86_400_000,
+            dailyAtMinutes: null,
+            enabled: healthy,
+            source: healthy ? "default" : "disabled",
+            env: "OPS_CHECK_REMOTE_VERIFY_INTERVAL",
             lastRunAt: null,
             lastResult: null,
           },

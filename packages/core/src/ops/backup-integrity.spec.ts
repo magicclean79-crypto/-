@@ -1,13 +1,17 @@
 import {
   DEFAULT_CHAIN_GAP_FACTOR,
+  DEFAULT_REMOTE_VERIFY_INTERVAL_MS,
+  MIN_CHAIN_WINDOW_INTERVAL_FACTOR,
   SCALE_MILESTONES_BYTES,
   detectBackupChainAlert,
   detectRemoteIntegrityAlert,
   detectScaleAlert,
   judgeBackupChain,
   judgeDatabaseScale,
+  judgeRecordedRemoteIntegrity,
   judgeRemoteIntegrity,
   judgeStorageStandard,
+  resolveChainWindowMs,
 } from "./backup-integrity";
 
 const HOUR = 60 * 60 * 1000;
@@ -302,6 +306,124 @@ describe("Backup Integrity Platform (TASK-2001)", () => {
     it("미설정은 운영에서 실패", () => {
       expect(judgeStorageStandard(null, true).status).toBe("fail");
       expect(judgeStorageStandard(undefined, false).status).toBe("manual");
+    });
+  });
+});
+
+describe("Operational Automation (TASK-2101)", () => {
+  describe("resolveChainWindowMs (CTO 결정 2001-①)", () => {
+    it("설정이 없으면 24시간", () => {
+      const result = resolveChainWindowMs(undefined, HOUR);
+      expect(result.windowMs).toBe(24 * HOUR);
+      expect(result.source).toBe("default");
+    });
+
+    it("설정한 시간을 그대로 쓴다", () => {
+      const result = resolveChainWindowMs("48", HOUR);
+      expect(result.windowMs).toBe(48 * HOUR);
+      expect(result.source).toBe("env");
+    });
+
+    it("간격의 4배에 못 미치면 올린다 — 표본이 없는 판정은 판정이 아니다", () => {
+      // 6시간 간격인데 창을 12시간으로 두면 창 안에 백업이 두 개뿐이다
+      const result = resolveChainWindowMs("12", 6 * HOUR);
+      expect(result.windowMs).toBe(24 * HOUR);
+      expect(result.source).toBe("clamped");
+      expect(result.detail).toContain("올렸습니다");
+    });
+
+    it("단위가 바뀌어도 조사가 어긋나지 않는다", () => {
+      // "2.0시간로" 같은 문장이 라이브에서 나왔다 — 단위마다 받침이 다르다
+      for (const intervalMs of [20_000, 60_000, HOUR, 24 * HOUR]) {
+        const detail = resolveChainWindowMs("0.001", intervalMs).detail;
+        expect(detail).not.toMatch(/(시간|분|일)로 /);
+        expect(detail).not.toContain("초으로");
+      }
+    });
+
+    it("기본값도 최소에 못 미치면 올린다", () => {
+      // 하루 1회 백업이면 최소 창은 4일이다
+      const result = resolveChainWindowMs(undefined, 24 * HOUR);
+      expect(result.windowMs).toBe(96 * HOUR);
+      expect(result.source).toBe("clamped");
+    });
+
+    it("해석할 수 없는 값은 기본값으로 되돌린다", () => {
+      expect(resolveChainWindowMs("나중에", HOUR).windowMs).toBe(24 * HOUR);
+      expect(resolveChainWindowMs("-3", HOUR).windowMs).toBe(24 * HOUR);
+      expect(resolveChainWindowMs("", HOUR).source).toBe("default");
+    });
+
+    it("최소 배수는 4다", () => {
+      expect(MIN_CHAIN_WINDOW_INTERVAL_FACTOR).toBe(4);
+    });
+  });
+
+  describe("judgeRecordedRemoteIntegrity (CTO 결정 2001-②)", () => {
+    const DAY = 24 * HOUR;
+
+    it("자동 대조 주기는 주 1회", () => {
+      expect(DEFAULT_REMOTE_VERIFY_INTERVAL_MS).toBe(7 * DAY);
+    });
+
+    it("기록이 없으면 확인하지 않은 것이다", () => {
+      expect(judgeRecordedRemoteIntegrity(null, { now }).verdict).toBe(
+        "unchecked",
+      );
+    });
+
+    it("최근 대조가 통과면 통과하고 언제 봤는지 말한다", () => {
+      const result = judgeRecordedRemoteIntegrity(
+        { verdict: "ok", checkedAt: now - 2 * DAY, fileName: "acos.dump" },
+        { now },
+      );
+      expect(result.status).toBe("pass");
+      expect(result.detail).toContain("acos.dump");
+      expect(result.detail).toContain("2.0일 전");
+    });
+
+    it("두 주기를 넘긴 성공은 지금의 사실이 아니다", () => {
+      const result = judgeRecordedRemoteIntegrity(
+        { verdict: "ok", checkedAt: now - 15 * DAY, fileName: null },
+        { now },
+      );
+      expect(result.status).toBe("manual");
+      expect(result.verdict).toBe("unchecked");
+      expect(result.detail).toContain("두 번 걸렀습니다");
+    });
+
+    it("한 번 걸러도 낡았다고 하지 않는다", () => {
+      expect(
+        judgeRecordedRemoteIntegrity(
+          { verdict: "ok", checkedAt: now - 10 * DAY, fileName: null },
+          { now },
+        ).status,
+      ).toBe("pass");
+    });
+
+    it("실패는 낡아도 실패다 — 시간이 지나도 사본이 돌아오지 않는다", () => {
+      const missing = judgeRecordedRemoteIntegrity(
+        { verdict: "missing", checkedAt: now - 30 * DAY, fileName: "a.dump" },
+        { now },
+      );
+      expect(missing.status).toBe("fail");
+      expect(missing.verdict).toBe("missing");
+
+      const mismatch = judgeRecordedRemoteIntegrity(
+        { verdict: "mismatch", checkedAt: now - 30 * DAY, fileName: "a.dump" },
+        { now },
+      );
+      expect(mismatch.status).toBe("fail");
+      expect(mismatch.detail).toContain("복구를 장담할 수 없습니다");
+    });
+
+    it("주기를 좁히면 낡음 판정도 함께 좁아진다", () => {
+      expect(
+        judgeRecordedRemoteIntegrity(
+          { verdict: "ok", checkedAt: now - 3 * DAY, fileName: null },
+          { now, intervalMs: DAY },
+        ).status,
+      ).toBe("manual");
     });
   });
 });

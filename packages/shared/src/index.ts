@@ -1725,8 +1725,22 @@ export interface EnterpriseRecoveryDto {
       expected: number;
       actual: number;
       longestGapMs: number | null;
+      /** 관측 창 (ms)과 그 출처 — env·default·clamped (TASK-2101) */
+      windowMs: number;
+      windowSource: "env" | "default" | "clamped";
+      windowDetail: string;
     };
-    remote: { status: DrStatusDto; detail: string; verdict: string };
+    remote: {
+      status: DrStatusDto;
+      detail: string;
+      verdict: string;
+      /** 마지막 자동/수동 대조 시각 (ISO) — 대조한 적 없으면 null */
+      checkedAt: string | null;
+      /** 자동 대조 주기 (ms) — 주 1회 (CTO 결정 2001-②) */
+      intervalMs: number;
+      /** 운영에서 자동으로 도는가 */
+      scheduled: boolean;
+    };
     scale: {
       status: DrStatusDto;
       detail: string;
@@ -1789,6 +1803,22 @@ export interface RecoveryDrillStatusDto {
   /** 아직 해소되지 않은 변경 사건 (TASK-1901) */
   pendingTriggers: string[];
   requirements: DrillRequirementDto[];
+  /** 기동 시 Major Migration 자동 등록 결과 (TASK-2101, CTO 결정 2001-④) */
+  autoRegistration: DrillAutoRegistrationDto;
+}
+
+/**
+ * 기동 시 자동 등록 결과 (TASK-2101, CTO 결정 2001-④).
+ *
+ * `registered`가 `null`이면 **확인하지 못한 것**이다 — 등록할 것이 없었다는
+ * 뜻이 아니다.
+ */
+export interface DrillAutoRegistrationDto {
+  checkedAt: string | null;
+  /** 적용된 Major Migration 목록 */
+  applied: string[];
+  registered: boolean | null;
+  detail: string;
 }
 
 /** 운영 대시보드 (GET /ops/readiness) */

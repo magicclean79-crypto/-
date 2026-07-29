@@ -5,10 +5,11 @@ import {
   NotFoundException,
   OnModuleInit,
 } from "@nestjs/common";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   DRILL_TRIGGERS,
+  crossCheckMajorMigrations,
   detectDrillAlert,
   hasPendingTrigger,
   judgeRecoveryDrill,
@@ -19,7 +20,11 @@ import type {
   DrillRequirementInput,
   DrillTrigger,
 } from "@acos/core";
-import type { DrillRequirementDto, RecoveryDrillDto } from "@acos/shared";
+import type {
+  DrillAutoRegistrationDto,
+  DrillRequirementDto,
+  RecoveryDrillDto,
+} from "@acos/shared";
 import { PrismaService } from "../prisma/prisma.service";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -209,11 +214,33 @@ export class RecoveryDrillService implements OnModuleInit {
   }
 
   /**
-   * Major Migration 자동 등록 (CTO 결정 1901-①).
+   * 기동 시 자동 등록 결과 (TASK-2101, CTO 결정 2001-④).
+   *
+   * 자동 등록은 **기동 시 1회**만 일어난다. 그 정책을 유지하기로 한 이상,
+   * 재기동 후 "등록됐는지"를 운영자가 확인할 수 있어야 한다 — 로그를 뒤지게
+   * 만들면 아무도 확인하지 않는다. Runbook의 확인 절차가 이 값을 본다.
+   */
+  private autoRegistration: DrillAutoRegistrationDto = {
+    checkedAt: null,
+    applied: [],
+    registered: null,
+    detail: "아직 확인하지 않았습니다.",
+  };
+
+  lastAutoRegistration(): DrillAutoRegistrationDto {
+    return this.autoRegistration;
+  }
+
+  /**
+   * Major Migration 자동 등록 (CTO 결정 1901-① · 2001-③).
    *
    * **지정된 마이그레이션만** 리허설을 부른다 — 사소한 컬럼 추가까지 리허설을
-   * 부르면 규칙이 소음이 되고, 소음이 된 규칙은 지켜지지 않는다. 무엇이
-   * major인지는 `prisma/major-migrations.json`에 사람이 적는다.
+   * 부르면 규칙이 소음이 되고, 소음이 된 규칙은 지켜지지 않는다.
+   *
+   * 지정하는 길이 둘이다: `prisma/major-migrations.json` 매니페스트와
+   * 파일명 규칙 `_major_`. 둘의 **합집합**을 major로 본다 — 한쪽에만 적어도
+   * 놓치지 않기 위해서다. 둘이 어긋나면 CI가 잡는다
+   * (`scripts/check-major-migrations.mjs`).
    *
    * `dr-change`·`pitr-adoption`은 자동 등록하지 않는다 — 코드로는 알 수 없는
    * 사건이라 운영자가 직접 등록한다.
@@ -222,15 +249,37 @@ export class RecoveryDrillService implements OnModuleInit {
     try {
       const applied = await this.appliedMajorMigrations();
       if (applied.length === 0) {
+        this.autoRegistration = {
+          checkedAt: new Date().toISOString(),
+          applied: [],
+          registered: false,
+          detail: "적용된 Major Migration이 없습니다 — 등록할 요구가 없습니다.",
+        };
         return;
       }
+      const latest = applied[applied.length - 1];
+      const marker = `major-migration:${latest}`;
+
       if (hasPendingTrigger(await this.requirementInputs(), "db-major-change")) {
+        this.autoRegistration = {
+          checkedAt: new Date().toISOString(),
+          applied,
+          registered: false,
+          detail:
+            "db-major-change 요구가 이미 미해소 상태라 중복 등록하지 않았습니다 " +
+            "(CTO 결정 1901-⑤).",
+        };
         return;
       }
       const known = await this.requirements(100);
       // 이미 이 마이그레이션으로 등록한 적이 있으면 다시 만들지 않는다
-      const marker = `major-migration:${applied[applied.length - 1]}`;
       if (known.some((entry) => entry.description.includes(marker))) {
+        this.autoRegistration = {
+          checkedAt: new Date().toISOString(),
+          applied,
+          registered: false,
+          detail: `${latest}은 이미 등록·해소된 적이 있습니다 — 다시 등록하지 않았습니다.`,
+        };
         return;
       }
       await this.prisma.drillRequirement.create({
@@ -240,20 +289,32 @@ export class RecoveryDrillService implements OnModuleInit {
           registeredBy: "system",
         },
       });
+      this.autoRegistration = {
+        checkedAt: new Date().toISOString(),
+        applied,
+        registered: true,
+        detail: `${latest} 적용으로 복구 리허설 요구를 자동 등록했습니다.`,
+      };
       this.logger.warn(
-        `Major Migration(${applied[applied.length - 1]}) 적용으로 복구 리허설 요구를 자동 등록했습니다 (CTO 결정 1901-①).`,
+        `Major Migration(${latest}) 적용으로 복구 리허설 요구를 자동 등록했습니다 (CTO 결정 1901-①).`,
       );
     } catch (error) {
-      // 자동 등록 실패가 기동을 막지는 않는다 — 다만 조용히 넘기지도 않는다
-      this.logger.warn(
-        `Major Migration 확인 실패: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      const message = error instanceof Error ? error.message : String(error);
+      // 자동 등록 실패가 기동을 막지는 않는다 — 다만 조용히 넘기지도 않는다.
+      // **확인하지 못한 것을 "등록할 것이 없었다"로 적지 않는다.**
+      this.autoRegistration = {
+        checkedAt: new Date().toISOString(),
+        applied: [],
+        registered: null,
+        detail: `Major Migration을 확인하지 못했습니다: ${message}`,
+      };
+      this.logger.warn(`Major Migration 확인 실패: ${message}`);
     }
   }
 
   /** 선언된 major 목록 중 실제로 적용된 것 */
   private async appliedMajorMigrations(): Promise<string[]> {
-    const declared = await this.majorMigrationManifest();
+    const declared = await this.majorMigrationNames();
     if (declared.length === 0) {
       return [];
     }
@@ -262,6 +323,21 @@ export class RecoveryDrillService implements OnModuleInit {
     )) as { migration_name: string }[];
     const appliedNames = new Set(rows.map((row) => row.migration_name));
     return declared.filter((name) => appliedNames.has(name));
+  }
+
+  /**
+   * 매니페스트 ∪ 파일명 규칙 (CTO 결정 2001-③).
+   *
+   * 매니페스트는 **잊기 쉽고**(파일을 만들고 목록에 넣는 것을 잊는다),
+   * 파일명은 **되돌리기 쉽다**(이름을 바꾸면 지정이 사라진다). 둘 다 받고,
+   * 어긋나는 것은 CI가 잡는다.
+   */
+  private async majorMigrationNames(): Promise<string[]> {
+    const [manifest, migrationNames] = await Promise.all([
+      this.majorMigrationManifest(),
+      this.migrationDirNames(),
+    ]);
+    return crossCheckMajorMigrations({ manifest, migrationNames }).effective;
   }
 
   private async majorMigrationManifest(): Promise<string[]> {
@@ -273,6 +349,21 @@ export class RecoveryDrillService implements OnModuleInit {
       return Array.isArray(parsed.majorMigrations) ? parsed.majorMigrations : [];
     } catch {
       // 목록이 없으면 자동 등록할 것도 없다 — 오류가 아니다
+      return [];
+    }
+  }
+
+  private async migrationDirNames(): Promise<string[]> {
+    try {
+      const entries = await readdir(
+        join(process.cwd(), "prisma", "migrations"),
+        { withFileTypes: true },
+      );
+      return entries
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name);
+    } catch {
+      // 배포 산출물에 마이그레이션 디렉터리가 없을 수 있다 — 매니페스트만 쓴다
       return [];
     }
   }

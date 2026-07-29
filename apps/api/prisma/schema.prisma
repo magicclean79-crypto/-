@@ -505,9 +505,14 @@ model BackupRun {
   entries    Int?
   /** 오브젝트 저장소에 복제된 키 — 복제하지 않았으면 null */
   offsiteKey String?
+  /** 원격 사본을 내려받아 대조한 시각 (TASK-2101, CTO 결정 2001-②) */
+  remoteCheckedAt DateTime?
+  /** 대조 결과 — ok · mismatch · missing */
+  remoteVerdict   String?
   createdAt  DateTime @default(now())
 
   @@index([createdAt])
+  @@index([remoteCheckedAt])
   @@map("backup_runs")
 }
 

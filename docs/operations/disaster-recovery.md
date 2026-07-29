@@ -1,4 +1,4 @@
-# Disaster Recovery (TASK-1601 · 1701 · 1801 · 1901 · 2001, Sprint 16~20)
+# Disaster Recovery (TASK-1601 ~ 2101, Sprint 16~21)
 
 **지금 무너지면 되살릴 수 있는가**를 다루는 문서입니다.
 배포 절차는 [production-runbook.md](production-runbook.md), 장애 대응 순서는
@@ -67,6 +67,8 @@ TZ=Asia/Seoul
 | `OPS_DRILL_GRACE_DAYS` | 리허설 기한 초과 후 경보 유예 | 14 |
 | `ALERT_COOLDOWN_BACKUP_PERF_MS` | 백업 성능 경보 재알림 간격 | 전체 기본값 |
 | `ALERT_COOLDOWN_BACKUP_INTEGRITY_MS` | 사슬·원격·규모 경보 재알림 간격 (2001) | 전체 기본값 |
+| `BACKUP_CHAIN_WINDOW_HOURS` | 사슬 관측 창(시간) — **최소는 백업 간격 × 4** (결정 2001-①) | 24 |
+| `OPS_CHECK_REMOTE_VERIFY_INTERVAL` | 원격 사본 대조 간격 (`7d` 등) — 전송 비용이 듭니다 | 운영 7일 · 그 외 꺼짐 (결정 2001-②) |
 | `BACKUP_MAX_AGE_HOURS` | 백업 신선도 한계 | 48 (2일, 결정 1601-⑤) |
 | `RESTORE_MAX_AGE_HOURS` | 복원 검증 신선도 한계 | 192 (8일, 결정 1601-⑤) |
 | `BACKUP_RPO_HOURS` | 허용 최대 손실 구간 | **백업 간격의 2배** (기본 2시간) |
@@ -197,6 +199,9 @@ TZ=Asia/Seoul
 **개발자에게 S3를 요구하지 않습니다** — 개발에서 개발 저장소를 쓰는 것은
 정상입니다. 표준은 운영에만 적용합니다.
 
+운영 전환 절차는 [s3-migration.md](s3-migration.md)에 있습니다
+(Sprint 21 완료 목표, CTO 결정 2001-⑤).
+
 백업 버킷도 이미지 버킷과 **같은 규칙**으로 판정합니다 (결정 1801-③).
 
 ### 백업 사슬 연속성 (TASK-2001)
@@ -208,7 +213,10 @@ TZ=Asia/Seoul
 
 그래서 **있어야 할 개수와 실제 개수를 비교합니다.**
 
-- 관측 창: 기본 24시간 (`DEFAULT_CHAIN_WINDOW_MS`)
+- 관측 창: `BACKUP_CHAIN_WINDOW_HOURS` (기본 24시간, CTO 결정 2001-①).
+  **최소는 백업 간격의 4배**이며, 그보다 짧게 두면 자동으로 올리고 **올렸다고
+  화면에 적습니다.** 창이 간격의 4배도 안 되면 창 안에 백업이 서너 개뿐이라
+  한 번만 걸러도 판정이 뒤집힙니다 — 표본이 없는 판정은 판정이 아니라 잡음입니다
 - 한계: **백업 간격의 2배** — 한 번 걸러도 경보하지 않습니다
 - 창 시작 ~ 첫 백업, 백업 사이, 마지막 백업 ~ 지금을 모두 공백으로 셉니다
 - 공백이 한계를 넘으면 **실패**이고, `backup-chain`은 **복구 필수 항목**입니다
@@ -226,14 +234,28 @@ TZ=Asia/Seoul
 `POST /ops/backup/verify-remote`는 마지막 원격 사본을 **내려받아** SHA-256을
 기록된 체크섬과 대조합니다.
 
-- **기본으로 돌지 않습니다** — 전송 비용이 듭니다 (결정 1301-⑤의 연장).
-  확인하지 않은 상태는 통과가 아니라 `직접 확인`입니다.
+- **운영에서는 주 1회 자동으로 돕니다** (CTO 결정 2001-②). 예약 점검
+  `remote-verify`이며 `OPS_CHECK_REMOTE_VERIFY_INTERVAL`로 조정합니다.
+  **운영이 아니면 기본이 꺼짐**입니다 — 개발이 전송 비용을 낼 이유가 없고,
+  개발 저장소에는 대조할 원격 사본도 없습니다. 스테이징에서 한 번 돌려 보려면
+  환경변수를 명시하면 됩니다.
+- **마지막 백업 1건만** 내려받습니다 — 이력 전체를 대조할 이유가 없습니다.
 - `missing` — 올렸다고 기록됐지만 실제로는 없습니다. 저장소 수명 주기 정책이나
   삭제 여부를 확인하십시오.
 - `mismatch` — 업로드가 잘렸거나 나중에 덮어써졌습니다. **이 사본으로는 복구를
   장담할 수 없습니다.**
 - 실패는 심각 경보 `backup-integrity:remote`입니다. 로컬 덤프로 복구는 되므로
   **복구 필수 항목은 아닙니다.**
+
+#### 결과는 남고, 낡으면 통과가 아닙니다
+
+대조 결과는 `backup_runs.remoteCheckedAt` · `remoteVerdict`에 남습니다.
+화면과 경보는 **이 기록을 읽습니다** — 조회할 때마다 내려받으면 화면을 여는
+것만으로 전송 비용이 발생합니다.
+
+- 마지막 대조가 **주기의 2배**를 넘기면 성공 기록도 `직접 확인`으로 되돌립니다.
+  예약이 두 번 걸렀다면 그때의 `ok`는 지금의 사실이 아닙니다.
+- **실패는 낡아도 실패입니다** — 시간이 지난다고 사본이 돌아오지 않습니다.
 
 ### 데이터베이스 규모 재평가 (CTO 결정 1901-④)
 
@@ -295,15 +317,56 @@ curl -X POST http://localhost:4000/ops/drills/require -b cookies.txt \
 않습니다. 그래서 `db-major-change`는 **지정된 Major Migration에 한해서만**
 자동 등록합니다.
 
-지정은 `apps/api/prisma/major-migrations.json`에 둡니다.
+지정하는 길이 **둘**입니다 (CTO 결정 2001-③).
 
-```json
-{ "majorMigrations": ["20260729210000_enterprise_backup"] }
-```
+| 방법 | 예 |
+| --- | --- |
+| 매니페스트 `apps/api/prisma/major-migrations.json` | `{ "majorMigrations": ["20260729210000_enterprise_backup"] }` |
+| 파일명 규칙 | `20260810000000_major_order_split` |
+
+둘의 **합집합**을 major로 봅니다 — 한쪽에만 적어도 놓치지 않기 위해서입니다.
+둘을 함께 두는 이유는 서로 다른 실수를 막기 때문입니다. 매니페스트는 **잊기
+쉽고**(파일을 만들고 목록에 넣는 것을 잊습니다), 파일명은 **되돌리기 쉽습니다**
+(이름을 바꾸면 지정이 사라집니다).
 
 기동할 때 `_prisma_migrations`와 대조해 **적용된 Major Migration**에 대해
 요구를 등록합니다. `dr-change`와 `pitr-adoption`은 코드가 알 수 없는
 사건이므로 **운영자가 직접 등록합니다.**
+
+##### CI 교차 검증
+
+```bash
+pnpm check:major-migrations
+```
+
+| 상황 | 종료 코드 |
+| --- | --- |
+| 매니페스트와 파일명 규칙이 일치 | 0 |
+| 파일명이 `_major_`인데 매니페스트에 없음 | **1** |
+| 매니페스트에 있는데 마이그레이션이 없음 | **1** |
+| 매니페스트·디렉터리를 읽지 못함 | **2** (판정 불가 — 통과로 처리하지 않습니다) |
+
+매니페스트에만 있고 파일명 규칙을 따르지 않는 것은 **오류가 아닙니다** —
+규칙을 도입하기 전에 지정한 마이그레이션이 그렇고, 이름을 소급해 바꾸면
+적용 이력(`_prisma_migrations`)과 어긋납니다.
+
+##### 재기동 후 확인 절차 (CTO 결정 2001-④)
+
+자동 등록은 **기동 시 1회**만 일어납니다. 마이그레이션만 적용하고 재기동하지
+않으면 등록되지 않습니다. 그래서 **배포 후 확인이 절차의 일부**입니다.
+
+1. 배포(또는 재기동)가 끝나면 `/admin/operations`를 엽니다.
+2. **복구 리허설** 구역의 `기동 시 Major Migration 자동 등록` 칸을 봅니다.
+3. 판정:
+
+| 표시 | 뜻 | 할 일 |
+| --- | --- | --- |
+| `등록됨` | 요구가 새로 등록됐습니다 | 리허설을 잡으십시오 |
+| `등록 없음` | 등록할 Major Migration이 없거나 이미 미해소 요구가 있습니다 | 문구를 읽고 확인만 하십시오 |
+| **`확인 불가`** | **확인하지 못했습니다** — 등록할 것이 없었다는 뜻이 아닙니다 | 문구의 사유를 보고 `pnpm check:major-migrations`로 대조한 뒤, 필요하면 직접 등록하십시오 |
+
+API로도 볼 수 있습니다: `GET /ops/readiness` →
+`enterprise.drill.autoRegistration`.
 
 ##### 중복 등록 금지 (CTO 결정 1901-⑤)
 
@@ -354,8 +417,11 @@ curl http://localhost:4000/ops/readiness -b cookies.txt
 # 메일 경로 확인 (연결·인증만, 메일은 보내지 않음)
 curl -X POST http://localhost:4000/ops/notifications/verify-smtp -b cookies.txt
 
-# 원격 사본 내려받아 대조 (전송 비용이 듭니다 — 기본으로 돌지 않습니다)
+# 원격 사본 내려받아 대조 (전송 비용 — 운영에서는 주 1회 자동으로도 돕니다)
 curl -X POST http://localhost:4000/ops/backup/verify-remote -b cookies.txt
+
+# 예약 점검으로 실행 (운영에서 주 1회 도는 것과 같은 경로)
+curl -X POST "http://localhost:4000/ops/checks/run?job=remote-verify" -b cookies.txt
 
 # 리허설 요구 목록 (취소된 것도 남아 있습니다)
 curl http://localhost:4000/ops/drills/requirements -b cookies.txt

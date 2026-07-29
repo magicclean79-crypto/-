@@ -19,6 +19,8 @@ export const SCHEDULED_JOBS = [
   "backup",
   "restore-verify",
   "provider-smoke",
+  // 원격 사본 대조 (TASK-2101, CTO 결정 2001-②) — 주 1회, 운영에서만
+  "remote-verify",
 ] as const;
 
 export type ScheduledJob = (typeof SCHEDULED_JOBS)[number];
@@ -39,7 +41,19 @@ export const DEFAULT_JOB_INTERVALS: Record<ScheduledJob, number> = {
   // 복구 검증·스모크는 여전히 시각 기반 (TASK-1601)
   "restore-verify": 24 * 60 * 60 * 1000,
   "provider-smoke": 24 * 60 * 60 * 1000,
+  // 원격 대조는 **전송 비용**이 든다 — 주 1회 (CTO 결정 2001-②)
+  "remote-verify": 7 * 24 * 60 * 60 * 1000,
 };
+
+/**
+ * **운영에서만** 도는 점검 (CTO 결정 2001-②).
+ *
+ * 원격 대조는 저장소에서 실제로 내려받으므로 전송 비용이 든다. 개발·테스트가
+ * 이 비용을 내야 할 이유가 없고, 개발 저장소에는 대조할 원격 사본도 없다.
+ * 운영이 아닌 곳에서는 `disabled`로 두되, **환경변수로 명시하면 켤 수 있다** —
+ * 스테이징에서 한 번 돌려 보는 길까지 막을 이유는 없다.
+ */
+export const PRODUCTION_ONLY_JOBS: ScheduledJob[] = ["remote-verify"];
 
 /**
  * 손실 한도(RPO) 기본 목표는 **백업 간격의 2배** (TASK-1801).
@@ -92,6 +106,8 @@ const UNIT_MS: Record<string, number> = {
   s: 1000,
   m: 60 * 1000,
   h: 60 * 60 * 1000,
+  // 주 1회 대조(CTO 결정 2001-②)를 `168h`로 적게 만들 이유가 없다
+  d: 24 * 60 * 60 * 1000,
 };
 
 /**
@@ -110,7 +126,7 @@ export function parseIntervalMs(
   if (trimmed.length === 0) {
     return fallback;
   }
-  const match = /^(\d+(?:\.\d+)?)(ms|s|m|h)?$/.exec(trimmed);
+  const match = /^(\d+(?:\.\d+)?)(ms|s|m|h|d)?$/.exec(trimmed);
   if (!match) {
     return fallback;
   }
@@ -145,6 +161,7 @@ export const JOB_INTERVAL_ENV: Record<ScheduledJob, string> = {
   backup: "OPS_CHECK_BACKUP_INTERVAL",
   "restore-verify": "OPS_CHECK_RESTORE_AT",
   "provider-smoke": "OPS_CHECK_SMOKE_AT",
+  "remote-verify": "OPS_CHECK_REMOTE_VERIFY_INTERVAL",
 };
 
 /**
@@ -179,6 +196,7 @@ export function resolveSchedules(
 ): JobSchedule[] {
   const globallyOff = (env.OPS_SCHEDULED_CHECKS ?? "").trim().toLowerCase();
   const allDisabled = globallyOff === "off" || globallyOff === "false" || globallyOff === "0";
+  const production = (env.NODE_ENV ?? "").trim().toLowerCase() === "production";
 
   return SCHEDULED_JOBS.map((job) => {
     const name = JOB_INTERVAL_ENV[job];
@@ -190,8 +208,11 @@ export function resolveSchedules(
     const daily = DAILY_JOBS[job] !== undefined;
     const defaultAt = DEFAULT_DAILY_TIMES[job] ?? DEFAULT_DAILY_AT;
     // 과금되는 점검은 명시적으로 켜야 한다 (TASK-1601)
+    // 운영 전용 점검은 운영이 아니면 꺼진다 — 다만 명시하면 켤 수 있다
     const defaultOff =
-      DEFAULT_DISABLED_JOBS.includes(job) && raw === undefined;
+      raw === undefined &&
+      (DEFAULT_DISABLED_JOBS.includes(job) ||
+        (PRODUCTION_ONLY_JOBS.includes(job) && !production));
 
     if (allDisabled || jobOff || defaultOff) {
       return {

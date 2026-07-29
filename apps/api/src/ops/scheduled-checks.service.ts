@@ -7,7 +7,9 @@ import {
   detectBackupChainAlert,
   detectBackupPerformanceAlert,
   detectLockOutageAlert,
+  detectRemoteIntegrityAlert,
   detectScaleAlert,
+  judgeRecordedRemoteIntegrity,
   detectSchedulerAlerts,
   detectUnpricedAlerts,
   isSchedulerStopped,
@@ -68,6 +70,8 @@ const JOB_ALERT_KINDS: Record<ScheduledJob, AlertKind[]> = {
   backup: [],
   "restore-verify": [],
   "provider-smoke": [],
+  // 원격 대조 결과는 watchdog이 backup-integrity 경보로 낸다
+  "remote-verify": [],
 };
 
 /** 사람이 읽는 주기 설명 (경보 문구용) */
@@ -79,7 +83,19 @@ function describeInterval(schedule: JobSchedule): string {
     // 상태와 설명이 어긋나 운영자가 다른 시각을 기다리게 된다
     return `매일 ${hours}:${minutes} 로컬(${process.env.TZ ?? "시스템 기본"})`;
   }
-  return `${Math.round(schedule.intervalMs / 1000)}초`;
+  // 주 1회 대조(CTO 결정 2001-②)가 "604800초"로 찍혀 아무도 읽을 수 없었다
+  // — 라이브 검증에서 드러난 결함. 사람이 읽는 단위로 적는다.
+  const ms = schedule.intervalMs;
+  if (ms % 86_400_000 === 0) {
+    return `${ms / 86_400_000}일`;
+  }
+  if (ms % 3_600_000 === 0) {
+    return `${ms / 3_600_000}시간`;
+  }
+  if (ms % 60_000 === 0) {
+    return `${ms / 60_000}분`;
+  }
+  return `${Math.round(ms / 1000)}초`;
 }
 
 /**
@@ -245,12 +261,20 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
       detectBackupPerformanceAlert(health.performance),
     );
 
-    // 백업 사슬·규모 (TASK-2001) — 원격 사본은 전송 비용이 들어 수동 실행만
+    // 백업 사슬·규모·원격 사본 (TASK-2001 · 2101)
+    // 원격은 **기록된 대조 결과**를 본다 — 여기서 다시 내려받으면 감시가
+    // 전송 비용을 만든다 (CTO 결정 2001-②는 주 1회 예약으로 돌린다)
     await this.alerts.sync(
       ["backup-integrity"],
       [
         ...detectBackupChainAlert(health.chain),
         ...detectScaleAlert(health.scale),
+        ...detectRemoteIntegrityAlert(
+          judgeRecordedRemoteIntegrity(health.remoteRecord, {
+            now: Date.now(),
+            intervalMs: this.backups.remoteVerifyIntervalMs,
+          }),
+        ),
       ],
     );
   }
@@ -473,6 +497,17 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
           : result.ok
             ? `복원 검증 통과 — 테이블 ${result.tables}개`
             : `복원 검증 실패 — ${result.error ?? "원인 불명"}`,
+        notified: [],
+      };
+    }
+
+    if (job === "remote-verify") {
+      // 원격에서 **실제로 내려받는다** = 전송 비용 (운영에서만 기본으로 켜지는 이유)
+      const result = await this.backups.verifyRemoteCopy();
+      return {
+        // 대조할 원격 사본이 없는 것은 실패가 아니다 — 못 한 것과 다르다
+        ok: result.verdict !== "missing" && result.verdict !== "mismatch",
+        detail: result.detail,
         notified: [],
       };
     }

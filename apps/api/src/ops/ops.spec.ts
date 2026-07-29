@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Test } from "@nestjs/testing";
 import request from "supertest";
+import { SCHEDULED_JOBS } from "@acos/core";
 import { AuthService } from "../auth/auth.service";
 import { WriteProtectionGuard } from "../auth/write-protection.guard";
 import { LlmBudgetService } from "../llm/llm-budget.service";
@@ -298,6 +299,36 @@ function createPrismaStub() {
             rows = rows.slice(0, args.take);
           }
           return rows.map((row) => ({ ...row }));
+        },
+        // 원격 대조 기록 조회 (TASK-2101)
+        findFirst: async (args?: {
+          where?: { remoteCheckedAt?: { not: null } };
+        }) => {
+          const rows = [...backups] as {
+            remoteCheckedAt?: Date | null;
+          }[];
+          const filtered = args?.where?.remoteCheckedAt
+            ? rows.filter((row) => row.remoteCheckedAt)
+            : rows;
+          const sorted = [...filtered].sort(
+            (a, b) =>
+              (b.remoteCheckedAt?.getTime() ?? 0) -
+              (a.remoteCheckedAt?.getTime() ?? 0),
+          );
+          return sorted[0] ? { ...sorted[0] } : null;
+        },
+        update: async (args: {
+          where: { id: string };
+          data: Record<string, unknown>;
+        }) => {
+          const row = (backups as { id: string }[]).find(
+            (entry) => entry.id === args.where.id,
+          );
+          if (!row) {
+            throw new Error("not found");
+          }
+          Object.assign(row, args.data);
+          return { ...row };
         },
       },
       restoreRun: {
@@ -753,6 +784,8 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
         "backup",
         "restore-verify",
         "provider-smoke",
+        // 원격 사본 대조 (TASK-2101, CTO 결정 2001-②)
+        "remote-verify",
       ]);
       // 마지막 실행 결과가 붙는다
       expect(
@@ -899,7 +932,7 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
       const coordination = await built.checks.coordination();
       expect(coordination.distributed).toBe(false);
       expect(coordination.instance).toMatch(/-\d+-[0-9a-f]+$/);
-      expect(coordination.leases).toHaveLength(7);
+      expect(coordination.leases).toHaveLength(SCHEDULED_JOBS.length);
       // 단일 모드에서는 내가 항상 리더다
       expect(coordination.leases.every((lease) => lease.self)).toBe(true);
     });
@@ -2474,6 +2507,221 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
         .set("Authorization", "Bearer tok-editor")
         .send({ cancelledBy: "a", reason: "b" })
         .expect(403);
+    });
+  });
+
+  describe("Enterprise Operational Automation (TASK-2101)", () => {
+    beforeEach(() => {
+      process.env.BACKUP_DIR = join(tmpdir(), "acos-backup-test");
+      process.env.DATABASE_URL = "postgresql://u:p@localhost:5432/acos";
+      delete process.env.NODE_ENV;
+      delete process.env.BACKUP_CHAIN_WINDOW_HOURS;
+      delete process.env.OPS_CHECK_BACKUP_INTERVAL;
+      delete process.env.OPS_CHECK_REMOTE_VERIFY_INTERVAL;
+      process.env.S3_ENDPOINT = "http://localhost:9000";
+    });
+
+    afterEach(() => {
+      delete process.env.BACKUP_CHAIN_WINDOW_HOURS;
+      delete process.env.OPS_CHECK_BACKUP_INTERVAL;
+      delete process.env.OPS_CHECK_REMOTE_VERIFY_INTERVAL;
+    });
+
+    const readiness = async (built: Awaited<ReturnType<typeof build>>) =>
+      (
+        await request(built.app.getHttpServer())
+          .get("/ops/readiness")
+          .set("Authorization", "Bearer tok-admin")
+          .expect(200)
+      ).body;
+
+    it("관측 창을 환경변수로 설정한다 (CTO 결정 2001-①)", async () => {
+      process.env.BACKUP_CHAIN_WINDOW_HOURS = "48";
+      const built = await build();
+      app = built.app;
+
+      const chain = (await readiness(built)).enterprise.backupIntegrity.chain;
+      expect(chain.windowMs).toBe(48 * 60 * 60 * 1000);
+      expect(chain.windowSource).toBe("env");
+    });
+
+    it("간격의 4배에 못 미치는 창은 올리고, 올렸다고 말한다", async () => {
+      process.env.OPS_CHECK_BACKUP_INTERVAL = "6h";
+      process.env.BACKUP_CHAIN_WINDOW_HOURS = "12";
+      const built = await build();
+      app = built.app;
+
+      const chain = (await readiness(built)).enterprise.backupIntegrity.chain;
+      expect(chain.windowMs).toBe(24 * 60 * 60 * 1000);
+      expect(chain.windowSource).toBe("clamped");
+      expect(chain.windowDetail).toContain("올렸습니다");
+    });
+
+    it("사슬 판정이 설정한 창을 실제로 쓴다", async () => {
+      // 30시간 전에만 백업이 있다 — 24시간 창에서는 창 안 0건이다
+      process.env.BACKUP_CHAIN_WINDOW_HOURS = "48";
+      const built = await build();
+      app = built.app;
+      built.prisma.backups.push({
+        id: "bk-old",
+        ok: true,
+        sizeBytes: BigInt(50_000),
+        fileName: "old.dump",
+        durationMs: 300,
+        trigger: "schedule",
+        error: null,
+        checksum: "a".repeat(64),
+        integrityOk: true,
+        entries: 120,
+        offsiteKey: null,
+        remoteCheckedAt: null,
+        remoteVerdict: null,
+        createdAt: new Date(Date.now() - 30 * 60 * 60 * 1000),
+      } as never);
+      const backups = built.app.get(BackupService);
+      Object.defineProperty(backups, "startedAt", {
+        value: Date.now() - 48 * 60 * 60 * 1000,
+      });
+
+      const chain = (await readiness(built)).enterprise.backupIntegrity.chain;
+      // 24시간 창이었다면 0건이었을 백업이 창 안에 들어온다
+      expect(chain.actual).toBe(1);
+    });
+
+    it("원격 대조는 운영에서 주 1회 예약된다 (CTO 결정 2001-②)", async () => {
+      process.env.NODE_ENV = "production";
+      const built = await build();
+      app = built.app;
+
+      const remote = (await readiness(built)).enterprise.backupIntegrity.remote;
+      expect(remote.scheduled).toBe(true);
+      expect(remote.intervalMs).toBe(7 * 24 * 60 * 60 * 1000);
+    });
+
+    it("운영이 아니면 예약되지 않는다 — 개발이 전송 비용을 낼 이유가 없다", async () => {
+      const built = await build();
+      app = built.app;
+      expect(
+        (await readiness(built)).enterprise.backupIntegrity.remote.scheduled,
+      ).toBe(false);
+    });
+
+    it("대조 결과를 기록하고, 조회는 기록을 읽는다", async () => {
+      const built = await build();
+      app = built.app;
+      built.prisma.backups.push({
+        id: "bk-remote",
+        ok: true,
+        sizeBytes: BigInt(50_000),
+        fileName: "acos.dump",
+        durationMs: 300,
+        trigger: "schedule",
+        error: null,
+        checksum: "a".repeat(64),
+        integrityOk: true,
+        entries: 120,
+        offsiteKey: "backups/acos.dump",
+        remoteCheckedAt: null,
+        remoteVerdict: null,
+        createdAt: new Date(),
+      } as never);
+
+      await request(built.app.getHttpServer())
+        .post("/ops/backup/verify-remote")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+
+      const row = (built.prisma.backups as { remoteVerdict?: string }[]).find(
+        (entry) => entry.remoteVerdict !== null,
+      );
+      expect(row?.remoteVerdict).toBeTruthy();
+
+      // 조회는 다시 내려받지 않고 **기록**을 읽는다
+      const remote = (await readiness(built)).enterprise.backupIntegrity.remote;
+      expect(remote.checkedAt).not.toBeNull();
+      expect(remote.verdict).not.toBe("unchecked");
+    });
+
+    it("예약 점검으로도 대조가 돈다", async () => {
+      const built = await build();
+      app = built.app;
+      built.prisma.backups.push({
+        id: "bk-sched",
+        ok: true,
+        sizeBytes: BigInt(50_000),
+        fileName: "acos.dump",
+        durationMs: 300,
+        trigger: "schedule",
+        error: null,
+        checksum: "a".repeat(64),
+        integrityOk: true,
+        entries: 120,
+        offsiteKey: "backups/acos.dump",
+        remoteCheckedAt: null,
+        remoteVerdict: null,
+        createdAt: new Date(),
+      } as never);
+
+      const result = await built.checks.run("remote-verify", "manual");
+      expect(result.detail).toBeTruthy();
+      const row = (
+        built.prisma.backups as { id: string; remoteVerdict?: string }[]
+      ).find((entry) => entry.id === "bk-sched");
+      expect(row?.remoteVerdict).toBeTruthy();
+    });
+
+    it("기록된 대조 실패는 감시가 경보로 올린다 — 감시가 전송 비용을 만들지 않는다", async () => {
+      const built = await build();
+      app = built.app;
+      built.prisma.backups.push({
+        id: "bk-missing",
+        ok: true,
+        sizeBytes: BigInt(50_000),
+        fileName: "gone.dump",
+        durationMs: 300,
+        trigger: "schedule",
+        error: null,
+        checksum: "a".repeat(64),
+        integrityOk: true,
+        entries: 120,
+        offsiteKey: "backups/gone.dump",
+        remoteCheckedAt: new Date(),
+        remoteVerdict: "missing",
+        createdAt: new Date(),
+      } as never);
+
+      await built.checks.watchdog();
+      const alert = built.prisma.alerts.get("backup-integrity:remote");
+      expect(alert).toMatchObject({ level: "CRITICAL", status: "ACTIVE" });
+    });
+
+    it("주 1회를 '604800초'라고 적지 않는다 — 아무도 읽을 수 없다", async () => {
+      // 기동 로그와 경보 문구가 같은 표기를 쓴다 (라이브 검증에서 드러난 결함)
+      process.env.NODE_ENV = "production";
+      const built = await build();
+      app = built.app;
+      // 예약이 멎은 것으로 만들어 경보 문구에 간격 표기를 태운다
+      Object.defineProperty(built.checks, "startedAt", {
+        value: Date.now() - 90 * 24 * 60 * 60 * 1000,
+      });
+
+      await built.checks.watchdog();
+      const alert = built.prisma.alerts.get(
+        "scheduler-stopped:remote-verify",
+      );
+      expect(alert?.message).toContain("7일");
+      expect(alert?.message).not.toContain("604800초");
+    });
+
+    it("재기동 후 자동 등록 결과를 화면에서 확인할 수 있다 (CTO 결정 2001-④)", async () => {
+      const built = await build();
+      app = built.app;
+
+      const auto = (await readiness(built)).enterprise.drill.autoRegistration;
+      expect(auto.checkedAt).not.toBeNull();
+      // 확인은 했고, 등록할 것이 있었는지가 분명하게 남는다
+      expect(auto.registered === null).toBe(false);
+      expect(auto.detail.length).toBeGreaterThan(0);
     });
   });
 });

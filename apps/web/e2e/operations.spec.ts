@@ -396,7 +396,7 @@ test.describe("Enterprise Backup Integrity Platform (TASK-2001)", () => {
 
     await page.getByTestId("verify-remote").click();
     await expect(page.getByTestId("operations-note")).toContainText(
-      "기록된 체크섬과 일치",
+      "내려받아 대조했습니다",
     );
     await expect(remote).toContainText("통과");
     // 체크섬 전체를 늘어놓지 않는다
@@ -491,5 +491,93 @@ test.describe("Enterprise Backup Integrity Platform (TASK-2001)", () => {
     // 취소된 요구는 리허설을 붙잡지 않는다
     await expect(page.getByTestId("drill-triggers")).toHaveCount(0);
     await expect(page.getByTestId("dr-item-drill")).toContainText("통과");
+  });
+});
+
+test.describe("Enterprise Operational Automation (TASK-2101)", () => {
+  test("원격 대조가 운영에서 주 1회 자동으로 돈다고 말한다 (CTO 결정 2001-②)", async ({
+    page,
+  }) => {
+    await setMode("data");
+    await openPage(page);
+
+    const remote = page.getByTestId("remote-integrity");
+    await expect(remote).toContainText("자동 대조 주기 7.0일");
+    await expect(remote).toContainText("마지막 백업 1건만 내려받습니다");
+  });
+
+  test("예약되지 않은 환경에서는 자동으로 돌지 않는다고 말한다", async ({
+    page,
+  }) => {
+    await setMode("empty");
+    await openPage(page);
+
+    const remote = page.getByTestId("remote-integrity");
+    await expect(remote).toContainText("자동 대조가 예약되어 있지 않습니다");
+    await expect(remote).toContainText("전송 비용");
+  });
+
+  test("대조하면 무엇을 언제 봤는지 남는다", async ({ page }) => {
+    await setMode("data");
+    await openPage(page);
+
+    await page.getByTestId("verify-remote").click();
+    const remote = page.getByTestId("remote-integrity");
+    await expect(remote).toContainText("통과");
+    await expect(remote).toContainText("acos-2026-07-29.dump");
+  });
+
+  test("관측 창을 올렸으면 숨기지 않는다 (CTO 결정 2001-①)", async ({ page }) => {
+    await setMode("empty");
+    await openPage(page);
+
+    const clamped = page.getByTestId("chain-window-clamped");
+    await expect(clamped).toContainText("4배에 못 미쳐");
+    await expect(clamped).toContainText("올렸습니다");
+  });
+
+  test("기본 창은 조용히 지나간다 — 올리지 않았으면 말할 것이 없다", async ({
+    page,
+  }) => {
+    await setMode("data");
+    await openPage(page);
+    await expect(page.getByTestId("chain-window-clamped")).toHaveCount(0);
+  });
+
+  test("재기동 후 자동 등록을 화면에서 확인한다 (CTO 결정 2001-④)", async ({
+    page,
+  }) => {
+    await setMode("data");
+    await openPage(page);
+
+    const auto = page.getByTestId("auto-registration");
+    await expect(auto).toContainText("등록됨");
+    await expect(auto).toContainText("20260729210000_enterprise_backup");
+    await expect(auto).toContainText("기동 시 1회");
+  });
+
+  test("확인하지 못한 것을 '등록할 것이 없었다'로 적지 않는다", async ({
+    page,
+  }) => {
+    await setMode("empty");
+    await openPage(page);
+
+    const auto = page.getByTestId("auto-registration");
+    await expect(auto).toContainText("확인 불가");
+    await expect(auto).toContainText("확인하지 못했습니다");
+  });
+
+  test("원격 대조가 예약 점검 목록에 주 1회로 보인다", async ({ page }) => {
+    await setMode("data");
+    await page.goto("/admin/production");
+    await page.evaluate(() => localStorage.setItem("acos_token", "stub-token"));
+    await page.reload();
+
+    await expect(page.getByTestId("schedule-remote-verify")).toContainText(
+      "remote-verify",
+    );
+    await expect(page.getByTestId("schedule-remote-verify")).toContainText(
+      "7일",
+    );
   });
 });
