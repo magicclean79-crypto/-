@@ -67,6 +67,14 @@ export interface DeploymentState {
     backupVersioning: ProtectionState;
     /** 재해 복구 판정 — 복구 가능한가 (알 수 없으면 null) */
     recoverable: boolean | null;
+    /**
+     * 운영 저장소가 Amazon S3인가 (TASK-2401, CTO 결정 2301-③).
+     *
+     * 전환이 끝났으면 **Versioning 조회 실패를 Fail로 승격**한다 — S3는
+     * 조회를 지원하므로, 읽지 못하는 것은 저장소의 한계가 아니라 **권한이
+     * 빠졌다는 뜻**이다. 전환 전에는 `직접 확인`을 유지한다.
+     */
+    storageStandard: boolean;
   };
 }
 
@@ -229,24 +237,33 @@ export function buildDeploymentChecklist(
         : "보호 상태를 읽을 수 있습니다 — 조회 권한이 부여되어 있습니다.",
   });
 
+  // S3 전환이 끝났으면 조회 실패를 실패로 본다 (CTO 결정 2301-③) —
+  // S3는 조회를 지원하므로, 못 읽는 것은 저장소의 한계가 아니라 권한 누락이다.
+  // 전환 전에는 `직접 확인`을 유지한다(개발 저장소는 조회를 지원하지 않는다).
+  const unknownIsFailure = state.production && ops.storageStandard;
+  const versioningStatus: ChecklistStatus =
+    ops.versioning === "enabled"
+      ? "pass"
+      : ops.versioning === "unknown"
+        ? unknownIsFailure
+          ? "fail"
+          : "manual"
+        : state.production
+          ? "fail"
+          : "warn";
   items.push({
     id: "versioning",
     title: "이미지 버킷 버전 관리",
     // 운영 필수 (CTO 결정 1701-③)
-    blocking: state.production && ops.versioning === "disabled",
-    status:
-      ops.versioning === "enabled"
-        ? "pass"
-        : ops.versioning === "unknown"
-          ? "manual"
-          : state.production
-            ? "fail"
-            : "warn",
+    blocking: state.production && versioningStatus === "fail",
+    status: versioningStatus,
     detail:
       ops.versioning === "enabled"
         ? "버전 관리가 켜져 있습니다."
         : ops.versioning === "unknown"
-          ? "버전 관리 상태를 알 수 없습니다 — 제공자 콘솔에서 직접 확인하세요."
+          ? unknownIsFailure
+            ? "버전 관리 상태를 읽지 못했습니다 — Amazon S3는 조회를 지원하므로 이것은 저장소의 한계가 아니라 s3:GetBucketVersioning 권한이 빠졌다는 뜻입니다 (CTO 결정 2301-③)."
+            : "버전 관리 상태를 알 수 없습니다 — 제공자 콘솔에서 직접 확인하세요. Amazon S3 전환 후에는 조회 실패를 실패로 봅니다 (CTO 결정 2301-③)."
           : "버전 관리가 꺼져 있습니다 — 실수로 덮어쓴 이미지를 되돌릴 수 없습니다 (운영 필수, CTO 결정 1701-③).",
   });
 

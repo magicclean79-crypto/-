@@ -1,6 +1,7 @@
 import type { INestApplication } from "@nestjs/common";
 import { APP_GUARD } from "@nestjs/core";
 import { createHash } from "node:crypto";
+import { readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Test } from "@nestjs/testing";
@@ -17,7 +18,9 @@ import { BackupService } from "./backup.service";
 import { DistributedLockService } from "./distributed-lock.service";
 import { NotificationQueueService } from "./notification-queue.service";
 import { NotificationService } from "./notification.service";
+import { MigrationGovernanceService } from "./migration-governance.service";
 import { RecoveryDrillService } from "./recovery-drill.service";
+import { RecoveryEvaluationService } from "./recovery-evaluation.service";
 import { OpsController } from "./ops.controller";
 import { ScheduledChecksService } from "./scheduled-checks.service";
 
@@ -58,6 +61,18 @@ interface CheckRunRow {
 
 const OFF = { budget: null, spend: 0, ratio: null, status: "off" as const };
 
+/**
+ * 실제 서비스가 읽는 것과 같은 마이그레이션 디렉터리 목록 (TASK-2401).
+ * 대조가 실제로 이뤄지는지 보려면 같은 목록을 써야 한다.
+ */
+const MIGRATION_DIRS = readdirSync(
+  join(process.cwd(), "prisma", "migrations"),
+  { withFileTypes: true },
+)
+  .filter((entry) => entry.isDirectory())
+  .map((entry) => entry.name)
+  .sort();
+
 /** 최소 Prisma 스텁 — alerts/check_runs를 메모리 Map으로 흉내 낸다 */
 function createPrismaStub() {
   const alerts = new Map<string, AlertRow>();
@@ -92,10 +107,24 @@ function createPrismaStub() {
   const restores: Record<string, unknown>[] = [];
   const drills: Record<string, unknown>[] = [];
   const requirements: Record<string, unknown>[] = [];
+  /**
+   * 스키마 적용 상태 (TASK-2401).
+   *
+   * 실제 서비스가 읽는 것과 같은 두 조회(`migration_name` 목록 · 실패 건수)를
+   * 여기서 답한다. 목록을 돌려주지 않으면 "코드에 없는 마이그레이션" 판정이
+   * 구조적으로 검증될 수 없다.
+   */
+  const migrations = {
+    // 기본은 **실제 디렉터리 그대로 적용됨** — 정상 상태에서 경보가 나지 않아야
+    // 경보가 났을 때 그것이 신호가 된다
+    applied: [...MIGRATION_DIRS] as string[] | null,
+    failed: 0 as number | null,
+  };
   let seq = 0;
 
   return {
     alerts,
+    migrations,
     runs,
     deliveries,
     queue,
@@ -118,6 +147,20 @@ function createPrismaStub() {
           }
           // Prisma처럼 복사본을 돌려준다 — 호출자가 저장소를 직접 바꾸면 안 된다
           return rows.map((row) => ({ ...row }));
+        },
+        /**
+         * 처음 관측한 시각 조회 (TASK-2401).
+         *
+         * 스텁이 이것을 답하지 않으면 `firstSeenAt`이 조용히 null이 되어
+         * **경보 승격이 검증되지 않는다** — 스텁이 결함을 감추는 그 형태다.
+         */
+        findFirst: async (args: { where: { key: string } }) => {
+          const found = [...alerts.values()]
+            .filter((row) => row.key === args.where.key)
+            .sort(
+              (a, b) => a.firstRaisedAt.getTime() - b.firstRaisedAt.getTime(),
+            )[0];
+          return found ? { ...found } : null;
         },
         upsert: async (args: {
           where: { key: string };
@@ -342,7 +385,24 @@ function createPrismaStub() {
         findMany: async () =>
           [...restores].reverse().map((row) => ({ ...row })),
       },
-      $queryRaw: async () => [{ "?column?": 1 }],
+      // 실제 서비스와 같이 **템플릿을 읽고** 답한다 — 무엇을 물어도 같은 값을
+      // 돌려주면 마이그레이션 판정이 검증되지 않는다 (TASK-2401)
+      $queryRaw: async (strings?: TemplateStringsArray) => {
+        const sql = strings ? strings.join(" ") : "";
+        if (sql.includes("migration_name")) {
+          if (migrations.applied === null) {
+            throw new Error('relation "_prisma_migrations" does not exist');
+          }
+          return migrations.applied.map((name) => ({ migration_name: name }));
+        }
+        if (sql.includes("_prisma_migrations")) {
+          if (migrations.failed === null) {
+            throw new Error('relation "_prisma_migrations" does not exist');
+          }
+          return [{ count: BigInt(migrations.failed) }];
+        }
+        return [{ "?column?": 1 }];
+      },
       $queryRawUnsafe: async (sql: string) =>
         sql.includes("pg_database_size")
           ? [{ size: BigInt(2 * 1024 ** 3) }]
@@ -465,6 +525,9 @@ async function build(overrides: Overrides = {}) {
       DistributedLockService,
       BackupService,
       RecoveryDrillService,
+      // 복구 판정의 단일 원천 (TASK-2401, 결정 2301-①) — 컨트롤러가 이것을 쓴다
+      RecoveryEvaluationService,
+      MigrationGovernanceService,
       {
         provide: StorageService,
         useValue: {
@@ -532,6 +595,9 @@ async function build(overrides: Overrides = {}) {
     prisma,
     checks: moduleRef.get(ScheduledChecksService),
     alerts: moduleRef.get(AlertService),
+    // 복구 판정·스키마 상태의 단일 원천 (TASK-2401)
+    recovery: moduleRef.get(RecoveryEvaluationService),
+    migrations: moduleRef.get(MigrationGovernanceService),
   };
 }
 
@@ -2930,6 +2996,189 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
       expect(
         (await readiness(built)).enterprise.storageProvisioning.mode,
       ).toBe("managed");
+    });
+  });
+
+  describe("Enterprise Operational Compliance Platform (TASK-2401)", () => {
+    beforeEach(() => {
+      process.env.BACKUP_DIR = join(tmpdir(), "acos-backup-test");
+      process.env.DATABASE_URL = "postgresql://u:p@localhost:5432/acos";
+      delete process.env.NODE_ENV;
+      process.env.S3_ENDPOINT = "http://localhost:9000";
+    });
+
+    const readiness = async (built: Awaited<ReturnType<typeof build>>) =>
+      (
+        await request(built.app.getHttpServer())
+          .get("/ops/readiness")
+          .set("Authorization", "Bearer tok-admin")
+          .expect(200)
+      ).body;
+
+    describe("복구 판정 단일 원천 (CTO 결정 2301-①)", () => {
+      it("조회와 판정 입구가 같은 답을 낸다", async () => {
+        const built = await build();
+        app = built.app;
+        const recovery = built.recovery;
+
+        const body = await readiness(built);
+        // 배포 체크리스트가 쓰는 입구와 화면이 보여 주는 값이 **같아야** 한다.
+        // 다르면 한 화면은 복구 가능이라 하고 다른 화면은 아니라고 한다.
+        expect(await recovery.recoverable()).toBe(body.recoverable);
+      });
+
+      it("복구 불가 상태에서도 두 답이 함께 움직인다", async () => {
+        // 버전 관리가 꺼진 운영 저장소는 복구 필수 항목을 실패시킨다
+        process.env.NODE_ENV = "production";
+        const built = await build();
+        app = built.app;
+        // build()가 보호 상태를 초기화하므로 그 뒤에 바꾼다 — 순서를 뒤집으면
+        // 의도한 이유가 아닌 다른 이유로 통과한다
+        storageProtection.versioning = "disabled";
+
+        const body = await readiness(built);
+        expect(body.recoverable).toBe(false);
+        expect(await built.recovery.recoverable()).toBe(false);
+      });
+
+      it("판정 조립이 한 곳에 있다 — 체크리스트 항목도 같은 것을 쓴다", async () => {
+        const built = await build();
+        app = built.app;
+
+        const evaluated = await built.recovery.evaluate();
+        const body = await readiness(built);
+        expect(evaluated.checklist.map((item) => item.id)).toEqual(
+          body.checklist.map((item: { id: string }) => item.id),
+        );
+        expect(evaluated.summary.recoverable).toBe(body.recoverable);
+      });
+    });
+
+    describe("코드에 없는 마이그레이션 경보 (CTO 결정 2301-②)", () => {
+      const UNKNOWN = "20260909000000_from_other_branch";
+
+      it("정상 상태에서는 경보하지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+
+        await built.checks.watchdog();
+        expect(
+          [...built.prisma.alerts.values()].filter(
+            (row) => row.kind === "migration-governance",
+          ),
+        ).toHaveLength(0);
+      });
+
+      it("스키마가 코드보다 앞서면 주의 경보를 만든다", async () => {
+        const built = await build();
+        app = built.app;
+        built.prisma.migrations.applied = [...MIGRATION_DIRS, UNKNOWN];
+
+        await built.checks.watchdog();
+        const alert = built.prisma.alerts.get("migration-governance:unknown");
+        expect(alert?.level).toBe("WARNING");
+        expect(alert?.status).toBe("ACTIVE");
+        expect(alert?.message).toContain(UNKNOWN);
+      });
+
+      it("7일을 넘기면 심각으로 올린다 — 되돌린 것이 아니라 잊은 것이다", async () => {
+        const built = await build();
+        app = built.app;
+        built.prisma.migrations.applied = [...MIGRATION_DIRS, UNKNOWN];
+
+        await built.checks.watchdog();
+        // 처음 관측 시각을 8일 전으로 되돌린다 — 경보 저장소가 관측 기록이다
+        const stored = built.prisma.alerts.get("migration-governance:unknown")!;
+        stored.firstRaisedAt = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+
+        await built.checks.watchdog();
+        const escalated = built.prisma.alerts.get(
+          "migration-governance:unknown",
+        );
+        expect(escalated?.level).toBe("CRITICAL");
+        expect(escalated?.message).toContain("8일째");
+        expect(escalated?.message).toContain("배포는 막지 않습니다");
+      });
+
+      it("심각으로 올라도 배포를 막지 않는다 — 판정은 주의로 남는다", async () => {
+        process.env.NODE_ENV = "production";
+        const built = await build();
+        app = built.app;
+        built.prisma.migrations.applied = [...MIGRATION_DIRS, UNKNOWN];
+
+        const judged = await built.migrations.judge(true);
+        // 경보와 차단은 다르다 — 막으면 되돌린 배포를 다시 되돌릴 수 없다
+        expect(judged.status).toBe("warn");
+        expect(judged.pending).toEqual([]);
+        expect(judged.unknown).toEqual([UNKNOWN]);
+      });
+
+      it("코드로 되살리면 경보가 해소된다", async () => {
+        const built = await build();
+        app = built.app;
+        built.prisma.migrations.applied = [...MIGRATION_DIRS, UNKNOWN];
+        await built.checks.watchdog();
+
+        built.prisma.migrations.applied = [...MIGRATION_DIRS];
+        await built.checks.watchdog();
+        expect(
+          built.prisma.alerts.get("migration-governance:unknown")?.status,
+        ).toBe("RESOLVED");
+      });
+
+      it("마이그레이션 경보가 예약 점검 경보를 해소하지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        built.prisma.migrations.applied = [...MIGRATION_DIRS, UNKNOWN];
+
+        await built.checks.watchdog();
+        const kinds = new Set(
+          [...built.prisma.alerts.values()]
+            .filter((row) => row.status === "ACTIVE")
+            .map((row) => row.kind),
+        );
+        // 종류가 다른 경보는 서로를 건드리지 않는다 (결정 1302-③)
+        expect(kinds.has("migration-governance")).toBe(true);
+        expect(
+          [...built.prisma.alerts.values()].filter(
+            (row) =>
+              row.kind === "scheduler-stopped" && row.status === "RESOLVED",
+          ).length,
+        ).toBe(0);
+      });
+    });
+
+    describe("스키마 상태를 한 곳에서 읽는다 (CTO 결정 2301-④)", () => {
+      it("미적용 마이그레이션은 실제 개수로 나온다", async () => {
+        const built = await build();
+        app = built.app;
+        built.prisma.migrations.applied = MIGRATION_DIRS.slice(0, -2);
+
+        const judged = await built.migrations.judge(true);
+        expect(judged.status).toBe("fail");
+        expect(judged.pending).toEqual(MIGRATION_DIRS.slice(-2));
+      });
+
+      it("적용 기록을 읽지 못하면 통과로 세지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        built.prisma.migrations.applied = null;
+
+        const judged = await built.migrations.judge(true);
+        expect(judged.status).toBe("manual");
+        expect(judged.pending).toEqual([]);
+      });
+
+      it("확인 불가 상태에서는 경보도 만들지 않는다 — 모르는 것으로 사람을 부르지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        built.prisma.migrations.applied = null;
+
+        await built.checks.watchdog();
+        expect(
+          built.prisma.alerts.get("migration-governance:unknown"),
+        ).toBeUndefined();
+      });
     });
   });
 });

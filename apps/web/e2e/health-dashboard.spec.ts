@@ -152,3 +152,53 @@ test.describe("Enterprise Deployment Governance (TASK-2301)", () => {
     await expect(blockers).toContainText("배포 차단");
   });
 });
+
+test.describe("Enterprise Operational Compliance (TASK-2401)", () => {
+  test("확인하지 못한 미적용 개수를 0으로 적지 않는다 (CTO 결정 2301-④)", async ({
+    page,
+  }) => {
+    await setMode("compliance");
+    await openDashboard(page);
+
+    // 0으로 보이면 "미적용 없음"으로 읽힌다 — 그것이 거짓 통과다
+    await expect(page.getByTestId("component-section")).toContainText(
+      "확인 불가",
+    );
+    await expect(page.getByTestId("migration-governance")).toContainText(
+      "마이그레이션 목록과 적용 기록을 모두 읽어야",
+    );
+    await expect(page.getByTestId("pending-migrations")).toHaveCount(0);
+  });
+
+  test("S3 전환 후 버전 관리 조회 실패가 배포를 막는다 (CTO 결정 2301-③)", async ({
+    page,
+  }) => {
+    await setMode("compliance");
+    await openDashboard(page);
+
+    await expect(page.getByTestId("readiness-verdict")).toContainText(
+      "배포 불가",
+    );
+    const blockers = page.getByTestId("readiness-blockers");
+    await expect(blockers).toContainText("이미지 버킷 버전 관리");
+    // 저장소의 한계가 아니라 권한 누락이라고 말한다
+    await expect(page.getByTestId("checklist-section")).toContainText(
+      "s3:GetBucketVersioning 권한이 빠졌다",
+    );
+  });
+
+  test("복구 판정을 확인하지 못하면 직접 확인으로 남는다 (CTO 결정 2301-①)", async ({
+    page,
+  }) => {
+    await setMode("compliance");
+    await openDashboard(page);
+
+    const section = page.getByTestId("checklist-section");
+    await expect(section).toContainText("재해 복구 판정 (복구 가능 여부)");
+    // 통과로 뭉개지 않고, 어디서 확인하는지 알려 준다
+    await expect(section).toContainText(
+      "재해 복구 판정을 확인하지 못했습니다",
+    );
+    await expect(section).toContainText("/ops/readiness");
+  });
+});

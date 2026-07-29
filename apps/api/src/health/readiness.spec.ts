@@ -10,6 +10,8 @@ import { PrismaService } from "../prisma/prisma.service";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { resolveProvisioningPolicy } from "@acos/core";
+import { MigrationGovernanceService } from "../ops/migration-governance.service";
+import { RecoveryEvaluationService } from "../ops/recovery-evaluation.service";
 import { StorageService } from "../storage/storage.service";
 import { HealthController } from "./health.controller";
 import { ReadinessService } from "./readiness.service";
@@ -48,8 +50,17 @@ describe("Production Readiness (TASK-1202)", () => {
     bucketExists: true,
     backupBucketExists: true,
     versioning: "enabled" as "enabled" | "disabled" | "unknown",
-    backups: 1,
-    restores: 1,
+    /**
+     * 복구 가능 여부 (TASK-2401, CTO 결정 2301-①).
+     *
+     * 배포 체크리스트는 이 값을 **판정하지 않고 가져다 쓴다** — 여기서는
+     * 단일 원천(`RecoveryEvaluationService`)이 돌려줄 값을 이 상태로 정한다.
+     * 이전에는 백업·복원 이력 개수로 대신 판정했고, 그것이 두 화면이 다른
+     * 말을 할 수 있게 했다.
+     */
+    recoverable: true as boolean | null,
+    /** 마이그레이션 적용 기록 조회 실패 — 모르는 것을 통과로 세지 않는다 */
+    migrationsUnreadable: false,
   };
 
   beforeAll(async () => {
@@ -59,6 +70,9 @@ describe("Production Readiness (TASK-1202)", () => {
         // 적용 기록 조회 — 실제 서비스와 같이 **목록**을 돌려준다.
         // 실패 행 수만 세면 미적용을 알 수 없다는 것이 이번 TASK의 요지다.
         if (sql.includes("migration_name")) {
+          if (state.migrationsUnreadable) {
+            throw new Error("relation \"_prisma_migrations\" does not exist");
+          }
           // readiness.service가 읽는 디렉터리 수만큼 적용됐다고 보고,
           // state.pending개는 빼서 미적용 상황을 만든다
           return migrationDirs
@@ -67,11 +81,6 @@ describe("Production Readiness (TASK-1202)", () => {
         }
         if (sql.includes("_prisma_migrations")) {
           return [{ count: BigInt(state.failed) }];
-        }
-        if (sql.includes("backup_runs")) {
-          return [
-            { backups: BigInt(state.backups), restores: BigInt(state.restores) },
-          ];
         }
         if (!state.dbOk) {
           throw new Error("connection refused");
@@ -85,6 +94,14 @@ describe("Production Readiness (TASK-1202)", () => {
       controllers: [HealthController],
       providers: [
         ReadinessService,
+        // 스키마 적용 상태를 읽는 곳도 하나다 (TASK-2401) — 실제 서비스를 쓴다
+        MigrationGovernanceService,
+        {
+          // 복구 판정의 단일 원천 (CTO 결정 2301-①). 배포 체크리스트는 이
+          // 값을 그대로 쓴다 — 여기서 다시 판정하지 않는다.
+          provide: RecoveryEvaluationService,
+          useValue: { recoverable: async () => state.recoverable },
+        },
         { provide: PrismaService, useValue: prisma },
         {
           provide: StorageService,
@@ -312,8 +329,9 @@ describe("Production Readiness (TASK-1202)", () => {
       state.bucketExists = true;
       state.backupBucketExists = true;
       state.versioning = "enabled";
-      state.backups = 1;
-      state.restores = 1;
+      state.recoverable = true;
+      state.migrationsUnreadable = false;
+      delete process.env.S3_ENDPOINT;
     });
 
     const report = async () => (await asAdmin("/health/ready").expect(200)).body;
@@ -405,9 +423,9 @@ describe("Production Readiness (TASK-1202)", () => {
       ).not.toContain("iam");
     });
 
-    it("복원해 본 적이 없으면 복구 불가로 보고 운영 배포를 막는다", async () => {
+    it("복구 불가면 운영 배포를 막는다", async () => {
       process.env.NODE_ENV = "production";
-      state.restores = 0;
+      state.recoverable = false;
 
       const body = await report();
       const readinessItem = body.checklist.find(
@@ -425,7 +443,7 @@ describe("Production Readiness (TASK-1202)", () => {
       state.bucketExists = false;
       state.backupBucketExists = false;
       state.versioning = "disabled";
-      state.restores = 0;
+      state.recoverable = false;
 
       const body = await report();
       const ids = body.summary.blockers.map((item: { id: string }) => item.id);
@@ -441,6 +459,149 @@ describe("Production Readiness (TASK-1202)", () => {
           (item: { id: string }) => item.id === "bucket",
         ).status,
       ).toBe("manual");
+    });
+  });
+
+  describe("Enterprise Operational Compliance (TASK-2401)", () => {
+    const originalEndpoint = process.env.S3_ENDPOINT;
+
+    beforeEach(() => {
+      state.dbOk = true;
+      state.storageOk = true;
+      state.pending = 0;
+      state.failed = 0;
+      state.admins = 1;
+      state.bucketExists = true;
+      state.backupBucketExists = true;
+      state.versioning = "enabled";
+      state.recoverable = true;
+      state.migrationsUnreadable = false;
+      delete process.env.S3_ENDPOINT;
+    });
+
+    afterAll(() => {
+      if (originalEndpoint === undefined) delete process.env.S3_ENDPOINT;
+      else process.env.S3_ENDPOINT = originalEndpoint;
+    });
+
+    const report = async () => (await asAdmin("/health/ready").expect(200)).body;
+
+    describe("복구 판정 단일 원천 (CTO 결정 2301-①)", () => {
+      it("배포 체크리스트는 복구 판정을 다시 하지 않고 가져다 쓴다", async () => {
+        // 백업·복원 이력 개수로 대신 판정하던 것을 없앴다 — 이력이 아무리
+        // 많아도 단일 원천이 복구 불가라고 하면 복구 불가다
+        state.recoverable = false;
+        process.env.NODE_ENV = "production";
+
+        const body = await report();
+        const item = body.checklist.find(
+          (entry: { id: string }) => entry.id === "readiness",
+        );
+        expect(item.status).toBe("fail");
+        expect(item.detail).toContain("/ops/readiness");
+        expect(
+          body.summary.blockers.map((entry: { id: string }) => entry.id),
+        ).toContain("readiness");
+      });
+
+      it("단일 원천이 복구 가능이라 하면 그대로 통과한다", async () => {
+        state.recoverable = true;
+        process.env.NODE_ENV = "production";
+
+        expect(
+          (await report()).checklist.find(
+            (entry: { id: string }) => entry.id === "readiness",
+          ).status,
+        ).toBe("pass");
+      });
+
+      it("복구 판정을 확인하지 못하면 통과로 세지 않는다", async () => {
+        // 모르는 것을 통과로 처리하지 않는다
+        state.recoverable = null;
+        process.env.NODE_ENV = "production";
+
+        const item = (await report()).checklist.find(
+          (entry: { id: string }) => entry.id === "readiness",
+        );
+        expect(item.status).toBe("manual");
+        expect(item.detail).toContain("확인하지 못했습니다");
+      });
+    });
+
+    describe("Versioning 조회 실패 승격 (CTO 결정 2301-③)", () => {
+      it("S3 전환 전에는 직접 확인으로 남기고 막지 않는다", async () => {
+        process.env.NODE_ENV = "production";
+        process.env.S3_ENDPOINT = "http://127.0.0.1:9000";
+        state.versioning = "unknown";
+
+        const body = await report();
+        const item = body.checklist.find(
+          (entry: { id: string }) => entry.id === "versioning",
+        );
+        expect(item.status).toBe("manual");
+        expect(item.detail).toContain("직접 확인하세요");
+        expect(
+          body.summary.blockers.map((entry: { id: string }) => entry.id),
+        ).not.toContain("versioning");
+      });
+
+      it("S3 전환 후에는 조회 실패를 실패로 올려 배포를 막는다", async () => {
+        process.env.NODE_ENV = "production";
+        process.env.S3_ENDPOINT = "https://s3.ap-northeast-2.amazonaws.com";
+        state.versioning = "unknown";
+
+        const body = await report();
+        const item = body.checklist.find(
+          (entry: { id: string }) => entry.id === "versioning",
+        );
+        expect(item.status).toBe("fail");
+        // 저장소의 한계가 아니라 권한 누락이라는 것을 말해 준다
+        expect(item.detail).toContain("s3:GetBucketVersioning");
+        expect(
+          body.summary.blockers.map((entry: { id: string }) => entry.id),
+        ).toContain("versioning");
+      });
+
+      it("개발에서는 S3여도 승격하지 않는다 — 배포 차단은 운영에서만", async () => {
+        delete process.env.NODE_ENV;
+        process.env.S3_ENDPOINT = "https://s3.ap-northeast-2.amazonaws.com";
+        state.versioning = "unknown";
+
+        const body = await report();
+        expect(
+          body.checklist.find(
+            (entry: { id: string }) => entry.id === "versioning",
+          ).status,
+        ).toBe("manual");
+        expect(
+          body.summary.blockers.map((entry: { id: string }) => entry.id),
+        ).not.toContain("versioning");
+      });
+    });
+
+    describe("pendingMigrations의 공식 의미 (CTO 결정 2301-④)", () => {
+      it("실제 미적용 개수다 — 실패 행 수가 아니다", async () => {
+        state.pending = 2;
+        state.failed = 5;
+
+        const body = await report();
+        // 실패 행이 5건이어도 미적용은 2건이다
+        expect(body.pendingMigrations).toBe(2);
+        expect(body.migrations.pending).toHaveLength(2);
+      });
+
+      it("확인하지 못하면 0이 아니라 null이다", async () => {
+        // 0으로 보고하면 "미적용 없음"이라는 거짓 통과가 된다
+        state.migrationsUnreadable = true;
+
+        const body = await report();
+        expect(body.pendingMigrations).toBeNull();
+        expect(body.migrations.status).toBe("manual");
+      });
+
+      it("전부 적용됐으면 0이다", async () => {
+        expect((await report()).pendingMigrations).toBe(0);
+      });
     });
   });
 });

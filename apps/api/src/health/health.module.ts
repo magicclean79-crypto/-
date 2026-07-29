@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { AuthModule } from "../auth/auth.module";
 import { LlmModule } from "../llm/llm.module";
+import { OpsModule } from "../ops/ops.module";
 import { StorageModule } from "../storage/storage.module";
 import { HealthController } from "./health.controller";
 import { ReadinessService } from "./readiness.service";
@@ -10,7 +11,9 @@ import { ReadinessService } from "./readiness.service";
  * 환경 검증·구성 요소 점검·배포 체크리스트를 제공한다.
  */
 @Module({
-  imports: [AuthModule, LlmModule, StorageModule],
+  // Ops → Health 방향 의존은 없다 — 복구 판정의 단일 원천을 가져다 쓴다
+  // (CTO 결정 2301-①)
+  imports: [AuthModule, LlmModule, StorageModule, OpsModule],
   controllers: [HealthController],
   providers: [ReadinessService],
   exports: [ReadinessService],

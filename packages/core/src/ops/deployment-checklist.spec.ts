@@ -47,6 +47,8 @@ const READY: DeploymentState = {
     versioning: "enabled",
     backupVersioning: "enabled",
     recoverable: true,
+    // S3 전환 완료 (CTO 결정 2301-③)
+    storageStandard: true,
   },
   storage: { ok: true, detail: "버킷 접근 정상" },
   availableProviders: ["mock", "openai", "anthropic"],
@@ -256,7 +258,7 @@ describe("운영 표준 배포 체크리스트 (TASK-2301, CTO 결정 2201-④)"
   });
 
   it("보호 상태를 읽지 못하면 IAM 권한을 의심하라고 말한다", () => {
-    const item = ops({ versioning: "unknown" }).find(
+    const item = ops({ versioning: "unknown", storageStandard: false }).find(
       (entry) => entry.id === "iam",
     )!;
     expect(item.status).toBe("warn");
@@ -267,8 +269,9 @@ describe("운영 표준 배포 체크리스트 (TASK-2301, CTO 결정 2201-④)"
 
   it("IAM 항목은 배포를 막지 않는다 — 읽지 못해도 지금 서비스는 돈다", () => {
     expect(
-      ops({ versioning: "unknown" }).find((entry) => entry.id === "iam")!
-        .blocking,
+      ops({ versioning: "unknown", storageStandard: false }).find(
+        (entry) => entry.id === "iam",
+      )!.blocking,
     ).toBe(false);
   });
 
@@ -280,12 +283,14 @@ describe("운영 표준 배포 체크리스트 (TASK-2301, CTO 결정 2201-④)"
     expect(item.detail).toContain("되돌릴 수 없습니다");
   });
 
-  it("버전 관리를 확인할 수 없으면 직접 확인으로 남기고 막지 않는다", () => {
-    const item = ops({ versioning: "unknown" }).find(
+  it("S3 전환 전에는 버전 관리 조회 실패를 직접 확인으로 남긴다 (CTO 결정 2301-③)", () => {
+    // 개발 저장소는 조회를 지원하지 않는다 — 못 읽는 것이 저장소의 한계다
+    const item = ops({ versioning: "unknown", storageStandard: false }).find(
       (entry) => entry.id === "versioning",
     )!;
     expect(item.status).toBe("manual");
     expect(item.blocking).toBe(false);
+    expect(item.detail).toContain("전환 후에는 조회 실패를 실패로 봅니다");
   });
 
   it("백업 버킷이 이미지 버킷과 같으면 함께 사라진다고 말한다", () => {
@@ -354,5 +359,59 @@ describe("운영 표준 배포 체크리스트 (TASK-2301, CTO 결정 2201-④)"
       migrations: { ...READY.migrations, appliedBy: "developer" },
     }).find((entry) => entry.id === "migrations")!;
     expect(item.title).toBe("마이그레이션 적용");
+  });
+});
+
+describe("S3 전환 후 버전 관리 조회 실패 승격 (TASK-2401, CTO 결정 2301-③)", () => {
+  const ops = (overrides: Partial<DeploymentState["operations"]>) =>
+    buildDeploymentChecklist({
+      ...READY,
+      operations: { ...READY.operations, ...overrides },
+    });
+
+  const versioning = (overrides: Partial<DeploymentState["operations"]>) =>
+    ops(overrides).find((entry) => entry.id === "versioning")!;
+
+  it("전환 후 조회 실패는 실패이고 배포를 막는다", () => {
+    const item = versioning({ versioning: "unknown", storageStandard: true });
+    expect(item).toMatchObject({ status: "fail", blocking: true });
+    // S3는 조회를 지원한다 — 못 읽는 것은 저장소의 한계가 아니라 권한 누락이다
+    expect(item.detail).toContain("s3:GetBucketVersioning 권한이 빠졌다");
+  });
+
+  it("전환 전 조회 실패는 직접 확인이고 막지 않는다", () => {
+    const item = versioning({ versioning: "unknown", storageStandard: false });
+    expect(item).toMatchObject({ status: "manual", blocking: false });
+  });
+
+  it("개발에서는 전환 여부와 무관하게 막지 않는다", () => {
+    for (const storageStandard of [true, false]) {
+      const items = buildDeploymentChecklist({
+        ...READY,
+        production: false,
+        operations: {
+          ...READY.operations,
+          versioning: "unknown",
+          storageStandard,
+        },
+      });
+      expect(
+        items.find((entry) => entry.id === "versioning")!.blocking,
+      ).toBe(false);
+    }
+  });
+
+  it("켜져 있으면 전환 여부와 무관하게 통과", () => {
+    for (const storageStandard of [true, false]) {
+      expect(
+        versioning({ versioning: "enabled", storageStandard }).status,
+      ).toBe("pass");
+    }
+  });
+
+  it("꺼져 있으면 전환 전에도 운영에서 실패다 (CTO 결정 1701-③)", () => {
+    expect(
+      versioning({ versioning: "disabled", storageStandard: false }),
+    ).toMatchObject({ status: "fail", blocking: true });
   });
 });

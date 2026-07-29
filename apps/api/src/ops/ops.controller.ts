@@ -10,26 +10,17 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import {
-  buildDisasterRecoveryChecklist,
   DRILL_TRIGGERS,
-  judgeChainWindow,
-  judgeRecordedRemoteIntegrity,
   MAX_MANUAL_REMOTE_VERIFY_COUNT,
   resolveRemoteVerifyCount,
-  judgeStorageProtection,
-  judgeStorageStandard,
-  resolveSchedules,
   SCHEDULED_JOBS,
   summarizeAlerts,
-  summarizeDisasterRecovery,
 } from "@acos/core";
 import type {
   DrillTrigger as ScheduledDrillTrigger,
-  ProtectionState,
   ScheduledJob,
 } from "@acos/core";
 import type {
-  DrStatusDto,
   AlertArchiveResultDto,
   AlertBoardDto,
   AlertHistoryDto,
@@ -43,7 +34,6 @@ import type {
   SmtpValidationDto,
 } from "@acos/shared";
 import { AuthGuard, RequireRole } from "../auth/auth.guard";
-import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
 import { AlertService } from "./alert.service";
 import { BackupService } from "./backup.service";
@@ -51,6 +41,7 @@ import { DistributedLockService } from "./distributed-lock.service";
 import { NotificationQueueService } from "./notification-queue.service";
 import { NotificationService } from "./notification.service";
 import { RecoveryDrillService } from "./recovery-drill.service";
+import { RecoveryEvaluationService } from "./recovery-evaluation.service";
 import { ScheduledChecksService } from "./scheduled-checks.service";
 
 /**
@@ -72,8 +63,8 @@ export class OpsController {
     private readonly backups: BackupService,
     private readonly drills: RecoveryDrillService,
     private readonly locks: DistributedLockService,
-    private readonly prisma: PrismaService,
     private readonly storage: StorageService,
+    private readonly recovery: RecoveryEvaluationService,
   ) {}
 
   /**
@@ -84,123 +75,31 @@ export class OpsController {
    */
   @Get("readiness")
   async readiness(): Promise<OperationsReadinessDto> {
-    const [
+    // 판정은 **한 곳에서만** 한다 (CTO 결정 2301-①) — 이 컨트롤러는
+    // 조립하지 않고 DTO로 옮기기만 한다
+    const evaluation = await this.recovery.evaluate();
+    const {
       health,
       backupHistory,
       restoreHistory,
       smtp,
       redis,
-      database,
-      storage,
-      protection,
-      backupProtection,
       drill,
       drillHistory,
       requirements,
-    ] = await Promise.all([
-      this.backups.health(),
-      this.backups.backupHistory(10),
-      this.backups.restoreHistory(10),
-      this.notifications.verifySmtp(),
-      this.locks.ping(),
-      this.checkDatabase(),
-      this.checkStorage(),
-      this.describeStorageProtection(),
-      this.describeStorageProtection(true),
-      this.drills.health(),
-      this.drills.history(10),
-      this.drills.requirements(10),
-    ]);
-
-    // 조회는 원격에서 내려받지 않는다 — **기록된 대조 결과**를 읽는다.
-    // 주 1회 예약(CTO 결정 2001-②)이 실제 내려받기를 담당한다.
-    // 관측 창 상향을 Readiness에 Warning으로 드러낸다 (CTO 결정 2101-②)
-    const chainWindowStatus = judgeChainWindow(health.chainWindow);
-    const remoteVerifyIntervalMs = this.backups.remoteVerifyIntervalMs;
-    const remoteVerifyScheduled =
-      resolveSchedules(process.env as Record<string, string | undefined>).find(
-        (entry) => entry.job === "remote-verify",
-      )?.enabled ?? false;
-    const remoteIntegrity = judgeRecordedRemoteIntegrity(health.remoteRecord, {
-      now: Date.now(),
-      intervalMs: remoteVerifyIntervalMs,
-    });
-
-    // 이미지 저장소 보호 상태 (CTO 결정 1601-④·1701-③) — 앱은 이미지를
-    // 백업하지 않는다. 운영에서는 Versioning이 필수, Replication은 권장이다.
-    const production = process.env.NODE_ENV === "production";
-    const storageProtection = judgeStorageProtection({
-      ...protection,
-      production,
-      label: "이미지 저장소",
-    });
-    // 백업 버킷도 같은 규칙으로 판정한다 (CTO 결정 1801-③)
-    const backupBucketProtection = judgeStorageProtection({
-      ...backupProtection,
-      production,
-      label: "백업 버킷",
-    });
-    // 운영 저장소 표준 (CTO 결정 1901-③)
-    const storageStandard = judgeStorageStandard(
-      process.env.S3_ENDPOINT,
-      production,
-    );
-    const targetSafety = this.backups.restoreTargetSafety;
-    const restoreTarget = {
-      status: (targetSafety.verdict === "same-as-production"
-        ? "fail"
-        : targetSafety.verdict === "not-configured"
-          ? "warn"
-          : "pass") as DrStatusDto,
-      detail: targetSafety.detail,
-    };
-
-    const channels = this.notifications
-      .channelConfigs()
-      .filter((config) => config.enabled).length;
-
-    const checklist = buildDisasterRecoveryChecklist({
-      backup: health.backup,
-      restore: health.restore,
-      database,
-      storage,
-      // Redis를 안 쓰는 구성이면 항목 자체를 두지 않는다
-      lock: this.locks.distributed
-        ? { ok: redis.ok, detail: redis.detail }
-        : null,
-      notificationChannels: channels,
-      runbookPath: "docs/operations/disaster-recovery.md",
-      enterprise: {
-        integrity: health.integrity,
-        offsite: health.offsite,
-        storageProtection,
-        objectives: {
-          status: health.objectives.status,
-          detail: health.objectives.detail,
-        },
-        restoreTarget,
-        drill: { status: drill.status, detail: drill.detail },
-        backupBucketProtection,
-        backupPerformance: {
-          status: health.performance.status,
-          detail: health.performance.detail,
-        },
-        backupChain: {
-          status: health.chain.status,
-          detail: health.chain.detail,
-        },
-        remoteIntegrity: {
-          status: remoteIntegrity.status,
-          detail: remoteIntegrity.detail,
-        },
-        storageStandard: {
-          status: storageStandard.status,
-          detail: storageStandard.detail,
-        },
-        chainWindow: chainWindowStatus,
-      },
-    });
-    const summary = summarizeDisasterRecovery(checklist);
+      protection,
+      backupProtection,
+      storageProtection,
+      backupBucketProtection,
+      storageStandard,
+      restoreTarget,
+      remoteIntegrity,
+      remoteVerifyIntervalMs,
+      remoteVerifyScheduled,
+      checklist,
+      summary,
+      restoreTargetVerdict,
+    } = evaluation;
     const unhealthySince = this.locks.unhealthySince;
 
     return {
@@ -244,11 +143,13 @@ export class OpsController {
         offsite: {
           ...health.offsite,
           configured: this.backups.offsiteEnabled,
-          copies: backupHistory.filter((entry) => entry.offsite).length,
+          copies: backupHistory.filter(
+            (entry: { offsite: boolean }) => entry.offsite,
+          ).length,
         },
         storageProtection: { ...storageProtection, ...protection },
         objectives: health.objectives,
-        restoreTarget: { ...restoreTarget, verdict: targetSafety.verdict },
+        restoreTarget: { ...restoreTarget, verdict: restoreTargetVerdict },
         drill: {
           status: drill.status,
           detail: drill.detail,
@@ -311,21 +212,6 @@ export class OpsController {
     };
   }
 
-  /** 저장소가 알려 주지 않으면 unknown으로 남긴다 — 모르는 것을 통과로 세지 않는다 */
-  private async describeStorageProtection(backupBucket = false): Promise<{
-    versioning: ProtectionState;
-    replication: ProtectionState;
-  }> {
-    try {
-      return backupBucket
-        ? await this.storage.describeBackupProtection()
-        : await this.storage.describeProtection();
-    } catch {
-      return { versioning: "unknown", replication: "unknown" };
-    }
-  }
-
-  /** SMTP 연결·인증 검증 — **메일은 보내지 않는다** */
   @Post("notifications/verify-smtp")
   @HttpCode(200)
   async verifySmtp(): Promise<SmtpValidationDto> {
@@ -474,30 +360,6 @@ export class OpsController {
     @Query("limit") limit?: string,
   ): Promise<DrillRequirementDto[]> {
     return this.drills.requirements(Number(limit) || 20);
-  }
-
-  private async checkDatabase(): Promise<{ ok: boolean; detail: string }> {
-    try {
-      await this.prisma.$queryRaw`SELECT 1`;
-      return { ok: true, detail: "연결 정상" };
-    } catch (error) {
-      return {
-        ok: false,
-        detail: `연결 실패: ${error instanceof Error ? error.message : String(error)}`,
-      };
-    }
-  }
-
-  private async checkStorage(): Promise<{ ok: boolean; detail: string }> {
-    try {
-      const detail = await this.storage.check();
-      return { ok: true, detail };
-    } catch (error) {
-      return {
-        ok: false,
-        detail: `접근 실패: ${error instanceof Error ? error.message : String(error)}`,
-      };
-    }
   }
 
   /** 경보 현황 + 예약 점검 구성·마지막 결과 */

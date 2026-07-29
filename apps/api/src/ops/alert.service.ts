@@ -262,6 +262,25 @@ export class AlertService {
     return rows.map(toDto);
   }
 
+  /**
+   * 특정 키를 **처음 본 시각** (TASK-2401, CTO 결정 2301-②).
+   *
+   * 경보는 삭제하지 않으므로(결정 1302-④) `firstRaisedAt`이 곧 "처음 본 때"다
+   * — 관측 기록을 위해 새 테이블을 두지 않는다. 해소된 경보도 포함해서 본다:
+   * 같은 문제가 다시 왔다면 처음 본 때는 여전히 처음이다.
+   */
+  async firstSeenAt(key: string): Promise<number | null> {
+    try {
+      const row = (await this.prisma.alert.findFirst({
+        where: { key },
+        orderBy: { firstRaisedAt: "asc" },
+      })) as { firstRaisedAt: Date } | null;
+      return row?.firstRaisedAt.getTime() ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   async recent(limit = 20): Promise<AlertDto[]> {
     const rows = (await this.prisma.alert.findMany({
       orderBy: { lastRaisedAt: "desc" },

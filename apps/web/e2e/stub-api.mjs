@@ -606,6 +606,94 @@ const server = http.createServer((req, res) => {
       res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
       return;
     }
+    /**
+     * 운영 준수 상태 (TASK-2401, CTO 결정 2301-①·③·④).
+     *
+     * S3 전환이 끝난 운영에서 **조회 실패가 실패로 승격된** 상태와, 스키마
+     * 적용 상태·복구 판정을 **확인하지 못한** 상태를 함께 보여준다 — 화면이
+     * 이 셋을 0이나 통과로 뭉개지 않는지가 요지다.
+     */
+    if (mode === "compliance") {
+      const versioning = {
+        id: "versioning",
+        title: "이미지 버킷 버전 관리",
+        status: "fail",
+        detail:
+          "버전 관리 상태를 읽지 못했습니다 — Amazon S3는 조회를 지원하므로 이것은 저장소의 한계가 아니라 s3:GetBucketVersioning 권한이 빠졌다는 뜻입니다 (CTO 결정 2301-③).",
+        blocking: true,
+      };
+      const checklist = [
+        { id: "env", title: "환경변수 검증", status: "pass", detail: "22개 항목 이상 없음.", blocking: true },
+        { id: "database", title: "데이터베이스 연결", status: "pass", detail: "연결 정상", blocking: true },
+        {
+          id: "migrations",
+          title: "마이그레이션 적용 (운영 담당자 수행)",
+          status: "manual",
+          detail:
+            "스키마 적용 상태를 확인하지 못했습니다 — 마이그레이션 목록과 적용 기록을 모두 읽어야 판정할 수 있습니다. 직접 확인하세요.",
+          blocking: true,
+        },
+        { id: "storage", title: "이미지 저장소 접근", status: "pass", detail: "버킷 접근 정상 (acos)", blocking: true },
+        { id: "admin-user", title: "관리자 계정", status: "pass", detail: "ADMIN 계정이 존재합니다.", blocking: true },
+        { id: "bucket", title: "이미지 버킷 준비", status: "pass", detail: "acos 확인됨.", blocking: true },
+        {
+          id: "iam",
+          title: "저장소 접근 권한 (IAM)",
+          status: "warn",
+          detail:
+            "버킷 보호 상태를 읽지 못했습니다 — s3:GetBucketVersioning · s3:GetReplicationConfiguration 권한을 확인하세요. 저장소가 S3인 것과 상태를 읽을 수 있는 것은 다릅니다.",
+          blocking: false,
+        },
+        versioning,
+        { id: "backup-bucket", title: "백업 버킷 준비·분리", status: "manual", detail: "acos-backups 분리됨 — 버전 관리 상태는 직접 확인하세요.", blocking: true },
+        {
+          id: "readiness",
+          title: "재해 복구 판정 (복구 가능 여부)",
+          status: "manual",
+          detail: "재해 복구 판정을 확인하지 못했습니다 — /ops/readiness를 직접 확인하세요.",
+          blocking: true,
+        },
+        { id: "smoke", title: "실 Provider 스모크 (배포 직후 1회)", status: "manual", detail: "node scripts/real-provider-smoke.mjs 실행", blocking: false },
+      ];
+      res.end(
+        JSON.stringify({
+          ready: false,
+          production: true,
+          nodeEnv: "production",
+          environment: { ok: true, errors: [], warnings: [], checked: 22 },
+          components: [
+            { name: "database", ok: true, detail: "연결 정상", latencyMs: 3 },
+            { name: "storage", ok: true, detail: "버킷 접근 정상 (acos)", latencyMs: 12 },
+          ],
+          // 확인하지 못한 것을 0으로 적지 않는다 (CTO 결정 2301-④)
+          pendingMigrations: null,
+          migrations: {
+            status: "manual",
+            detail:
+              "스키마 적용 상태를 확인하지 못했습니다 — 마이그레이션 목록과 적용 기록을 모두 읽어야 판정할 수 있습니다. 직접 확인하세요.",
+            pending: [],
+            unknown: [],
+            appliedBy: "operator",
+          },
+          providers: { available: ["mock", "openai"], default: "openai" },
+          checklist,
+          summary: {
+            ready: false,
+            pass: 5,
+            fail: 1,
+            warn: 1,
+            manual: 4,
+            blockers: [versioning],
+          },
+          configuration: [
+            { name: "DATABASE_URL", category: "database", description: "PostgreSQL 연결 문자열", requiredInProduction: true, configured: true, value: null, secret: true, fallback: null },
+            { name: "S3_ENDPOINT", category: "storage", description: "S3 호환 엔드포인트", requiredInProduction: false, configured: true, value: "https://s3.ap-northeast-2.amazonaws.com", secret: false, fallback: null },
+          ],
+          checkedAt: new Date().toISOString(),
+        }),
+      );
+      return;
+    }
     const ready = mode === "data";
     res.end(
       JSON.stringify({

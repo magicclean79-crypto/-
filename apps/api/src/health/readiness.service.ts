@@ -1,20 +1,20 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { readdir } from "node:fs/promises";
-import { join } from "node:path";
 import {
   buildDeploymentChecklist,
   describeEnvironment,
-  judgeMigrations,
+  judgeStorageStandard,
   summarizeChecklist,
   validateEnvironment,
 } from "@acos/core";
-import type { EnvValidationResult, MigrationState } from "@acos/core";
+import type { EnvValidationResult } from "@acos/core";
 import type {
   ComponentHealthDto,
   ReadinessReportDto,
 } from "@acos/shared";
 import { LlmService } from "../llm/llm.service";
 import { PrismaService } from "../prisma/prisma.service";
+import { MigrationGovernanceService } from "../ops/migration-governance.service";
+import { RecoveryEvaluationService } from "../ops/recovery-evaluation.service";
 import { StorageService } from "../storage/storage.service";
 import { failoverPriority } from "../llm/failover-config";
 import { LlmBudgetService } from "../llm/llm-budget.service";
@@ -38,6 +38,8 @@ export class ReadinessService {
     private readonly llm: LlmService,
     private readonly budget: LlmBudgetService,
     private readonly storage: StorageService,
+    private readonly recovery: RecoveryEvaluationService,
+    private readonly migrations: MigrationGovernanceService,
   ) {}
 
   /** 환경 검증 (Environment Validation) */
@@ -62,67 +64,6 @@ export class ReadinessService {
         detail: `연결 실패: ${error instanceof Error ? error.message : String(error)}`,
         latencyMs: Date.now() - startedAt,
       };
-    }
-  }
-
-  /**
-   * 스키마 적용 상태 (TASK-2301, CTO 결정 2201-①).
-   *
-   * **실패 행만 세면 미적용을 알 수 없다** — 적용하지 않은 마이그레이션은
-   * 실패 행조차 남기지 않으므로, 그것만 보면 "미적용 없음"이라는 거짓 통과가
-   * 나온다. 그래서 마이그레이션 디렉터리와 적용 기록을 **대조한다.**
-   *
-   * 애플리케이션은 적용하지 않는다 — 검증만 한다.
-   */
-  private async migrationState(): Promise<MigrationState> {
-    const [directories, applied, failed] = await Promise.all([
-      this.migrationDirectories(),
-      this.appliedMigrations(),
-      this.failedMigrations(),
-    ]);
-    return { directories, applied, failed };
-  }
-
-  private async migrationDirectories(): Promise<string[] | null> {
-    try {
-      const entries = await readdir(
-        join(process.cwd(), "prisma", "migrations"),
-        { withFileTypes: true },
-      );
-      return entries
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => entry.name)
-        .sort();
-    } catch {
-      // 읽지 못한 것을 "없음"으로 세지 않는다
-      return null;
-    }
-  }
-
-  private async appliedMigrations(): Promise<string[] | null> {
-    try {
-      const rows = await this.prisma.$queryRaw<{ migration_name: string }[]>`
-        SELECT migration_name
-        FROM _prisma_migrations
-        WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL
-        ORDER BY finished_at ASC
-      `;
-      return rows.map((row) => row.migration_name);
-    } catch {
-      return null;
-    }
-  }
-
-  private async failedMigrations(): Promise<number | null> {
-    try {
-      const rows = await this.prisma.$queryRaw<{ count: bigint }[]>`
-        SELECT COUNT(*)::bigint AS count
-        FROM _prisma_migrations
-        WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL
-      `;
-      return Number(rows[0]?.count ?? 0);
-    } catch {
-      return null;
     }
   }
 
@@ -177,11 +118,19 @@ export class ReadinessService {
         this.storage
           .describeBackupProtection()
           .catch(() => ({ versioning: "unknown" as const, replication: "unknown" as const })),
-        this.recoverable(),
+        // 복구 판정은 **단일 원천**을 쓴다 (CTO 결정 2301-①) —
+        // 배포 체크리스트가 판정을 다시 구현하지 않는다
+        this.recovery.recoverable(),
       ]);
 
     return {
       provisioningMode: this.storage.provisioning.mode,
+      // S3 전환 완료 여부 — Versioning 조회 실패의 강도를 좌우한다
+      // (CTO 결정 2301-③)
+      storageStandard: judgeStorageStandard(
+        process.env.S3_ENDPOINT,
+        validateEnvironment(process.env).production,
+      ).standard,
       bucket: { name: this.storage.bucket, exists: bucketExists },
       backupBucket: {
         name: this.storage.backupBucket,
@@ -195,50 +144,21 @@ export class ReadinessService {
   }
 
   /**
-   * 재해 복구 판정 (`/ops/readiness`의 `recoverable`).
-   *
-   * 배포 체크리스트가 운영 대시보드를 **직접 부르지 않는다** — 순환 의존이
-   * 되고, 한쪽이 느려지면 다른 쪽이 함께 멈춘다. 대신 복구 필수 항목의
-   * 근거인 **백업·복원 이력만** 확인한다. 확인하지 못하면 null이다.
-   */
-  private async recoverable(): Promise<boolean | null> {
-    try {
-      const rows = await this.prisma.$queryRaw<
-        { backups: bigint; restores: bigint }[]
-      >`
-        SELECT
-          (SELECT COUNT(*)::bigint FROM backup_runs WHERE ok = true) AS backups,
-          (SELECT COUNT(*)::bigint FROM restore_runs WHERE ok = true) AS restores
-      `;
-      const row = rows[0];
-      if (!row) {
-        return null;
-      }
-      // 백업이 있고 복원해 본 적이 있어야 "복구 가능"의 최소 조건이다
-      return Number(row.backups) > 0 && Number(row.restores) > 0;
-    } catch {
-      return null;
-    }
-  }
-
-  /**
    * 배포 준비 보고 (Configuration Verification + Deployment Checklist).
    * 점검은 병렬로 돌리되, 하나가 실패해도 나머지 결과는 그대로 담는다.
    */
   async report(): Promise<ReadinessReportDto> {
     const environment = this.validateEnv();
-    const [database, storage, migrationState, adminUser, budgetStatus, ops] =
+    const [database, storage, migrations, adminUser, budgetStatus, ops] =
       await Promise.all([
         this.checkDatabase(),
         this.checkStorage(),
-        this.migrationState(),
+        this.migrations.judge(environment.production),
         this.adminUserExists(),
         this.budget.status().catch(() => null),
         this.operationsState(),
       ]);
-    const migrations = judgeMigrations(migrationState, {
-      production: environment.production,
-    });
+
 
     const routing = this.llm.routing();
     const budgetConfigured = Boolean(
@@ -270,11 +190,10 @@ export class ReadinessService {
         checked: environment.checked,
       },
       components: [database, storage],
-      // 미적용 목록의 길이 — 실패 행 수가 아니라 **실제 미적용 건수**다
+      // **실제 미적용 마이그레이션 개수** (CTO 결정 2301-④) —
+      // 실패 행 수가 아니다. 확인하지 못하면 null이다.
       pendingMigrations:
-        migrationState.directories === null || migrationState.applied === null
-          ? null
-          : migrations.pending.length,
+        migrations.status === "manual" ? null : migrations.pending.length,
       migrations,
       providers: {
         available: routing.availableProviders,

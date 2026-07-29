@@ -27,6 +27,8 @@ export const ALERT_KINDS = [
   "backup-performance",
   // 백업 사슬·원격 사본·규모 (TASK-2001)
   "backup-integrity",
+  // 스키마 거버넌스 (TASK-2401, CTO 결정 2301-②)
+  "migration-governance",
 ] as const;
 
 export type AlertKind = (typeof ALERT_KINDS)[number];
@@ -434,6 +436,7 @@ export const DEFAULT_ALERT_COOLDOWN_MS = 30 * 60 * 1000;
 
 /** 종류별 재알림 간격 환경변수 — 결정 1302-①이 허용한 확장 */
 export const ALERT_COOLDOWN_ENV: Record<AlertKind, string> = {
+  "migration-governance": "ALERT_COOLDOWN_MIGRATION_MS",
   budget: "ALERT_COOLDOWN_BUDGET_MS",
   "provider-failure": "ALERT_COOLDOWN_PROVIDER_MS",
   "unpriced-model": "ALERT_COOLDOWN_UNPRICED_MS",

@@ -9,6 +9,7 @@ import {
   detectLockOutageAlert,
   detectRemoteIntegrityAlert,
   detectScaleAlert,
+  detectUnknownMigrationAlert,
   judgeRecordedRemoteIntegrity,
   detectSchedulerAlerts,
   detectUnpricedAlerts,
@@ -33,6 +34,7 @@ import { AlertService } from "./alert.service";
 import { BackupService } from "./backup.service";
 import { DistributedLockService } from "./distributed-lock.service";
 import { NotificationQueueService } from "./notification-queue.service";
+import { MigrationGovernanceService } from "./migration-governance.service";
 import { RecoveryDrillService } from "./recovery-drill.service";
 
 interface CheckRunRow {
@@ -139,6 +141,7 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
     private readonly drills: RecoveryDrillService,
     private readonly production2: ProviderProductionService,
     private readonly queue: NotificationQueueService,
+    private readonly migrations: MigrationGovernanceService,
   ) {}
 
   /** 점검 1건의 잠금 이름 */
@@ -259,6 +262,21 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
     await this.alerts.sync(
       ["backup-performance"],
       detectBackupPerformanceAlert(health.performance),
+    );
+
+    // 스키마가 코드보다 앞선 상태 (TASK-2401, CTO 결정 2301-②) —
+    // 최초 warning, 7일 초과 critical. **배포는 막지 않는다.**
+    const migrations = await this.migrations.judge(
+      validateEnvironment(process.env).production,
+    );
+    await this.alerts.sync(
+      ["migration-governance"],
+      detectUnknownMigrationAlert(migrations.unknown, {
+        now: Date.now(),
+        firstSeenAt: await this.alerts.firstSeenAt(
+          "migration-governance:unknown",
+        ),
+      }),
     );
 
     // 백업 사슬·규모·원격 사본 (TASK-2001 · 2101)

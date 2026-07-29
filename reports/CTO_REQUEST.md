@@ -5,7 +5,107 @@
 
 ## 결정 대기
 
-### 56. TASK-2301 "Enterprise Deployment Governance" 세부 해석 확인
+### 57. TASK-2401 "Enterprise Operational Compliance Platform" 세부 해석 확인
+- 현황: CTO 결정 2301-①~④가 이번 TASK의 범위였습니다. 주제는 **같은 사실을 두
+  곳이 따로 판정하지 않게 하는 것**입니다. Sprint 16부터 판정을 늘려 왔고,
+  판정이 늘면 필연적으로 같은 것을 두 곳에서 재는 일이 생깁니다 —
+  **답이 두 개면 어느 쪽도 신뢰할 수 없습니다**:
+  - **복구 판정의 단일 원천**(결정 2301-① — `RecoveryEvaluationService`를
+    신설해 재해 복구 체크리스트 **조립 전체**를 내렸고, `/ops/readiness`와
+    `/health/ready`가 **같은 함수를 부릅니다**. 이전에는 배포 체크리스트가
+    순환 의존을 피하려고 **백업·복원 이력 개수**(`backups ≥ 1 && restores ≥ 1`)
+    로 대신 판정했습니다 — 즉 이력이 있으면 배포 체크리스트는 "복구 가능"이라
+    말하는데 `/ops/readiness`는 같은 순간 "복구 불가"라고 말할 수 있었습니다.
+    순환은 **모듈 방향**으로 풀었습니다(Health → Ops, 역방향 없음). 확인하지
+    못하면 `null`이고 `직접 확인`입니다. 스키마 적용 상태도 같은 이유로
+    `MigrationGovernanceService` 한 곳에서만 읽습니다)
+  - **스키마가 코드보다 앞선 상태는 경보로**(결정 2301-② — 최초 `주의`,
+    **7일 초과 `심각`**. 되돌린 배포는 흔하고 직후에 사람을 부를 일은 아니지만
+    **일주일이 지나도 그대로라면 되돌린 것이 아니라 잊은 것**입니다.
+    **배포는 막지 않습니다** — 막으면 되돌린 배포를 다시 되돌릴 수 없고,
+    경보 문구에 그 사실을 적었습니다. 경과는 **경보의 `firstRaisedAt`**으로
+    셉니다 — 경보를 삭제하지 않기로 한 결정(1302-④) 때문에 그 값이 곧 최초
+    관측 시각이라, **관측 기록용 테이블을 새로 만들지 않았습니다**)
+  - **S3 전환 후 Versioning 조회 실패는 Fail**(결정 2301-③ —
+    `unknownIsFailure = production && storageStandard`. 전환 전에는
+    `직접 확인`(개발 저장소는 조회를 지원하지 않습니다), 전환 후에는
+    **실패·배포 차단**입니다. S3는 조회를 지원하므로 못 읽는 것은 저장소의
+    한계가 아니라 **`s3:GetBucketVersioning` 권한 누락**이고 문구가 그렇게
+    말합니다. 같은 상태에 같은 판정을 주면 전환의 의미 절반이 사라집니다)
+  - **`pendingMigrations`는 실제 미적용 개수**(결정 2301-④ — 공식 의미를 코드와
+    운영 문서에 못 박았습니다. 확인 불가는 `0`이 아니라 `null`이고 화면에는
+    `확인 불가`입니다. 여기서 **결함 하나를 더 발견했습니다**: `judgeMigrations`가
+    실패 행이 있으면 `pending: []`로 **비워서** 돌려줘, 반쯤 적용된 스키마에서
+    `pendingMigrations`가 0으로 보고됐습니다 — TASK-2301에서 고친 거짓 통과가
+    **다른 경로로 되살아나 있었습니다**. 무엇을 먼저 알릴지와 무엇이 사실인지는
+    다르므로, 대조를 먼저 하고 알릴 때만 실패를 앞세우도록 바꿨습니다)
+  - 라이브(**실 PostgreSQL + 실 Redis + 실 S3 + 실 pg_dump/pg_restore**):
+    실제 복원 성공(32개 테이블) 후 백업 4,406건·복원 7건이 남은 상태 =
+    **옛 대리 판정이라면 "복구 가능"**인데 두 화면이 **함께 복구 불가** ·
+    코드에 없는 마이그레이션 삽입 → `WARNING` → `firstRaisedAt`을 8일 전으로
+    되돌리자 **`CRITICAL`·"8일째"**로 승격하되 `migrations`는 `주의`로 남아
+    **차단하지 않음** · `s3:GetBucketVersioning`만 403으로 거부하는 프록시를
+    `*.amazonaws.com` 호스트로 붙이자 `versioning` **실패·차단**, **같은 거부**를
+    비-S3 호스트로 붙이면 `직접 확인` · 미적용 1건 + 실패 행 1건에서
+    `pendingMigrations` **1로 유지**(고치기 전에는 0)
+  - **자체 발견 결함 1건 + 검증 구조 개선 1건**: ⓐ 위의 미적용 목록 비움
+    ⓑ `ops.spec` Prisma 스텁이 **무엇을 물어도 같은 값**을 돌려주고
+    `alert.findFirst`가 없어 **경보 승격이 구조적으로 검증될 수 없었습니다** —
+    템플릿을 읽어 답하도록 고치고 실제 마이그레이션 디렉터리와 대조합니다
+- 하지 않은 것: 7일 임계값의 환경변수화, `*.amazonaws.com` 외 S3 호환 저장소의
+  표준 인정, `migration-governance` 경보의 전달 채널 별도 정책, 복구 판정 캐시,
+  Amazon S3 실제 전환
+- 질문: ① **승격 임계값 7일의 근거** — 되돌린 배포를 얼마나 두고 볼지에 실측
+  근거는 없고 판단입니다. 환경변수로 열지 않았습니다(열면 "일단 늘려 두는"
+  우회가 생깁니다). 7일을 유지할지, 다른 값으로 고정할지 ② **전환 판정 기준** —
+  지금은 엔드포인트 호스트가 `*.amazonaws.com`으로 끝나는지로 판단합니다.
+  S3 호환 상용 저장소(R2·Wasabi 등)는 조회를 지원해도 승격되지 않습니다.
+  이대로 Amazon S3만 표준으로 둘지, 조회 가능성으로 판단을 바꿀지
+  ③ **`migration-governance` 경보의 전달** — 기본 최소 수준(warning은 웹훅,
+  critical은 메일)을 그대로 씁니다. 이 종류만 다르게 둘 필요가 있는지
+  ④ **복구 판정 응답 시간** — 배포 게이트 경로(`/health/ready`)가 이제
+  `/ops/readiness` 전체 조립(12개 병렬 조회)에 의존합니다. 실측은 1초 미만이지만
+  짧은 캐시를 둘지 ⑤ **Sprint 24 진행 방향** 및 다음 TASK 지정 요청.
+
+
+### 2. tesseract Provider 유지 여부
+- 현황: OCR 기본 Provider는 mock이며, 로컬 오프라인 엔진(tesseract.js)이
+  선택 옵션(`OCR_PROVIDER=tesseract`)으로 유지되어 있다. 외부 API 아님.
+- 질문: Foundation 단계 원칙("실제 OCR 연결 금지")에 따라 제거할지,
+  개발용 실측 엔진으로 유지할지?
+
+### 4. 구(자체정의) TASK 산출물 처리
+- 현황: 공식 스펙 이전에 구현된 Product CRUD + 웹 플로우(`d842338`),
+  AI 분석 Foundation(`d49157a`)이 브랜치에 포함되어 있다.
+- 질문: 로드맵과 충돌 없으면 유지 예정. 제거/변경이 필요하면 지시 요청.
+
+### 6. 실제 Provider 연결 시점
+- 현황: OCR/Analysis/Vision 전부 mock 기본. 실제 모델 연결 가이드는
+  docs/architecture/*.md에 준비되어 있다.
+- 요청: 어느 계층부터, 어떤 모델로 연결할지 스펙 요청 (API 키 확보 포함).
+
+### 7. READY 전환 조건 확장 여부
+- 현황: TASK-0302에서 최소 규칙(제목 + OCR/Vision 요약 중 1개)으로 구현됨.
+- 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
+
+## 결정됨
+
+### 56. TASK-2301 해석 확인 → 승인 + 복구 판정 단일 원천·Unknown Migration 7일 승격·S3 전환 후 Versioning Fail 승격·`pendingMigrations` 의미 확정 + Sprint 23 종료 (2026-07-29)
+- CTO 결정: ① **Recovery 판정은 `/ops/readiness`의 `recoverable`을 Single
+  Source of Truth로 사용** — 공통 Recovery Evaluation 계층을 만들어 동일한
+  판정 로직을 공유 ② **Unknown Migration은 최초 Warning · 7일 초과 Critical
+  Alert** — **자동 배포 차단은 하지 않음** ③ **Amazon S3 운영 전환 완료 이후
+  Versioning 조회 실패는 Fail로 승격하여 배포 차단** — 전환 전에는 Manual 정책
+  유지 ④ **`pendingMigrations`는 "실제 미적용 Migration 개수"를 공식 의미로
+  유지** — 운영 문서도 함께 갱신 · Sprint 23 종료, Sprint 24 시작,
+  TASK-2401 "Enterprise Operational Compliance Platform" 지시
+- 반영: TASK-2401에서 ①~④ 전부 구현 — `RecoveryEvaluationService`(단일 원천,
+  Health → Ops 단방향 의존) · `detectUnknownMigrationAlert`(7일 승격, 차단 없음,
+  경과는 `alerts.firstRaisedAt`) · `unknownIsFailure = production &&
+  storageStandard`(전환 후에만 승격) · `pendingMigrations` 공식 의미를 코드·문서에
+  확정(실패 행이 있어도 실제 미적용 개수 유지 — 이 과정에서 결함 1건 발견·수정)
+
+#### 제출 당시 기록 (TASK-2301)
 - 현황: CTO 결정 2201-①~④가 이번 TASK의 범위였습니다. 주제는 **경계를 문서가
   아니라 판정으로 만드는 것**입니다. "운영 담당자가 한다"고 적어 두는 것과,
   하지 않았을 때 **배포가 막히는** 것은 다릅니다:
@@ -58,28 +158,6 @@
   실제 미적용 건수로 바뀌었습니다. 외부 모니터링이 이 값을 읽고 있다면 임계값
   확인이 필요한지 ⑤ **Sprint 23 진행 방향** 및 다음 TASK 지정 요청.
 
-
-### 2. tesseract Provider 유지 여부
-- 현황: OCR 기본 Provider는 mock이며, 로컬 오프라인 엔진(tesseract.js)이
-  선택 옵션(`OCR_PROVIDER=tesseract`)으로 유지되어 있다. 외부 API 아님.
-- 질문: Foundation 단계 원칙("실제 OCR 연결 금지")에 따라 제거할지,
-  개발용 실측 엔진으로 유지할지?
-
-### 4. 구(자체정의) TASK 산출물 처리
-- 현황: 공식 스펙 이전에 구현된 Product CRUD + 웹 플로우(`d842338`),
-  AI 분석 Foundation(`d49157a`)이 브랜치에 포함되어 있다.
-- 질문: 로드맵과 충돌 없으면 유지 예정. 제거/변경이 필요하면 지시 요청.
-
-### 6. 실제 Provider 연결 시점
-- 현황: OCR/Analysis/Vision 전부 mock 기본. 실제 모델 연결 가이드는
-  docs/architecture/*.md에 준비되어 있다.
-- 요청: 어느 계층부터, 어떤 모델로 연결할지 스펙 요청 (API 키 확보 포함).
-
-### 7. READY 전환 조건 확장 여부
-- 현황: TASK-0302에서 최소 규칙(제목 + OCR/Vision 요약 중 1개)으로 구현됨.
-- 질문: Company Brain 검증(금지어·필수 고지) 등 추가 조건의 도입 시점/규칙.
-
-## 결정됨
 
 ### 55. TASK-2201 해석 확인 → 승인 + 스키마까지 운영 담당자 수행·자동 복구 금지·우회 플래그 없음·배포 체크리스트 운영 표준 확정 + Sprint 22 종료 (2026-07-29)
 - CTO 결정: ① **운영에서 Storage · IAM · Database Migration(`prisma migrate
