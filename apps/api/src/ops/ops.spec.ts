@@ -1,5 +1,7 @@
 import type { INestApplication } from "@nestjs/common";
 import { APP_GUARD } from "@nestjs/core";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Test } from "@nestjs/testing";
 import request from "supertest";
 import { AuthService } from "../auth/auth.service";
@@ -267,7 +269,19 @@ interface Overrides {
   monitor?: Record<string, unknown>;
 }
 
+/** 저장소 스텁 상태 (TASK-1701) — 테스트마다 바꿔 쓴다 */
+const storageProtection = {
+  versioning: "unknown" as "enabled" | "disabled" | "unknown",
+  replication: "unknown" as "enabled" | "disabled" | "unknown",
+  uploadFails: false,
+};
+const offsiteUploads: string[] = [];
+
 async function build(overrides: Overrides = {}) {
+  storageProtection.versioning = "unknown";
+  storageProtection.replication = "unknown";
+  storageProtection.uploadFails = false;
+  offsiteUploads.length = 0;
   const prisma = createPrismaStub();
 
   const production = {
@@ -331,7 +345,24 @@ async function build(overrides: Overrides = {}) {
       NotificationQueueService,
       DistributedLockService,
       BackupService,
-      { provide: StorageService, useValue: { check: async () => "버킷 접근 정상" } },
+      {
+        provide: StorageService,
+        useValue: {
+          check: async () => "버킷 접근 정상",
+          // 목업 저장소는 보호 상태를 알려 주지 않는다 — unknown이 정직한 답이다
+          describeProtection: async () => ({
+            versioning: storageProtection.versioning,
+            replication: storageProtection.replication,
+          }),
+          putObject: async (key: string) => {
+            offsiteUploads.push(key);
+            if (storageProtection.uploadFails) {
+              throw new Error("저장소 연결 실패");
+            }
+            return `https://example.com/${key}`;
+          },
+        },
+      },
       { provide: PrismaService, useValue: prisma.stub },
       { provide: ProviderProductionService, useValue: production },
       { provide: LlmBudgetService, useValue: budget },
@@ -1152,8 +1183,13 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
       expect(
         response.body.checklist.map((item: { id: string }) => item.id),
       ).toContain("runbook");
-      // 자동 판정이 불가능한 항목은 manual로 남는다
-      expect(response.body.summary.manual).toBe(1);
+      // 자동 판정이 불가능한 항목은 manual로 남는다 — 통과로 세지 않는다
+      expect(response.body.summary.manual).toBeGreaterThanOrEqual(1);
+      expect(
+        response.body.checklist.find(
+          (item: { id: string }) => item.id === "runbook",
+        ).status,
+      ).toBe("manual");
     });
 
     it("GET /ops/readiness — SMTP·Redis 상태를 담되 수신자는 노출하지 않는다", async () => {
@@ -1292,6 +1328,271 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
         .post("/ops/notifications/verify-smtp")
         .set("Authorization", "Bearer tok-editor")
         .expect(403);
+    });
+  });
+
+  describe("Enterprise Backup & Disaster Recovery (TASK-1701)", () => {
+    beforeEach(() => {
+      // 테스트가 실제 운영 백업 경로에 쓰지 않도록 임시 디렉터리로 돌린다
+      process.env.BACKUP_DIR = join(tmpdir(), "acos-backup-test");
+      process.env.BACKUP_RESTORE_DB_URL =
+        "postgresql://u:p@localhost:5432/acos_restore_check";
+      process.env.DATABASE_URL = "postgresql://u:p@localhost:5432/acos";
+      delete process.env.BACKUP_OFFSITE;
+      delete process.env.BACKUP_RPO_HOURS;
+      delete process.env.BACKUP_RTO_MINUTES;
+      delete process.env.BACKUP_MAX_AGE_HOURS;
+      delete process.env.RESTORE_MAX_AGE_HOURS;
+    });
+
+    it("복원 대상이 운영 DB면 복원을 아예 하지 않는다 (CTO 결정 1601-②)", async () => {
+      // 복원은 대상을 지우고 쓴다 — 잘못된 설정을 그대로 실행하면 사고다
+      process.env.BACKUP_RESTORE_DB_URL = "postgresql://other:x@localhost:5432/acos";
+      const built = await build();
+      app = built.app;
+      const backups = built.app.get(BackupService);
+
+      expect(backups.restoreTargetSafety.verdict).toBe("same-as-production");
+      expect(backups.restoreTarget).toBeNull();
+
+      const result = await backups.verifyRestore("manual");
+      expect(result.configured).toBe(false);
+      // pg_restore를 부르지 않았으므로 이력도 남지 않는다
+      expect(built.prisma.restores).toHaveLength(0);
+    });
+
+    it("체크리스트가 복원 대상 분리를 복구 필수 항목으로 본다", async () => {
+      process.env.BACKUP_RESTORE_DB_URL = "postgresql://u:p@localhost:5432/acos";
+      const built = await build();
+      app = built.app;
+
+      const response = await request(built.app.getHttpServer())
+        .get("/ops/readiness")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+
+      const item = response.body.checklist.find(
+        (entry: { id: string }) => entry.id === "restore-target",
+      );
+      expect(item).toMatchObject({ status: "fail", critical: true });
+      expect(response.body.recoverable).toBe(false);
+      expect(response.body.enterprise.restoreTarget.verdict).toBe(
+        "same-as-production",
+      );
+    });
+
+    it("원격 복제가 꺼져 있으면 올리지 않는다 — 과금·용량을 몰래 쓰지 않는다", async () => {
+      const built = await build();
+      app = built.app;
+      const backups = built.app.get(BackupService);
+      expect(backups.offsiteEnabled).toBe(false);
+
+      await backups.backup("manual");
+      expect(offsiteUploads).toHaveLength(0);
+    });
+
+    it("복제 실패가 백업을 실패시키지는 않는다 — 덤프는 이미 받았다", async () => {
+      process.env.BACKUP_OFFSITE = "on";
+      const built = await build();
+      app = built.app;
+      storageProtection.uploadFails = true;
+
+      const result = await built.app.get(BackupService).backup("manual");
+      // 덤프 자체가 실패했는지(pg_dump 부재 등)와 무관하게, 복제 실패로
+      // 예외가 새어 나오지는 않아야 한다
+      expect(result.offsite).toBe(false);
+    });
+
+    it("저장소가 보호 상태를 알려 주지 않으면 통과로 세지 않는다 (CTO 결정 1601-④)", async () => {
+      const built = await build();
+      app = built.app;
+
+      const response = await request(built.app.getHttpServer())
+        .get("/ops/readiness")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+
+      const item = response.body.checklist.find(
+        (entry: { id: string }) => entry.id === "storage-protection",
+      );
+      expect(item).toMatchObject({ status: "manual", critical: false });
+      expect(item.detail).toContain("애플리케이션은 이미지를 백업하지 않습니다");
+      expect(response.body.enterprise.storageProtection).toMatchObject({
+        versioning: "unknown",
+        replication: "unknown",
+      });
+    });
+
+    it("버전 관리가 꺼져 있으면 주의로 알리되 복구를 막지는 않는다", async () => {
+      const built = await build();
+      app = built.app;
+      storageProtection.versioning = "disabled";
+      storageProtection.replication = "enabled";
+
+      const response = await request(built.app.getHttpServer())
+        .get("/ops/readiness")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+
+      const item = response.body.checklist.find(
+        (entry: { id: string }) => entry.id === "storage-protection",
+      );
+      expect(item.status).toBe("warn");
+      expect(item.detail).toContain("버전 관리가 꺼져 있습니다");
+    });
+
+    it("무결성을 확인하지 못했으면 직접 확인으로 남는다", async () => {
+      const built = await build();
+      app = built.app;
+
+      const response = await request(built.app.getHttpServer())
+        .get("/ops/readiness")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+
+      expect(response.body.enterprise.integrity.status).toBe("manual");
+    });
+
+    it("읽히지 않는 덤프는 복구 불가로 판정한다", async () => {
+      const built = await build();
+      app = built.app;
+      built.prisma.backups.push({
+        id: "bk-bad",
+        ok: true,
+        sizeBytes: BigInt(50_000),
+        fileName: "acos.dump",
+        durationMs: 100,
+        trigger: "schedule",
+        error: null,
+        checksum: "a".repeat(64),
+        integrityOk: false,
+        entries: null,
+        offsiteKey: null,
+        createdAt: new Date(),
+      });
+
+      const response = await request(built.app.getHttpServer())
+        .get("/ops/readiness")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+
+      expect(response.body.enterprise.integrity.status).toBe("fail");
+      expect(response.body.recoverable).toBe(false);
+    });
+
+    it("RTO는 실제 복원 소요 시간을 쓴다 — 추정이 아니라 측정이다", async () => {
+      process.env.BACKUP_RTO_MINUTES = "1";
+      const built = await build();
+      app = built.app;
+      built.prisma.backups.push({
+        id: "bk-ok",
+        ok: true,
+        sizeBytes: BigInt(50_000),
+        fileName: "acos.dump",
+        durationMs: 100,
+        trigger: "schedule",
+        error: null,
+        checksum: "a".repeat(64),
+        integrityOk: true,
+        entries: 120,
+        offsiteKey: null,
+        createdAt: new Date(),
+      });
+      built.prisma.restores.push({
+        id: "rs-ok",
+        ok: true,
+        tables: 30,
+        fileName: "acos.dump",
+        durationMs: 90_000,
+        trigger: "schedule",
+        error: null,
+        createdAt: new Date(),
+      });
+
+      const response = await request(built.app.getHttpServer())
+        .get("/ops/readiness")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+
+      const objectives = response.body.enterprise.objectives;
+      expect(objectives.rtoMs).toBe(90_000);
+      expect(objectives.rtoTargetMs).toBe(60_000);
+      expect(objectives.rtoMet).toBe(false);
+      expect(objectives.status).toBe("warn");
+      expect(objectives.detail).toContain("측정된 하한");
+    });
+
+    it("복원 측정치가 없으면 RTO를 통과로 세지 않는다", async () => {
+      const built = await build();
+      app = built.app;
+      built.prisma.backups.push({
+        id: "bk-ok",
+        ok: true,
+        sizeBytes: BigInt(50_000),
+        fileName: "acos.dump",
+        durationMs: 100,
+        trigger: "schedule",
+        error: null,
+        checksum: null,
+        integrityOk: true,
+        entries: 10,
+        offsiteKey: null,
+        createdAt: new Date(),
+      });
+
+      const response = await request(built.app.getHttpServer())
+        .get("/ops/readiness")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+
+      expect(response.body.enterprise.objectives.rtoMs).toBeNull();
+      expect(response.body.enterprise.objectives.status).toBe("manual");
+    });
+
+    it("신선도 기본값은 백업 2일 · 복원 검증 8일 (CTO 결정 1601-⑤)", async () => {
+      const built = await build();
+      app = built.app;
+      const backups = built.app.get(BackupService);
+      expect(backups.maxBackupAgeMs).toBe(48 * 60 * 60 * 1000);
+      expect(backups.maxRestoreAgeMs).toBe(192 * 60 * 60 * 1000);
+
+      process.env.BACKUP_MAX_AGE_HOURS = "6";
+      expect(backups.maxBackupAgeMs).toBe(6 * 60 * 60 * 1000);
+    });
+
+    it("이력에 체크섬 전체나 원격 키를 그대로 담지 않는다", async () => {
+      const built = await build();
+      app = built.app;
+      built.prisma.backups.push({
+        id: "bk-ok",
+        ok: true,
+        sizeBytes: BigInt(50_000),
+        fileName: "acos.dump",
+        durationMs: 100,
+        trigger: "schedule",
+        error: null,
+        checksum: "c".repeat(64),
+        integrityOk: true,
+        entries: 120,
+        offsiteKey: "backups/secret-path/acos.dump",
+        createdAt: new Date(),
+      });
+
+      const response = await request(built.app.getHttpServer())
+        .get("/ops/readiness")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+
+      const body = JSON.stringify(response.body);
+      // 원격 키는 저장소 구조를 드러낸다 — 있는지만 알린다
+      expect(body).not.toContain("secret-path");
+      expect(response.body.backup.history[0].offsite).toBe(true);
+      // 체크섬은 이력에 그대로 둔다 — 운영자가 원격 사본과 대조할 근거다.
+      // 다만 체크리스트 설명에는 앞부분만 싣는다(읽으라고 있는 문장이므로).
+      expect(response.body.backup.history[0].checksum).toHaveLength(64);
+      expect(response.body.enterprise.integrity.detail).not.toContain(
+        "c".repeat(64),
+      );
     });
   });
 });

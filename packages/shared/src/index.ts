@@ -1604,6 +1604,14 @@ export interface BackupRunDto {
   durationMs: number;
   trigger: string;
   error: string | null;
+  /** SHA-256 (TASK-1701) */
+  checksum: string | null;
+  /** pg_restore --list로 읽히는가 — 확인하지 못했으면 null */
+  integrityOk: boolean | null;
+  /** 덤프 안에서 확인한 객체 수 */
+  entries: number | null;
+  /** 원격 저장소에 사본이 있는가 (키는 노출하지 않는다) */
+  offsite: boolean;
   createdAt: string;
 }
 
@@ -1654,6 +1662,47 @@ export interface RedisHealthDto {
   outageThresholdMs: number;
 }
 
+/** 저장소 보호 상태 (CTO 결정 1601-④) */
+export type ProtectionStateDto = "enabled" | "disabled" | "unknown";
+
+/** 복구 목표 (RPO·RTO, TASK-1701) */
+export interface RecoveryObjectivesDto {
+  /** 지금 무너지면 잃을 최대 구간 (ms) */
+  rpoMs: number | null;
+  rpoTargetMs: number;
+  rpoMet: boolean | null;
+  /** 복원에 실제로 걸린 시간 (측정치, ms) */
+  rtoMs: number | null;
+  rtoTargetMs: number;
+  rtoMet: boolean | null;
+  status: DrStatusDto;
+  detail: string;
+}
+
+/** Enterprise 백업·재해 복구 (TASK-1701) */
+export interface EnterpriseRecoveryDto {
+  integrity: { status: DrStatusDto; detail: string };
+  offsite: {
+    status: DrStatusDto;
+    detail: string;
+    /** 원격 복제를 쓰는 구성인가 */
+    configured: boolean;
+    copies: number;
+  };
+  storageProtection: {
+    status: DrStatusDto;
+    detail: string;
+    versioning: ProtectionStateDto;
+    replication: ProtectionStateDto;
+  };
+  objectives: RecoveryObjectivesDto;
+  restoreTarget: {
+    status: DrStatusDto;
+    detail: string;
+    verdict: "ok" | "same-as-production" | "not-configured";
+  };
+}
+
 /** 운영 대시보드 (GET /ops/readiness) */
 export interface OperationsReadinessDto {
   /** critical 항목이 전부 통과하면 true */
@@ -1680,5 +1729,7 @@ export interface OperationsReadinessDto {
   };
   smtp: SmtpValidationDto;
   redis: RedisHealthDto;
+  /** Enterprise 백업·재해 복구 (TASK-1701) */
+  enterprise: EnterpriseRecoveryDto;
   checkedAt: string;
 }

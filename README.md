@@ -522,6 +522,32 @@ TASK-1302가 남긴 두 부채를 갚습니다: **예약 점검의 인스턴스�
 | `POST` | `/ops/backup/verify-restore` | **지금 복원 검증 (ADMIN)** |
 | `POST` | `/ops/notifications/verify-smtp` | **메일 경로 확인 (ADMIN)** |
 
+## Enterprise 백업·재해 복구 (TASK-1701, Sprint 17)
+
+"백업이 있고 복원된다"(1601) 다음의 세 질문 — **덤프가 온전한가 · 같은 곳에만
+있지 않은가 · 얼마를 잃고 얼마나 걸리는가**.
+절차는 [disaster-recovery.md](docs/operations/disaster-recovery.md), 백업 방식
+검토는 [backup-strategy.md](docs/operations/backup-strategy.md).
+
+- **Backup Integrity**: 백업 직후 `pg_restore --list`로 목차를 읽고 SHA-256을
+  기록합니다. **읽히지 않는 덤프는 복구 불가**로 판정합니다 — 크기가 정상이어도
+  복원할 수 없는 파일이면 복구 지점이 아닙니다
+- **Offsite Replication**(`BACKUP_OFFSITE=on`): 덤프를 오브젝트 저장소에도
+  올립니다. 복제 실패가 백업을 실패시키지는 않되(덤프는 이미 있습니다) 화면에
+  드러납니다. 원격 키는 노출하지 않고 **있는지만** 알립니다
+- **RPO · RTO**: RPO는 마지막 백업 이후 경과, RTO는 **실제 복원 검증에 걸린
+  시간(측정치)**입니다. 다만 **하한**입니다 — 장애를 알아차리고 결정하는 시간은
+  포함하지 않으며, 측정치가 없으면 통과로 세지 않습니다
+- **복원 대상 강제 분리**(결정 1601-②): 복원 대상이 운영 DB와 같으면
+  **기동하지 않습니다**. 자격 증명이 달라도 같은 DB는 같은 DB로 봅니다
+- **`BACKUP_DIR` 운영 필수**(결정 1601-①): 미설정이면 **기동하지 않습니다** —
+  백업이 컨테이너와 함께 사라지는 구성으로 운영을 시작할 수는 없습니다
+- **이미지 저장소 보호**(결정 1601-④): 버전 관리·복제 상태를 체크리스트에
+  표시합니다. **애플리케이션은 이미지를 직접 백업하지 않으며**, 저장소가 알려
+  주지 않으면 `직접 확인`으로 남깁니다
+- **WAL·PITR·증분**(결정 1601-③): 이번 Sprint는 **검토만** 했습니다 — 현재
+  데이터 규모에서는 백업 주기 단축이 PITR보다 효과가 큽니다
+
 ## Execution Domain (TASK-0601, Sprint 6)
 
 모든 LLM 호출(Content Generation · Analysis · Vision · 개발용 API)은 호출 1건당

@@ -691,6 +691,10 @@ const server = http.createServer((req, res) => {
           durationMs: 4200,
           trigger: "manual",
           error: null,
+          checksum: "c".repeat(64),
+          integrityOk: true,
+          entries: 142,
+          offsite: false,
           createdAt: new Date().toISOString(),
         }),
       );
@@ -766,6 +770,10 @@ const server = http.createServer((req, res) => {
               durationMs: 4200,
               trigger: stubBackupRan ? "manual" : "schedule",
               error: null,
+              checksum: "c".repeat(64),
+              integrityOk: healthy,
+              entries: 142,
+              offsite: healthy,
               createdAt: new Date().toISOString(),
             },
           ]
@@ -820,6 +828,55 @@ const server = http.createServer((req, res) => {
         status: "pass",
         detail: "버킷 접근 정상.",
         critical: true,
+      },
+      // Enterprise 항목 (TASK-1701)
+      {
+        id: "integrity",
+        title: "덤프 무결성",
+        status: backupHistory.length === 0 ? "manual" : healthy ? "pass" : "fail",
+        detail:
+          backupHistory.length === 0
+            ? "덤프 무결성을 확인하지 못했습니다 — 백업 이력이 없거나 점검이 돌지 않았습니다."
+            : healthy
+              ? "덤프 목록 판독 정상 — 객체 142개 · SHA-256 cccccccccccc…."
+              : "마지막 덤프를 읽을 수 없습니다 — 파일이 손상되었을 수 있습니다. 즉시 다시 받으세요.",
+        critical: true,
+      },
+      {
+        id: "restore-target",
+        title: "복원 대상 분리",
+        status: healthy ? "pass" : "warn",
+        detail: healthy
+          ? "복원 대상이 운영 데이터베이스와 분리되어 있습니다."
+          : "복원 검증 대상 DB가 없습니다 — 복원해 보지 않은 백업은 백업이 아닙니다.",
+        critical: true,
+      },
+      {
+        id: "offsite",
+        title: "백업 원격 복제",
+        status: healthy ? "pass" : "warn",
+        detail: healthy
+          ? "원격 사본 1개 — 마지막 백업이 원격에도 있습니다."
+          : "원격 복제가 꺼져 있습니다 — 백업이 데이터베이스와 같은 곳에만 있어, 그 곳이 사라지면 백업도 함께 사라집니다.",
+        critical: false,
+      },
+      {
+        id: "storage-protection",
+        title: "이미지 저장소 보호 (버전 관리·복제)",
+        status: healthy ? "pass" : "manual",
+        detail: healthy
+          ? "버전 관리·복제가 모두 켜져 있습니다."
+          : "저장소가 버전 관리·복제 상태를 알려 주지 않습니다 — 제공자 콘솔에서 직접 확인하세요 (애플리케이션은 이미지를 백업하지 않습니다).",
+        critical: false,
+      },
+      {
+        id: "objectives",
+        title: "복구 목표 (RPO·RTO)",
+        status: healthy ? "pass" : "manual",
+        detail: healthy
+          ? "지금 무너지면 최대 3분치를 잃습니다 (목표 1.0일) · 복원에 8초 걸렸습니다 (목표 30분). 복원 시간은 측정된 하한이며, 장애를 알아차리고 결정하는 시간은 포함하지 않습니다."
+          : "복원 검증 측정치가 없어 복구 소요(RTO)를 알 수 없습니다 — 한 번 복원해 보세요.",
+        critical: false,
       },
       {
         id: "lock",
@@ -900,6 +957,53 @@ const server = http.createServer((req, res) => {
               host: null,
               latencyMs: 0,
             },
+        enterprise: {
+          integrity: {
+            status:
+              backupHistory.length === 0 ? "manual" : healthy ? "pass" : "fail",
+            detail:
+              backupHistory.length === 0
+                ? "덤프 무결성을 확인하지 못했습니다 — 백업 이력이 없거나 점검이 돌지 않았습니다."
+                : healthy
+                  ? "덤프 목록 판독 정상 — 객체 142개 · SHA-256 cccccccccccc…."
+                  : "마지막 덤프를 읽을 수 없습니다 — 파일이 손상되었을 수 있습니다. 즉시 다시 받으세요.",
+          },
+          offsite: {
+            status: healthy ? "pass" : "warn",
+            detail: healthy
+              ? "원격 사본 1개 — 마지막 백업이 원격에도 있습니다."
+              : "원격 복제가 꺼져 있습니다 — 백업이 데이터베이스와 같은 곳에만 있어, 그 곳이 사라지면 백업도 함께 사라집니다.",
+            configured: healthy,
+            copies: healthy ? 1 : 0,
+          },
+          storageProtection: {
+            status: healthy ? "pass" : "manual",
+            detail: healthy
+              ? "버전 관리·복제가 모두 켜져 있습니다."
+              : "저장소가 버전 관리·복제 상태를 알려 주지 않습니다 — 제공자 콘솔에서 직접 확인하세요 (애플리케이션은 이미지를 백업하지 않습니다).",
+            versioning: healthy ? "enabled" : "unknown",
+            replication: healthy ? "enabled" : "unknown",
+          },
+          objectives: {
+            rpoMs: healthy ? 180_000 : null,
+            rpoTargetMs: 86_400_000,
+            rpoMet: healthy ? true : null,
+            rtoMs: healthy ? 8_100 : null,
+            rtoTargetMs: 1_800_000,
+            rtoMet: healthy ? true : null,
+            status: healthy ? "pass" : "manual",
+            detail: healthy
+              ? "지금 무너지면 최대 3분치를 잃습니다 (목표 1.0일) · 복원에 8초 걸렸습니다 (목표 30분). 복원 시간은 측정된 하한이며, 장애를 알아차리고 결정하는 시간은 포함하지 않습니다."
+              : "복원 검증 측정치가 없어 복구 소요(RTO)를 알 수 없습니다 — 한 번 복원해 보세요.",
+          },
+          restoreTarget: {
+            status: healthy ? "pass" : "warn",
+            detail: healthy
+              ? "복원 대상이 운영 데이터베이스와 분리되어 있습니다."
+              : "복원 검증 대상 DB가 없습니다 — 복원해 보지 않은 백업은 백업이 아닙니다.",
+            verdict: healthy ? "ok" : "not-configured",
+          },
+        },
         redis: {
           configured: true,
           ok: healthy,

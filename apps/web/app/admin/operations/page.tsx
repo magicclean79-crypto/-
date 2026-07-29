@@ -5,6 +5,7 @@ import Link from "next/link";
 import type {
   DrStatusDto,
   OperationsReadinessDto,
+  ProtectionStateDto,
   ReadinessVerdictDto,
 } from "@acos/shared";
 import { authFetchInit } from "../../../lib/auth-client";
@@ -75,6 +76,29 @@ function since(ms: number | null): string {
 function duration(ms: number): string {
   return ms % 60_000 === 0 ? `${ms / 60_000}분` : `${Math.round(ms / 1000)}초`;
 }
+
+/** 복구 목표용 — 확인하지 못한 값은 "확인 불가"로, 0으로 채우지 않는다 */
+function span(ms: number | null): string {
+  if (ms === null) {
+    return "확인 불가";
+  }
+  if (ms >= 24 * 60 * 60 * 1000) {
+    return `${(ms / (24 * 60 * 60 * 1000)).toFixed(1)}일`;
+  }
+  if (ms >= 60 * 60 * 1000) {
+    return `${(ms / (60 * 60 * 1000)).toFixed(1)}시간`;
+  }
+  if (ms >= 60 * 1000) {
+    return `${Math.round(ms / 60_000)}분`;
+  }
+  return `${Math.round(ms / 1000)}초`;
+}
+
+const PROTECTION_LABEL: Record<ProtectionStateDto, string> = {
+  enabled: "켜짐",
+  disabled: "꺼짐",
+  unknown: "확인 불가",
+};
 
 /**
  * 운영 대시보드 (TASK-1601) — ADMIN 전용.
@@ -401,6 +425,144 @@ export default function OperationsPage() {
                 </table>
               </div>
             ) : null}
+          </section>
+
+          <section
+            data-testid="recovery-objectives"
+            className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800"
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-lg font-semibold">복구 목표 (RPO · RTO)</h2>
+              <span
+                data-testid="objectives-verdict"
+                className={`rounded-full px-2 py-0.5 text-xs font-medium ${DR_STYLE[data.enterprise.objectives.status]}`}
+              >
+                {DR_LABEL[data.enterprise.objectives.status]}
+              </span>
+              <span className="text-xs text-zinc-500">
+                손실 한도 {span(data.enterprise.objectives.rpoTargetMs)} · 복구
+                한도 {span(data.enterprise.objectives.rtoTargetMs)}
+              </span>
+            </div>
+            <p className="mt-1 text-sm">{data.enterprise.objectives.detail}</p>
+            <dl className="mt-3 grid grid-cols-2 gap-3 text-sm">
+              <div className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
+                <dt className="text-xs text-zinc-500">
+                  지금 무너지면 잃는 구간 (RPO)
+                </dt>
+                <dd
+                  data-testid="rpo-value"
+                  className={`mt-1 text-lg font-semibold ${
+                    data.enterprise.objectives.rpoMet === false
+                      ? "text-amber-700 dark:text-amber-300"
+                      : ""
+                  }`}
+                >
+                  {span(data.enterprise.objectives.rpoMs)}
+                </dd>
+              </div>
+              <div className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
+                <dt className="text-xs text-zinc-500">
+                  복원에 걸린 시간 (RTO, 측정치)
+                </dt>
+                <dd
+                  data-testid="rto-value"
+                  className={`mt-1 text-lg font-semibold ${
+                    data.enterprise.objectives.rtoMet === false
+                      ? "text-amber-700 dark:text-amber-300"
+                      : ""
+                  }`}
+                >
+                  {span(data.enterprise.objectives.rtoMs)}
+                </dd>
+              </div>
+            </dl>
+          </section>
+
+          <section
+            data-testid="backup-protection"
+            className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800"
+          >
+            <h2 className="text-lg font-semibold">백업 보호</h2>
+            <ul className="mt-3 space-y-2 text-sm">
+              <li
+                data-testid="integrity-status"
+                className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${DR_STYLE[data.enterprise.integrity.status]}`}
+                  >
+                    {DR_LABEL[data.enterprise.integrity.status]}
+                  </span>
+                  <strong>덤프 무결성</strong>
+                </div>
+                <p className="mt-1">{data.enterprise.integrity.detail}</p>
+                <p className="mt-1 text-xs text-zinc-500">
+                  받자마자 목차를 읽어 봅니다 — 읽히지 않는 덤프를 복원하려는
+                  순간에 알면 늦습니다.
+                </p>
+              </li>
+              <li
+                data-testid="offsite-status"
+                className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${DR_STYLE[data.enterprise.offsite.status]}`}
+                  >
+                    {DR_LABEL[data.enterprise.offsite.status]}
+                  </span>
+                  <strong>원격 복제</strong>
+                  <span className="text-xs text-zinc-500">
+                    {data.enterprise.offsite.configured
+                      ? `사본 ${data.enterprise.offsite.copies}개`
+                      : "꺼짐 (BACKUP_OFFSITE)"}
+                  </span>
+                </div>
+                <p className="mt-1">{data.enterprise.offsite.detail}</p>
+              </li>
+              <li
+                data-testid="storage-protection"
+                className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${DR_STYLE[data.enterprise.storageProtection.status]}`}
+                  >
+                    {DR_LABEL[data.enterprise.storageProtection.status]}
+                  </span>
+                  <strong>이미지 저장소 보호</strong>
+                  <span className="text-xs text-zinc-500">
+                    버전 관리{" "}
+                    {PROTECTION_LABEL[
+                      data.enterprise.storageProtection.versioning
+                    ]}{" "}
+                    · 복제{" "}
+                    {PROTECTION_LABEL[
+                      data.enterprise.storageProtection.replication
+                    ]}
+                  </span>
+                </div>
+                <p className="mt-1">
+                  {data.enterprise.storageProtection.detail}
+                </p>
+              </li>
+              <li
+                data-testid="restore-target"
+                className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${DR_STYLE[data.enterprise.restoreTarget.status]}`}
+                  >
+                    {DR_LABEL[data.enterprise.restoreTarget.status]}
+                  </span>
+                  <strong>복원 대상 분리</strong>
+                </div>
+                <p className="mt-1">{data.enterprise.restoreTarget.detail}</p>
+              </li>
+            </ul>
           </section>
 
           <section

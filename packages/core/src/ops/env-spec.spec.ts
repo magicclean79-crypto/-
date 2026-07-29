@@ -28,6 +28,8 @@ const PRODUCTION_ENV: Record<string, string> = {
   TZ: "Asia/Seoul",
   BACKUP_DIR: "/var/backups/acos",
   BACKUP_RESTORE_DB_URL: "postgresql://user:pw@db:5432/acos_restore_check",
+  // 백업 원격 복제 (TASK-1701) — 없으면 호스트와 함께 백업도 사라진다
+  BACKUP_OFFSITE: "on",
 };
 
 describe("Environment Validation (TASK-1202)", () => {
@@ -223,12 +225,50 @@ describe("Environment Validation (TASK-1202)", () => {
       ).toContain("복원해 보지 않은 백업은 백업이 아닙니다");
     });
 
-    it("백업 위치가 없으면 사라지는 곳에 쌓인다고 경고한다", () => {
+    it("백업 위치가 없으면 운영에서 기동을 막는다 (CTO 결정 1601-①)", () => {
+      // 백업이 컨테이너와 함께 사라지는 구성으로 운영을 시작할 수는 없다
       const { BACKUP_DIR, ...rest } = PRODUCTION_ENV;
       void BACKUP_DIR;
+      const result = validateEnvironment(rest);
+      expect(result.ok).toBe(false);
+      expect(result.errors.map((issue) => issue.name)).toContain("BACKUP_DIR");
+
+      // 개발에서는 여전히 오류가 아니다
       expect(
-        validateEnvironment(rest).warnings.map((issue) => issue.name),
-      ).toContain("BACKUP_DIR");
+        validateEnvironment({ ...rest, NODE_ENV: "development" }).ok,
+      ).toBe(true);
+    });
+
+    it("원격 복제가 꺼져 있으면 경고하되 기동은 막지 않는다", () => {
+      const { BACKUP_OFFSITE, ...rest } = PRODUCTION_ENV;
+      void BACKUP_OFFSITE;
+      const result = validateEnvironment(rest);
+      expect(result.ok).toBe(true);
+      expect(
+        result.warnings.find((issue) => issue.name === "BACKUP_OFFSITE")
+          ?.message,
+      ).toContain("백업도 함께 사라집니다");
+    });
+
+    it("복원 대상이 운영 DB면 환경과 무관하게 기동을 막는다 (CTO 결정 1601-②)", () => {
+      // 복원은 대상을 지우고 쓴다 — 개발에서도 허용할 수 없다
+      const result = validateEnvironment({
+        ...PRODUCTION_ENV,
+        BACKUP_RESTORE_DB_URL: "postgresql://other:pw@db:5432/acos",
+      });
+      expect(result.ok).toBe(false);
+      expect(
+        result.errors.find((issue) => issue.name === "BACKUP_RESTORE_DB_URL")
+          ?.message,
+      ).toContain("검증이 곧 사고가 됩니다");
+
+      expect(
+        validateEnvironment({
+          NODE_ENV: "development",
+          DATABASE_URL: "postgresql://user:pw@db:5432/acos",
+          BACKUP_RESTORE_DB_URL: "postgresql://user:pw@db:5432/acos",
+        }).ok,
+      ).toBe(false);
     });
 
     it("복원 검증 DB 주소는 비밀로 다룬다 — 화면에 노출하지 않는다", () => {
@@ -238,6 +278,14 @@ describe("Environment Validation (TASK-1202)", () => {
       expect(view).toMatchObject({ secret: true, configured: true });
       expect(view.value).toBeNull();
     });
+  });
+
+  it("설명·대체 동작에 마크다운 강조를 쓰지 않는다", () => {
+    // 설명은 기동 실패 로그와 화면에 그대로 실린다 — 별표가 보이면 안 된다
+    for (const spec of ENV_SPECS) {
+      expect(spec.description).not.toContain("**");
+      expect(spec.fallback ?? "").not.toContain("**");
+    }
   });
 
   it("선언 목록에 중복 이름이 없다", () => {

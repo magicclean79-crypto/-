@@ -10,12 +10,14 @@ import {
 } from "@nestjs/common";
 import {
   buildDisasterRecoveryChecklist,
+  judgeStorageProtection,
   SCHEDULED_JOBS,
   summarizeAlerts,
   summarizeDisasterRecovery,
 } from "@acos/core";
-import type { ScheduledJob } from "@acos/core";
+import type { ProtectionState, ScheduledJob } from "@acos/core";
 import type {
+  DrStatusDto,
   AlertArchiveResultDto,
   AlertBoardDto,
   AlertHistoryDto,
@@ -65,16 +67,37 @@ export class OpsController {
    */
   @Get("readiness")
   async readiness(): Promise<OperationsReadinessDto> {
-    const [health, backupHistory, restoreHistory, smtp, redis, database, storage] =
-      await Promise.all([
-        this.backups.health(),
-        this.backups.backupHistory(10),
-        this.backups.restoreHistory(10),
-        this.notifications.verifySmtp(),
-        this.locks.ping(),
-        this.checkDatabase(),
-        this.checkStorage(),
-      ]);
+    const [
+      health,
+      backupHistory,
+      restoreHistory,
+      smtp,
+      redis,
+      database,
+      storage,
+      protection,
+    ] = await Promise.all([
+      this.backups.health(),
+      this.backups.backupHistory(10),
+      this.backups.restoreHistory(10),
+      this.notifications.verifySmtp(),
+      this.locks.ping(),
+      this.checkDatabase(),
+      this.checkStorage(),
+      this.describeStorageProtection(),
+    ]);
+
+    // 이미지 저장소 보호 상태 (CTO 결정 1601-④) — 앱은 이미지를 백업하지 않는다
+    const storageProtection = judgeStorageProtection(protection);
+    const targetSafety = this.backups.restoreTargetSafety;
+    const restoreTarget = {
+      status: (targetSafety.verdict === "same-as-production"
+        ? "fail"
+        : targetSafety.verdict === "not-configured"
+          ? "warn"
+          : "pass") as DrStatusDto,
+      detail: targetSafety.detail,
+    };
 
     const channels = this.notifications
       .channelConfigs()
@@ -91,6 +114,16 @@ export class OpsController {
         : null,
       notificationChannels: channels,
       runbookPath: "docs/operations/disaster-recovery.md",
+      enterprise: {
+        integrity: health.integrity,
+        offsite: health.offsite,
+        storageProtection,
+        objectives: {
+          status: health.objectives.status,
+          detail: health.objectives.detail,
+        },
+        restoreTarget,
+      },
     });
     const summary = summarizeDisasterRecovery(checklist);
     const unhealthySince = this.locks.unhealthySince;
@@ -131,8 +164,31 @@ export class OpsController {
           unhealthySince === null ? null : new Date(unhealthySince).toISOString(),
         outageThresholdMs: this.checks.lockOutageThresholdMs,
       },
+      enterprise: {
+        integrity: health.integrity,
+        offsite: {
+          ...health.offsite,
+          configured: this.backups.offsiteEnabled,
+          copies: backupHistory.filter((entry) => entry.offsite).length,
+        },
+        storageProtection: { ...storageProtection, ...protection },
+        objectives: health.objectives,
+        restoreTarget: { ...restoreTarget, verdict: targetSafety.verdict },
+      },
       checkedAt: new Date().toISOString(),
     };
+  }
+
+  /** 저장소가 알려 주지 않으면 unknown으로 남긴다 — 모르는 것을 통과로 세지 않는다 */
+  private async describeStorageProtection(): Promise<{
+    versioning: ProtectionState;
+    replication: ProtectionState;
+  }> {
+    try {
+      return await this.storage.describeProtection();
+    } catch {
+      return { versioning: "unknown", replication: "unknown" };
+    }
   }
 
   /** SMTP 연결·인증 검증 — **메일은 보내지 않는다** */

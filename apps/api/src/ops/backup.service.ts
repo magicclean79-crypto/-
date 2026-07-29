@@ -1,15 +1,27 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdir, readdir, rm, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import {
   judgeBackup,
+  judgeIntegrity,
+  judgeOffsite,
+  judgeRecoveryObjectives,
   judgeRestore,
+  judgeRestoreTarget,
 } from "@acos/core";
-import type { BackupHealth, RestoreHealth } from "@acos/core";
+import type {
+  BackupHealth,
+  OffsiteHealth,
+  RecoveryObjectives,
+  RestoreHealth,
+} from "@acos/core";
 import type { BackupRunDto, RestoreRunDto } from "@acos/shared";
 import { PrismaService } from "../prisma/prisma.service";
+import { StorageService } from "../storage/storage.service";
 
 const run = promisify(execFile);
 
@@ -24,6 +36,10 @@ interface BackupRow {
   durationMs: number;
   trigger: string;
   error: string | null;
+  checksum: string | null;
+  integrityOk: boolean | null;
+  entries: number | null;
+  offsiteKey: string | null;
   createdAt: Date;
 }
 
@@ -47,6 +63,11 @@ function toBackupDto(row: BackupRow): BackupRunDto {
     durationMs: row.durationMs,
     trigger: row.trigger,
     error: row.error,
+    checksum: row.checksum ?? null,
+    integrityOk: row.integrityOk ?? null,
+    entries: row.entries ?? null,
+    // 키는 있는지만 알린다 — 저장소 구조를 드러낼 이유가 없다
+    offsite: Boolean(row.offsiteKey),
     createdAt: row.createdAt.toISOString(),
   };
 }
@@ -83,7 +104,10 @@ function toRestoreDto(row: RestoreRow): RestoreRunDto {
 export class BackupService {
   private readonly logger = new Logger(BackupService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storage: StorageService,
+  ) {}
 
   get directory(): string {
     return process.env.BACKUP_DIR?.trim() || "/var/backups/acos";
@@ -105,10 +129,70 @@ export class BackupService {
     return Number.isFinite(raw) && raw > 0 ? Math.round(raw) : DEFAULT_TIMEOUT_MS;
   }
 
-  /** 복원 검증용 별도 DB — 없으면 검증을 "미구성"으로 남긴다 */
+  /**
+   * 복원 검증용 별도 DB — 없으면 검증을 "미구성"으로 남긴다.
+   *
+   * **운영 DB를 가리키면 null을 돌려준다** (CTO 결정 1601-②). 복원은 대상을
+   * 지우고 쓰므로, 잘못 지정된 설정을 그대로 실행하면 검증이 곧 사고가 된다.
+   * 기동 시 환경 검증이 이미 막지만, 실행 직전에 한 번 더 본다 — 설정은
+   * 기동 후에도 바뀔 수 있다.
+   */
   get restoreTarget(): string | null {
     const raw = process.env.BACKUP_RESTORE_DB_URL?.trim();
-    return raw ? BackupService.toLibpqUrl(raw) : null;
+    if (!raw) {
+      return null;
+    }
+    if (this.restoreTargetSafety.verdict === "same-as-production") {
+      return null;
+    }
+    return BackupService.toLibpqUrl(raw);
+  }
+
+  /** 복원 대상이 운영 DB와 분리되어 있는가 (CTO 결정 1601-②) */
+  get restoreTargetSafety(): ReturnType<typeof judgeRestoreTarget> {
+    return judgeRestoreTarget(
+      process.env.DATABASE_URL,
+      process.env.BACKUP_RESTORE_DB_URL,
+    );
+  }
+
+  /** 백업을 오브젝트 저장소에도 올릴 것인가 */
+  get offsiteEnabled(): boolean {
+    const value = (process.env.BACKUP_OFFSITE ?? "").trim().toLowerCase();
+    return ["on", "1", "true", "yes"].includes(value);
+  }
+
+  private get offsitePrefix(): string {
+    const raw = process.env.BACKUP_OFFSITE_PREFIX?.trim() || "backups/";
+    return raw.endsWith("/") ? raw : `${raw}/`;
+  }
+
+  /** 백업 신선도 한계 (CTO 결정 1601-⑤ — 기본 2일) */
+  get maxBackupAgeMs(): number {
+    const raw = Number(process.env.BACKUP_MAX_AGE_HOURS);
+    return Number.isFinite(raw) && raw > 0
+      ? raw * 60 * 60 * 1000
+      : 48 * 60 * 60 * 1000;
+  }
+
+  /** 복원 검증 신선도 한계 (CTO 결정 1601-⑤ — 기본 8일) */
+  get maxRestoreAgeMs(): number {
+    const raw = Number(process.env.RESTORE_MAX_AGE_HOURS);
+    return Number.isFinite(raw) && raw > 0
+      ? raw * 60 * 60 * 1000
+      : 192 * 60 * 60 * 1000;
+  }
+
+  get rpoTargetMs(): number {
+    const raw = Number(process.env.BACKUP_RPO_HOURS);
+    return Number.isFinite(raw) && raw > 0
+      ? raw * 60 * 60 * 1000
+      : 24 * 60 * 60 * 1000;
+  }
+
+  get rtoTargetMs(): number {
+    const raw = Number(process.env.BACKUP_RTO_MINUTES);
+    return Number.isFinite(raw) && raw > 0 ? raw * 60 * 1000 : 30 * 60 * 1000;
   }
 
   /**
@@ -161,6 +245,10 @@ export class BackupService {
         durationMs: 0,
         trigger,
         error: "DATABASE_URL이 없습니다.",
+        checksum: null,
+        integrityOk: null,
+        entries: null,
+        offsiteKey: null,
       });
     }
 
@@ -176,6 +264,11 @@ export class BackupService {
         },
       );
       const info = await stat(target);
+
+      // 받자마자 확인한다 — 읽히지 않는 덤프를 복원 시점에 알면 늦다
+      const integrity = await this.inspect(target);
+      const checksum = await this.checksum(target);
+      const offsiteKey = await this.replicate(name, target);
       await this.prune();
 
       return this.recordBackup({
@@ -185,6 +278,10 @@ export class BackupService {
         durationMs: Date.now() - startedAt,
         trigger,
         error: null,
+        checksum,
+        integrityOk: integrity.readable,
+        entries: integrity.entries,
+        offsiteKey,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -196,7 +293,82 @@ export class BackupService {
         durationMs: Date.now() - startedAt,
         trigger,
         error: message.slice(0, 500),
+        checksum: null,
+        integrityOk: null,
+        entries: null,
+        offsiteKey: null,
       });
+    }
+  }
+
+  /**
+   * 덤프 무결성 판독 — `pg_restore --list`로 목차를 읽어 본다.
+   *
+   * 복원하지 않고도 **파일이 온전한지**를 알 수 있는 가장 싼 검사다.
+   * 읽히지 않으면 그 백업은 존재하지만 쓸 수 없는 파일이다.
+   */
+  private async inspect(
+    path: string,
+  ): Promise<{ readable: boolean; entries: number | null }> {
+    try {
+      const { stdout } = await run("pg_restore", ["--list", path], {
+        timeout: this.timeoutMs,
+        maxBuffer: 64 * 1024 * 1024,
+      });
+      const entries = stdout
+        .split("\n")
+        .filter((line) => line.trim() && !line.startsWith(";")).length;
+      // 목차가 비어 있으면 읽힌 것이 아니다
+      return { readable: entries > 0, entries };
+    } catch (error) {
+      this.logger.error(
+        `덤프 판독 실패: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return { readable: false, entries: null };
+    }
+  }
+
+  /** SHA-256 — 원격 사본이 같은 파일인지 확인할 근거 */
+  private async checksum(path: string): Promise<string | null> {
+    try {
+      const hash = createHash("sha256");
+      for await (const chunk of createReadStream(path)) {
+        hash.update(chunk as Buffer);
+      }
+      return hash.digest("hex");
+    } catch {
+      // 체크섬을 못 구한 것이 백업을 실패시키지는 않는다
+      return null;
+    }
+  }
+
+  /**
+   * 원격 복제 — 덤프를 오브젝트 저장소에도 올린다.
+   *
+   * 백업이 데이터베이스와 **같은 곳에만** 있으면, 그 곳이 사라질 때 백업도
+   * 사라진다. 복제 실패가 백업을 실패시키지는 않지만(덤프는 이미 있다),
+   * 로그로 남기고 화면에서 드러낸다.
+   */
+  private async replicate(
+    name: string,
+    path: string,
+  ): Promise<string | null> {
+    if (!this.offsiteEnabled) {
+      return null;
+    }
+    try {
+      const key = `${this.offsitePrefix}${name}`;
+      await this.storage.putObject(
+        key,
+        await readFile(path),
+        "application/octet-stream",
+      );
+      return key;
+    } catch (error) {
+      this.logger.error(
+        `백업 원격 복제 실패: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
     }
   }
 
@@ -336,6 +508,10 @@ export class BackupService {
     durationMs: number;
     trigger: string;
     error: string | null;
+    checksum: string | null;
+    integrityOk: boolean | null;
+    entries: number | null;
+    offsiteKey: string | null;
   }): Promise<BackupRunDto> {
     try {
       const row = (await this.prisma.backupRun.create({
@@ -349,9 +525,11 @@ export class BackupService {
       this.logger.warn(
         `백업 이력 기록 실패: ${error instanceof Error ? error.message : String(error)}`,
       );
+      const { offsiteKey, ...rest } = entry;
       return {
         id: "unrecorded",
-        ...entry,
+        ...rest,
+        offsite: Boolean(offsiteKey),
         createdAt: new Date().toISOString(),
       };
     }
@@ -398,30 +576,64 @@ export class BackupService {
     return rows.map(toRestoreDto);
   }
 
-  /** 백업·복원 건강 판정 (core 순수 로직) */
-  async health(): Promise<{ backup: BackupHealth; restore: RestoreHealth }> {
+  /**
+   * 백업·복원 건강 판정 (core 순수 로직).
+   *
+   * TASK-1701부터 무결성·원격 복제·복구 목표(RPO·RTO)도 함께 판정한다.
+   */
+  async health(): Promise<{
+    backup: BackupHealth;
+    restore: RestoreHealth;
+    integrity: ReturnType<typeof judgeIntegrity>;
+    offsite: OffsiteHealth;
+    objectives: RecoveryObjectives;
+  }> {
     const now = Date.now();
     const [backups, restores] = await Promise.all([
       this.backupHistory(20),
       this.restoreHistory(20),
     ]);
+
+    const backup = judgeBackup(
+      backups.map((entry) => ({
+        ok: entry.ok,
+        sizeBytes: entry.sizeBytes,
+        createdAt: new Date(entry.createdAt).getTime(),
+      })),
+      { now, maxAgeMs: this.maxBackupAgeMs },
+    );
+    const restore = judgeRestore(
+      restores.map((entry) => ({
+        ok: entry.ok,
+        tables: entry.tables,
+        createdAt: new Date(entry.createdAt).getTime(),
+      })),
+      { now, maxAgeMs: this.maxRestoreAgeMs },
+    );
+
+    const latestOk = backups.find((entry) => entry.ok) ?? null;
+    // RTO는 **측정치**다 — 마지막으로 성공한 복원에 실제로 걸린 시간
+    const measuredRestore = restores.find((entry) => entry.ok) ?? null;
+
     return {
-      backup: judgeBackup(
-        backups.map((entry) => ({
-          ok: entry.ok,
-          sizeBytes: entry.sizeBytes,
-          createdAt: new Date(entry.createdAt).getTime(),
-        })),
-        { now },
-      ),
-      restore: judgeRestore(
-        restores.map((entry) => ({
-          ok: entry.ok,
-          tables: entry.tables,
-          createdAt: new Date(entry.createdAt).getTime(),
-        })),
-        { now },
-      ),
+      backup,
+      restore,
+      integrity: judgeIntegrity({
+        readable: latestOk?.integrityOk ?? null,
+        checksum: latestOk?.checksum ?? null,
+        entries: latestOk?.entries ?? null,
+      }),
+      offsite: judgeOffsite({
+        configured: this.offsiteEnabled,
+        latestReplicated: latestOk === null ? null : latestOk.offsite,
+        copies: backups.filter((entry) => entry.offsite).length,
+      }),
+      objectives: judgeRecoveryObjectives({
+        lastBackupAgeMs: backup.ageMs,
+        measuredRestoreMs: measuredRestore?.durationMs ?? null,
+        rpoTargetMs: this.rpoTargetMs,
+        rtoTargetMs: this.rtoTargetMs,
+      }),
     };
   }
 

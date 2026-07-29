@@ -23,6 +23,11 @@ const READY: DeploymentState = {
       LLM_FAILOVER_PRIORITY: "openai",
       ALERT_WEBHOOK_URL: "https://hooks.example.com/acos",
       REDIS_URL: "redis://cache:6379",
+      // 재해 복구 (TASK-1601·1701) — BACKUP_DIR은 운영 필수(결정 1601-①)
+      TZ: "Asia/Seoul",
+      BACKUP_DIR: "/var/backups/acos",
+      BACKUP_RESTORE_DB_URL: "postgresql://user:pw@db:5432/acos_restore_check",
+      BACKUP_OFFSITE: "on",
     },
   ),
   database: { ok: true, detail: "연결 정상" },
@@ -156,6 +161,8 @@ describe("Deployment Checklist (TASK-1202)", () => {
         OPENAI_API_KEY: "sk-proj-abcdefghijklmnop1234",
         LLM_DAILY_BUDGET_USD: "50",
         LLM_FAILOVER_PRIORITY: "openai",
+        // 운영 필수 항목은 갖춘 상태여야 "경고만"이 된다 (결정 1601-①)
+        BACKUP_DIR: "/var/backups/acos",
       }),
     });
     expect(item(items, "env").status).toBe("warn");

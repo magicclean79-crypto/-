@@ -1,4 +1,5 @@
 import { providerKeyRequired, validateApiKeyFormat } from "../llm/api-key";
+import { judgeRestoreTarget } from "./enterprise-recovery";
 
 /**
  * Environment Validation. (TASK-1202, Sprint 12)
@@ -496,12 +497,12 @@ export const ENV_SPECS: EnvSpec[] = [
   {
     name: "BACKUP_DIR",
     category: "ops",
-    description: "데이터베이스 백업 파일을 두는 디렉터리",
-    fallback: "./backups (컨테이너 안 — 재시작하면 사라진다)",
-    productionAdvice: (value) =>
-      value
-        ? null
-        : "백업 위치가 지정되지 않았습니다 — 컨테이너와 함께 사라지는 곳에 백업이 쌓입니다.",
+    description:
+      "데이터베이스 백업 파일을 두는 디렉터리 — 컨테이너 밖 볼륨을 가리켜야 한다",
+    // CTO 결정 1601-①: 운영 필수로 승격. 미설정이면 기동하지 않는다 —
+    // 백업이 컨테이너와 함께 사라지는 구성으로 운영을 시작할 수는 없다
+    requiredInProduction: true,
+    fallback: "/var/backups/acos (개발 전용)",
   },
   {
     name: "BACKUP_RETENTION_DAYS",
@@ -529,7 +530,7 @@ export const ENV_SPECS: EnvSpec[] = [
     name: "BACKUP_RESTORE_DB_URL",
     category: "ops",
     description:
-      "복원 검증 전용 데이터베이스 — **운영 DB를 절대 지정하지 마십시오** (덮어씁니다)",
+      "복원 검증 전용 데이터베이스 — 운영 DB를 절대 지정하지 마십시오 (덮어씁니다)",
     secret: true,
     validate: (value) =>
       value.startsWith("postgres://") || value.startsWith("postgresql://")
@@ -557,7 +558,7 @@ export const ENV_SPECS: EnvSpec[] = [
     name: "OPS_CHECK_SMOKE_AT",
     category: "ops",
     description:
-      "Provider Smoke 실행 시각 HH:MM — **실제 과금**되므로 기본은 꺼져 있다",
+      "Provider Smoke 실행 시각 HH:MM — 실제 과금되므로 기본은 꺼져 있다",
     fallback: "꺼짐 (켜려면 시각을 지정, CTO 결정 1301-①)",
   },
   {
@@ -574,6 +575,55 @@ export const ENV_SPECS: EnvSpec[] = [
     description: "예약 점검 스케줄러가 할 일을 둘러보는 주기(ms)",
     validate: positiveNumber("OPS_TICK_INTERVAL_MS"),
     fallback: "60000 (1분)",
+  },
+  // ── Enterprise 백업·재해 복구 (TASK-1701) ──
+  {
+    name: "BACKUP_OFFSITE",
+    category: "ops",
+    description:
+      "백업 덤프를 오브젝트 저장소에도 올린다 (on | off) — 호스트가 사라져도 백업은 남는다",
+    validate: oneOf(["on", "off", "1", "0", "true", "false"]),
+    fallback: "off (백업이 데이터베이스와 같은 곳에만 남는다)",
+    productionAdvice: (value) =>
+      ["on", "1", "true"].includes((value ?? "").toLowerCase())
+        ? null
+        : "백업 원격 복제가 꺼져 있습니다 — 호스트가 사라지면 백업도 함께 사라집니다.",
+  },
+  {
+    name: "BACKUP_OFFSITE_PREFIX",
+    category: "ops",
+    description: "원격 복제 시 오브젝트 키 접두사",
+    fallback: "backups/",
+  },
+  {
+    name: "BACKUP_RPO_HOURS",
+    category: "ops",
+    description:
+      "허용하는 최대 데이터 손실 구간(시간) — 지금 무너지면 얼마를 잃어도 되는가",
+    validate: positiveNumber("BACKUP_RPO_HOURS"),
+    fallback: "24 (하루 1회 백업 기준)",
+  },
+  {
+    name: "BACKUP_RTO_MINUTES",
+    category: "ops",
+    description:
+      "복원에 허용하는 시간(분) — 실제 복원 검증 측정치와 비교한다",
+    validate: positiveNumber("BACKUP_RTO_MINUTES"),
+    fallback: "30",
+  },
+  {
+    name: "BACKUP_MAX_AGE_HOURS",
+    category: "ops",
+    description: "백업 신선도 한계(시간) — 넘기면 '오래됨'으로 표시한다",
+    validate: positiveNumber("BACKUP_MAX_AGE_HOURS"),
+    fallback: "48 (2일 — CTO 결정 1601-⑤)",
+  },
+  {
+    name: "RESTORE_MAX_AGE_HOURS",
+    category: "ops",
+    description: "복원 검증 신선도 한계(시간)",
+    validate: positiveNumber("RESTORE_MAX_AGE_HOURS"),
+    fallback: "192 (8일 — CTO 결정 1601-⑤)",
   },
 ];
 
@@ -654,6 +704,19 @@ export function validateEnvironment(
     if (advice) {
       warnings.push(issue("warning", advice));
     }
+  }
+
+  // 항목 하나만 봐서는 알 수 없는 검사 (CTO 결정 1601-②).
+  // 복원은 대상 스키마를 지우고 쓴다 — 운영 DB를 가리키면 검증이 곧 사고다.
+  // 환경과 무관하게 오류다: 개발에서도 운영 DB를 지우는 설정은 허용할 수 없다.
+  const target = judgeRestoreTarget(env.DATABASE_URL, env.BACKUP_RESTORE_DB_URL);
+  if (target.verdict === "same-as-production") {
+    errors.push({
+      name: "BACKUP_RESTORE_DB_URL",
+      severity: "error",
+      message: target.detail,
+      category: "ops",
+    });
   }
 
   return {

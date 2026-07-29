@@ -192,6 +192,22 @@ export interface DrState {
   notificationChannels: number;
   /** 복구 절차 문서가 최신인지 사람이 확인해야 한다 */
   runbookPath: string;
+  /**
+   * Enterprise 항목 (TASK-1701) — 없으면 체크리스트에 넣지 않는다.
+   * 순수 판정은 `enterprise-recovery.ts`가 하고, 여기서는 결과만 배치한다.
+   */
+  enterprise?: {
+    /** 덤프 무결성 */
+    integrity: { status: DrStatus; detail: string };
+    /** 원격 복제 */
+    offsite: { status: DrStatus; detail: string };
+    /** 이미지 저장소 보호 상태 (CTO 결정 1601-④) */
+    storageProtection: { status: DrStatus; detail: string };
+    /** 복구 목표 RPO·RTO */
+    objectives: { status: DrStatus; detail: string };
+    /** 복원 대상 분리 (CTO 결정 1601-②) */
+    restoreTarget: { status: DrStatus; detail: string };
+  };
 }
 
 const VERDICT_TO_STATUS: Record<ReadinessVerdict, DrStatus> = {
@@ -241,6 +257,56 @@ export function buildDisasterRecoveryChecklist(state: DrState): DrItem[] {
       critical: true,
     },
   ];
+
+  if (state.enterprise) {
+    const {
+      integrity,
+      offsite,
+      storageProtection,
+      objectives,
+      restoreTarget,
+    } = state.enterprise;
+    items.push(
+      {
+        id: "integrity",
+        title: "덤프 무결성",
+        // 읽히지 않는 덤프는 복원하려는 순간에야 드러난다 — 복구를 좌우한다
+        status: integrity.status,
+        detail: integrity.detail,
+        critical: true,
+      },
+      {
+        id: "restore-target",
+        title: "복원 대상 분리",
+        status: restoreTarget.status,
+        detail: restoreTarget.detail,
+        // 운영 DB를 가리키면 검증이 곧 사고다 (CTO 결정 1601-②)
+        critical: true,
+      },
+      {
+        id: "offsite",
+        title: "백업 원격 복제",
+        status: offsite.status,
+        detail: offsite.detail,
+        // 로컬 덤프로 복구는 되므로 지금의 복구 가능성을 막지는 않는다
+        critical: false,
+      },
+      {
+        id: "storage-protection",
+        title: "이미지 저장소 보호 (버전 관리·복제)",
+        status: storageProtection.status,
+        detail: storageProtection.detail,
+        critical: false,
+      },
+      {
+        id: "objectives",
+        title: "복구 목표 (RPO·RTO)",
+        status: objectives.status,
+        detail: objectives.detail,
+        critical: false,
+      },
+    );
+  }
 
   if (state.lock !== null) {
     items.push({

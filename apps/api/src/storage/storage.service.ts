@@ -5,6 +5,7 @@ import {
   ServiceUnavailableException,
 } from "@nestjs/common";
 import { Client } from "minio";
+import type { ProtectionState } from "@acos/core";
 
 const DEFAULT_ENDPOINT = "http://localhost:9000";
 
@@ -70,6 +71,62 @@ export class StorageService implements OnModuleInit {
       throw new Error(`버킷을 찾을 수 없습니다: ${this.bucket}`);
     }
     return `버킷 접근 정상 (${this.bucket})`;
+  }
+
+  /**
+   * 버킷 보호 상태 (TASK-1701, CTO 결정 1601-④).
+   *
+   * **애플리케이션은 이미지를 백업하지 않는다** — 저장소 제공자의 버전 관리·
+   * 복제에 의존한다. 그러니 최소한 그 정책이 켜져 있는지는 보여야 한다.
+   *
+   * 저장소가 조회를 지원하지 않으면(로컬 목업 등) **`unknown`으로 남긴다** —
+   * 확인하지 못한 것을 "꺼져 있음"이라고 단정하면 그것도 거짓이다.
+   */
+  async describeProtection(): Promise<{
+    versioning: ProtectionState;
+    replication: ProtectionState;
+  }> {
+    const [versioning, replication] = await Promise.all([
+      this.readVersioning(),
+      this.readReplication(),
+    ]);
+    return { versioning, replication };
+  }
+
+  private async readVersioning(): Promise<ProtectionState> {
+    try {
+      const config = (await this.client.getBucketVersioning(this.bucket)) as
+        | { Status?: string }
+        | undefined;
+      const status = config?.Status?.trim().toLowerCase();
+      if (!status) {
+        // 응답은 왔지만 상태가 비어 있으면 꺼진 것으로 본다(S3 규약)
+        return "disabled";
+      }
+      return status === "enabled" ? "enabled" : "disabled";
+    } catch {
+      return "unknown";
+    }
+  }
+
+  private async readReplication(): Promise<ProtectionState> {
+    try {
+      const config = (await this.client.getBucketReplication(this.bucket)) as
+        | { Rule?: unknown }
+        | undefined;
+      const rules = config?.Rule;
+      const list = Array.isArray(rules) ? rules : rules ? [rules] : [];
+      return list.length > 0 ? "enabled" : "disabled";
+    } catch (error) {
+      // 규칙이 없을 때 오류로 답하는 구현이 있다 — 그건 "없음"이지 "모름"이 아니다
+      const message =
+        error instanceof Error ? error.message.toLowerCase() : String(error);
+      return message.includes("replicationconfigurationnotfound") ||
+        message.includes("not found") ||
+        message.includes("no replication")
+        ? "disabled"
+        : "unknown";
+    }
   }
 
   private async ensureBucket(): Promise<void> {

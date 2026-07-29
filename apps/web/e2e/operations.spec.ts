@@ -125,3 +125,78 @@ test.describe("운영 대시보드 (TASK-1601)", () => {
     await expect(page.getByTestId("dr-checklist")).toHaveCount(0);
   });
 });
+
+test.describe("Enterprise 백업·재해 복구 (TASK-1701)", () => {
+  test("무결성·원격 복제·저장소 보호·복원 대상을 한 묶음으로 보여준다", async ({
+    page,
+  }) => {
+    await setMode("data");
+    await openPage(page);
+
+    await expect(page.getByTestId("integrity-status")).toContainText("통과");
+    await expect(page.getByTestId("integrity-status")).toContainText(
+      "객체 142개",
+    );
+    // 체크섬 전체를 늘어놓지 않는다
+    await expect(page.getByTestId("integrity-status")).not.toContainText(
+      "c".repeat(64),
+    );
+    await expect(page.getByTestId("offsite-status")).toContainText("사본 1개");
+    await expect(page.getByTestId("storage-protection")).toContainText(
+      "버전 관리 켜짐",
+    );
+    await expect(page.getByTestId("restore-target")).toContainText(
+      "운영 데이터베이스와 분리",
+    );
+  });
+
+  test("복구 목표는 측정치를 쓰고, 하한임을 밝힌다", async ({ page }) => {
+    await setMode("data");
+    await openPage(page);
+
+    await expect(page.getByTestId("objectives-verdict")).toContainText("통과");
+    await expect(page.getByTestId("rpo-value")).toContainText("3분");
+    await expect(page.getByTestId("rto-value")).toContainText("8초");
+    await expect(page.getByTestId("recovery-objectives")).toContainText(
+      "측정된 하한",
+    );
+  });
+
+  test("측정치가 없으면 '확인 불가'로 두고 0으로 채우지 않는다", async ({
+    page,
+  }) => {
+    await setMode("empty");
+    await openPage(page);
+
+    await expect(page.getByTestId("rto-value")).toContainText("확인 불가");
+    await expect(page.getByTestId("objectives-verdict")).toContainText(
+      "직접 확인",
+    );
+  });
+
+  test("저장소가 알려 주지 않으면 통과로 세지 않는다 (CTO 결정 1601-④)", async ({
+    page,
+  }) => {
+    await setMode("empty");
+    await openPage(page);
+
+    const protection = page.getByTestId("storage-protection");
+    await expect(protection).toContainText("직접 확인");
+    await expect(protection).toContainText("버전 관리 확인 불가");
+    await expect(protection).toContainText(
+      "애플리케이션은 이미지를 백업하지 않습니다",
+    );
+  });
+
+  test("원격 복제가 꺼져 있으면 백업이 함께 사라진다고 말한다", async ({
+    page,
+  }) => {
+    await setMode("empty");
+    await openPage(page);
+
+    const offsite = page.getByTestId("offsite-status");
+    await expect(offsite).toContainText("주의");
+    await expect(offsite).toContainText("백업도 함께 사라집니다");
+    await expect(offsite).toContainText("꺼짐 (BACKUP_OFFSITE)");
+  });
+});

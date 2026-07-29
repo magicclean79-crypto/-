@@ -497,6 +497,14 @@ model BackupRun {
   durationMs Int
   trigger    String   @default("schedule")
   error      String?
+  /** 덤프 SHA-256 — 같은 파일인지 확인한다 (TASK-1701) */
+  checksum   String?
+  /** pg_restore --list로 읽히는가 — 확인하지 못했으면 null */
+  integrityOk Boolean?
+  /** 덤프 안에서 확인한 객체 수 */
+  entries    Int?
+  /** 오브젝트 저장소에 복제된 키 — 복제하지 않았으면 null */
+  offsiteKey String?
   createdAt  DateTime @default(now())
 
   @@index([createdAt])
