@@ -3,11 +3,13 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import type {
   ContentDto,
+  ContentGovernanceDto,
   ContentStatusHistoryDto,
   ProductObjectDto,
   ProjectDetailDto,
 } from "@acos/shared";
 import { Badge } from "@acos/ui";
+import { ContentGovernancePanel } from "./content-governance";
 import { ContentStatusActions } from "./content-status-actions";
 import { ContentStatusBadge } from "./content-status";
 import { PipelineActions } from "./pipeline-actions";
@@ -57,6 +59,25 @@ export default async function ProjectDetailPage({
                 `/projects/${id}/contents/${content.id}/history`,
               )
             )?.history ?? [],
+          ] as const,
+      ),
+    ),
+  );
+  /**
+   * 발행 거버넌스 판정 (TASK-2501) — 콘텐츠별 병렬 조회.
+   *
+   * 발행 버튼 옆에 판정을 함께 두는 이유: 눌러 보고 막히는 것과, 무엇이
+   * 막는지 먼저 보는 것은 다르다. 조회는 전이하지 않으므로 안전하다.
+   */
+  const verdicts = new Map(
+    await Promise.all(
+      contents.map(
+        async (content) =>
+          [
+            content.id,
+            await fetchJson<ContentGovernanceDto>(
+              `/projects/${id}/contents/${content.id}/governance`,
+            ),
           ] as const,
       ),
     ),
@@ -190,6 +211,9 @@ export default async function ProjectDetailPage({
                       {content.body}
                     </pre>
                   </details>
+                  <ContentGovernancePanel
+                    verdict={verdicts.get(content.id) ?? null}
+                  />
                   <div className="mt-3">
                     <ContentStatusActions
                       projectId={project.id}

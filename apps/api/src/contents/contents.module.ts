@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { AuthModule } from "../auth/auth.module";
 import { CompanyBrainModule } from "../company-brain/company-brain.module";
+import { ContentGovernanceModule } from "../content-governance/content-governance.module";
 import { LlmModule } from "../llm/llm.module";
 import { PromptModule } from "../prompt/prompt.module";
 import { ContentGenerationService } from "./content-generation.service";
@@ -17,7 +18,14 @@ import { EngineContentGenerator } from "./engine-content.generator";
  * @deprecated 상태로 보존되어 있으나 더 이상 연결되지 않는다.)
  */
 @Module({
-  imports: [AuthModule, CompanyBrainModule, LlmModule, PromptModule],
+  // 발행 게이트는 거버넌스 판정을 가져다 쓴다 (TASK-2501)
+  imports: [
+    AuthModule,
+    CompanyBrainModule,
+    ContentGovernanceModule,
+    LlmModule,
+    PromptModule,
+  ],
   controllers: [ContentsController],
   providers: [
     ContentsService,

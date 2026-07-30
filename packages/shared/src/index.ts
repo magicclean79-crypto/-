@@ -590,6 +590,64 @@ export interface ReadyValidationRequest {
   productObjectVersion?: number;
 }
 
+// ── Content Governance (TASK-2501, Sprint 25) ──────────
+
+/** 판정 등급은 READY 판정과 같다 — 화면이 두 어휘를 배우지 않게 */
+export type GovernanceStatusDto = ReadyValidationStatus;
+
+export interface GovernanceCheckDto {
+  /** 검사 식별자 (banned-words · disclosures · source-object · …) */
+  key: string;
+  name: string;
+  status: GovernanceStatusDto;
+  messages: string[];
+  /** 이 검사가 실패하면 발행을 막는가 */
+  blocking: boolean;
+}
+
+/** 발행 거버넌스 판정 결과 (TASK-2501) */
+export interface ContentGovernanceDto {
+  projectId: string;
+  contentId: string;
+  contentStatus: ContentStatus;
+  /** 전체 판정 — 개별 검사 중 최악 값 */
+  status: GovernanceStatusDto;
+  checks: GovernanceCheckDto[];
+  /** 발행을 막는 항목 — 비어 있으면 발행할 수 있다 */
+  blockers: GovernanceCheckDto[];
+  publishable: boolean;
+  /** 판정에 실제로 쓰인 기준 — 규칙은 나중에 바뀌므로 함께 남긴다 */
+  appliedRules: {
+    bannedWordCount: number | null;
+    disclosureIds: string[] | null;
+  };
+  evaluatedAt: string;
+}
+
+/**
+ * 발행 시점 판정 기록 (TASK-2501) — 삭제하지 않는다.
+ *
+ * 발행이 막힌 기록도 남는다. 무엇이 막혔고 언제 풀렸는지가 남지 않으면
+ * "왜 이렇게 늦게 발행됐지"에 아무도 답할 수 없다.
+ */
+export interface ContentGovernanceRecordDto {
+  id: string;
+  contentId: string;
+  status: GovernanceStatusDto;
+  /** 이 판정으로 발행이 이뤄졌는가 — false면 막힌 기록이다 */
+  published: boolean;
+  /** 막은 항목의 key 목록 */
+  blockedBy: string[];
+  checks: GovernanceCheckDto[];
+  appliedRules: {
+    bannedWordCount: number | null;
+    disclosureIds: string[] | null;
+  };
+  /** 수행자 이메일 */
+  actor: string | null;
+  createdAt: string;
+}
+
 // ── LLM Gateway (TASK-0501, Sprint 5 — AI Execution) ───
 
 export const LLM_MESSAGE_ROLES = ["system", "user", "assistant"] as const;

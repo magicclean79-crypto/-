@@ -1,6 +1,10 @@
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import request from "supertest";
+import { CompanyBrainService } from "../company-brain/company-brain.service";
+import { ContentGovernanceService } from "../content-governance/content-governance.service";
+import { GovernanceRulesService } from "../content-governance/governance-rules.service";
+import { createCompanyBrainMock } from "../content-governance/governance.spec-helpers";
 import { PrismaService } from "../prisma/prisma.service";
 import { ContentGenerationService } from "./content-generation.service";
 import { CONTENT_GENERATOR } from "./contents.constants";
@@ -34,6 +38,13 @@ describe("Contents API (API Test)", () => {
       controllers: [ContentsController],
       providers: [
         ContentsService,
+        // 발행 게이트 (TASK-2501) — 금지어를 등록해 실제로 막히는지도 본다
+        ContentGovernanceService,
+        GovernanceRulesService,
+        {
+          provide: CompanyBrainService,
+          useValue: createCompanyBrainMock({ bannedWords: ["최고", "1위"] }),
+        },
         { provide: PrismaService, useValue: prismaMock },
         {
           provide: CONTENT_GENERATOR,
@@ -216,6 +227,115 @@ describe("Contents API (API Test)", () => {
     expect(response.body.title).toBe("생성된 상세페이지");
     expect(engine.generate).toHaveBeenCalledWith("proj-1", {
       productObjectVersion: 2,
+    });
+  });
+  describe("발행 거버넌스 API (TASK-2501)", () => {
+    /** 새 콘텐츠를 만들고 REVIEW로 올린다 */
+    async function reviewed(body?: string) {
+      const created = await request(app.getHttpServer())
+        .post("/projects/proj-1/contents")
+        .send({})
+        .expect(201);
+      const id = created.body.id as string;
+      if (body !== undefined) {
+        prismaMock.contents.get(id)!.body = body;
+      }
+      await request(app.getHttpServer())
+        .patch(`/projects/proj-1/contents/${id}/status`)
+        .set("Authorization", "Bearer editor-token")
+        .send({ status: "REVIEW" })
+        .expect(200);
+      return id;
+    }
+
+    it("GET …/governance — 전이하지 않고 판정만 돌려준다", async () => {
+      const id = await reviewed("깨끗한 매트입니다.");
+
+      const response = await request(app.getHttpServer())
+        .get(`/projects/proj-1/contents/${id}/governance`)
+        .expect(200);
+
+      expect(response.body.contentId).toBe(id);
+      expect(response.body.contentStatus).toBe("REVIEW");
+      expect(response.body.publishable).toBe(true);
+      expect(
+        response.body.checks.map((check: { key: string }) => check.key),
+      ).toEqual([
+        "content-body",
+        "banned-words",
+        "disclosures",
+        "source-object",
+        "related-rules",
+      ]);
+      // 각 항목이 막는 항목인지 화면이 추측하지 않게 밝힌다
+      expect(
+        response.body.checks.every(
+          (check: { blocking?: boolean }) => typeof check.blocking === "boolean",
+        ),
+      ).toBe(true);
+      // 상태는 그대로다 — 판정은 전이가 아니다
+      expect(
+        (
+          await request(app.getHttpServer())
+            .get(`/projects/proj-1/contents/${id}`)
+            .expect(200)
+        ).body.status,
+      ).toBe("REVIEW");
+    });
+
+    it("미리보기가 막힌다고 하면 발행도 막힌다 — 같은 판정을 쓴다", async () => {
+      const id = await reviewed("업계 1위 매트입니다.");
+
+      const preview = await request(app.getHttpServer())
+        .get(`/projects/proj-1/contents/${id}/governance`)
+        .expect(200);
+      expect(preview.body.publishable).toBe(false);
+      expect(
+        preview.body.blockers.map((check: { key: string }) => check.key),
+      ).toEqual(["banned-words"]);
+
+      const blocked = await request(app.getHttpServer())
+        .patch(`/projects/proj-1/contents/${id}/status`)
+        .set("Authorization", "Bearer editor-token")
+        .send({ status: "PUBLISHED" })
+        .expect(400);
+      expect(blocked.body.message).toContain("1위");
+    });
+
+    it("GET …/governance/history — 막힌 기록도 남아 있다", async () => {
+      const id = await reviewed("업계 1위 매트입니다.");
+      await request(app.getHttpServer())
+        .patch(`/projects/proj-1/contents/${id}/status`)
+        .set("Authorization", "Bearer editor-token")
+        .send({ status: "PUBLISHED" })
+        .expect(400);
+
+      prismaMock.contents.get(id)!.body = "깨끗한 매트입니다.";
+      await request(app.getHttpServer())
+        .patch(`/projects/proj-1/contents/${id}/status`)
+        .set("Authorization", "Bearer editor-token")
+        .send({ status: "PUBLISHED" })
+        .expect(200);
+
+      const response = await request(app.getHttpServer())
+        .get(`/projects/proj-1/contents/${id}/governance/history`)
+        .expect(200);
+
+      expect(response.body.records).toHaveLength(2);
+      // 최신순 — 통과한 기록이 먼저
+      expect(response.body.records[0].published).toBe(true);
+      expect(response.body.records[1].published).toBe(false);
+      expect(response.body.records[1].blockedBy).toEqual(["banned-words"]);
+      expect(response.body.records[1].actor).toBe("editor@acos.local");
+    });
+
+    it("없는 콘텐츠의 판정·이력 조회는 404", async () => {
+      await request(app.getHttpServer())
+        .get("/projects/proj-1/contents/none/governance")
+        .expect(404);
+      await request(app.getHttpServer())
+        .get("/projects/proj-1/contents/none/governance/history")
+        .expect(404);
     });
   });
 });

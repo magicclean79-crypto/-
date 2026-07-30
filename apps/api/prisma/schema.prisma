@@ -144,21 +144,41 @@ enum OcrStatus {
 
 // 상세페이지 콘텐츠 — Product Object를 단일 입력으로 생성된다 (TASK-0303)
 model Content {
-  id              String                 @id @default(cuid())
-  project         Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  projectId       String
-  productObject   ProductObject?         @relation(fields: [productObjectId], references: [id], onDelete: SetNull)
-  productObjectId String?
-  title           String
-  body            String
-  status          ContentStatus          @default(DRAFT)
-  publishedAt     DateTime? // 발행 시각 (TASK-0703) — PUBLISHED 전이 시 기록
-  statusHistory   ContentStatusHistory[]
-  createdAt       DateTime               @default(now())
-  updatedAt       DateTime               @updatedAt
+  id               String                   @id @default(cuid())
+  project          Project                  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId        String
+  productObject    ProductObject?           @relation(fields: [productObjectId], references: [id], onDelete: SetNull)
+  productObjectId  String?
+  title            String
+  body             String
+  status           ContentStatus            @default(DRAFT)
+  publishedAt      DateTime? // 발행 시각 (TASK-0703) — PUBLISHED 전이 시 기록
+  statusHistory    ContentStatusHistory[]
+  governanceChecks ContentGovernanceCheck[] // 발행 거버넌스 판정 기록 (TASK-2501)
+  createdAt        DateTime                 @default(now())
+  updatedAt        DateTime                 @updatedAt
 
   @@index([projectId])
   @@map("contents")
+}
+
+// 발행 거버넌스 판정 기록 (TASK-2501) — 발행 시도 1건당 1레코드.
+// 삭제하지 않는다: 규칙은 나중에 바뀌므로 "그때의 기준"이 남아 있어야
+// "왜 이게 발행됐지"에 답할 수 있다. 막힌 기록도 남는다.
+model ContentGovernanceCheck {
+  id           String   @id @default(cuid())
+  content      Content  @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  contentId    String
+  status       String // PASS | WARNING | FAIL (판정 등급은 READY 판정과 같다)
+  published    Boolean  @default(false) // 이 판정으로 실제 발행이 이뤄졌는가
+  blockedBy    String[] // 막은 검사의 key 목록 — 빈 배열이면 막힌 것이 없다
+  checks       Json // 판정 당시 검사 결과 전체
+  appliedRules Json // 판정에 실제로 쓰인 기준 (금지어 수·적용 고지 id)
+  actor        String? // 수행자 이메일
+  createdAt    DateTime @default(now())
+
+  @@index([contentId, createdAt])
+  @@map("content_governance_checks")
 }
 
 // 발행 파이프라인 감사 이력 (TASK-0704) — 상태 전이 1건당 1레코드
@@ -403,15 +423,19 @@ model Alert {
   title         String
   message       String
   status        AlertStatus @default(ACTIVE)
-  /** 같은 경보가 다시 감지된 횟수 */
+  /**
+   * 같은 경보가 다시 감지된 횟수
+   */
   occurrences   Int         @default(1)
   firstRaisedAt DateTime    @default(now())
   lastRaisedAt  DateTime    @default(now())
-  /** 마지막으로 외부 채널에 알린 시각 (재알림 쿨다운 기준) */
+  /**
+   * 마지막으로 외부 채널에 알린 시각 (재알림 쿨다운 기준)
+   */
   notifiedAt    DateTime?
   resolvedAt    DateTime?
 
-  archivedAt    DateTime?
+  archivedAt DateTime?
 
   @@index([status, lastRaisedAt])
   @@index([kind, lastRaisedAt])
@@ -420,24 +444,31 @@ model Alert {
 
 /**
  * 알림 전송 시도 1건 (TASK-1401).
- *
  * 전송이 **실패한 사실 자체가 알려지지 않는 것**이 TASK-1302의 구멍이었다.
  * 채널·시도 횟수·마지막 오류를 남겨 "왜 아무도 못 받았는가"를 추적한다.
  */
 model NotificationDelivery {
-  id         String   @id @default(cuid())
-  /** 경보 키 (alerts.key) — 삭제 연쇄를 만들지 않으려 FK를 걸지 않는다 */
-  alertKey   String
-  channel    String // slack | email | webhook
-  level      String // warning | critical | resolved
-  /** 최종 성공 여부 */
-  ok         Boolean
-  /** 총 시도 횟수 (최초 1회 포함) */
-  attempts   Int      @default(1)
-  /** 마지막 응답 상태 — 네트워크 오류면 null */
-  status     Int?
-  error      String?
-  createdAt  DateTime @default(now())
+  id        String   @id @default(cuid())
+  /**
+   * 경보 키 (alerts.key) — 삭제 연쇄를 만들지 않으려 FK를 걸지 않는다
+   */
+  alertKey  String
+  channel   String // slack | email | webhook
+  level     String // warning | critical | resolved
+  /**
+   * 최종 성공 여부
+   */
+  ok        Boolean
+  /**
+   * 총 시도 횟수 (최초 1회 포함)
+   */
+  attempts  Int      @default(1)
+  /**
+   * 마지막 응답 상태 — 네트워크 오류면 null
+   */
+  status    Int?
+  error     String?
+  createdAt DateTime @default(now())
 
   @@index([alertKey, createdAt])
   @@index([channel, createdAt])
@@ -447,15 +478,18 @@ model NotificationDelivery {
 enum NotificationQueueStatus {
   PENDING
   SENT
-  /** Dead Letter — 사람이 고쳐야 나간다. **지우지 않는다** */
+  /**
+   * Dead Letter — 사람이 고쳐야 나간다. **지우지 않는다**
+   */
   DEAD
-  /** 90일이 지난 Dead Letter — 보관 (CTO 결정 1501-③, 삭제 아님) */
+  /**
+   * 90일이 지난 Dead Letter — 보관 (CTO 결정 1501-③, 삭제 아님)
+   */
   ARCHIVED
 }
 
 /**
  * 알림 전송 큐 (TASK-1501, CTO 결정 1401-②).
- *
  * TASK-1401의 재시도는 프로세스 안에서만 돌아서, 인스턴스가 재시작하면
  * 진행 중이던 재시도가 사라졌다. 큐에 담아 두면 **재시작을 견딘다**.
  */
@@ -464,11 +498,15 @@ model NotificationQueue {
   alertKey      String
   channel       String // slack | email | webhook
   level         String // warning | critical | resolved
-  /** 전송 본문 (채널 무관 표현) — 재시도 때 그대로 다시 쓴다 */
+  /**
+   * 전송 본문 (채널 무관 표현) — 재시도 때 그대로 다시 쓴다
+   */
   payload       Json
   status        NotificationQueueStatus @default(PENDING)
   attempts      Int                     @default(0)
-  /** 다음 시도 시각 — Retry Worker가 이 시각을 지난 항목만 집어 간다 */
+  /**
+   * 다음 시도 시각 — Retry Worker가 이 시각을 지난 항목만 집어 간다
+   */
   nextAttemptAt DateTime                @default(now())
   lastStatus    Int?
   lastError     String?
@@ -488,28 +526,44 @@ model NotificationQueue {
  * **크기를 남기는 이유**: "성공"이라도 0바이트면 복원할 수 없다.
  */
 model BackupRun {
-  id         String   @id @default(cuid())
-  ok         Boolean
-  /** 덤프 크기 (bytes) — 실패면 null */
-  sizeBytes  BigInt?
-  /** 저장 경로 (파일명만 — 절대 경로는 노출하지 않는다) */
-  fileName   String?
-  durationMs Int
-  trigger    String   @default("schedule")
-  error      String?
-  /** 덤프 SHA-256 — 같은 파일인지 확인한다 (TASK-1701) */
-  checksum   String?
-  /** pg_restore --list로 읽히는가 — 확인하지 못했으면 null */
-  integrityOk Boolean?
-  /** 덤프 안에서 확인한 객체 수 */
-  entries    Int?
-  /** 오브젝트 저장소에 복제된 키 — 복제하지 않았으면 null */
-  offsiteKey String?
-  /** 원격 사본을 내려받아 대조한 시각 (TASK-2101, CTO 결정 2001-②) */
+  id              String    @id @default(cuid())
+  ok              Boolean
+  /**
+   * 덤프 크기 (bytes) — 실패면 null
+   */
+  sizeBytes       BigInt?
+  /**
+   * 저장 경로 (파일명만 — 절대 경로는 노출하지 않는다)
+   */
+  fileName        String?
+  durationMs      Int
+  trigger         String    @default("schedule")
+  error           String?
+  /**
+   * 덤프 SHA-256 — 같은 파일인지 확인한다 (TASK-1701)
+   */
+  checksum        String?
+  /**
+   * pg_restore --list로 읽히는가 — 확인하지 못했으면 null
+   */
+  integrityOk     Boolean?
+  /**
+   * 덤프 안에서 확인한 객체 수
+   */
+  entries         Int?
+  /**
+   * 오브젝트 저장소에 복제된 키 — 복제하지 않았으면 null
+   */
+  offsiteKey      String?
+  /**
+   * 원격 사본을 내려받아 대조한 시각 (TASK-2101, CTO 결정 2001-②)
+   */
   remoteCheckedAt DateTime?
-  /** 대조 결과 — ok · mismatch · missing */
+  /**
+   * 대조 결과 — ok · mismatch · missing
+   */
   remoteVerdict   String?
-  createdAt  DateTime @default(now())
+  createdAt       DateTime  @default(now())
 
   @@index([createdAt])
   @@index([remoteCheckedAt])
@@ -523,9 +577,13 @@ model BackupRun {
 model RestoreRun {
   id         String   @id @default(cuid())
   ok         Boolean
-  /** 복원 후 확인한 테이블 수 */
+  /**
+   * 복원 후 확인한 테이블 수
+   */
   tables     Int?
-  /** 검증에 쓴 백업 파일 */
+  /**
+   * 검증에 쓴 백업 파일
+   */
   fileName   String?
   durationMs Int
   trigger    String   @default("schedule")
@@ -538,19 +596,26 @@ model RestoreRun {
 
 /**
  * 복구 리허설 기록 (TASK-1801, CTO 결정 1701-⑤).
- *
  * 분기 1회 실제 복구를 해 보고 결과를 남긴다. 절차를 읽는 것과 해 보는 것은
  * 다르고, 기록하지 않으면 "했다"는 말만 남는다.
  */
 model RecoveryDrill {
   id          String   @id @default(cuid())
-  /** 절차대로 복구에 성공했는가 */
+  /**
+   * 절차대로 복구에 성공했는가
+   */
   ok          Boolean
-  /** 수행자 (감사용) */
+  /**
+   * 수행자 (감사용)
+   */
   performedBy String
-  /** 소요 시간 — 실제 RTO의 근거 */
+  /**
+   * 소요 시간 — 실제 RTO의 근거
+   */
   durationMs  Int?
-  /** 발견 사항 — 절차의 어디가 어긋났는지 */
+  /**
+   * 발견 사항 — 절차의 어디가 어긋났는지
+   */
   findings    String?
   notes       String?
   createdAt   DateTime @default(now())
@@ -561,35 +626,44 @@ model RecoveryDrill {
 
 /**
  * 리허설을 즉시 요구하는 변경 사건 (TASK-1901, CTO 결정 1801-⑤).
- *
  * 90일 주기는 "아무것도 바뀌지 않았을 때"의 간격이다. DR 절차·DB·백업 방식이
  * 크게 바뀌면 마지막 리허설이 검증한 것은 지금의 시스템이 아니다.
  */
 model DrillRequirement {
-  id          String    @id @default(cuid())
-  /** dr-change | db-major-change | pitr-adoption */
-  trigger     String
-  /** 무엇이 바뀌었는지 */
-  description String
+  id           String    @id @default(cuid())
+  /**
+   * dr-change | db-major-change | pitr-adoption
+   */
+  trigger      String
+  /**
+   * 무엇이 바뀌었는지
+   */
+  description  String
   registeredBy String
-  /** 이 요구를 충족한 리허설 시각 — 미해소면 null */
-  satisfiedAt DateTime?
-  /** 충족한 리허설 id */
-  satisfiedBy String?
+  /**
+   * 이 요구를 충족한 리허설 시각 — 미해소면 null
+   */
+  satisfiedAt  DateTime?
+  /**
+   * 충족한 리허설 id
+   */
+  satisfiedBy  String?
   /**
    * 취소 (TASK-2001, CTO 결정 1901-②).
    * **삭제는 금지한다** — 잘못 등록한 것도 기록으로 남아야 한다.
    */
-  cancelledAt DateTime?
-  cancelledBy String?
+  cancelledAt  DateTime?
+  cancelledBy  String?
   cancelReason String?
-  createdAt   DateTime  @default(now())
+  createdAt    DateTime  @default(now())
 
   @@index([satisfiedAt])
   @@map("drill_requirements")
 }
 
-/** 예약 점검 실행 이력 — "언제 마지막으로 확인했는가"의 근거 */
+/**
+ * 예약 점검 실행 이력 — "언제 마지막으로 확인했는가"의 근거
+ */
 model CheckRun {
   id           String   @id @default(cuid())
   job          String // cost-verification | provider-validation | health-check
@@ -597,7 +671,9 @@ model CheckRun {
   detail       String
   alertsRaised Int      @default(0)
   durationMs   Int
-  /** 예약 실행인지 수동 실행인지 */
+  /**
+   * 예약 실행인지 수동 실행인지
+   */
   trigger      String   @default("schedule")
   createdAt    DateTime @default(now())
 
@@ -617,19 +693,19 @@ enum ExperimentStatus {
 // (CTO 결정 1003-②로 표기법 확정), 이 표는 **운영 중 바뀌는 상태**만 갖는다.
 // 행이 없으면 RUNNING으로 본다 (TASK-1003 동작 보존).
 model ExperimentState {
-  id              String           @id @default(cuid())
-  feature         String           @unique
-  status          ExperimentStatus @default(RUNNING)
+  id                 String           @id @default(cuid())
+  feature            String           @unique
+  status             ExperimentStatus @default(RUNNING)
   // 승자 변형 키 (`provider` 또는 `provider:model`) — PROMOTED일 때만 유효
-  promotedVariant String?
-  actor           String? // 마지막 조작자 (이메일)
-  note            String?
+  promotedVariant    String?
+  actor              String? // 마지막 조작자 (이메일)
+  note               String?
   // 관측 기간 기준 (TASK-1201, CTO 결정 1102-③): 실험 정의 서명이 바뀔 때만
   // 초기화한다 — START/STOP은 기간을 이어간다.
   signature          String?
   signatureChangedAt DateTime?
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
 
   events      ExperimentEvent[]
   assignments ExperimentAssignment[]
@@ -639,17 +715,17 @@ model ExperimentState {
 
 // 상태 전이 이력 — Rollback은 이 이력의 직전 상태로 되돌린다 (감사 겸용)
 model ExperimentEvent {
-  id              String           @id @default(cuid())
-  stateId         String
-  state           ExperimentState  @relation(fields: [stateId], references: [id], onDelete: Cascade)
-  action          String // START | STOP | PROMOTE | ROLLBACK
-  fromStatus      ExperimentStatus
-  toStatus        ExperimentStatus
-  fromVariant     String?
-  toVariant       String?
-  actor           String?
-  note            String?
-  createdAt       DateTime         @default(now())
+  id          String           @id @default(cuid())
+  stateId     String
+  state       ExperimentState  @relation(fields: [stateId], references: [id], onDelete: Cascade)
+  action      String // START | STOP | PROMOTE | ROLLBACK
+  fromStatus  ExperimentStatus
+  toStatus    ExperimentStatus
+  fromVariant String?
+  toVariant   String?
+  actor       String?
+  note        String?
+  createdAt   DateTime         @default(now())
 
   @@index([stateId, createdAt])
   @@map("experiment_events")
@@ -679,15 +755,15 @@ model ExperimentAssignment {
 // 실험 정의(변형·가중치)가 바뀌면 기존 Sticky 배정이 무효가 되어 다시
 // 배정되는데, 그 변화를 조용히 넘기지 않고 이력으로 남긴다.
 model ExperimentAssignmentEvent {
-  id           String   @id @default(cuid())
-  feature      String
-  projectId    String
-  reason       String // DEFINITION_CHANGED | VARIANT_UNAVAILABLE
-  fromVariant  String?
-  toVariant    String
+  id            String   @id @default(cuid())
+  feature       String
+  projectId     String
+  reason        String // DEFINITION_CHANGED | VARIANT_UNAVAILABLE
+  fromVariant   String?
+  toVariant     String
   fromSignature String?
-  toSignature  String
-  createdAt    DateTime @default(now())
+  toSignature   String
+  createdAt     DateTime @default(now())
 
   @@index([feature, createdAt])
   @@map("experiment_assignment_events")

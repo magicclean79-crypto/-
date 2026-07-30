@@ -10,12 +10,15 @@ import {
 } from "@nestjs/common";
 import type {
   ContentDto,
+  ContentGovernanceDto,
+  ContentGovernanceRecordDto,
   ContentStatusHistoryDto,
   GenerateContentRequest,
   UpdateContentStatusRequest,
 } from "@acos/shared";
 import { AuthGuard, RequireRole } from "../auth/auth.guard";
 import type { AuthenticatedRequest } from "../auth/auth.guard";
+import { ContentGovernanceService } from "../content-governance/content-governance.service";
 import { ContentGenerationService } from "./content-generation.service";
 import { ContentsService } from "./contents.service";
 
@@ -24,6 +27,7 @@ export class ContentsController {
   constructor(
     private readonly contentsService: ContentsService,
     private readonly contentGenerationService: ContentGenerationService,
+    private readonly governanceService: ContentGovernanceService,
   ) {}
 
   /**
@@ -90,6 +94,32 @@ export class ContentsController {
         projectId,
         contentId,
       ),
+    };
+  }
+
+  /**
+   * 발행 거버넌스 판정 미리보기 (TASK-2501) — 전이하지 않고 판정만.
+   *
+   * 발행 버튼을 누르기 전에 무엇이 막는지 보기 위한 것이다. 발행 게이트와
+   * **같은 판정 함수**를 부르므로, 여기서 "발행 가능"이면 눌러도 막히지 않는다.
+   * 기록은 남기지 않는다 — 보는 것과 시도하는 것은 다르다.
+   */
+  @Get(":contentId/governance")
+  async governance(
+    @Param("projectId") projectId: string,
+    @Param("contentId") contentId: string,
+  ): Promise<ContentGovernanceDto> {
+    return this.governanceService.evaluate(projectId, contentId);
+  }
+
+  /** 발행 거버넌스 판정 기록 (TASK-2501) — 최신순. 막힌 기록도 남아 있다 */
+  @Get(":contentId/governance/history")
+  async governanceHistory(
+    @Param("projectId") projectId: string,
+    @Param("contentId") contentId: string,
+  ): Promise<{ records: ContentGovernanceRecordDto[] }> {
+    return {
+      records: await this.governanceService.history(projectId, contentId),
     };
   }
 

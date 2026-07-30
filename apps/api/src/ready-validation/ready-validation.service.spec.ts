@@ -1,6 +1,7 @@
 import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { CompanyBrainService } from "../company-brain/company-brain.service";
+import { GovernanceRulesService } from "../content-governance/governance-rules.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { ReadyValidationService } from "./ready-validation.service";
 import {
@@ -17,6 +18,8 @@ describe("ReadyValidationService (Service Test)", () => {
     const moduleRef = await Test.createTestingModule({
       providers: [
         ReadyValidationService,
+        // 거버넌스 규칙은 발행 게이트와 같은 곳에서 읽는다 (TASK-2501)
+        GovernanceRulesService,
         { provide: PrismaService, useValue: prisma },
         { provide: CompanyBrainService, useValue: companyBrain },
       ],

@@ -8,8 +8,6 @@ import type {
   CompanyBrainQueryResponse,
   CompanyBrainSource,
   DecisionDto,
-  KnowledgeDto,
-  MemoryDto,
   OcrSummary,
   ReadyValidationRequest,
   ReadyValidationResultDto,
@@ -17,6 +15,7 @@ import type {
 } from "@acos/shared";
 import type { ProductObject } from "@prisma/client";
 import { CompanyBrainService } from "../company-brain/company-brain.service";
+import { GovernanceRulesService } from "../content-governance/governance-rules.service";
 import { PrismaService } from "../prisma/prisma.service";
 
 function sectionItems<T>(
@@ -40,6 +39,9 @@ export class ReadyValidationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly companyBrain: CompanyBrainService,
+    // 거버넌스 규칙은 발행 게이트와 **같은 곳에서** 읽는다 (TASK-2501) —
+    // 상품에서는 걸리는 말이 콘텐츠에서는 안 걸리면 어느 쪽도 믿을 수 없다
+    private readonly rules: GovernanceRulesService,
   ) {}
 
   async validate(
@@ -60,7 +62,8 @@ export class ReadyValidationService {
     );
 
     // Company Brain 읽기 (조회 순서와 무관하게 목적별 3회 조회)
-    const bannedWords = await this.readBannedWords();
+    // 값만 쓴다 — READY 판정의 문구 체계는 TASK-0404 그대로다
+    const bannedWords = (await this.rules.bannedWords()).value;
     const { relatedRules, relatedDecisions } = await this.readRelatedContext(
       projectId,
       productObject.title,
@@ -94,27 +97,12 @@ export class ReadyValidationService {
     };
   }
 
-  /** Memory(GLOBAL, key=banned-words)에서 금지어 목록을 읽는다 — 미설정이면 null */
-  private async readBannedWords(): Promise<string[] | null> {
-    const response = await this.companyBrain.query({
-      query: "banned-words",
-      scope: "GLOBAL",
-    });
-    const memory = sectionItems<MemoryDto>(response, "MEMORY").find(
-      (item) => item.key === "banned-words",
-    );
-    if (!memory) return null;
-    const value = memory.value;
-    if (
-      Array.isArray(value) &&
-      value.every((word) => typeof word === "string")
-    ) {
-      return value as string[];
-    }
-    return null;
-  }
-
-  /** 제목으로 Knowledge(RULE/LEGAL)·프로젝트 Decision을 검색한다 */
+  /**
+   * 제목으로 관련 규칙·결정을 읽는다.
+   *
+   * 규칙(RULE/LEGAL)은 발행 게이트와 같은 곳에서 읽는다 (TASK-2501).
+   * 결정(Decision)은 READY 판정에만 쓰이므로 여기서 읽는다.
+   */
   private async readRelatedContext(
     projectId: string,
     title: string,
@@ -125,14 +113,14 @@ export class ReadyValidationService {
     if (title.trim().length === 0) {
       return { relatedRules: [], relatedDecisions: [] };
     }
-    const response = await this.companyBrain.query({
-      query: title,
-      scope: "PROJECT",
-      scopeId: projectId,
-    });
-    const relatedRules = sectionItems<KnowledgeDto>(response, "KNOWLEDGE")
-      .filter((item) => item.category === "RULE" || item.category === "LEGAL")
-      .map((item) => ({ title: item.title, category: item.category }));
+    const [relatedRules, response] = await Promise.all([
+      this.rules.relatedRules(projectId, title),
+      this.companyBrain.query({
+        query: title,
+        scope: "PROJECT",
+        scopeId: projectId,
+      }),
+    ]);
     const relatedDecisions = sectionItems<DecisionDto>(
       response,
       "DECISION",

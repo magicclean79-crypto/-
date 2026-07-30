@@ -1,23 +1,76 @@
 import type {
   Content,
+  ContentGovernanceCheck,
   ContentStatusHistory,
   ProductObject,
 } from "@prisma/client";
 
-/** contents/product_objects를 흉내 내는 인메모리 Prisma 목업 (테스트 전용) */
+/**
+ * contents/product_objects를 흉내 내는 인메모리 Prisma 목업 (테스트 전용).
+ *
+ * 연결된 Product Object는 **실제 서비스가 select하는 필드 그대로**
+ * (`version`·`status`·`category`) 돌려준다 — `version`만 돌려주면 분류별
+ * 필수 고지 판정이 구조적으로 검증될 수 없다 (TASK-2501).
+ */
 export function createPrismaMock() {
   const contents = new Map<string, Content>();
   const productObjects: Partial<ProductObject>[] = [];
   const statusHistory: ContentStatusHistory[] = [];
+  const governanceChecks: ContentGovernanceCheck[] = [];
   let sequence = 0;
+
+  /** 실제 서비스의 select와 같은 모양 */
+  const linkedObject = (productObjectId: string | null) => {
+    const po = productObjects.find((item) => item.id === productObjectId);
+    return po
+      ? {
+          version: po.version as number,
+          status: po.status as string,
+          category: (po.category ?? null) as string | null,
+        }
+      : null;
+  };
 
   const prisma = {
     contents,
     productObjects,
     statusHistory,
+    governanceChecks,
     $transaction: jest.fn(async (operations: Promise<unknown>[]) =>
       Promise.all(operations),
     ),
+    contentGovernanceCheck: {
+      create: jest.fn(
+        async ({ data }: { data: Partial<ContentGovernanceCheck> }) => {
+          const row = {
+            id: `gov-${governanceChecks.length + 1}`,
+            createdAt: new Date(),
+            published: false,
+            actor: null,
+            ...data,
+          } as ContentGovernanceCheck;
+          governanceChecks.push(row);
+          return { ...row };
+        },
+      ),
+      findMany: jest.fn(
+        async ({
+          where,
+          take,
+        }: {
+          where: { contentId: string };
+          take?: number;
+        }) => {
+          const rows = governanceChecks
+            .filter((row) => row.contentId === where.contentId)
+            .slice()
+            .reverse();
+          return (typeof take === "number" ? rows.slice(0, take) : rows).map(
+            (row) => ({ ...row }),
+          );
+        },
+      ),
+    },
     contentStatusHistory: {
       create: jest.fn(
         async ({ data }: { data: Partial<ContentStatusHistory> }) => {
@@ -81,10 +134,7 @@ export function createPrismaMock() {
             ...data,
           } as Content;
           contents.set(row.id, row);
-          const po = productObjects.find(
-            (item) => item.id === row.productObjectId,
-          );
-          return { ...row, productObject: po ? { version: po.version } : null };
+          return { ...row, productObject: linkedObject(row.productObjectId) };
         },
       ),
       update: jest.fn(
@@ -97,10 +147,7 @@ export function createPrismaMock() {
         }) => {
           const row = contents.get(where.id) as Content;
           Object.assign(row, data, { updatedAt: new Date() });
-          const po = productObjects.find(
-            (item) => item.id === row.productObjectId,
-          );
-          return { ...row, productObject: po ? { version: po.version } : null };
+          return { ...row, productObject: linkedObject(row.productObjectId) };
         },
       ),
       findMany: jest.fn(
@@ -109,16 +156,7 @@ export function createPrismaMock() {
             .filter((row) => row.projectId === where.projectId)
             .map((row) => ({
               ...row,
-              productObject:
-                productObjects.find(
-                  (item) => item.id === row.productObjectId,
-                ) != null
-                  ? {
-                      version: productObjects.find(
-                        (item) => item.id === row.productObjectId,
-                      )?.version,
-                    }
-                  : null,
+              productObject: linkedObject(row.productObjectId),
             })),
       ),
       findFirst: jest.fn(
@@ -129,10 +167,7 @@ export function createPrismaMock() {
         }) => {
           const row = contents.get(where.id);
           if (!row || row.projectId !== where.projectId) return null;
-          const po = productObjects.find(
-            (item) => item.id === row.productObjectId,
-          );
-          return { ...row, productObject: po ? { version: po.version } : null };
+          return { ...row, productObject: linkedObject(row.productObjectId) };
         },
       ),
     },

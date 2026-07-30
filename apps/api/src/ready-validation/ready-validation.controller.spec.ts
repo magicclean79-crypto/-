@@ -2,6 +2,7 @@ import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import request from "supertest";
 import { CompanyBrainService } from "../company-brain/company-brain.service";
+import { GovernanceRulesService } from "../content-governance/governance-rules.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { ReadyValidationController } from "./ready-validation.controller";
 import { ReadyValidationService } from "./ready-validation.service";
@@ -19,6 +20,7 @@ describe("READY Validation API (API Test)", () => {
       controllers: [ReadyValidationController],
       providers: [
         ReadyValidationService,
+        GovernanceRulesService,
         {
           provide: PrismaService,
           useValue: createPrismaMock([draftProductObject]),

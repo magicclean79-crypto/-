@@ -173,6 +173,74 @@ function complexityError(password) {
 // 발행 파이프라인 스텁 상태 (TASK-0704) — /__mode 전환 시 초기화
 let pubContent;
 let pubHistory;
+let pubGovernanceBlocked;
+let pubGovernanceRecords;
+
+/**
+ * 발행 거버넌스 판정 (TASK-2501).
+ *
+ * 차단 상태와 통과 상태를 같은 경로에서 만들 수 있어야 한다 — 통과만 보여
+ * 주면 "막힌 화면"이 검증되지 않는다.
+ */
+function pubGovernanceVerdict() {
+  const banned = {
+    key: "banned-words",
+    name: "금지어 검사",
+    status: pubGovernanceBlocked ? "FAIL" : "PASS",
+    blocking: true,
+    messages: pubGovernanceBlocked
+      ? ["금지어 발견: 1위 (제목 0건 · 본문 1건)"]
+      : ["금지어 2개 기준 위반 없음"],
+  };
+  const checks = [
+    {
+      key: "content-body",
+      name: "제목·본문",
+      status: "PASS",
+      blocking: true,
+      messages: ["제목 12자 · 본문 20자"],
+    },
+    banned,
+    {
+      key: "disclosures",
+      name: "필수 고지",
+      status: "PASS",
+      blocking: true,
+      messages: ["적용 고지 1건 모두 본문에 있습니다."],
+    },
+    {
+      key: "source-object",
+      name: "근거 상품 연결",
+      status: "WARNING",
+      blocking: false,
+      messages: [
+        "연결된 Product Object가 없습니다 — 발행 후 이 콘텐츠의 근거를 추적할 수 없습니다.",
+      ],
+    },
+    {
+      key: "related-rules",
+      name: "관련 규칙 검토",
+      status: "PASS",
+      blocking: false,
+      messages: ["관련 RULE/LEGAL 지식 없음"],
+    },
+  ];
+  const blockers = checks.filter(
+    (check) => check.blocking && check.status === "FAIL",
+  );
+  return {
+    projectId: "proj-pub",
+    contentId: pubContent.id,
+    contentStatus: pubContent.status,
+    status: blockers.length > 0 ? "FAIL" : "WARNING",
+    checks,
+    blockers,
+    publishable: blockers.length === 0,
+    appliedRules: { bannedWordCount: 2, disclosureIds: ["wash"] },
+    evaluatedAt: new Date().toISOString(),
+  };
+}
+
 function resetPublishing() {
   pubContent = {
     id: "content-pub-1",
@@ -187,6 +255,10 @@ function resetPublishing() {
     updatedAt: "2026-07-28T09:00:00.000Z",
   };
   pubHistory = [];
+  // 발행 거버넌스 판정 (TASK-2501) — 기본은 통과. 차단 상태는 테스트가
+  // POST /__publishing/ban 으로 만든다 (막힌 화면도 검증되어야 한다)
+  pubGovernanceBlocked = false;
+  pubGovernanceRecords = [];
 }
 resetPublishing();
 
@@ -500,6 +572,38 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({ contents: [pubContent] }));
     return;
   }
+  if (
+    url.pathname === `/projects/proj-pub/contents/${pubContent.id}/governance`
+  ) {
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify(pubGovernanceVerdict()));
+    return;
+  }
+  if (
+    url.pathname ===
+    `/projects/proj-pub/contents/${pubContent.id}/governance/history`
+  ) {
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify({ records: [...pubGovernanceRecords].reverse() }),
+    );
+    return;
+  }
+  // 본문의 금지어 유무를 전환한다 — 막힌 화면과 풀린 화면을 같은 경로로 본다
+  if (req.method === "POST" && url.pathname === "/__publishing/ban") {
+    pubGovernanceBlocked = true;
+    pubContent.body = "# 발행 테스트\n\n업계 1위 제품입니다.";
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ blocked: pubGovernanceBlocked }));
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/__publishing/unban") {
+    pubGovernanceBlocked = false;
+    pubContent.body = "# 발행 테스트\n\n깨끗한 본문";
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ blocked: pubGovernanceBlocked }));
+    return;
+  }
   if (url.pathname === `/projects/proj-pub/contents/${pubContent.id}/history`) {
     res.setHeader("content-type", "application/json");
     res.end(JSON.stringify({ history: [...pubHistory].reverse() }));
@@ -525,6 +629,35 @@ const server = http.createServer((req, res) => {
     req.on("end", () => {
       const { status } = JSON.parse(body);
       const now = new Date().toISOString();
+      // 발행 거버넌스 게이트 (TASK-2501) — 발행에만 적용된다
+      if (status === "PUBLISHED") {
+        const verdict = pubGovernanceVerdict();
+        pubGovernanceRecords.push({
+          id: `gov-${pubGovernanceRecords.length + 1}`,
+          contentId: pubContent.id,
+          status: verdict.status,
+          published: verdict.publishable,
+          blockedBy: verdict.blockers.map((check) => check.key),
+          checks: verdict.checks,
+          appliedRules: verdict.appliedRules,
+          actor: "admin@acos.local",
+          createdAt: now,
+        });
+        if (!verdict.publishable) {
+          res.statusCode = 400;
+          res.setHeader("content-type", "application/json");
+          res.end(
+            JSON.stringify({
+              message:
+                "발행 거버넌스 판정을 통과하지 못했습니다 — " +
+                verdict.blockers
+                  .map((check) => `${check.name}: ${check.messages.join(" ")}`)
+                  .join(" / "),
+            }),
+          );
+          return;
+        }
+      }
       pubHistory.push({
         id: `hist-${pubHistory.length + 1}`,
         contentId: pubContent.id,

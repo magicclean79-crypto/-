@@ -2,6 +2,9 @@ import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { createDefaultPromptEngine, MockLlmProvider } from "@acos/core";
 import { CompanyBrainService } from "../company-brain/company-brain.service";
+import { ContentGovernanceService } from "../content-governance/content-governance.service";
+import { GovernanceRulesService } from "../content-governance/governance-rules.service";
+import { createCompanyBrainMock } from "../content-governance/governance.spec-helpers";
 import { LlmService } from "../llm/llm.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { ContentGenerationService } from "./content-generation.service";
@@ -29,13 +32,26 @@ function createEngine(
 }
 
 describe("ContentsService (Service Test)", () => {
+  /**
+   * 발행 게이트를 포함해 조립한다 (TASK-2501).
+   *
+   * `governance` 옵션으로 거버넌스 규칙(금지어·필수 고지)을 준다 — 주지
+   * 않으면 규칙 미설정 상태이므로 `주의`가 되고 발행은 막히지 않는다.
+   */
   async function createService(
     prisma: ReturnType<typeof createPrismaMock>,
     engine: ContentGenerationService = createEngine(prisma),
+    governance: Parameters<typeof createCompanyBrainMock>[0] = {},
   ) {
     const moduleRef = await Test.createTestingModule({
       providers: [
         ContentsService,
+        ContentGovernanceService,
+        GovernanceRulesService,
+        {
+          provide: CompanyBrainService,
+          useValue: createCompanyBrainMock(governance),
+        },
         { provide: PrismaService, useValue: prisma },
         {
           // TASK-0506: 구 Generator 경로는 Wrapper를 통해 공식 엔진 호출
@@ -216,6 +232,201 @@ describe("ContentsService (Service Test)", () => {
       await expect(
         service.getStatusHistory("proj-1", "nope"),
       ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe("발행 거버넌스 게이트 (TASK-2501)", () => {
+    /**
+     * `readyProductObject`의 분류는 "생활용품"이다 — 분류별 고지 규칙이
+     * 실제로 적용되는지 보려면 그 값을 그대로 써야 한다.
+     */
+    const DISCLOSURE = {
+      id: "wash",
+      text: "사용 후 물로 충분히 헹구세요.",
+      whenCategory: "생활용품",
+      reason: "사내 규정",
+    };
+
+    async function setup(
+      governance: Parameters<typeof createCompanyBrainMock>[0] = {},
+    ) {
+      const prisma = createPrismaMock();
+      prisma.productObjects.push({ ...readyProductObject });
+      const service = await createService(prisma, undefined, governance);
+      const content = await service.generate("proj-1", {});
+      await service.updateStatus("proj-1", content.id, "REVIEW");
+      return { prisma, service, content };
+    }
+
+    /** 본문을 갈아 끼운다 — 생성 본문에 특정 문구를 넣기 위해 */
+    async function rewrite(
+      prisma: ReturnType<typeof createPrismaMock>,
+      contentId: string,
+      body: string,
+    ) {
+      const row = prisma.contents.get(contentId)!;
+      row.body = body;
+    }
+
+    it("금지어가 든 본문은 발행되지 않는다", async () => {
+      // 그 전까지 발행 조건은 "REVIEW + 제목·본문 있음"뿐이었다 —
+      // 금지어가 든 본문도 그냥 나갔다
+      const { prisma, service, content } = await setup({
+        bannedWords: ["최고", "1위"],
+      });
+      await rewrite(prisma, content.id, "이 제품은 업계 1위입니다.");
+
+      await expect(
+        service.updateStatus("proj-1", content.id, "PUBLISHED"),
+      ).rejects.toThrow(BadRequestException);
+
+      // 상태는 그대로 REVIEW — 막혔으면 바뀌지 않아야 한다
+      expect((await service.getById("proj-1", content.id)).status).toBe(
+        "REVIEW",
+      );
+      expect((await service.getById("proj-1", content.id)).publishedAt).toBeNull();
+    });
+
+    it("차단 사유에 무엇이 걸렸는지 담긴다 — 고칠 수 있어야 한다", async () => {
+      const { prisma, service, content } = await setup({
+        bannedWords: ["1위"],
+      });
+      await rewrite(prisma, content.id, "업계 1위입니다.");
+
+      await expect(
+        service.updateStatus("proj-1", content.id, "PUBLISHED"),
+      ).rejects.toThrow(/1위/);
+    });
+
+    it("필수 고지가 빠지면 발행되지 않는다", async () => {
+      const { prisma, service, content } = await setup({
+        disclosures: [DISCLOSURE],
+      });
+      await rewrite(prisma, content.id, "좋은 매트입니다.");
+
+      await expect(
+        service.updateStatus("proj-1", content.id, "PUBLISHED"),
+      ).rejects.toThrow(/사용 후 물로 충분히 헹구세요/);
+    });
+
+    it("고지를 넣으면 발행된다", async () => {
+      const { prisma, service, content } = await setup({
+        bannedWords: ["최고"],
+        disclosures: [DISCLOSURE],
+      });
+      await rewrite(
+        prisma,
+        content.id,
+        "좋은 매트입니다. 사용 후 물로 충분히 헹구세요.",
+      );
+
+      const published = await service.updateStatus(
+        "proj-1",
+        content.id,
+        "PUBLISHED",
+      );
+      expect(published.status).toBe("PUBLISHED");
+      expect(published.publishedAt).not.toBeNull();
+    });
+
+    it("주의만 있으면 발행을 막지 않는다 — 미구성과 위반은 다르다", async () => {
+      // 금지어·고지 규칙이 미설정이면 WARNING이지만 발행은 된다
+      const { service, content } = await setup({});
+      expect(
+        (await service.updateStatus("proj-1", content.id, "PUBLISHED")).status,
+      ).toBe("PUBLISHED");
+    });
+
+    it("발행이 아닌 전이는 거버넌스로 막지 않는다", async () => {
+      // 검토를 요청하는 것과 세상에 내보내는 것은 다르다
+      const prisma = createPrismaMock();
+      prisma.productObjects.push({ ...readyProductObject });
+      const service = await createService(prisma, undefined, {
+        bannedWords: ["최고", "Magic"],
+      });
+      const content = await service.generate("proj-1", {});
+
+      expect(
+        (await service.updateStatus("proj-1", content.id, "REVIEW")).status,
+      ).toBe("REVIEW");
+      expect(
+        (await service.updateStatus("proj-1", content.id, "ARCHIVED")).status,
+      ).toBe("ARCHIVED");
+      // 발행 시도가 없었으므로 판정 기록도 없다
+      expect(prisma.governanceChecks).toHaveLength(0);
+    });
+
+    it("막힌 판정도 기록에 남는다", async () => {
+      const { prisma, service, content } = await setup({
+        bannedWords: ["1위"],
+      });
+      await rewrite(prisma, content.id, "업계 1위입니다.");
+
+      await expect(
+        service.updateStatus(
+          "proj-1",
+          content.id,
+          "PUBLISHED",
+          "editor@acos.local",
+        ),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(prisma.governanceChecks).toHaveLength(1);
+      const [record] = prisma.governanceChecks;
+      expect(record.status).toBe("FAIL");
+      expect(record.published).toBe(false);
+      expect(record.blockedBy).toEqual(["banned-words"]);
+      expect(record.actor).toBe("editor@acos.local");
+    });
+
+    it("통과한 판정도 기록에 남는다 — 그때의 기준과 함께", async () => {
+      const { prisma, service, content } = await setup({
+        bannedWords: ["최고", "1위"],
+        disclosures: [DISCLOSURE],
+      });
+      await rewrite(
+        prisma,
+        content.id,
+        "좋은 매트입니다. 사용 후 물로 충분히 헹구세요.",
+      );
+
+      await service.updateStatus("proj-1", content.id, "PUBLISHED");
+      const [record] = prisma.governanceChecks;
+      expect(record.published).toBe(true);
+      expect(record.blockedBy).toEqual([]);
+      expect(record.appliedRules).toMatchObject({
+        bannedWordCount: 2,
+        disclosureIds: ["wash"],
+      });
+    });
+
+    it("막힌 뒤 고쳐서 발행하면 두 기록이 남는다", async () => {
+      // "왜 이렇게 늦게 발행됐지"에 답할 수 있어야 한다
+      const { prisma, service, content } = await setup({
+        bannedWords: ["1위"],
+      });
+      await rewrite(prisma, content.id, "업계 1위입니다.");
+      await expect(
+        service.updateStatus("proj-1", content.id, "PUBLISHED"),
+      ).rejects.toThrow(BadRequestException);
+
+      await rewrite(prisma, content.id, "좋은 매트입니다.");
+      await service.updateStatus("proj-1", content.id, "PUBLISHED");
+
+      expect(prisma.governanceChecks.map((row) => row.published)).toEqual([
+        false,
+        true,
+      ]);
+    });
+
+    it("발행 형식 검증은 거버넌스보다 먼저다 — 빈 본문은 판정 기록을 만들지 않는다", async () => {
+      const { prisma, service, content } = await setup({});
+      await rewrite(prisma, content.id, "");
+
+      await expect(
+        service.updateStatus("proj-1", content.id, "PUBLISHED"),
+      ).rejects.toThrow(/발행 조건을 충족하지 않습니다/);
+      expect(prisma.governanceChecks).toHaveLength(0);
     });
   });
 

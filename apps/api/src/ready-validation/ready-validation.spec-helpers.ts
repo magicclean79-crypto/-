@@ -1,4 +1,3 @@
-import type { CompanyBrainQueryRequest } from "@acos/shared";
 import type { ProductObject } from "@prisma/client";
 
 /** project/productObject 조회를 흉내 내는 최소 Prisma 목업 (테스트 전용) */
@@ -31,80 +30,10 @@ export function createPrismaMock(productObjects: Partial<ProductObject>[]) {
 }
 
 /**
- * CompanyBrainService 목업 — 호출된 query에 따라 준비된 섹션을 돌려준다.
- * bannedWords: GLOBAL Memory(banned-words) value로 반환할 값 (undefined면 미설정)
+ * CompanyBrainService 목업은 **거버넌스 모듈이 소유한다** (TASK-2501) —
+ * READY 판정과 발행 게이트가 같은 규칙을 읽으므로 목업도 같은 것을 쓴다.
  */
-export function createCompanyBrainMock(options?: {
-  bannedWords?: unknown;
-  ruleKnowledge?: { title: string; category: string | null }[];
-  decisions?: { title: string }[];
-  hasSop?: boolean;
-}) {
-  const hasSop = options?.hasSop ?? true;
-  return {
-    query: jest.fn(async (request: CompanyBrainQueryRequest) => {
-      const memoryItems =
-        request.query === "banned-words" && options?.bannedWords !== undefined
-          ? [
-              {
-                id: "mem-1",
-                scope: "GLOBAL",
-                scopeId: null,
-                key: "banned-words",
-                value: options.bannedWords,
-                description: null,
-                createdAt: "",
-                updatedAt: "",
-              },
-            ]
-          : [];
-      return {
-        query: request.query,
-        results: [
-          { source: "MEMORY", items: memoryItems },
-          {
-            source: "KNOWLEDGE",
-            items: (options?.ruleKnowledge ?? []).map((rule, index) => ({
-              id: `kn-${index}`,
-              title: rule.title,
-              content: "",
-              category: rule.category,
-              createdAt: "",
-              updatedAt: "",
-            })),
-          },
-          {
-            source: "DECISION",
-            items: (options?.decisions ?? []).map((decision, index) => ({
-              id: `dec-${index}`,
-              projectId: "proj-1",
-              title: decision.title,
-              description: null,
-              reason: "",
-              decisionType: "PROCESS",
-              author: "CTO",
-              createdAt: "",
-              updatedAt: "",
-            })),
-          },
-          {
-            source: "SOP",
-            items: hasSop
-              ? [
-                  {
-                    key: "product-content",
-                    name: "상품 콘텐츠 표준 절차",
-                    description: "",
-                    steps: [],
-                  },
-                ]
-              : [],
-          },
-        ],
-      };
-    }),
-  };
-}
+export { createCompanyBrainMock } from "../content-governance/governance.spec-helpers";
 
 export const draftProductObject: Partial<ProductObject> = {
   id: "po-1",

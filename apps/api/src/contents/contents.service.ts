@@ -20,6 +20,7 @@ import type {
   VisionSummary,
 } from "@acos/shared";
 import type { Content, ProductObject } from "@prisma/client";
+import { ContentGovernanceService } from "../content-governance/content-governance.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { CONTENT_GENERATOR } from "./contents.constants";
 
@@ -47,6 +48,8 @@ export class ContentsService {
   constructor(
     private readonly prisma: PrismaService,
     @Inject(CONTENT_GENERATOR) private readonly generator: ContentGenerator,
+    // 발행 게이트 (TASK-2501) — 판정은 이 계층 하나에서만 한다
+    private readonly governance: ContentGovernanceService,
   ) {}
 
   /**
@@ -116,11 +119,20 @@ export class ContentsService {
   }
 
   /**
-   * 발행 파이프라인 상태 전이 (TASK-0703).
+   * 발행 파이프라인 상태 전이 (TASK-0703 · 거버넌스 게이트 TASK-2501).
    * DRAFT → REVIEW → PUBLISHED → ARCHIVED (전이 규칙은 @acos/core
    * canTransition — REVIEW→DRAFT 되돌리기·단계별 ARCHIVED 포함).
-   * PUBLISHED 전이는 발행 조건(isPublishable: REVIEW + 제목/본문)을 추가로
-   * 검증하고 publishedAt을 기록한다.
+   *
+   * **PUBLISHED 전이는 거버넌스 판정을 통과해야 한다** (TASK-2501).
+   * 그 전까지 발행 조건은 "REVIEW 상태이며 제목과 본문이 비어 있지 않다"
+   * 뿐이었다 — 금지어가 든 본문도, 필수 고지가 빠진 본문도 그냥 나갔다.
+   * 상품(READY 판정)만 검사하고 실제로 나가는 콘텐츠를 검사하지 않는 것은
+   * **재료를 검사하고 완성품은 안 보는 것**과 같다.
+   *
+   * 판정은 **막든 통과하든 기록한다** — 무엇이 막았고 언제 풀렸는지가 없으면
+   * "왜 이렇게 늦게 발행됐지"에 아무도 답할 수 없다.
+   * 다른 전이(REVIEW·ARCHIVED 등)는 막지 않는다 — 검토를 요청하는 것과
+   * 세상에 내보내는 것은 다르다.
    */
   async updateStatus(
     projectId: string,
@@ -137,6 +149,11 @@ export class ContentsService {
 
     const record = await this.prisma.content.findFirst({
       where: { id: contentId, projectId },
+      include: {
+        productObject: {
+          select: { version: true, status: true, category: true },
+        },
+      },
     });
     if (!record) {
       throw new NotFoundException(`콘텐츠를 찾을 수 없습니다: ${contentId}`);
@@ -155,6 +172,41 @@ export class ContentsService {
       throw new BadRequestException(
         "발행 조건을 충족하지 않습니다 — REVIEW 상태이며 제목과 본문이 있어야 합니다.",
       );
+    }
+
+    // 거버넌스 게이트 (TASK-2501) — 발행에만 적용한다.
+    // 판정은 **읽어 둔 이 레코드로** 한다: 다시 읽으면 판정한 내용과
+    // 발행되는 내용이 다를 수 있다.
+    if (target === "PUBLISHED") {
+      const verdict = await this.governance.judge({
+        id: record.id,
+        projectId: record.projectId,
+        status: record.status,
+        title: record.title,
+        body: record.body,
+        productObject: record.productObject
+          ? {
+              version: record.productObject.version,
+              status: record.productObject.status,
+              category: record.productObject.category,
+            }
+          : null,
+      });
+
+      // 통과든 차단이든 남긴다 — 막힌 기록이 없으면 지연을 설명할 수 없다
+      await this.governance.record(record.id, verdict, {
+        published: verdict.publishable,
+        actor,
+      });
+
+      if (!verdict.publishable) {
+        throw new BadRequestException(
+          "발행 거버넌스 판정을 통과하지 못했습니다 — " +
+            verdict.blockers
+              .map((check) => `${check.name}: ${check.messages.join(" ")}`)
+              .join(" / "),
+        );
+      }
     }
 
     // 전이 + 감사 이력(TASK-0704)을 한 트랜잭션으로 기록한다

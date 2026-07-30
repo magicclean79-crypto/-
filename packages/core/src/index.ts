@@ -10,6 +10,7 @@ export * from "./project-memory";
 export * from "./memory";
 export * from "./knowledge";
 export * from "./ready-validation";
+export * from "./content-governance";
 export * from "./llm";
 export * from "./content-generation";
 export * from "./prompt";
