@@ -34,7 +34,7 @@
 | 품질 게이트 자체 검증 | `pnpm check:ci-gates` | ✅ **필수 게이트 7개**(Job 분리 반영) 순서 일치 |
 | Major Migration 교차 검증 | `pnpm check:major-migrations` | ✅ 2건 일치 (신규 1건은 major 아님 — §6) |
 | Live Verification | 실 PostgreSQL + 실 Redis + 실 S3 + Vision 스텁 + **공지 스텁 4곳** + GitHub Actions 스텁 | ✅ §4 |
-| **GitHub Actions** | 실제 워크플로 실행 (**병렬 2 Job**) | ✅ §4에 기록 |
+| **GitHub Actions** | 실제 워크플로 실행 (**병렬 2 Job**) | ✅ **run 30590485382 통과 — 2분 40초** (직전 단일 Job 3분 49초). 두 Job 모두 success |
 | **`/ops/cutover`** | `pnpm cutover` | ⚠️ **exit 1 — 활성화 0/3 조건.** 전환은 아직이며 판정이 그 사실을 말한다 |
 
 ## 3. 변경 사항 (이번 보고 주기)
@@ -274,7 +274,23 @@ TASK-3401에서 본 실패는 "게이트가 적혀 있는데 돌지 않은 것"�
 | **정책 ① 환경** | `NODE_ENV=production` → `applicable: true` · `development` → `false`("전환 대상이 아닙니다") |
 | **정책 ② 기본값** | 공지 시각이 예약 기본값으로 들어가고, 운영자 값이 우선하며, 과거 시각은 **기본값이어도 400** |
 
-### GitHub Actions 실제 실행
+### GitHub Actions 실제 실행 — Job 분리 효과 (TASK-3601, 정책 3601-④)
+
+| run | 구성 | 결과 | 전체 소요 |
+| --- | --- | --- | --- |
+| 30586977670 | 단일 Job | ✅ | 3분 49초 |
+| **30590485382** | **병렬 2 Job** | **✅** | **2분 40초** |
+
+| Job | 소요 |
+| --- | --- |
+| `quality-gates` (Build · 교차 검증 · **게이트 자체 검증** · TypeScript · Lint · Core/API) | 1분 40초 |
+| `web-e2e` (브라우저 설치 · Build · Web e2e) | 2분 38초 |
+
+두 Job이 서로를 기다리지 않으므로 전체 소요는 **느린 쪽 하나**입니다. 그리고
+어느 쪽이 깨졌는지가 색으로 바로 갈립니다 — 예전에는 "테스트 실패" 하나로
+뭉뚱그려졌습니다.
+
+### (직전 주기) GitHub Actions 실제 실행
 
 TASK-3401의 커밋에서 **13회 연속 실패를 끊고 처음으로 초록**이 됐고, 그 뒤로
 **3회 연속 초록**입니다.
