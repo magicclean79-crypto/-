@@ -152,7 +152,12 @@ model Content {
   title            String
   body             String
   status           ContentStatus            @default(DRAFT)
-  publishedAt      DateTime? // 발행 시각 (TASK-0703) — PUBLISHED 전이 시 기록
+  publishedAt      DateTime? // **최초** 발행 시각 (TASK-0703) — 한 번 기록되면 바뀌지 않는다
+  // 마지막 발행 시각 (TASK-2801, CTO 결정 2701-②) — 발행할 때마다 갱신.
+  // 최초 발행 시각만으로는 "지금 언제부터 나가 있는가"에 답할 수 없다:
+  // 내렸다 고쳐 다시 올린 콘텐츠는 옛 날짜를 보여 준다.
+  // null인데 publishedAt이 있으면 **이 값을 두기 전에 발행된 것**이다.
+  lastPublishedAt  DateTime?
   statusHistory    ContentStatusHistory[]
   governanceChecks ContentGovernanceCheck[] // 발행 거버넌스 판정 기록 (TASK-2501)
   createdAt        DateTime                 @default(now())
@@ -207,6 +212,16 @@ model GovernanceScanRun {
   total               Int
   alerted             Boolean  @default(false)
   trigger             String // schedule | manual
+  // 위반 콘텐츠 id 목록 (TASK-2801, CTO 결정 2701-⑤) — 다음 실행이 "새로
+  // 위반된 것"을 가리는 근거. **null은 목록을 남기지 않은 실행**(TASK-2701
+  // 이전)이고 빈 배열("위반이 없었다")과 다르다.
+  violatingIds        Json?
+  // 새로 위반된 콘텐츠: 표본(최대 10건) + 전체 수. null은 "가릴 수 없었다".
+  newly               Json?
+  newlyCount          Int?
+  // 지난 실행에는 있었으나 이번에 사라진 위반 수 — 총량이 같아도 구성이
+  // 바뀔 수 있고, 그 사실이 없으면 조용했던 실행을 나중에 설명할 수 없다
+  resolvedCount       Int?
   createdAt           DateTime @default(now())
 
   @@index([scope, createdAt])

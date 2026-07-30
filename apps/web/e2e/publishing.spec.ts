@@ -80,6 +80,32 @@ test.describe("발행 파이프라인 Web UI (TASK-0704)", () => {
     await expect(badge).toHaveText("PUBLISHED");
   });
 
+  test("재발행하면 최초 발행과 마지막 발행을 나눠 보여준다 (TASK-2801, CTO 결정 2701-②)", async ({
+    page,
+  }) => {
+    await reset();
+    await page.goto("/projects/proj-pub");
+    const item = page.getByTestId("content-item");
+
+    await item.getByRole("button", { name: "검토 요청 (REVIEW)" }).click();
+    await item.getByRole("button", { name: "발행 (PUBLISHED)" }).click();
+    // 첫 발행에는 두 시각이 같으므로 재발행 표기를 하지 않는다 —
+    // 같은 날짜를 두 번 보여 주면 읽는 사람이 차이를 찾느라 시간을 쓴다
+    await expect(item.getByTestId("content-published-at")).toBeVisible();
+    await expect(item.getByTestId("content-last-published-at")).toHaveCount(0);
+
+    await item.getByRole("button", { name: "보관 (ARCHIVED)" }).click();
+    await item.getByRole("button", { name: "DRAFT로 되돌리기" }).click();
+    await item.getByRole("button", { name: "검토 요청 (REVIEW)" }).click();
+    await item.getByRole("button", { name: "발행 (PUBLISHED)" }).click();
+
+    // 최초 발행은 그대로 남고, 다시 나간 시각이 따로 보인다
+    await expect(item.getByTestId("content-published-at")).toBeVisible();
+    await expect(item.getByTestId("content-last-published-at")).toContainText(
+      "재발행:",
+    );
+  });
+
   test("REVIEW → DRAFT 되돌리기 버튼이 동작한다", async ({ page }) => {
     await reset();
     await page.goto("/projects/proj-pub");
@@ -323,6 +349,20 @@ test.describe("예약 스캔 이력 Web UI (TASK-2701, CTO 결정 2601-②③)",
     await page.goto("/projects/proj-pub");
     await expect(page.getByTestId("scan-history")).toContainText(
       "지난번 0건",
+    );
+  });
+
+  test("새로 위반된 콘텐츠 수를 보여주고, 가릴 수 없으면 그렇게 말한다 (TASK-2801, CTO 결정 2701-⑤)", async ({
+    page,
+  }) => {
+    await reset();
+    await page.goto("/projects/proj-pub");
+
+    // 늘어난 실행에는 새로 위반된 건수가 보인다
+    await expect(page.getByTestId("scan-newly")).toHaveText("신규 위반 1건");
+    // 첫 스캔은 비교할 목록이 없다 — "0건"이 아니라 "판별 불가"다
+    await expect(page.getByTestId("scan-newly-unknown")).toHaveText(
+      "신규 판별 불가",
     );
   });
 });

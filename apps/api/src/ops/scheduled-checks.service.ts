@@ -585,20 +585,28 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
       // 스캔 자체는 **아무것도 바꾸지 않는다** (CTO 결정 2501-①).
       // 경보는 **늘었을 때만** 나간다 (CTO 결정 2601-③) — 같은 결과로
       // 반복해서 부르면 그 경보는 배경 소음이 된다.
-      const { outcome, detected, shouldSync } = await this.governanceScan.run({
-        trigger,
-      });
+      //
+      // **프로젝트별로 훑고 전체는 합으로 만든다** (CTO 결정 2701-③).
+      const { detected, resolvableKeys, detail } =
+        await this.governanceScan.runScheduled({ trigger });
       // **늘었을 때와 0이 됐을 때만** 경보 저장소를 건드린다 (결정 2601-③).
       // 아무 때나 sync를 부르면 늘지 않은 실행에서 경보가 새로 생기거나,
       // 남아 있는 위반이 "풀렸다"로 해소된다.
-      const notified = shouldSync
-        ? await this.alerts.sync(JOB_ALERT_KINDS[job], detected)
-        : [];
+      //
+      // 해소 범위도 **판정한 범위로 좁힌다** (결정 2701-④) — 좁히지 않으면
+      // 이번에 조용했던 프로젝트의 경보가 다른 프로젝트의 스캔 때문에
+      // 사라진다(위반은 그대로인데).
+      const notified =
+        resolvableKeys.length > 0 || detected.length > 0
+          ? await this.alerts.sync(JOB_ALERT_KINDS[job], detected, {
+              resolvableKeys,
+            })
+          : [];
       return {
         // 위반이 있는 것은 시스템 장애가 아니다 — 점검 자체는 성공이다.
         // ok=false로 두면 예약 점검 실패로 읽혀 엉뚱한 곳을 보게 된다
         ok: true,
-        detail: outcome.run.detail,
+        detail,
         notified,
       };
     }

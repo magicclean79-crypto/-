@@ -27,7 +27,12 @@ const CLEAN = "깨끗한 매트입니다. 사용 후 물로 충분히 헹구세�
 const BANNED = "업계 1위 매트입니다. 사용 후 물로 충분히 헹구세요.";
 
 async function build(
-  seeds: { body: string; status?: string; projectId?: string }[] = [],
+  seeds: {
+    body: string;
+    status?: string;
+    projectId?: string;
+    title?: string;
+  }[] = [],
 ) {
   const prisma = createPrismaMock();
   prisma.productObjects.push({ ...readyProductObject });
@@ -36,7 +41,7 @@ async function build(
       data: {
         projectId: seed.projectId ?? "proj-1",
         productObjectId: "po-1",
-        title: "매트",
+        title: seed.title ?? "매트",
         body: seed.body,
         status: seed.status ?? "REVIEW",
       } as never,
@@ -278,6 +283,193 @@ describe("GovernanceScanService (TASK-2701, CTO 결정 2601-②③)", () => {
 
       const [latest] = await service.history({ scope: ALL_SCOPE });
       expect(latest.detail).toContain("지난번과 같습니다");
+    });
+  });
+
+  describe("예약 실행은 프로젝트별로 돈다 (TASK-2801, CTO 결정 2701-③④)", () => {
+    it("프로젝트마다 남기고 전체는 그 합이다", async () => {
+      const { service, prisma } = await build([
+        { body: BANNED, projectId: "proj-1" },
+        { body: BANNED, projectId: "proj-2" },
+        { body: CLEAN, projectId: "proj-2" },
+      ]);
+
+      const { results } = await service.runScheduled({ trigger: "schedule" });
+
+      expect(results.map((result) => result.outcome.run.scope)).toEqual([
+        projectScope("proj-1"),
+        projectScope("proj-2"),
+        ALL_SCOPE,
+      ]);
+      const [p1, p2, all] = results.map((result) => result.outcome.run);
+      expect(p1.total).toBe(1);
+      expect(p2.total).toBe(1);
+      // 합으로 만든다 — 따로 훑으면 읽은 시점이 달라 어긋날 수 있다
+      expect(all.total).toBe(p1.total + p2.total);
+      expect(all.summary.scanned).toBe(
+        p1.summary.scanned + p2.summary.scanned,
+      );
+      expect(prisma.governanceScanRuns).toHaveLength(3);
+    });
+
+    it("총량이 그대로여도 나빠진 프로젝트는 경보한다", async () => {
+      // 전체 숫자 하나만 보면 이 경우에 아무 경보도 오지 않는다 —
+      // 범위를 나눈 이유가 정확히 이것이다
+      const { service, prisma } = await build([
+        { body: BANNED, projectId: "proj-1" },
+        { body: CLEAN, projectId: "proj-2" },
+      ]);
+      await service.runScheduled({ trigger: "schedule" }); // 기준선
+
+      rewrite(prisma, 0, CLEAN); // proj-1 해소
+      rewrite(prisma, 1, BANNED); // proj-2 악화
+      const { results, detected } = await service.runScheduled({
+        trigger: "schedule",
+      });
+
+      const byScope = new Map(
+        results.map((result) => [result.outcome.run.scope, result.outcome.run]),
+      );
+      expect(byScope.get(ALL_SCOPE)!.verdict).toBe("unchanged");
+      expect(byScope.get(projectScope("proj-1"))!.verdict).toBe("resolved");
+      expect(byScope.get(projectScope("proj-2"))!.verdict).toBe("increased");
+      expect(detected).toHaveLength(1);
+      expect(detected[0].key).toContain("project:proj-2");
+    });
+
+    it("해소 대상은 이번에 판정한 범위만이다", async () => {
+      const { service, prisma } = await build([
+        { body: BANNED, projectId: "proj-1" },
+        { body: CLEAN, projectId: "proj-2" },
+      ]);
+      await service.runScheduled({ trigger: "schedule" });
+
+      rewrite(prisma, 0, CLEAN); // proj-1: 1건 → 0건 = 해소
+      const { resolvableKeys } = await service.runScheduled({
+        trigger: "schedule",
+      });
+
+      // proj-1(해소)과 전체(해소)만 저장소를 건드린다. proj-2는 그대로이므로
+      // 목록에 없다 — 넣으면 그 범위의 경보가 이유 없이 사라진다
+      expect(resolvableKeys).toEqual([
+        "governance-scan:violations:project:proj-1",
+        "governance-scan:violations:all",
+      ]);
+    });
+
+    it("프로젝트가 없어도 전체 범위 실행은 남는다", async () => {
+      const { service, prisma } = await build();
+      prisma.projects.length = 0;
+
+      const { results } = await service.runScheduled({ trigger: "schedule" });
+      // 기록이 없으면 "돌지 않았다"와 구분되지 않는다
+      expect(results).toHaveLength(1);
+      expect(results[0].outcome.run.scope).toBe(ALL_SCOPE);
+      expect(results[0].outcome.run.summary.scanned).toBe(0);
+    });
+
+    it("실행 문구가 어느 범위에서 경보했는지 밝힌다", async () => {
+      const { service, prisma } = await build([
+        { body: CLEAN, projectId: "proj-1" },
+      ]);
+      await service.runScheduled({ trigger: "schedule" });
+
+      rewrite(prisma, 0, BANNED);
+      const { detail } = await service.runScheduled({ trigger: "schedule" });
+      expect(detail).toContain("프로젝트 2개 + 전체 범위 스캔");
+      expect(detail).toContain("경보 2건");
+      expect(detail).toContain("매직클린");
+    });
+  });
+
+  describe("새로 위반된 콘텐츠 (TASK-2801, CTO 결정 2701-⑤)", () => {
+    it("첫 실행은 가릴 수 없다 — 0건이 아니라 null이다", async () => {
+      const { service } = await build([{ body: BANNED }]);
+      const { outcome } = await service.run({ trigger: "manual" });
+
+      expect(outcome.run.newlyCount).toBeNull();
+      expect(outcome.run.newly).toEqual([]);
+      expect(outcome.run.resolvedCount).toBeNull();
+    });
+
+    it("두 번째 실행부터 무엇이 새로 위반됐는지 가린다", async () => {
+      const { service, prisma } = await build([
+        { body: BANNED, title: "매트 상세" },
+        { body: CLEAN, title: "세제 상세" },
+      ]);
+      await service.run({ trigger: "schedule" });
+
+      rewrite(prisma, 1, BANNED);
+      const { outcome, detected } = await service.run({ trigger: "schedule" });
+
+      expect(outcome.run.newlyCount).toBe(1);
+      expect(outcome.run.newly.map((item) => item.title)).toEqual(["세제 상세"]);
+      // 경보 문구에 실제로 담긴다
+      expect(detected[0].message).toContain("새로 위반된 콘텐츠 1건");
+      expect(detected[0].message).toContain("세제 상세");
+    });
+
+    it("총량이 같아도 구성 변화는 이력에 남는다 — 경보는 하지 않는다", async () => {
+      const { service, prisma } = await build([
+        { body: BANNED, title: "매트 상세" },
+        { body: CLEAN, title: "세제 상세" },
+      ]);
+      await service.run({ trigger: "schedule" });
+
+      rewrite(prisma, 0, CLEAN);
+      rewrite(prisma, 1, BANNED);
+      const { outcome, detected, shouldSync } = await service.run({
+        trigger: "schedule",
+      });
+
+      expect(outcome.run.verdict).toBe("unchanged");
+      expect(outcome.run.newlyCount).toBe(1);
+      expect(outcome.run.resolvedCount).toBe(1);
+      expect(outcome.run.detail).toContain("새로 위반된 콘텐츠 1건");
+      // 늘지 않았으므로 부르지 않는다 (결정 2601-③은 그대로다)
+      expect(detected).toEqual([]);
+      expect(shouldSync).toBe(false);
+    });
+
+    it("표본은 10건까지만 남기고 건수는 전체를 남긴다", async () => {
+      const seeds = Array.from({ length: 12 }, (_, index) => ({
+        body: CLEAN,
+        title: `콘텐츠 ${index}`,
+      }));
+      const { service, prisma } = await build(seeds);
+      await service.run({ trigger: "schedule" }); // 기준선 0건
+
+      for (let index = 0; index < 12; index += 1) {
+        rewrite(prisma, index, BANNED);
+      }
+      const { outcome } = await service.run({ trigger: "schedule" });
+
+      expect(outcome.run.newlyCount).toBe(12);
+      // 목록은 10건이지만 숫자는 12건이다 — 조용히 자르지 않는다
+      expect(outcome.run.newly).toHaveLength(10);
+      expect(outcome.run.detail).toContain("새로 위반된 콘텐츠 12건");
+      expect(
+        (prisma.governanceScanRuns[1].newly as unknown[]).length,
+      ).toBe(10);
+    });
+
+    it("위반 목록과 총계가 어긋나지 않는다", async () => {
+      // 목록은 "막는 검사가 있는 것"이고 총계는 blocked + publishedViolations다.
+      // 두 집합이 갈라지면 경보의 숫자와 목록이 서로 다른 말을 한다.
+      const { service, prisma } = await build([
+        { body: BANNED, status: "REVIEW" },
+        { body: BANNED, status: "PUBLISHED" },
+        { body: CLEAN, status: "DRAFT" },
+      ]);
+      await service.run({ trigger: "schedule" });
+      rewrite(prisma, 2, BANNED);
+      const { outcome } = await service.run({ trigger: "schedule" });
+
+      const ids = prisma.governanceScanRuns[1].violatingIds as string[];
+      expect(ids).toHaveLength(
+        outcome.run.summary.blocked + outcome.run.summary.publishedViolations,
+      );
+      expect(ids).toHaveLength(outcome.run.total);
     });
   });
 

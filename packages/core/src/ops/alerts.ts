@@ -327,6 +327,19 @@ export interface ReconcileOptions {
   cooldownMs: number;
   /** 종류별 간격 (CTO 결정 1302-①) — 없는 종류는 cooldownMs를 쓴다 */
   cooldownByKind?: Partial<Record<AlertKind, number>>;
+  /**
+   * 해소를 판정할 수 있는 키 목록 (TASK-2801, CTO 결정 2701-④).
+   *
+   * 없으면 넘어온 상태 전체가 대상이다(기존 동작). **한 종류 안에 서로
+   * 독립적인 경보가 여러 개 있을 때** 필요하다: 프로젝트별 위반 경보는
+   * 같은 `kind`인데 프로젝트마다 따로 판정되므로, 프로젝트 A만 훑은
+   * 실행이 프로젝트 B의 경보를 "이번에 감지되지 않았다"며 해소해 버리면
+   * **B의 위반은 그대로인데 화면에서 사라진다.**
+   *
+   * 재알림 간격은 이미 키마다 독립이다(`AlertState.notifiedAt`이 키 단위)
+   * — 해소 범위까지 키 단위로 좁히면 두 축이 모두 독립이 된다.
+   */
+  resolvableKeys?: readonly string[];
   now: number;
 }
 
@@ -399,7 +412,16 @@ export function reconcileAlerts(
     }
   }
 
+  const resolvable =
+    options.resolvableKeys === undefined
+      ? null
+      : new Set(options.resolvableKeys);
+
   for (const state of states) {
+    // 이번 실행이 판정하지 않은 범위는 건드리지 않는다 (결정 2701-④)
+    if (resolvable !== null && !resolvable.has(state.key)) {
+      continue;
+    }
     if (state.status === "ACTIVE" && !seen.has(state.key)) {
       decisions.push({
         key: state.key,

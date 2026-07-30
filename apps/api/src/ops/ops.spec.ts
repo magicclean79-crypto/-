@@ -136,6 +136,23 @@ function createPrismaStub() {
    * 않는다.
    */
   const governanceScanRuns: Record<string, unknown>[] = [];
+  /**
+   * 프로젝트와 콘텐츠 (TASK-2801) — 예약 스캔이 **프로젝트별로** 돌기 때문에
+   * 목록이 실제로 필요하다. 빈 스텁을 두면 프로젝트별 스캔이 아무것도 하지
+   * 않는데도 테스트가 통과한다.
+   */
+  const projects: { id: string; name: string }[] = [
+    { id: "proj-a", name: "가 프로젝트" },
+    { id: "proj-b", name: "나 프로젝트" },
+  ];
+  const contents: {
+    id: string;
+    projectId: string;
+    title: string;
+    body: string;
+    status: string;
+    createdAt: Date;
+  }[] = [];
   const migrations = {
     // 기본은 **실제 디렉터리 그대로 적용됨** — 정상 상태에서 경보가 나지 않아야
     // 경보가 났을 때 그것이 신호가 된다
@@ -149,6 +166,8 @@ function createPrismaStub() {
     migrations,
     governanceChecks,
     governanceScanRuns,
+    projects,
+    contents,
     runs,
     deliveries,
     queue,
@@ -272,11 +291,35 @@ function createPrismaStub() {
         },
       },
       content: {
-        // 위반 스캔이 읽는다 — 이 스텁에는 콘텐츠가 없으므로 항상 빈 목록이다
-        findMany: async () => [],
+        /**
+         * 위반 스캔이 읽는다 — `projectId`·`status`·`take`를 **실제로
+         * 적용한다**(TASK-2801). 무시하면 프로젝트별 범위가 검증되지 않는다.
+         */
+        findMany: async (args?: {
+          where?: { projectId?: string; status?: { in: string[] } };
+          take?: number;
+        }) => {
+          let rows = [...contents];
+          const projectId = args?.where?.projectId;
+          if (projectId !== undefined) {
+            rows = rows.filter((row) => row.projectId === projectId);
+          }
+          const statuses = args?.where?.status?.in;
+          if (statuses) {
+            rows = rows.filter((row) => statuses.includes(row.status));
+          }
+          if (typeof args?.take === "number") {
+            rows = rows.slice(0, args.take);
+          }
+          return rows.map((row) => ({ ...row, productObject: null }));
+        },
       },
       project: {
-        findUnique: async () => null,
+        findUnique: async (args: { where: { id: string } }) => {
+          const found = projects.find((row) => row.id === args.where.id);
+          return found ? { ...found } : null;
+        },
+        findMany: async () => projects.map((row) => ({ ...row })),
       },
       contentGovernanceCheck: {
         updateMany: async (args: {
@@ -624,7 +667,8 @@ async function build(overrides: Overrides = {}) {
       GovernancePreflightService,
       {
         provide: CompanyBrainService,
-        useValue: createCompanyBrainMock({}),
+        // 예약 스캔이 실제로 위반을 잡아야 경보 경로가 검증된다 (TASK-2801)
+        useValue: createCompanyBrainMock({ bannedWords: ["1위"] }),
       },
       {
         provide: StorageService,
@@ -3279,6 +3323,146 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
         expect(
           built.prisma.alerts.get("migration-governance:unknown"),
         ).toBeUndefined();
+      });
+    });
+  });
+  describe("Enterprise Governance Intelligence Platform (TASK-2801)", () => {
+    /** 위반 본문 / 통과 본문 */
+    const BANNED = "업계 1위 매트";
+    const CLEAN = "깨끗한 매트";
+
+    function seed(
+      prisma: ReturnType<typeof createPrismaStub>,
+      rows: { id: string; projectId: string; body: string; title?: string }[],
+    ): void {
+      prisma.contents.length = 0;
+      for (const row of rows) {
+        prisma.contents.push({
+          id: row.id,
+          projectId: row.projectId,
+          title: row.title ?? row.id,
+          body: row.body,
+          status: "REVIEW",
+          createdAt: new Date(),
+        });
+      }
+    }
+
+    describe("프로젝트별 예약 스캔 (CTO 결정 2701-③)", () => {
+      it("한 번 돌면 프로젝트마다 + 전체 범위로 기록이 남는다", async () => {
+        const built = await build();
+        app = built.app;
+        seed(built.prisma, [
+          { id: "c-a1", projectId: "proj-a", body: BANNED },
+          { id: "c-b1", projectId: "proj-b", body: CLEAN },
+        ]);
+
+        const result = await built.checks.run("governance-scan", "schedule");
+
+        expect(result.ok).toBe(true);
+        expect(result.detail).toContain("프로젝트 2개 + 전체 범위 스캔");
+        expect(
+          built.prisma.governanceScanRuns.map((row) => row.scope),
+        ).toEqual(["project:proj-a", "project:proj-b", "all"]);
+        // 첫 실행은 기준선이므로 경보하지 않는다 (결정 2601-③ 유지)
+        expect(result.notified).toEqual([]);
+      });
+
+      it("나빠진 프로젝트만 경보하고, 전체 경보와 키가 다르다", async () => {
+        const built = await build();
+        app = built.app;
+        seed(built.prisma, [
+          { id: "c-a1", projectId: "proj-a", body: CLEAN },
+          { id: "c-b1", projectId: "proj-b", body: CLEAN },
+        ]);
+        await built.checks.run("governance-scan", "schedule"); // 기준선 0건
+
+        built.prisma.contents[1].body = BANNED; // proj-b만 나빠진다
+        const result = await built.checks.run("governance-scan", "schedule");
+
+        expect(result.notified.map((entry) => entry.key).sort()).toEqual([
+          "governance-scan:violations:all",
+          "governance-scan:violations:project:proj-b",
+        ]);
+        // 나아지지도 나빠지지도 않은 proj-a는 경보가 없다
+        expect(
+          built.prisma.alerts.get("governance-scan:violations:project:proj-a"),
+        ).toBeUndefined();
+      });
+    });
+
+    describe("프로젝트별 Alert와 독립 Cooldown (CTO 결정 2701-④)", () => {
+      it("한 프로젝트의 해소가 다른 프로젝트의 경보를 지우지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        seed(built.prisma, [
+          { id: "c-a1", projectId: "proj-a", body: CLEAN },
+          { id: "c-b1", projectId: "proj-b", body: CLEAN },
+        ]);
+        await built.checks.run("governance-scan", "schedule"); // 기준선 0·0
+
+        built.prisma.contents[1].body = BANNED; // proj-b 위반
+        await built.checks.run("governance-scan", "schedule");
+        expect(
+          built.prisma.alerts.get("governance-scan:violations:project:proj-b")
+            ?.status,
+        ).toBe("ACTIVE");
+
+        // proj-b는 고쳐지고 proj-a가 나빠진다 — 전체 총량은 1건 그대로다
+        built.prisma.contents[1].body = CLEAN;
+        built.prisma.contents[0].body = BANNED;
+        await built.checks.run("governance-scan", "schedule");
+
+        expect(
+          built.prisma.alerts.get("governance-scan:violations:project:proj-b")
+            ?.status,
+        ).toBe("RESOLVED");
+        expect(
+          built.prisma.alerts.get("governance-scan:violations:project:proj-a")
+            ?.status,
+        ).toBe("ACTIVE");
+        // 전체 범위는 이번에 판정하지 않았다(총량 그대로) — 건드리지 않는다.
+        // 좁히지 않으면 위반이 남아 있는데도 여기서 해소된다.
+        expect(
+          built.prisma.alerts.get("governance-scan:violations:all")?.status,
+        ).toBe("ACTIVE");
+      });
+
+      it("모두 조용한 실행은 경보 저장소를 아예 건드리지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        seed(built.prisma, [{ id: "c-a1", projectId: "proj-a", body: BANNED }]);
+        await built.checks.run("governance-scan", "schedule"); // 기준선 1건
+
+        const result = await built.checks.run("governance-scan", "schedule");
+        expect(result.notified).toEqual([]);
+        expect(built.prisma.alerts.size).toBe(0);
+      });
+    });
+
+    describe("경보에 담기는 것 (CTO 결정 2701-⑤)", () => {
+      it("증가 수와 새로 위반된 콘텐츠를 함께 담는다", async () => {
+        const built = await build();
+        app = built.app;
+        seed(built.prisma, [
+          { id: "c-a1", projectId: "proj-a", body: CLEAN, title: "매트 상세" },
+          { id: "c-a2", projectId: "proj-a", body: CLEAN, title: "세제 상세" },
+        ]);
+        await built.checks.run("governance-scan", "schedule");
+
+        built.prisma.contents[1].body = BANNED;
+        await built.checks.run("governance-scan", "schedule");
+
+        const alert = built.prisma.alerts.get(
+          "governance-scan:violations:project:proj-a",
+        )!;
+        expect(alert.message).toContain("0건에서 1건으로 1건 늘었습니다");
+        expect(alert.message).toContain("새로 위반된 콘텐츠 1건");
+        expect(alert.message).toContain("세제 상세(c-a2)");
+        // 제목에 범위가 있어야 여러 건이 왔을 때 구분된다
+        expect(alert.title).toContain("가 프로젝트");
+        expect(alert.title).toContain("proj-a");
+        expect(alert.title).not.toContain("**");
       });
     });
   });

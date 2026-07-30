@@ -196,6 +196,42 @@ describe("Contents API (API Test)", () => {
     ]);
   });
 
+  it("PATCH status — 되살려 재발행하는 절차를 EDITOR가 끝까지 수행한다 (TASK-2801, CTO 결정 2701-①②)", async () => {
+    const created = await request(app.getHttpServer())
+      .post("/projects/proj-1/contents")
+      .send({})
+      .expect(201);
+    const id = created.body.id;
+    const patch = (status: string) =>
+      request(app.getHttpServer())
+        .patch(`/projects/proj-1/contents/${id}/status`)
+        .set("Authorization", "Bearer editor-token")
+        .send({ status });
+
+    await patch("REVIEW").expect(200);
+    const first = await patch("PUBLISHED").expect(200);
+    expect(first.body.lastPublishedAt).toBe(first.body.publishedAt);
+
+    // 공식 절차(결정 2601-①): ARCHIVED → DRAFT → REVIEW → PUBLISHED.
+    // **ADMIN으로 올리지 않았으므로**(결정 2701-①) EDITOR가 전 과정을 한다
+    await patch("ARCHIVED").expect(200);
+    await patch("DRAFT").expect(200);
+    await patch("REVIEW").expect(200);
+    const again = await patch("PUBLISHED").expect(200);
+
+    // 최초 발행 시각은 그대로, 마지막 발행 시각은 다시 기록된다
+    expect(again.body.publishedAt).toBe(first.body.publishedAt);
+    expect(again.body.lastPublishedAt).not.toBeNull();
+
+    // 되살리기도 같은 경로이므로 VIEWER는 여전히 막힌다
+    await patch("ARCHIVED").expect(200);
+    await request(app.getHttpServer())
+      .patch(`/projects/proj-1/contents/${id}/status`)
+      .set("Authorization", "Bearer viewer-token")
+      .send({ status: "DRAFT" })
+      .expect(403);
+  });
+
   it("POST — 없는 프로젝트 404", async () => {
     await request(app.getHttpServer())
       .post("/projects/nope/contents")

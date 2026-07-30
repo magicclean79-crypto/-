@@ -26,8 +26,15 @@ export interface ContentDto {
   title: string;
   body: string;
   status: ContentStatus;
-  /** 발행 시각 (TASK-0703) — PUBLISHED 전이 시 기록 */
+  /** **최초** 발행 시각 (TASK-0703) — 재발행해도 바뀌지 않는다 */
   publishedAt: string | null;
+  /**
+   * 마지막 발행 시각 (TASK-2801, CTO 결정 2701-②) — 발행할 때마다 갱신된다.
+   *
+   * `publishedAt`이 있는데 이 값이 `null`이면 **알 수 없다**(이 값을 두기
+   * 전에 발행된 콘텐츠). 그때 "재발행 없음"으로 보여 주면 화면이 거짓을 말한다.
+   */
+  lastPublishedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -725,6 +732,23 @@ export interface GovernanceScanRunDto {
   /** 이 실행이 경보를 만들었는가 */
   alerted: boolean;
   trigger: string;
+  /**
+   * 새로 위반된 콘텐츠 수 (TASK-2801, CTO 결정 2701-⑤).
+   *
+   * `null`은 **가릴 수 없었다**는 뜻이다(첫 스캔이거나 지난 실행이 목록을
+   * 남기지 않았다) — 0("새로 생긴 것이 없다")과 다르다.
+   * **총량 증가분(`total - previousTotal`)과 다를 수 있다**: 2건이 새로
+   * 생기고 1건이 해소되면 총량은 1건 늘지만 새로 위반된 것은 2건이다.
+   */
+  newlyCount: number | null;
+  /** 그중 문구에 담은 표본 (최대 10건) */
+  newly: {
+    contentId: string;
+    title: string;
+    contentStatus: ContentStatus;
+  }[];
+  /** 지난 실행에는 있었으나 이번에 사라진 위반 수 — 가릴 수 없으면 null */
+  resolvedCount: number | null;
   detail: string;
   createdAt: string;
 }

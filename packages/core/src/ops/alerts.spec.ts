@@ -334,6 +334,92 @@ describe("Production Alerting (TASK-1302)", () => {
       const [decision] = reconcileAlerts([alert()], [state], { cooldownMs, now });
       expect(decision).toMatchObject({ action: "repeat", notify: true });
     });
+
+    describe("범위별 독립 판정 (TASK-2801, CTO 결정 2701-④)", () => {
+      const active = (key: string, notifiedAt = now - 1_000): AlertState => ({
+        key,
+        level: "warning",
+        status: "ACTIVE",
+        notifiedAt,
+      });
+      const scan = (key: string) =>
+        alert({ kind: "governance-scan", key, level: "warning" });
+
+      it("판정하지 않은 범위의 경보는 해소하지 않는다", () => {
+        // 프로젝트 A만 훑은 실행이 B의 경보를 해소하면 **B의 위반은 그대로인데
+        // 화면에서 사라진다** — 같은 kind라는 것만으로 함께 지워선 안 된다
+        const decisions = reconcileAlerts(
+          [],
+          [active("governance-scan:violations:project:a"), active("governance-scan:violations:project:b")],
+          {
+            cooldownMs,
+            now,
+            resolvableKeys: ["governance-scan:violations:project:a"],
+          },
+        );
+        expect(decisions).toHaveLength(1);
+        expect(decisions[0]).toMatchObject({
+          key: "governance-scan:violations:project:a",
+          action: "resolve",
+        });
+      });
+
+      it("빈 목록을 넘기면 아무것도 해소하지 않는다", () => {
+        expect(
+          reconcileAlerts([], [active("governance-scan:violations:all")], {
+            cooldownMs,
+            now,
+            resolvableKeys: [],
+          }),
+        ).toEqual([]);
+      });
+
+      it("넘기지 않으면 기존 동작 그대로 전체가 대상이다", () => {
+        expect(
+          reconcileAlerts([], [active("governance-scan:violations:all")], {
+            cooldownMs,
+            now,
+          }),
+        ).toHaveLength(1);
+      });
+
+      it("재알림 간격은 범위마다 따로 흐른다", () => {
+        // 방금 알린 A는 억제되고, 오래된 B는 다시 알린다 — 한 프로젝트의
+        // 알림이 다른 프로젝트를 조용하게 만들면 안 된다
+        const decisions = reconcileAlerts(
+          [
+            scan("governance-scan:violations:project:a"),
+            scan("governance-scan:violations:project:b"),
+          ],
+          [
+            active("governance-scan:violations:project:a", now - 1_000),
+            active("governance-scan:violations:project:b", now - 600_000),
+          ],
+          { cooldownMs, now },
+        );
+        expect(decisions.map((decision) => decision.action)).toEqual([
+          "suppress",
+          "repeat",
+        ]);
+      });
+
+      it("해소 범위를 좁혀도 감지된 경보는 그대로 올린다", () => {
+        const decisions = reconcileAlerts(
+          [scan("governance-scan:violations:project:b")],
+          [active("governance-scan:violations:project:a")],
+          {
+            cooldownMs,
+            now,
+            resolvableKeys: ["governance-scan:violations:project:b"],
+          },
+        );
+        expect(decisions).toHaveLength(1);
+        expect(decisions[0]).toMatchObject({
+          key: "governance-scan:violations:project:b",
+          action: "raise",
+        });
+      });
+    });
   });
 
   describe("summarizeAlerts", () => {

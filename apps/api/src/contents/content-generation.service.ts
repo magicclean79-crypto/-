@@ -44,6 +44,8 @@ function toDto(record: ContentWithVersion): ContentDto {
     body: record.body,
     status: record.status,
     publishedAt: record.publishedAt?.toISOString() ?? null,
+    // 최초 발행과 마지막 발행을 나눈다 (TASK-2801, CTO 결정 2701-②)
+    lastPublishedAt: record.lastPublishedAt?.toISOString() ?? null,
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
   };

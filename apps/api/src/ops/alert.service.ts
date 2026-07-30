@@ -112,10 +112,16 @@ export class AlertService {
    * **kind 단위로 처리하는 이유**: 해소 판정은 "이번에 감지되지 않았다"로
    * 하는데, 비용 점검이 돌 때 Provider 경보까지 해소해 버리면 안 된다.
    * 각 점검은 자기가 책임지는 kind만 넘긴다.
+   *
+   * kind 하나 안에서도 서로 독립적인 경보가 여러 개일 수 있다(프로젝트별
+   * 위반 경보 — TASK-2801, CTO 결정 2701-④). 그럴 때는 `resolvableKeys`로
+   * **이번에 실제로 판정한 범위만** 해소 대상에 넣는다. 넘기지 않으면
+   * 그 kind 전체가 대상이다(기존 동작).
    */
   async sync(
     kinds: DetectedAlert["kind"][],
     detected: DetectedAlert[],
+    options: { resolvableKeys?: readonly string[] } = {},
   ): Promise<AlertDelivery[]> {
     const rows = (await this.prisma.alert.findMany({
       where: { kind: { in: kinds } },
@@ -133,6 +139,7 @@ export class AlertService {
     const decisions = reconcileAlerts(detected, states, {
       cooldownMs: this.cooldownMs,
       cooldownByKind: this.cooldownByKind,
+      resolvableKeys: options.resolvableKeys,
       now,
     });
 

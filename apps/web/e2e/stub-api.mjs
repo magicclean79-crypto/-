@@ -252,6 +252,8 @@ function resetPublishing() {
     body: "# 발행 테스트\n\n본문",
     status: "DRAFT",
     publishedAt: null,
+    // 마지막 발행 시각 (TASK-2801, CTO 결정 2701-②) — 발행할 때마다 갱신된다
+    lastPublishedAt: null,
     createdAt: "2026-07-28T09:00:00.000Z",
     updatedAt: "2026-07-28T09:00:00.000Z",
   };
@@ -278,8 +280,19 @@ function resetPublishing() {
       total: 1,
       alerted: true,
       trigger: "schedule",
+      // 새로 위반된 콘텐츠 (TASK-2801, CTO 결정 2701-⑤)
+      newlyCount: 1,
+      newly: [
+        {
+          contentId: "content-pub-1",
+          title: "발행 테스트 상세페이지",
+          contentStatus: "REVIEW",
+        },
+      ],
+      resolvedCount: 0,
       detail:
-        "콘텐츠 1건 검사 · 위반 1건 — 지난번 0건보다 1건 늘어 경보했습니다.",
+        "콘텐츠 1건 검사 · 위반 1건 — 지난번 0건보다 1건 늘어 경보했습니다." +
+        " 새로 위반된 콘텐츠 1건.",
       createdAt: "2026-07-30T03:50:00.000Z",
     },
     {
@@ -298,6 +311,11 @@ function resetPublishing() {
       total: 0,
       alerted: false,
       trigger: "schedule",
+      // 첫 스캔은 비교할 지난 목록이 없다 — null은 "가릴 수 없었다"이고
+      // 0("새로 생긴 것 없음")과 다르다
+      newlyCount: null,
+      newly: [],
+      resolvedCount: null,
       detail:
         "콘텐츠 1건 검사 · 위반 0건 — 첫 스캔이므로 기준선으로 삼고 경보하지 않았습니다.",
       createdAt: "2026-07-29T03:50:00.000Z",
@@ -786,8 +804,13 @@ const server = http.createServer((req, res) => {
         createdAt: now,
       });
       pubContent.status = status;
-      if (status === "PUBLISHED" && !pubContent.publishedAt) {
-        pubContent.publishedAt = now;
+      if (status === "PUBLISHED") {
+        // 최초 발행 시각은 보존하고(TASK-0703 승인 ②) 마지막 발행 시각만
+        // 갱신한다 (TASK-2801, CTO 결정 2701-②)
+        if (!pubContent.publishedAt) {
+          pubContent.publishedAt = now;
+        }
+        pubContent.lastPublishedAt = now;
       }
       res.setHeader("content-type", "application/json");
       res.end(JSON.stringify(pubContent));

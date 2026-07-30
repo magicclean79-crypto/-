@@ -76,18 +76,13 @@ export class GovernancePreflightService {
     const statuses = this.resolveStatuses(options.statuses);
 
     if (options.projectId !== undefined) {
-      const project = await this.prisma.project.findUnique({
-        where: { id: options.projectId },
-        select: { id: true },
-      });
-      if (!project) {
-        throw new NotFoundException(
-          `프로젝트를 찾을 수 없습니다: ${options.projectId}`,
-        );
-      }
+      await this.ensureProject(options.projectId);
     }
 
-    const items = await this.judgeAll(options.projectId, statuses);
+    const items = await this.items({
+      projectId: options.projectId,
+      statuses,
+    });
     const result = summarizePreflight(items, { limit, offset });
 
     return {
@@ -102,6 +97,17 @@ export class GovernancePreflightService {
     };
   }
 
+  /** 프로젝트가 없으면 404 — 없는 프로젝트를 0건으로 답하면 오타를 알 수 없다 */
+  async ensureProject(projectId: string): Promise<void> {
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: { id: true },
+    });
+    if (!project) {
+      throw new NotFoundException(`프로젝트를 찾을 수 없습니다: ${projectId}`);
+    }
+  }
+
   /**
    * 대상 전체를 판정한다.
    *
@@ -109,7 +115,21 @@ export class GovernancePreflightService {
    * 새 콘텐츠가 생겼을 때 **한 건을 두 번 세거나 건너뛴다.**
    *
    * 규칙은 시작에 한 번 읽어 전체 판정에 재사용한다 (결정 2601-⑤).
+   *
+   * **판정 결과 전체를 돌려준다** (TASK-2801): 예약 스캔은 요약뿐 아니라
+   * **어떤 콘텐츠가 위반인지**를 알아야 다음 실행에서 "새로 위반된 것"을
+   * 가릴 수 있다(결정 2701-⑤). 페이지로 자른 목록으로는 그것을 할 수 없다.
    */
+  async items(options: {
+    projectId?: string;
+    statuses?: ContentStatus[];
+  }): Promise<PreflightItem[]> {
+    return this.judgeAll(
+      options.projectId,
+      options.statuses ?? DEFAULT_STATUSES,
+    );
+  }
+
   private async judgeAll(
     projectId: string | undefined,
     statuses: ContentStatus[],

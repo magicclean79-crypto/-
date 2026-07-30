@@ -240,6 +240,81 @@ describe("ContentsService (Service Test)", () => {
       expect(archived.publishedAt).toBe(first.publishedAt);
     });
 
+    describe("마지막 발행 시각 (TASK-2801, CTO 결정 2701-②)", () => {
+      it("첫 발행에는 두 값이 같다", async () => {
+        const { service, content } = await setup();
+        await service.updateStatus("proj-1", content.id, "REVIEW");
+        const published = await service.updateStatus(
+          "proj-1",
+          content.id,
+          "PUBLISHED",
+        );
+        expect(published.lastPublishedAt).toBe(published.publishedAt);
+      });
+
+      it("되살려 재발행하면 최초는 그대로, 마지막만 갱신된다", async () => {
+        const { prisma, service, content } = await setup();
+        await service.updateStatus("proj-1", content.id, "REVIEW");
+        const first = await service.updateStatus(
+          "proj-1",
+          content.id,
+          "PUBLISHED",
+        );
+
+        // 공식 절차: PUBLISHED → ARCHIVED → DRAFT → REVIEW → PUBLISHED
+        await service.updateStatus("proj-1", content.id, "ARCHIVED");
+        await service.updateStatus("proj-1", content.id, "DRAFT");
+        await service.updateStatus("proj-1", content.id, "REVIEW");
+        const again = await service.updateStatus(
+          "proj-1",
+          content.id,
+          "PUBLISHED",
+        );
+
+        expect(again.publishedAt).toBe(first.publishedAt);
+        expect(
+          new Date(again.lastPublishedAt!).getTime(),
+        ).toBeGreaterThanOrEqual(new Date(first.publishedAt!).getTime());
+
+        // 값 비교만으로는 부족하다 — 같은 밀리초에 끝나면 통과해 버린다.
+        // **재발행이 최초 시각을 아예 쓰지 않는다**는 것이 결정 ②의 내용이므로
+        // 마지막 갱신 요청의 내용을 직접 본다.
+        const lastWrite = prisma.content.update.mock.calls.at(-1)![0] as {
+          data: Record<string, unknown>;
+        };
+        expect(lastWrite.data).toHaveProperty("lastPublishedAt");
+        expect(lastWrite.data).not.toHaveProperty("publishedAt");
+      });
+
+      it("발행 전에는 둘 다 없다 — 나가지 않은 것을 나갔다고 하지 않는다", async () => {
+        const { service, content } = await setup();
+        const review = await service.updateStatus(
+          "proj-1",
+          content.id,
+          "REVIEW",
+        );
+        expect(review.publishedAt).toBeNull();
+        expect(review.lastPublishedAt).toBeNull();
+      });
+
+      it("보관해도 두 값 모두 보존된다", async () => {
+        const { service, content } = await setup();
+        await service.updateStatus("proj-1", content.id, "REVIEW");
+        const published = await service.updateStatus(
+          "proj-1",
+          content.id,
+          "PUBLISHED",
+        );
+        const archived = await service.updateStatus(
+          "proj-1",
+          content.id,
+          "ARCHIVED",
+        );
+        expect(archived.publishedAt).toBe(published.publishedAt);
+        expect(archived.lastPublishedAt).toBe(published.lastPublishedAt);
+      });
+    });
+
     it("없는 콘텐츠의 이력 조회는 404", async () => {
       const { service } = await setup();
       await expect(

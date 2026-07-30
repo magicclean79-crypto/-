@@ -8,6 +8,7 @@ import {
   allowedTransitions,
   canTransition,
   isPublishable,
+  resolvePublishTimestamps,
 } from "@acos/core";
 import type { ContentGenerator } from "@acos/core";
 import { CONTENT_STATUSES } from "@acos/shared";
@@ -38,6 +39,8 @@ function toDto(record: ContentWithVersion): ContentDto {
     body: record.body,
     status: record.status,
     publishedAt: record.publishedAt?.toISOString() ?? null,
+    // 최초 발행과 마지막 발행을 나눈다 (TASK-2801, CTO 결정 2701-②)
+    lastPublishedAt: record.lastPublishedAt?.toISOString() ?? null,
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
   };
@@ -219,9 +222,16 @@ export class ContentsService {
         where: { id: record.id },
         data: {
           status: target,
-          // publishedAt은 최초 발행 시점 보존 (CTO 결정, TASK-0703 승인 ②)
-          ...(target === "PUBLISHED" && !record.publishedAt
-            ? { publishedAt: new Date() }
+          // 발행 시각은 둘이다 (TASK-2801, CTO 결정 2701-②):
+          // `publishedAt`은 **최초** 발행 시점을 보존하고(TASK-0703 승인 ②),
+          // `lastPublishedAt`은 발행할 때마다 갱신된다. 재발행이 공식 절차가
+          // 된 뒤(결정 2601-①) 최초 시각만으로는 "지금 언제부터 나가 있는가"에
+          // 답할 수 없다. 판정은 core의 순수 함수가 한다.
+          ...(target === "PUBLISHED"
+            ? resolvePublishTimestamps(
+                { publishedAt: record.publishedAt },
+                new Date(),
+              )
             : {}),
         },
         include: { productObject: { select: { version: true } } },

@@ -22,6 +22,14 @@ export function createPrismaMock() {
    * 무시하면 범위별 비교(전체/프로젝트)가 구조적으로 검증되지 않는다.
    */
   const governanceScanRuns: Record<string, unknown>[] = [];
+  /**
+   * 프로젝트 — 예약 스캔이 프로젝트별로 돌기 위해 목록을 읽는다 (TASK-2801).
+   * 테스트가 `prisma.projects.push(...)`로 늘릴 수 있다.
+   */
+  const projects: { id: string; name: string; description: string | null }[] = [
+    { id: "proj-1", name: "매직클린", description: "물만으로 닦는다" },
+    { id: "proj-2", name: "매직클린 프로", description: null },
+  ];
   let sequence = 0;
 
   /** 실제 서비스의 select와 같은 모양 */
@@ -160,16 +168,19 @@ export function createPrismaMock() {
             .reverse(),
       ),
     },
+    projects,
     project: {
-      findUnique: jest.fn(async ({ where }: { where: { id: string } }) =>
-        where.id === "proj-1"
-          ? {
-              id: "proj-1",
-              name: "매직클린",
-              description: "물만으로 닦는다",
-            }
-          : null,
-      ),
+      findUnique: jest.fn(async ({ where }: { where: { id: string } }) => {
+        const found = projects.find((project) => project.id === where.id);
+        return found ? { ...found } : null;
+      }),
+      /**
+       * 예약 스캔이 프로젝트를 하나씩 훑기 위해 부른다 (TASK-2801).
+       *
+       * **목록을 실제로 돌려준다** — 빈 배열을 돌려주면 프로젝트별 스캔이
+       * 아무것도 하지 않는데 테스트는 통과한다.
+       */
+      findMany: jest.fn(async () => projects.map((project) => ({ ...project }))),
     },
     productObject: {
       findFirst: jest.fn(
@@ -198,6 +209,7 @@ export function createPrismaMock() {
             id: `content-${++sequence}`,
             status: "DRAFT",
             publishedAt: null,
+            lastPublishedAt: null,
             createdAt: now,
             updatedAt: now,
             ...data,
@@ -220,14 +232,25 @@ export function createPrismaMock() {
         },
       ),
       /**
-       * `projectId`·`status`·`take`를 **실제로 적용한다** (TASK-2601).
+       * `projectId`·`status`·`take`·**커서와 정렬**을 실제로 적용한다
+       * (TASK-2601 → TASK-2801).
        *
        * 무시하면 Preflight의 범위(프로젝트/전체)와 상태 필터가 구조적으로
-       * 검증되지 않는다 — 스텁이 결함을 감추는 그 형태다.
+       * 검증되지 않는다 — 스텁이 결함을 감추는 그 형태다. 커서를 무시하면
+       * **묶음보다 큰 스캔이 영원히 첫 묶음만 다시 읽는데도** 테스트는
+       * 통과한다(그 경우 실제로는 무한 루프다).
        */
       findMany: jest.fn(
         async (args?: {
-          where?: { projectId?: string; status?: { in: string[] } };
+          where?: {
+            projectId?: string;
+            status?: { in: string[] };
+            OR?: {
+              createdAt?: Date | { lt: Date };
+              id?: { gt: string };
+            }[];
+          };
+          orderBy?: unknown;
           take?: number;
         }) => {
           let rows = [...contents.values()];
@@ -239,6 +262,40 @@ export function createPrismaMock() {
           if (statuses) {
             rows = rows.filter((row) => statuses.includes(row.status));
           }
+
+          // 실제 질의와 같은 정렬: createdAt 내림차순 + id 오름차순
+          rows.sort(
+            (a, b) =>
+              b.createdAt.getTime() - a.createdAt.getTime() ||
+              a.id.localeCompare(b.id),
+          );
+
+          // 커서: `createdAt < c` 또는 (`createdAt = c` 그리고 `id > c.id`)
+          const cursor = args?.where?.OR;
+          if (cursor) {
+            rows = rows.filter((row) =>
+              cursor.some((clause) => {
+                if (
+                  clause.createdAt !== undefined &&
+                  typeof clause.createdAt === "object" &&
+                  "lt" in clause.createdAt
+                ) {
+                  return row.createdAt.getTime() < clause.createdAt.lt.getTime();
+                }
+                if (
+                  clause.createdAt instanceof Date &&
+                  clause.id?.gt !== undefined
+                ) {
+                  return (
+                    row.createdAt.getTime() === clause.createdAt.getTime() &&
+                    row.id > clause.id.gt
+                  );
+                }
+                return false;
+              }),
+            );
+          }
+
           if (typeof args?.take === "number") {
             rows = rows.slice(0, args.take);
           }

@@ -225,6 +225,29 @@ export function GovernanceScanHistory({
           >
             {run.alerted ? "경보" : "조용"}
           </span>
+          {/*
+            새로 위반된 콘텐츠 (TASK-2801, CTO 결정 2701-⑤).
+            `null`은 **가릴 수 없었다**는 뜻이고 0("새로 생긴 것 없음")과 다르다
+            — 둘을 같은 글자로 보여 주면 화면이 거짓을 말한다.
+          */}
+          {run.newlyCount === null ? (
+            <span data-testid="scan-newly-unknown" className="text-zinc-400">
+              신규 판별 불가
+            </span>
+          ) : run.newlyCount > 0 ? (
+            <span
+              data-testid="scan-newly"
+              className="text-amber-600 dark:text-amber-400"
+              title={run.newly
+                .map((item) => `${item.title}(${item.contentId})`)
+                .join(", ")}
+            >
+              신규 위반 {run.newlyCount}건
+              {run.resolvedCount !== null && run.resolvedCount > 0
+                ? ` · 해소 ${run.resolvedCount}건`
+                : ""}
+            </span>
+          ) : null}
           <span className="text-zinc-500">{run.trigger}</span>
         </li>
       ))}

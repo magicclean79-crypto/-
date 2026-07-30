@@ -252,6 +252,36 @@ export default async function ProjectDetailPage({
                           (UTC)
                         </span>
                       ) : null}
+                      {/*
+                        마지막 발행 시각 (TASK-2801, CTO 결정 2701-②).
+                        최초 발행 시각은 그대로 두고, **다시 나간 시각**을 따로
+                        보여 준다 — 내렸다 고쳐 올린 콘텐츠에 옛 날짜만 보이면
+                        "언제부터 나가 있는가"를 화면이 잘못 답한다.
+                        값이 없으면 "모른다"고 말한다(이 값을 두기 전에 발행된
+                        콘텐츠) — 재발행이 없었다는 뜻이 아니다.
+                      */}
+                      {content.publishedAt &&
+                      content.lastPublishedAt === null ? (
+                        <span
+                          data-testid="content-last-published-unknown"
+                          className="text-xs text-zinc-400"
+                        >
+                          마지막 발행 시각 미기록
+                        </span>
+                      ) : content.publishedAt &&
+                        content.lastPublishedAt !== null &&
+                        content.lastPublishedAt !== content.publishedAt ? (
+                        <span
+                          data-testid="content-last-published-at"
+                          className="text-xs text-amber-600 dark:text-amber-400"
+                        >
+                          재발행:{" "}
+                          {content.lastPublishedAt
+                            .slice(0, 16)
+                            .replace("T", " ")}{" "}
+                          (UTC)
+                        </span>
+                      ) : null}
                     </summary>
                     <pre className="mt-3 overflow-x-auto whitespace-pre-wrap rounded-lg bg-zinc-50 p-4 text-xs text-zinc-700 dark:bg-zinc-950 dark:text-zinc-300">
                       {content.body}

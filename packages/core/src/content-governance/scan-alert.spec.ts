@@ -1,12 +1,15 @@
 import {
   GOVERNANCE_SCAN_ALERT_KEY,
+  NEW_VIOLATION_SAMPLE_LIMIT,
   compareScan,
+  describeNewViolations,
   describeScanRun,
   detectGovernanceScanAlert,
+  diffViolations,
   shouldSyncScanAlerts,
   totalViolations,
 } from "./scan-alert";
-import type { ScanTotals } from "./scan-alert";
+import type { ScanTotals, ViolatingContent } from "./scan-alert";
 
 const totals = (
   blocked: number,
@@ -160,6 +163,181 @@ describe("예약 스캔 경보 (TASK-2701, CTO 결정 2601-③)", () => {
       expect(detect(totals(1), totals(2), "all")[0].key).toBe(
         detect(totals(2), totals(9), "all")[0].key,
       );
+    });
+  });
+
+  describe("새로 위반된 콘텐츠 (TASK-2801, CTO 결정 2701-⑤)", () => {
+    const violating = (id: string, title = `제목 ${id}`): ViolatingContent => ({
+      contentId: id,
+      title,
+      contentStatus: "REVIEW",
+    });
+
+    describe("대조", () => {
+      it("지난 목록에 없던 것만 새로 위반이다", () => {
+        const diff = diffViolations(["a"], [violating("a"), violating("b")]);
+        expect(diff.newly.map((item) => item.contentId)).toEqual(["b"]);
+        expect(diff.newlyCount).toBe(1);
+        expect(diff.resolvedCount).toBe(0);
+        expect(diff.comparable).toBe(true);
+      });
+
+      it("사라진 것도 센다 — 총량이 같아도 구성이 바뀔 수 있다", () => {
+        const diff = diffViolations(["a", "b"], [violating("b"), violating("c")]);
+        expect(diff.newlyCount).toBe(1);
+        expect(diff.resolvedCount).toBe(1);
+      });
+
+      it("지난 목록이 없으면 0건이 아니라 '가릴 수 없음'이다", () => {
+        // null과 빈 배열을 섞으면 목록을 두기 전의 위반이 전부 "새로 생겼다"로
+        // 보고된다 — 첫 실행에 10건이 경보 문구에 실리는 그 결함
+        const unknown = diffViolations(null, [violating("a")]);
+        expect(unknown.comparable).toBe(false);
+        expect(unknown.newly).toEqual([]);
+
+        const known = diffViolations([], [violating("a")]);
+        expect(known.comparable).toBe(true);
+        expect(known.newlyCount).toBe(1);
+      });
+    });
+
+    describe("문구", () => {
+      it("제목과 id를 적는다 — 숫자만으로는 어디를 볼지 알 수 없다", () => {
+        const text = describeNewViolations(
+          diffViolations([], [violating("c-1", "매트 상세")]),
+        );
+        expect(text).toContain("새로 위반된 콘텐츠 1건");
+        expect(text).toContain("매트 상세(c-1)");
+      });
+
+      it("이미 나간 것은 목록에서도 구분한다", () => {
+        const text = describeNewViolations(
+          diffViolations(
+            [],
+            [{ contentId: "c-1", title: "매트", contentStatus: "PUBLISHED" }],
+          ),
+        );
+        expect(text).toContain("이미 발행됨");
+      });
+
+      it("10건까지만 담고 생략 건수를 밝힌다 — 조용히 자르지 않는다", () => {
+        const many = Array.from({ length: 14 }, (_, index) =>
+          violating(`c-${index}`),
+        );
+        const text = describeNewViolations(diffViolations([], many));
+        expect(text).toContain("새로 위반된 콘텐츠 14건");
+        expect(text).toContain("나머지 4건은 문구에 담지 않았습니다");
+        expect(text.split("·")).toHaveLength(NEW_VIOLATION_SAMPLE_LIMIT);
+      });
+
+      it("표본만 남은 이력에서도 건수는 전체를 말한다", () => {
+        // 저장은 표본 10건이지만 newlyCount는 30건 — 목록은 잘라도 숫자는
+        // 사실이어야 한다
+        const sample = Array.from({ length: 10 }, (_, index) =>
+          violating(`c-${index}`),
+        );
+        const text = describeNewViolations({
+          newly: sample,
+          newlyCount: 30,
+          resolvedCount: 0,
+          comparable: true,
+        });
+        expect(text).toContain("새로 위반된 콘텐츠 30건");
+        expect(text).toContain("나머지 20건");
+      });
+
+      it("가릴 수 없으면 '없다'고 하지 않는다", () => {
+        const text = describeNewViolations(diffViolations(null, [violating("a")]));
+        expect(text).toContain("가릴 수 없습니다");
+        expect(text).not.toContain("없습니다 (이미 있던");
+      });
+
+      it("비교했고 새 것이 없으면 그렇게 말한다", () => {
+        expect(describeNewViolations(diffViolations(["a"], [violating("a")]))).toContain(
+          "새로 위반된 콘텐츠는 없습니다",
+        );
+      });
+    });
+
+    describe("경보 문구", () => {
+      it("증가 수와 새로 위반된 콘텐츠를 함께 담는다", () => {
+        const [alert] = detectGovernanceScanAlert(
+          compareScan(totals(1), totals(3)),
+          totals(3),
+          {
+            scope: "all",
+            diff: diffViolations(
+              ["old"],
+              [violating("old"), violating("n-1", "세제"), violating("n-2")],
+            ),
+          },
+        );
+        expect(alert.message).toContain("1건에서 3건으로 2건 늘었습니다");
+        expect(alert.message).toContain("새로 위반된 콘텐츠 2건");
+        expect(alert.message).toContain("세제(n-1)");
+      });
+
+      it("새로 생긴 수와 증가 수가 다르면 둘을 구분해 말한다", () => {
+        // 2건이 새로 생기고 1건이 해소되면 총량은 1건만 늘었다 —
+        // 한 숫자로 뭉치면 문구가 거짓이 된다
+        const [alert] = detectGovernanceScanAlert(
+          compareScan(totals(2), totals(3)),
+          totals(3),
+          {
+            scope: "all",
+            diff: diffViolations(
+              ["a", "b"],
+              [violating("b"), violating("c"), violating("d")],
+            ),
+          },
+        );
+        expect(alert.message).toContain("새로 위반된 콘텐츠 2건");
+        expect(alert.message).toContain("1건은 해소되어 총량은 1건 늘었습니다");
+      });
+
+      it("범위를 제목에 적는다 — 프로젝트별 경보를 구분해야 한다", () => {
+        const [alert] = detectGovernanceScanAlert(
+          compareScan(totals(1), totals(2)),
+          totals(2),
+          { scope: "project:p-1", projectNames: { "p-1": "매직클린" } },
+        );
+        expect(alert.title).toContain("매직클린");
+        expect(alert.message).toContain("프로젝트 매직클린 (p-1) 범위에서");
+      });
+
+      it("대조 결과를 주지 않으면 목록을 말하지 않는다", () => {
+        const [alert] = detectGovernanceScanAlert(
+          compareScan(totals(1), totals(2)),
+          totals(2),
+          { scope: "all" },
+        );
+        expect(alert.message).not.toContain("새로 위반된");
+      });
+    });
+
+    describe("이력 문구", () => {
+      it("늘지 않은 실행에도 구성 변화를 남긴다 — 부르지는 않는다", () => {
+        const change = compareScan(totals(2), totals(2));
+        const diff = diffViolations(["a", "b"], [violating("b"), violating("c")]);
+        const detail = describeScanRun(change, totals(2), diff);
+
+        expect(detail).toContain("지난번과 같습니다");
+        expect(detail).toContain("새로 위반된 콘텐츠 1건");
+        expect(detail).toContain("해소 1건");
+        // 경보는 여전히 만들지 않는다 (결정 2601-③)
+        expect(
+          detectGovernanceScanAlert(change, totals(2), { scope: "all", diff }),
+        ).toEqual([]);
+      });
+
+      it("대조할 수 없었으면 구성 변화를 적지 않는다", () => {
+        const detail = describeScanRun(
+          compareScan(totals(1), totals(2)),
+          totals(2),
+          diffViolations(null, [violating("a"), violating("b")]),
+        );
+        expect(detail).not.toContain("새로 위반된 콘텐츠");
+      });
     });
   });
 
