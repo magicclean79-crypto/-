@@ -4,8 +4,9 @@ import {
   isOfficialCall,
   judgeProductionCutover,
 } from "@acos/core";
+import { judgeActivation } from "@acos/core";
 import type { SuccessCount } from "@acos/core";
-import type { ProductionCutoverDto } from "@acos/shared";
+import type { ProductionActivationDto, ProductionCutoverDto } from "@acos/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
 import { CiStatusService } from "./ci-status.service";
@@ -91,6 +92,34 @@ export class ProductionCutoverService {
       applicable: report.applicable,
       environment: report.environment,
       egress,
+      checkedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * 운영 활성화 판정 (TASK-3601, CTO 정책 3601-①).
+   *
+   * 자격 증명 · 네트워크 · 전환 판정 **세 조건이 모두** 충족될 때만 완료로
+   * 인정합니다. 하나로 뭉친 초록불은 "무엇이 남았는지"를 말하지 못합니다.
+   */
+  async activation(branch?: string): Promise<ProductionActivationDto> {
+    const cutover = await this.report(branch);
+    const judged = judgeActivation({
+      env: process.env as Record<string, string | undefined>,
+      egress: cutover.egress as never,
+      cutover: {
+        ready: cutover.ready,
+        applicable: cutover.applicable,
+        environment: cutover.environment,
+        detail: cutover.detail,
+      },
+    });
+    return {
+      conditions: judged.conditions,
+      activated: judged.activated,
+      applicable: judged.applicable,
+      environment: judged.environment,
+      detail: judged.detail,
       checkedAt: new Date().toISOString(),
     };
   }

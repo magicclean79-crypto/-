@@ -167,6 +167,15 @@ PRICE_SOURCE_URL_PROJECT_ACME=...        # 거부됩니다 (정책 3301-④와 �
 | `acos` | `[{target, key, ...}]` 또는 `{prices: [...]}` — 우리 계약 |
 | `flat` | `{models: {"gpt-4o": {input, output}}, engines: {"google-vision": {perUnit}}}` |
 | `csv` | 첫 줄이 머리글인 표 (`target,key,inputPerMillion,outputPerMillion,perUnitUsd,effectiveFrom`) |
+| `html` · `rss` · `jsonfeed` | **예정** — 이름은 알지만 아직 어댑터가 없습니다 (CTO 정책 3601-③) |
+
+**형식이 늘어도 판정은 늘지 않습니다.** 파서가 하는 일은 어떤 모양이든
+`parseEntry`가 읽을 수 있는 **줄의 목록**으로 펴는 것뿐이고, 무엇이 유효한
+단가인지·못 읽은 것을 어떻게 다룰지는 `PRICE_SOURCE_PARSERS` 바깥 한 곳에서만
+정합니다 — HTML·RSS·JSON Feed를 붙일 때도 파서 한 줄이면 됩니다.
+
+거부 문구도 갈립니다: **"아직 어댑터가 없습니다"**(예정된 형식)와 **"알 수
+없는 공지 형식입니다"**(오타 의심)는 사람이 할 일이 다릅니다.
 
 `csv`에서 **빈 칸은 없는 값**입니다 — 0으로 읽지 않습니다. 0은 "무료"라는
 뜻이 되어 버립니다.

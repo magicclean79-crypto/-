@@ -9,6 +9,7 @@ import type {
   ApiKeyFormatStatusDto,
   CostVerificationDto,
   MonitorStatusDto,
+  ProductionActivationDto,
   ProductionCutoverDto,
   ProductionMonitorDto,
   ProviderRolloutDto,
@@ -151,6 +152,10 @@ export default function ProductionOpsPage() {
   const [rollout, setRollout] = useState<ProviderRolloutDto | null>(null);
   // 운영 전환 검증 (TASK-3401, CTO 지시 4·5·6) — 붙은 상대가 진짜인가
   const [cutover, setCutover] = useState<ProductionCutoverDto | null>(null);
+  // 운영 활성화 세 조건 (TASK-3601, CTO 정책 3601-①)
+  const [activation, setActivation] = useState<ProductionActivationDto | null>(
+    null,
+  );
   // OCR 관측 (TASK-3001, CTO 결정 2901-④) — LLM과 같은 기준, 다른 표
   const [ocrMonitor, setOcrMonitor] = useState<ProductionMonitorDto | null>(
     null,
@@ -190,6 +195,7 @@ export default function ProductionOpsPage() {
         nextRollout,
         nextOcrMonitor,
         nextCutover,
+        nextActivation,
       ] = await Promise.all([
         get<ProviderValidationReportDto>(
           `/llm/providers/validate${live ? "?live=1" : ""}`,
@@ -204,9 +210,14 @@ export default function ProductionOpsPage() {
         get<ProductionMonitorDto>("/llm/monitoring/ocr?minutes=60"),
         // 운영 전환 검증 (TASK-3401)
         get<ProductionCutoverDto>("/ops/cutover"),
+        // 운영 활성화 (TASK-3601)
+        get<ProductionActivationDto>("/ops/activation"),
       ]);
       if (nextCutover) {
         setCutover(nextCutover);
+      }
+      if (nextActivation) {
+        setActivation(nextActivation);
       }
       if (nextRollout) {
         setRollout(nextRollout);
@@ -717,6 +728,37 @@ export default function ProductionOpsPage() {
                         : "닿지 못함"}
                   </span>{" "}
                   {probe.host} — {probe.detail}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+
+          {/*
+            운영 활성화 세 조건 (TASK-3601, CTO 정책 3601-①).
+            하나로 뭉친 초록불은 "무엇이 남았는지"를 말하지 못하고,
+            둘이 충족된 상태를 "거의 다"로 보이게 만든다.
+          */}
+          {activation ? (
+            <ul
+              data-testid="activation-conditions"
+              className="mt-3 grid gap-2 sm:grid-cols-3"
+            >
+              {activation.conditions.map((condition) => (
+                <li
+                  key={condition.id}
+                  data-testid={`activation-${condition.id}`}
+                  className={`rounded-lg border p-2 text-xs ${
+                    condition.met
+                      ? "border-emerald-200 dark:border-emerald-900"
+                      : "border-amber-200 dark:border-amber-900"
+                  }`}
+                >
+                  <span className="font-medium">
+                    {condition.met ? "충족" : "아직"} · {condition.title}
+                  </span>
+                  <p className="mt-1 text-zinc-600 dark:text-zinc-400">
+                    {condition.detail}
+                  </p>
                 </li>
               ))}
             </ul>

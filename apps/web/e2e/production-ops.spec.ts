@@ -489,3 +489,47 @@ test.describe("전환 대상 환경 (TASK-3501)", () => {
     await expect(page.getByTestId("cutover-next")).toBeVisible();
   });
 });
+
+/**
+ * 운영 활성화 세 조건 (TASK-3601 — CTO 정책 3601-①).
+ *
+ * 하나로 뭉친 초록불은 **무엇이 남았는지** 말하지 못하고, 둘이 충족된 상태를
+ * "거의 다"로 보이게 만듭니다.
+ */
+test.describe("운영 활성화 조건 (TASK-3601)", () => {
+  test("세 조건을 따로 보여준다", async ({ page }) => {
+    await setMode("data");
+    await openPage(page);
+
+    const conditions = page.getByTestId("activation-conditions");
+    await expect(conditions).toBeVisible();
+    await expect(page.getByTestId("activation-credentials")).toContainText(
+      "자격 증명",
+    );
+    await expect(page.getByTestId("activation-network")).toContainText("네트워크");
+    await expect(page.getByTestId("activation-cutover")).toContainText(
+      "전환 판정",
+    );
+  });
+
+  test("아직인 조건은 무엇이 없는지 이름으로 말한다", async ({ page }) => {
+    await setMode("data");
+    await openPage(page);
+
+    await expect(page.getByTestId("activation-credentials")).toContainText(
+      "OPENAI_API_KEY",
+    );
+    await expect(page.getByTestId("activation-network")).toContainText(
+      "가릴 수 없음",
+    );
+  });
+
+  test("세 조건이 모두 충족되면 전부 충족으로 보인다", async ({ page }) => {
+    await setMode("cutover-done");
+    await openPage(page);
+
+    for (const id of ["credentials", "network", "cutover"]) {
+      await expect(page.getByTestId(`activation-${id}`)).toContainText("충족");
+    }
+  });
+});

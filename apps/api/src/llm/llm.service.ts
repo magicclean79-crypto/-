@@ -48,6 +48,7 @@ import type {
 import { AdminSettingsService } from "../admin/admin-settings.service";
 import { EXECUTION_STORE } from "../execution/execution.constants";
 import { PricingService } from "../pricing/pricing.service";
+import { RequestContextService } from "../common/request-context.service";
 import { allExperiments, featureExperiment } from "./experiment-config";
 import { ExperimentLifecycleService } from "./experiment-lifecycle.service";
 import {
@@ -118,6 +119,8 @@ export class LlmService {
     @Optional() private readonly lifecycleService?: ExperimentLifecycleService,
     @Optional() private readonly settings?: AdminSettingsService,
     @Optional() pricingService?: PricingService,
+    // 요청 추적 (TASK-3601, CTO 정책 3601-②) — 미주입이면 기록에 남지 않는다
+    @Optional() requestContext?: RequestContextService,
   ) {
     const createGateway = (target: LlmProvider): LlmGateway =>
       new LlmGateway(target, {
@@ -155,6 +158,10 @@ export class LlmService {
               provider,
               process.env as Record<string, string | undefined>,
             ),
+          // 한 요청이 부른 호출들을 묶는 끈 (TASK-3601, CTO 정책 3601-②)
+          ...(requestContext
+            ? { trace: () => requestContext.current() }
+            : {}),
         })
       : null;
   }

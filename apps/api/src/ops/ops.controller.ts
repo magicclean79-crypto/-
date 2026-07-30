@@ -38,6 +38,7 @@ import type {
   NotificationQueueStatusDto,
   DrillRequirementDto,
   OperationsReadinessDto,
+  ProductionActivationDto,
   ProductionCutoverDto,
   ProviderRolloutDto,
   RecoveryDrillDto,
@@ -131,6 +132,20 @@ export class OpsController {
    * 연결의 증거가 아니고, 그것을 가려내지 못하면 화면은 붙지 않은 시스템을
    * 붙었다고 보고한다.
    */
+  /**
+   * 운영 활성화 판정 (TASK-3601, CTO 정책 3601-①).
+   *
+   * `/ops/cutover`가 "붙은 상대가 진짜인가"에 답한다면, 이쪽은
+   * **"이제 운영으로 볼 수 있는가"** 에 답한다 — 자격 증명 · 네트워크 ·
+   * 전환 판정 세 조건이 모두 충족될 때만 완료다.
+   */
+  @Get("activation")
+  async productionActivation(
+    @Query("branch") branch?: string,
+  ): Promise<ProductionActivationDto> {
+    return this.cutover.activation(branch?.trim() || undefined);
+  }
+
   @Get("cutover")
   async productionCutover(
     @Query("branch") branch?: string,

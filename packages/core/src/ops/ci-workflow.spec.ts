@@ -44,7 +44,7 @@ describe("CI 워크플로 (TASK-2201, CTO 결정 2101-③)", () => {
   it("Lint·Test·TypeScript보다 앞에 있다 — 지정이 어긋난 채로 통과시키지 않는다", () => {
     const check = workflow.indexOf("run: pnpm check:major-migrations");
     expect(workflow.indexOf("run: pnpm lint")).toBeGreaterThan(check);
-    expect(workflow.indexOf("run: pnpm test")).toBeGreaterThan(check);
+    expect(workflow.indexOf("run: pnpm test:unit")).toBeGreaterThan(check);
     expect(workflow.indexOf("run: pnpm typecheck")).toBeGreaterThan(check);
   });
 
@@ -58,6 +58,20 @@ describe("CI 워크플로 (TASK-2201, CTO 결정 2101-③)", () => {
    */
   it("게이트 자체 검증 단계가 있다 (TASK-3501)", () => {
     expect(workflow).toContain("run: pnpm check:ci-gates");
+  });
+
+  /**
+   * TASK-3601 (CTO 정책 3601-④) — Core/API와 Web e2e를 **병렬 Job**으로
+   * 나눈다. 한 Job이 전부를 돌면 e2e가 늘 때마다 모든 게이트의 답이 늦어지고,
+   * 게이트가 느려지면 사람은 게이트를 안 기다린다.
+   */
+  it("Core·API와 Web e2e가 별도 Job이다 (TASK-3601)", () => {
+    expect(workflow).toContain("quality-gates:");
+    expect(workflow).toContain("web-e2e:");
+    // e2e Job은 브라우저를 설치하고, 정적 게이트 Job은 그럴 필요가 없다
+    const e2eJob = workflow.slice(workflow.indexOf("web-e2e:"));
+    expect(e2eJob).toContain("playwright install");
+    expect(e2eJob).toContain("run: pnpm test:e2e");
   });
 
   it("동시 실행을 접고 시간 상한과 최소 권한을 둔다 (TASK-3501)", () => {
@@ -86,7 +100,7 @@ describe("CI 워크플로 (TASK-2201, CTO 결정 2101-③)", () => {
   it("게이트가 빠지면 무엇이 빠졌는지 말한다", () => {
     const judged = judgeCiWorkflow("- run: pnpm build\n");
     expect(judged.missing).toContain("ci-gates");
-    expect(judged.missing).toContain("test");
+    expect(judged.missing).toContain("test-unit");
     expect(judged.missing).toContain("lint");
     expect(judged.detail).toContain("빠진 게이트");
   });
@@ -99,7 +113,8 @@ describe("CI 워크플로 (TASK-2201, CTO 결정 2101-③)", () => {
         "- run: pnpm check:ci-gates",
         "- run: pnpm typecheck",
         "- run: pnpm lint",
-        "- run: pnpm test",
+        "- run: pnpm test:unit",
+        "- run: pnpm test:e2e",
         "- run: playwright install",
       ].join("\n"),
     );

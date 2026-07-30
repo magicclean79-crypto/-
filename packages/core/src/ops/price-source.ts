@@ -93,6 +93,21 @@ export type PriceSourceStatus =
 export const PRICE_SOURCE_FORMATS = ["acos", "flat", "csv"] as const;
 export type PriceSourceFormat = (typeof PRICE_SOURCE_FORMATS)[number];
 
+/**
+ * 이름은 알지만 **아직 어댑터가 없는** 형식 (TASK-3601 — CTO 정책 3601-③).
+ *
+ * "모르는 형식"과 "아직 안 만든 형식"은 사람이 할 일이 다릅니다:
+ * 앞은 오타를 의심해야 하고, 뒤는 **어댑터를 만들어 달라고 요청**해야 합니다.
+ * 그래서 같은 거부라도 문구를 가릅니다.
+ *
+ * 여기에 이름을 올려 두는 것은 약속이 아니라 **구조가 이 방향으로 열려
+ * 있다는 표시**입니다. 실제로 붙일 때는 파서 하나(`PRICE_SOURCE_PARSERS`에
+ * 한 줄)만 더하면 됩니다 — 판정·경보·화면은 그대로 씁니다.
+ */
+export const PLANNED_PRICE_SOURCE_FORMATS = ["html", "rss", "jsonfeed"] as const;
+export type PlannedPriceSourceFormat =
+  (typeof PLANNED_PRICE_SOURCE_FORMATS)[number];
+
 /** 공지 조회 결과 (어댑터가 채운다) */
 export interface PriceSourceFetch {
   /** 소스 이름 — Provider별 공지를 가른다 (기본 소스는 `default`) */
@@ -179,12 +194,25 @@ export function resolvePriceSources(
     if ((PRICE_SOURCE_FORMATS as readonly string[]).includes(value)) {
       return value as PriceSourceFormat;
     }
+    // 이름은 아는데 아직 안 만든 형식은 **다르게 말한다** (정책 3601-③) —
+    // 오타를 의심할 일과 어댑터를 요청할 일은 다르다
+    if ((PLANNED_PRICE_SOURCE_FORMATS as readonly string[]).includes(value)) {
+      rejected.push({
+        name,
+        reason:
+          `${raw} 형식은 아직 어댑터가 없습니다 — 구조는 이 방향으로 열려 있고 ` +
+          "파서 하나만 더하면 됩니다. 그전까지 이 소스는 읽지 않습니다 " +
+          "(잘못 읽은 단가는 못 읽은 단가보다 위험합니다).",
+      });
+      return null;
+    }
     rejected.push({
       name,
       reason:
-        `알 수 없는 공지 형식입니다: ${raw} — 아는 형식은 ` +
-        `${PRICE_SOURCE_FORMATS.join("·")}입니다. 짐작해서 읽지 않고 이 소스는 읽지 않습니다 ` +
-        "(잘못 읽은 단가는 못 읽은 단가보다 위험합니다).",
+        `알 수 없는 공지 형식입니다: ${raw} — 지금 읽을 수 있는 형식은 ` +
+        `${PRICE_SOURCE_FORMATS.join("·")}이고, 예정된 형식은 ` +
+        `${PLANNED_PRICE_SOURCE_FORMATS.join("·")}입니다. 짐작해서 읽지 않고 이 소스는 ` +
+        "읽지 않습니다 (잘못 읽은 단가는 못 읽은 단가보다 위험합니다).",
     });
     return null;
   };
@@ -443,6 +471,39 @@ function flattenCsvFormat(body: unknown): unknown[] | null {
 }
 
 /**
+ * 형식별 파서 (TASK-3601 — CTO 정책 3601-③).
+ *
+ * **형식이 늘어도 판정은 늘지 않습니다.** 파서가 하는 일은 어떤 모양이든
+ * `parseEntry`가 읽을 수 있는 **줄의 목록**으로 펴는 것뿐이고, 무엇이 유효한
+ * 단가인지·못 읽은 것을 어떻게 다룰지는 한 곳에서만 정합니다. HTML·RSS·
+ * JSON Feed를 붙일 때도 여기 한 줄이면 됩니다.
+ *
+ * 파서는 **해석할 수 없으면 `null`** 을 돌려줍니다 — 빈 배열을 돌려주면
+ * "0건을 읽었다"가 되어 "변경 없음"으로 읽힙니다(정책 3301-①이 금지).
+ */
+export type PriceSourceParser = (body: unknown) => unknown[] | null;
+
+export const PRICE_SOURCE_PARSERS: Record<PriceSourceFormat, PriceSourceParser> = {
+  acos: (body) =>
+    Array.isArray(body)
+      ? body
+      : typeof body === "object" &&
+          body !== null &&
+          Array.isArray((body as { prices?: unknown }).prices)
+        ? (body as { prices: unknown[] }).prices
+        : null,
+  flat: (body) => flattenFlatFormat(body),
+  csv: (body) => flattenCsvFormat(body),
+};
+
+/** 형식별 "이런 모양을 기대했다" 설명 — 실패 문구에 쓴다 */
+const FORMAT_SHAPE: Record<PriceSourceFormat, string> = {
+  acos: "목록(배열 또는 prices 필드)이 아닙니다",
+  flat: "models·engines 사전이 아닙니다",
+  csv: "target·key 머리글을 가진 표가 아닙니다",
+};
+
+/**
  * 조회 결과를 판정한다 (순수 함수).
  *
  * **실패를 "변경 없음"으로 바꾸지 않습니다** (정책 3301-①). 어떤 실패든
@@ -498,12 +559,7 @@ export function judgePriceSource(fetched: PriceSourceFetch): PriceSourceVerdict 
       unparsed: [],
       needsHumanCheck: true,
       detail:
-        "가격 공지를 해석할 수 없습니다 — " +
-        (format === "flat"
-          ? "models·engines 사전이 아닙니다"
-          : format === "csv"
-            ? "target·key 머리글을 가진 표가 아닙니다"
-            : "목록(배열 또는 prices 필드)이 아닙니다") +
+        `가격 공지를 해석할 수 없습니다 — ${FORMAT_SHAPE[format]}` +
         `(형식: ${format}). 형식이 바뀌었는지 확인해 주세요. ${NOT_NO_CHANGE}`,
     };
   }

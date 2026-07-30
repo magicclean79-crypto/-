@@ -23,6 +23,9 @@ const rows: Execution[] = [
     endpoint: null,
     baseUrl: null,
     calledAt: null,
+    // 요청 추적 (TASK-3601, 정책 3601-②) — 옛 기록은 모른다(null)
+    requestId: null,
+    traceId: null,
     createdAt: new Date("2026-07-28T02:00:00Z"),
   },
   {
@@ -41,6 +44,9 @@ const rows: Execution[] = [
     endpoint: null,
     baseUrl: null,
     calledAt: null,
+    // 요청 추적 (TASK-3601, 정책 3601-②) — 옛 기록은 모른다(null)
+    requestId: null,
+    traceId: null,
     createdAt: new Date("2026-07-28T01:00:00Z"),
   },
 ];

@@ -1,18 +1,22 @@
-# CI. (TASK-2101, Sprint 21 — TASK-3401에서 운영 검증)
+# CI. (TASK-2101, Sprint 21 — TASK-3401 운영 검증 · TASK-3601 Job 분리)
 #
-# 품질 게이트(Build / TypeScript / ESLint / Test·Playwright)와
-# **Major Migration 교차 검증**(CTO 결정 2001-③)을 돌린다. 교차 검증은 build
-# 뒤에 둔다 — 검증 로직이 `@acos/core`에 있고, 순수 로직은 한 곳에만 둔다는
-# 규칙을 스크립트에서도 지키기 때문이다.
+# 품질 게이트와 **Major Migration 교차 검증**(CTO 결정 2001-③)을 돌린다.
+# 교차 검증은 build 뒤에 둔다 — 검증 로직이 `@acos/core`에 있고, 순수 로직은
+# 한 곳에만 둔다는 규칙을 스크립트에서도 지키기 때문이다.
 #
-# TASK-3501 (CTO 지시 4 "운영 안정화·품질 게이트 자동 검증")에서 더한 것:
+# TASK-3601 (CTO 정책 3601-④)에서 나눈 것: **Core/API와 Web e2e를 병렬 Job**
+# 으로 분리한다. 한 Job이 4분을 쓰던 구조에서는 e2e가 늘 때마다 모든 게이트의
+# 답이 늦어졌고, 게이트가 느려지면 사람은 게이트를 안 기다린다.
+# 두 Job은 서로를 기다리지 않는다 — 어느 쪽이 깨졌는지도 색으로 바로 갈린다.
+#
+# TASK-3501 (CTO 지시 4)에서 더한 것:
 # 동시 실행 취소 · 작업 시간 상한 · 최소 권한 · **게이트 자체 검증 단계**.
 #
-# TASK-3401 (CTO 지시 6 "GitHub Actions 운영 검증")에서 고친 것:
+# TASK-3401 (CTO 지시 6)에서 고친 것:
 #
 # 1. **Playwright 브라우저를 설치한다.** `pnpm test`에는 web e2e가 들어 있고,
-#    러너에는 브라우저가 없다. 그래서 이 워크플로는 지금까지 **13회 실행이
-#    전부 실패**했다 — 게이트가 파일에 적혀 있었지만 한 번도 초록인 적이 없었다.
+#    러너에는 브라우저가 없다. 그래서 이 워크플로는 한때 **13회 실행이 전부
+#    실패**했다 — 게이트가 파일에 적혀 있었지만 한 번도 초록인 적이 없었다.
 #    로컬에서만 통과하는 게이트는 게이트가 아니다.
 # 2. **TypeScript 게이트를 추가한다.** CTO가 매 TASK 요구하는 게이트인데
 #    워크플로에는 없었다 — 사람이 로컬에서 돌리는 것에만 의존하고 있었다.
@@ -40,9 +44,9 @@ permissions:
   contents: read
 
 jobs:
+  # 정적 게이트 + Core/API 테스트 — 브라우저가 필요 없다
   quality-gates:
     runs-on: ubuntu-latest
-    # 멈춘 실행이 러너를 몇 시간 붙들지 않도록 상한을 둔다
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -57,11 +61,6 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
-
-      # 브라우저가 없으면 web e2e가 통째로 죽고, 그 실패는 "코드가 잘못됐다"로
-      # 읽힌다 — 실제로는 환경이 준비되지 않은 것이다.
-      - name: Playwright 브라우저 설치
-        run: pnpm --filter web exec playwright install --with-deps chromium
 
       - name: Build
         run: pnpm build
@@ -83,5 +82,34 @@ jobs:
       - name: Lint
         run: pnpm lint
 
-      - name: Test
-        run: pnpm test
+      - name: Test (Core · API)
+        run: pnpm test:unit
+
+  # Web e2e — 브라우저가 필요하고 가장 오래 걸린다 (TASK-3601, 정책 3601-④)
+  web-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # 브라우저가 없으면 e2e가 통째로 죽고, 그 실패는 "코드가 잘못됐다"로
+      # 읽힌다 — 실제로는 환경이 준비되지 않은 것이다.
+      - name: Playwright 브라우저 설치
+        run: pnpm --filter web exec playwright install --with-deps chromium
+
+      - name: Build
+        run: pnpm build
+
+      - name: Test (Web e2e)
+        run: pnpm test:e2e

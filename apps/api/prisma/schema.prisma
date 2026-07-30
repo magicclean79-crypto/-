@@ -141,6 +141,9 @@ model OcrResult {
   endpoint      String?
   baseUrl       String?
   calledAt      DateTime?
+  /** 요청 추적 (TASK-3601, CTO 정책 3601-②) — Execution과 같은 이유다 */
+  requestId     String?
+  traceId       String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -150,6 +153,8 @@ model OcrResult {
   @@index([createdAt])
   // 전환 판정이 "공식 주소로 성공한 기록"을 센다 (TASK-3501)
   @@index([provider, baseUrl, createdAt])
+  // 한 요청이 부른 호출을 모아 본다 (TASK-3601)
+  @@index([requestId])
   @@map("ocr_results")
 }
 
@@ -537,12 +542,23 @@ model Execution {
   endpoint     String?
   baseUrl      String?
   calledAt     DateTime?
+  /**
+   * 요청 추적 (TASK-3601, CTO 정책 3601-②).
+   *
+   * 한 번의 사용자 요청이 부른 호출들을 묶는 끈이다. 없으면 "이 요청이
+   * 얼마를 썼는가"·"이 실패가 그 요청의 것인가"에 답할 수 없다.
+   * 모르면 null — 지어내지 않는다.
+   */
+  requestId    String?
+  traceId      String?
   createdAt    DateTime        @default(now())
 
   @@index([feature, createdAt])
   @@index([diagnostic, createdAt])
   // 전환 판정이 "공식 주소로 성공한 기록"을 센다 (TASK-3501)
   @@index([provider, baseUrl, createdAt])
+  // 한 요청이 부른 호출을 모아 본다 (TASK-3601)
+  @@index([requestId])
   @@map("executions")
 }
 

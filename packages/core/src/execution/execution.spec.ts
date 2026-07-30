@@ -107,6 +107,9 @@ describe("ExecutionTracker", () => {
       endpoint: null,
       baseUrl: null,
       calledAt: expect.any(Date),
+      // 요청 추적 해석기를 주지 않으면 남지 않는다 (TASK-3601, 정책 3601-②)
+      requestId: null,
+      traceId: null,
     });
   });
 
@@ -182,5 +185,75 @@ describe("ExecutionTracker", () => {
 
     expect(result.provider).toBe("mock");
     expect(errors).toEqual(["DB 다운"]);
+  });
+});
+
+/**
+ * 호출 대상·요청 추적 기록 (TASK-3501 정책 3501-④ · TASK-3601 정책 3601-②).
+ *
+ * core는 환경변수도 요청 컨텍스트도 모른다 — 어댑터가 알려 준다. 주지 않으면
+ * **기록에 남지 않고**, 그때 판정은 "모른다"로 센다(공식이었다고 세지 않는다).
+ */
+describe("ExecutionTracker — 호출 대상과 요청 추적", () => {
+  it("어댑터가 알려 주면 그대로 남긴다", async () => {
+    const recorded: NewExecution[] = [];
+    const tracker = new ExecutionTracker(
+      { record: async (entry) => { recorded.push(entry); return { ...entry, id: "x", createdAt: new Date() }; } },
+      {
+        callTarget: () => ({
+          endpoint: "https://api.openai.com/v1/chat/completions",
+          baseUrl: "https://api.openai.com",
+        }),
+        trace: () => ({ requestId: "req-1", traceId: "trace-1" }),
+      },
+    );
+
+    await tracker.track("dev", { provider: "openai", model: "gpt-4o" }, async () => ({
+      provider: "openai",
+      model: "gpt-4o",
+      usage: { inputTokens: 1, outputTokens: 1 },
+    }));
+
+    expect(recorded[0].baseUrl).toBe("https://api.openai.com");
+    expect(recorded[0].requestId).toBe("req-1");
+    expect(recorded[0].traceId).toBe("trace-1");
+    expect(recorded[0].calledAt).toBeInstanceOf(Date);
+  });
+
+  it("실패한 호출에도 남긴다 — 실패야말로 추적이 필요하다", async () => {
+    const recorded: NewExecution[] = [];
+    const tracker = new ExecutionTracker(
+      { record: async (entry) => { recorded.push(entry); return { ...entry, id: "x", createdAt: new Date() }; } },
+      {
+        callTarget: () => ({ endpoint: null, baseUrl: "https://api.openai.com" }),
+        trace: () => ({ requestId: "req-2", traceId: "trace-2" }),
+      },
+    );
+
+    await expect(
+      tracker.track("dev", { provider: "openai", model: "gpt-4o" }, async () => {
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+
+    expect(recorded[0].status).toBe("FAILED");
+    expect(recorded[0].requestId).toBe("req-2");
+  });
+
+  it("해석기가 null을 주면 지어내지 않는다", async () => {
+    const recorded: NewExecution[] = [];
+    const tracker = new ExecutionTracker(
+      { record: async (entry) => { recorded.push(entry); return { ...entry, id: "x", createdAt: new Date() }; } },
+      { callTarget: () => null, trace: () => null },
+    );
+
+    await tracker.track("dev", { provider: "openai", model: "gpt-4o" }, async () => ({
+      provider: "openai",
+      model: "gpt-4o",
+      usage: { inputTokens: 1, outputTokens: 1 },
+    }));
+
+    expect(recorded[0].baseUrl).toBeNull();
+    expect(recorded[0].requestId).toBeNull();
   });
 });

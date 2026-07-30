@@ -4,6 +4,7 @@ import type { OcrRecognition, OcrRun, OcrRunStore } from "@acos/core";
 import { Prisma, type OcrResult } from "@prisma/client";
 import { PricingService } from "../pricing/pricing.service";
 import { PrismaService } from "../prisma/prisma.service";
+import { RequestContextService } from "../common/request-context.service";
 
 export function toOcrRun(record: OcrResult): OcrRun {
   return {
@@ -31,6 +32,8 @@ export class PrismaOcrRunStore implements OcrRunStore {
     private readonly prisma: PrismaService,
     // 단가는 승인·적용된 가격표에서 온다 (TASK-3101, CTO 정책 3101-①)
     @Optional() private readonly pricing?: PricingService,
+    // 요청 추적 (TASK-3601, CTO 정책 3601-②) — 미주입이면 기록에 남지 않는다
+    @Optional() private readonly requestContext?: RequestContextService,
   ) {}
 
   async start(imageId: string, provider: string): Promise<OcrRun> {
@@ -79,6 +82,7 @@ export class PrismaOcrRunStore implements OcrRunStore {
       current.provider,
       process.env as Record<string, string | undefined>,
     );
+    const trace = this.requestContext?.current() ?? null;
 
     const record = await this.prisma.ocrResult.update({
       where: { id },
@@ -94,6 +98,9 @@ export class PrismaOcrRunStore implements OcrRunStore {
         endpoint: target.endpoint,
         baseUrl: target.baseUrl,
         calledAt: new Date(),
+        // 한 요청이 부른 호출들을 묶는 끈 (TASK-3601, CTO 정책 3601-②)
+        requestId: trace?.requestId ?? null,
+        traceId: trace?.traceId ?? null,
       },
     });
     return toOcrRun(record);

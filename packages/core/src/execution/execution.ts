@@ -51,6 +51,18 @@ export interface NewExecution {
   endpoint?: string | null;
   baseUrl?: string | null;
   calledAt?: Date | null;
+  /**
+   * 요청 추적 (TASK-3601, CTO 정책 3601-②).
+   *
+   * 한 번의 사용자 요청이 LLM·OCR을 여러 번 부릅니다. 그 호출들을 묶는 끈이
+   * 없으면 "이 요청이 얼마를 썼는가"·"이 실패가 그 요청의 것인가"에 답할 수
+   * 없고, 장애 때 로그와 기록을 손으로 맞춰 보게 됩니다.
+   *
+   * `requestId`는 우리 요청 1건, `traceId`는 그 요청이 속한 추적 전체입니다
+   * (W3C `traceparent`가 있으면 그 값). 모르면 `null` — 지어내지 않습니다.
+   */
+  requestId?: string | null;
+  traceId?: string | null;
 }
 
 /** Execution Domain 모델 — 저장소와 무관한 순수 표현 */
@@ -156,6 +168,14 @@ export interface ExecutionTrackerOptions {
     endpoint: string | null;
     baseUrl: string | null;
   } | null;
+  /**
+   * 요청 추적 해석기 (TASK-3601, CTO 정책 3601-②).
+   *
+   * core는 요청 컨텍스트를 모릅니다 — 어댑터가 "지금 처리 중인 요청은
+   * 무엇인가"를 알려 줍니다. 주지 않으면 기록에 남지 않습니다(모르는 것을
+   * 지어내지 않습니다).
+   */
+  trace?: () => { requestId: string | null; traceId: string | null } | null;
 }
 
 export interface TrackedLlmResult {
@@ -174,6 +194,7 @@ export class ExecutionTracker {
   private readonly onRecordError?: (error: string) => void;
   private readonly pricing: LlmPricingSource;
   private readonly callTarget?: ExecutionTrackerOptions["callTarget"];
+  private readonly trace?: ExecutionTrackerOptions["trace"];
 
   constructor(
     private readonly store: ExecutionStore,
@@ -183,15 +204,20 @@ export class ExecutionTracker {
     this.onRecordError = options.onRecordError;
     this.pricing = options.pricing ?? DEFAULT_LLM_PRICING;
     this.callTarget = options.callTarget;
+    this.trace = options.trace;
   }
 
   /** 호출 대상 — 모르면 세 칸 모두 null (모르는 것을 지어내지 않는다) */
   private target(provider: string, calledAt: number) {
     const resolved = this.callTarget?.(provider) ?? null;
+    const trace = this.trace?.() ?? null;
     return {
       endpoint: resolved?.endpoint ?? null,
       baseUrl: resolved?.baseUrl ?? null,
       calledAt: new Date(calledAt),
+      // 한 요청이 부른 호출들을 묶는 끈 (정책 3601-②)
+      requestId: trace?.requestId ?? null,
+      traceId: trace?.traceId ?? null,
     };
   }
 

@@ -6092,6 +6092,52 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
         }
       });
 
+      /**
+       * 운영 활성화 (TASK-3601, CTO 정책 3601-①) — 세 조건이 모두 충족될
+       * 때만 완료다. 둘이 충족된 상태는 "거의 다"가 아니다.
+       */
+      it("활성화는 세 조건을 따로 보여준다", async () => {
+        const built = await build();
+        app = built.app;
+
+        const response = await request(built.app.getHttpServer() as never)
+          .get("/ops/activation")
+          .set("Authorization", "Bearer tok-admin")
+          .expect(200);
+
+        expect(response.body.conditions.map((row: { id: string }) => row.id)).toEqual([
+          "credentials",
+          "network",
+          "cutover",
+        ]);
+        expect(response.body.activated).toBe(false);
+        expect(response.body.detail).toContain("세 조건이 모두 충족될 때만");
+      });
+
+      it("활성화도 ADMIN 전용이다", async () => {
+        const built = await build();
+        app = built.app;
+        await request(built.app.getHttpServer() as never)
+          .get("/ops/activation")
+          .expect(401);
+      });
+
+      it("네트워크 점검이 없으면 네트워크 조건은 충족이 아니다", async () => {
+        const built = await build();
+        app = built.app;
+
+        const response = await request(built.app.getHttpServer() as never)
+          .get("/ops/activation")
+          .set("Authorization", "Bearer tok-admin")
+          .expect(200);
+
+        const network = response.body.conditions.find(
+          (row: { id: string }) => row.id === "network",
+        );
+        expect(network.met).toBe(false);
+        expect(network.detail).toContain("점검하지 않은 것을");
+      });
+
       it("실행 이력이 없으면 CI를 초록으로 세지 않는다", async () => {
         const built = await build();
         app = built.app;

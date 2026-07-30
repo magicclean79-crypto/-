@@ -2322,6 +2322,27 @@ export interface ProductionCutoverDto {
   checkedAt: string;
 }
 
+/**
+ * 운영 활성화 판정 (TASK-3601 — CTO 정책 3601-①).
+ *
+ * **세 조건이 모두 충족될 때만 완료다.** 둘이 충족된 상태는 "거의 다"가
+ * 아니라 여전히 전환되지 않은 상태다.
+ */
+export interface ProductionActivationDto {
+  conditions: {
+    id: "credentials" | "network" | "cutover";
+    title: string;
+    met: boolean;
+    detail: string;
+    next: string;
+  }[];
+  activated: boolean;
+  applicable: boolean;
+  environment: string;
+  detail: string;
+  checkedAt: string;
+}
+
 /** Provider별 감지 현황 (TASK-3301, CTO 정책 3301-④) */
 export interface PricingDetectionStatusDto {
   /** Provider별 주기 — **프로젝트별 설정은 없다** */

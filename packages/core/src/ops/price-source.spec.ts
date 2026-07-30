@@ -3,6 +3,8 @@ import { DEFAULT_OCR_PRICING } from "../ocr/ocr-pricing";
 import {
   comparePublishedPrices,
   judgePriceSource,
+  PRICE_SOURCE_FORMATS,
+  PRICE_SOURCE_PARSERS,
   resolvePriceSources,
   summarizePriceSources,
 } from "./price-source";
@@ -284,6 +286,35 @@ describe("Provider별 공지 (TASK-3401, CTO 결정 3301-⑤)", () => {
       });
       expect(sources).toHaveLength(0);
       expect(rejected[0].reason).toContain("잘못 읽은 단가는");
+    });
+
+    it("이름은 아는데 아직 못 만든 형식은 다르게 말한다 (TASK-3601, 정책 3601-③)", () => {
+      // 오타를 의심할 일과 어댑터를 요청할 일은 다르다
+      for (const format of ["html", "rss", "jsonfeed"]) {
+        const { sources, rejected } = resolvePriceSources({
+          PRICE_SOURCE_URL_OPENAI: "https://openai.example/p",
+          PRICE_SOURCE_FORMAT_OPENAI: format,
+        });
+        expect(sources).toHaveLength(0);
+        expect(rejected[0].reason).toContain("아직 어댑터가 없습니다");
+        expect(rejected[0].reason).toContain("파서 하나만 더하면");
+      }
+    });
+
+    it("모르는 형식은 예정된 형식까지 함께 알려 준다", () => {
+      const { rejected } = resolvePriceSources({
+        PRICE_SOURCE_URL_OPENAI: "https://openai.example/p",
+        PRICE_SOURCE_FORMAT_OPENAI: "yaml",
+      });
+      expect(rejected[0].reason).toContain("알 수 없는 공지 형식");
+      expect(rejected[0].reason).toContain("html·rss·jsonfeed");
+    });
+
+    it("형식이 늘어도 판정은 한 곳에서만 한다 (정책 3601-③)", () => {
+      // 파서는 "줄의 목록으로 펴는 것"만 한다 — 유효성 판정은 늘지 않는다
+      expect(Object.keys(PRICE_SOURCE_PARSERS).sort()).toEqual(
+        [...PRICE_SOURCE_FORMATS].sort(),
+      );
     });
 
     it("프로젝트별 공지는 거부하고 사유를 남긴다", () => {

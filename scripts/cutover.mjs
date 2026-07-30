@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 운영 전환 게이트. (TASK-3501, Sprint 35 — CTO 지시 2·3)
+ * 운영 활성화 게이트. (TASK-3501 · 3601 — CTO 정책 3601-①)
  *
  * `/ops/cutover` 판정을 **명령 하나로** 확인합니다. 배포 게이트
  * (`deployment-gate.mjs`)가 "지금 배포해도 되는가"에 답한다면, 이것은
@@ -60,18 +60,24 @@ try {
   fail(`API에 연결할 수 없습니다: ${String(error)}`);
 }
 
-let report;
-try {
-  const query = BRANCH ? `?branch=${encodeURIComponent(BRANCH)}` : "";
-  const response = await fetch(`${API_BASE}/ops/cutover${query}`, {
+const query = BRANCH ? `?branch=${encodeURIComponent(BRANCH)}` : "";
+const read = async (path) => {
+  const response = await fetch(`${API_BASE}${path}${query}`, {
     headers: cookie ? { cookie } : {},
   });
   if (!response.ok) {
-    fail(`전환 판정을 읽지 못했습니다 (HTTP ${response.status}).`);
+    fail(`판정을 읽지 못했습니다 (${path}, HTTP ${response.status}).`);
   }
-  report = await response.json();
+  return response.json();
+};
+
+let report;
+let activation;
+try {
+  report = await read("/ops/cutover");
+  activation = await read("/ops/activation");
 } catch (error) {
-  fail(`전환 판정을 읽지 못했습니다: ${String(error)}`);
+  fail(`판정을 읽지 못했습니다: ${String(error)}`);
 }
 
 console.log(
@@ -96,8 +102,18 @@ for (const row of report.dependencies) {
   }
 }
 
-if (report.ready) {
-  console.log("[cutover] 운영 전환이 끝났습니다.");
+// 운영 활성화 세 조건 (CTO 정책 3601-①) — 하나로 뭉친 초록불은 "무엇이
+// 남았는지"를 말하지 못한다
+console.log("[cutover] 운영 활성화 조건 (CTO 정책 3601-①)");
+for (const condition of activation.conditions) {
+  console.log(`  ${condition.met ? "✓" : "✗"} ${condition.title} — ${condition.detail}`);
+  if (!condition.met) {
+    console.log(`      다음 할 일: ${condition.next}`);
+  }
+}
+
+if (activation.activated) {
+  console.log("[cutover] 운영 활성화 완료 — 세 조건이 모두 충족됐습니다.");
   process.exit(0);
 }
 
@@ -114,5 +130,5 @@ if (!report.applicable) {
   process.exit(0);
 }
 
-console.error(`[cutover] ${report.detail}`);
+console.error(`[cutover] ${activation.detail}`);
 process.exit(1);

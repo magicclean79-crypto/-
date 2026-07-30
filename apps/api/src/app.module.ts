@@ -1,5 +1,7 @@
-import { Module } from "@nestjs/common";
+import { MiddlewareConsumer, Module, NestModule } from "@nestjs/common";
 import { AppController } from "./app.controller";
+import { CommonModule } from "./common/common.module";
+import { RequestContextMiddleware } from "./common/request-context.service";
 import { AppService } from "./app.service";
 import { AnalysisModule } from "./analysis/analysis.module";
 import { AdminSettingsModule } from "./admin/admin-settings.module";
@@ -28,6 +30,7 @@ import { UploadsModule } from "./uploads/uploads.module";
 
 @Module({
   imports: [
+    CommonModule,
     PrismaModule,
     StorageModule,
     UploadsModule,
@@ -56,4 +59,14 @@ import { UploadsModule } from "./uploads/uploads.module";
   controllers: [AppController],
   providers: [AppService],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  /**
+   * 모든 요청에 추적 정보를 세운다 (TASK-3601, CTO 정책 3601-②).
+   *
+   * 경로를 골라 붙이지 않습니다 — 고르는 순간 "여기는 추적이 되고 저기는
+   * 안 되는" 상태가 생기고, 그러면 아무도 추적을 믿지 않습니다.
+   */
+  configure(consumer: MiddlewareConsumer): void {
+    consumer.apply(RequestContextMiddleware).forRoutes("*path");
+  }
+}

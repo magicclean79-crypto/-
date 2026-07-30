@@ -42,7 +42,11 @@ export const REQUIRED_CI_GATES = [
   },
   { id: "typecheck", script: "pnpm typecheck", title: "TypeScript" },
   { id: "lint", script: "pnpm lint", title: "ESLint" },
-  { id: "test", script: "pnpm test", title: "Test · Playwright" },
+  // Core/API와 Web e2e는 **병렬 Job**으로 나뉘어 있다 (TASK-3601, 정책 3601-④).
+  // 한 Job이 4분을 쓰던 구조에서는 e2e가 늘 때마다 모든 게이트의 답이
+  // 늦어졌고, 게이트가 느려지면 사람은 게이트를 안 기다린다.
+  { id: "test-unit", script: "pnpm test:unit", title: "Test (Core · API)" },
+  { id: "test-e2e", script: "pnpm test:e2e", title: "Test (Web e2e)" },
 ] as const;
 
 export type CiGateId = (typeof REQUIRED_CI_GATES)[number]["id"];
@@ -64,9 +68,9 @@ export interface CiWorkflowJudgement {
   /**
    * Playwright 브라우저 설치 단계가 있는가.
    *
-   * `pnpm test`는 web e2e(Playwright)를 포함합니다. 러너에 브라우저가 없으면
-   * **테스트 게이트 전체가 실패**하는데, 그 실패는 "코드가 잘못됐다"로
-   * 읽힙니다 — 실제로는 환경이 준비되지 않은 것입니다.
+   * web e2e는 브라우저 없이 통째로 실패하고, 그 실패는 "코드가 잘못됐다"로
+   * 읽힙니다 — 실제로는 환경이 준비되지 않은 것입니다. 실제로 이 저장소에서
+   * 13회 연속 실패의 원인이 이것이었습니다.
    */
   browsersInstalled: boolean;
   ok: boolean;
@@ -102,7 +106,7 @@ export function judgeCiWorkflow(yaml: string): CiWorkflowJudgement {
   if (build > -1 && cross > -1 && cross < build) {
     outOfOrder.push("major-migrations");
   }
-  for (const id of ["ci-gates", "typecheck", "lint", "test"] as const) {
+  for (const id of ["ci-gates", "typecheck", "lint", "test-unit"] as const) {
     const position = at(id);
     if (position > -1 && cross > -1 && position < cross) {
       outOfOrder.push(id);

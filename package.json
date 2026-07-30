@@ -13,6 +13,8 @@
     "lint": "eslint .",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
+    "test:unit": "turbo run test --filter=@acos/core --filter=api",
+    "test:e2e": "turbo run test --filter=web",
     "check:major-migrations": "node scripts/check-major-migrations.mjs",
     "check:ci-gates": "node scripts/check-ci-gates.mjs",
     "cutover": "node scripts/cutover.mjs",

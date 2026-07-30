@@ -19,3 +19,4 @@ export * from "./price-detection";
 export * from "./price-source";
 export * from "./ci-workflow";
 export * from "./production-cutover";
+export * from "./activation";

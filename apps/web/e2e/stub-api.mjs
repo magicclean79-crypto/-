@@ -2658,6 +2658,62 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  /** 운영 활성화 세 조건 (TASK-3601, CTO 정책 3601-①) — ADMIN 전용 */
+  if (url.pathname === "/ops/activation") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    const done = mode === "cutover-done";
+    res.end(
+      JSON.stringify({
+        conditions: [
+          {
+            id: "credentials",
+            title: "자격 증명",
+            met: done,
+            detail: done
+              ? "필요한 자격 증명 3개가 모두 설정돼 있습니다 (형식 기준 — 유효성은 실제 호출이 압니다)."
+              : "아직인 것 2개: OPENAI_API_KEY(없습니다) · S3_ENDPOINT(Amazon S3를 가리키지 않습니다)",
+            next: done ? "추가 조치가 없습니다." : "OPENAI_API_KEY · S3_ENDPOINT를 설정하세요.",
+          },
+          {
+            id: "network",
+            title: "네트워크",
+            met: done,
+            detail: done
+              ? "공식 주소 2곳에 모두 닿습니다."
+              : "가릴 수 없음 api.openai.com — 403이 Provider의 거절인지 프록시인지 모릅니다",
+            next: done
+              ? "추가 조치가 없습니다."
+              : "실제 호출 1회로 403의 주인이 누구인지 확인하세요.",
+          },
+          {
+            id: "cutover",
+            title: "전환 판정 (pnpm cutover)",
+            met: done,
+            detail: done
+              ? "운영 전환 4/4항목이 실제 연결로 확인됐습니다."
+              : "운영 전환 0/4항목 확인 — 확인되지 않은 항목을 전환 완료로 세지 않습니다.",
+            next: done
+              ? "추가 조치가 없습니다."
+              : "pnpm cutover가 알려 주는 항목부터 처리하세요.",
+          },
+        ],
+        activated: done,
+        applicable: mode !== "empty",
+        environment: mode === "empty" ? "development" : "production",
+        detail: done
+          ? "운영 활성화 완료 — 자격 증명 · 네트워크 · 전환 판정 세 조건이 모두 충족됐습니다 (CTO 정책 3601-①)."
+          : "운영 활성화 0/3 조건 충족 — 남은 조건: 자격 증명, 네트워크, 전환 판정 (pnpm cutover). 세 조건이 모두 충족될 때만 완료로 인정합니다 (CTO 정책 3601-①).",
+        checkedAt: new Date().toISOString(),
+      }),
+    );
+    return;
+  }
+
   // ── Provider 연결 순서 (TASK-2901, CTO 결정 2801-⑤) ── ADMIN 전용
   if (url.pathname === "/ops/providers") {
     if (req.headers.authorization !== "Bearer stub-token") {
