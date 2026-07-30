@@ -646,6 +646,55 @@ export interface ContentGovernanceRecordDto {
   /** 수행자 이메일 */
   actor: string | null;
   createdAt: string;
+  /**
+   * 보관 시각 (TASK-2601, CTO 결정 2501-⑤) — 90일 경과 후 보관.
+   * **삭제가 아니다.** 현황 조회에서 비켜 두되 이력은 남는다.
+   */
+  archivedAt: string | null;
+}
+
+// ── Governance Preflight Scan (TASK-2601, CTO 결정 2501-①) ──
+
+/** 위반 1건 — 상태를 바꾸지 않고 목록만 만든다 */
+export interface PreflightItemDto {
+  contentId: string;
+  projectId: string;
+  title: string;
+  contentStatus: ContentStatus;
+  status: GovernanceStatusDto;
+  /** 발행을 막는 검사의 key */
+  blockedBy: string[];
+  /** 막지는 않지만 드러낼 것 */
+  warnings: string[];
+}
+
+export interface PreflightSummaryDto {
+  scanned: number;
+  /** 아직 발행되지 않았고 위반이 있는 것 — 발행 시 막힌다 */
+  blocked: number;
+  /** **이미 발행된** 위반 — 막을 수 없고 사람이 내려야 한다 */
+  publishedViolations: number;
+  warned: number;
+  clean: number;
+  byCheck: { key: string; blocked: number; warned: number }[];
+}
+
+/**
+ * Preflight Scan 결과 (TASK-2601).
+ *
+ * **상태 변경도, 자동 수정도 하지 않는다** (CTO 결정 2501-①).
+ */
+export interface GovernancePreflightDto {
+  /** 프로젝트 범위 스캔이면 그 id, 전체 스캔이면 null */
+  projectId: string | null;
+  summary: PreflightSummaryDto;
+  items: PreflightItemDto[];
+  /** 목록을 잘랐는가 — 요약의 숫자는 자르기 전 전체다 */
+  truncated: boolean;
+  omitted: number;
+  /** 사람이 읽을 한 줄 */
+  detail: string;
+  scannedAt: string;
 }
 
 // ── LLM Gateway (TASK-0501, Sprint 5 — AI Execution) ───

@@ -34,6 +34,7 @@ import { AlertService } from "./alert.service";
 import { BackupService } from "./backup.service";
 import { DistributedLockService } from "./distributed-lock.service";
 import { NotificationQueueService } from "./notification-queue.service";
+import { ContentGovernanceService } from "../content-governance/content-governance.service";
 import { MigrationGovernanceService } from "./migration-governance.service";
 import { RecoveryDrillService } from "./recovery-drill.service";
 
@@ -142,6 +143,8 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
     private readonly production2: ProviderProductionService,
     private readonly queue: NotificationQueueService,
     private readonly migrations: MigrationGovernanceService,
+    // 발행 판정 기록 보관 (TASK-2601, CTO 결정 2501-⑤)
+    private readonly governance: ContentGovernanceService,
   ) {}
 
   /** 점검 1건의 잠금 이름 */
@@ -548,17 +551,25 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (job === "alert-archive") {
-      // 보관은 경보를 만들지 않는다 — 정리 작업이다 (CTO 결정 1401-③)
-      const [alerts, queue] = await Promise.all([
+      // 보관은 경보를 만들지 않는다 — 정리 작업이다 (CTO 결정 1401-③).
+      // 보관 대상이 셋이지만 **작업은 하나로 둔다** — 새 예약을 만들면
+      // 같은 성격의 정리가 서로 다른 시각에 돌아 무엇이 남았는지 흐려진다.
+      const [alerts, queue, governance] = await Promise.all([
         this.alerts.archive(),
         // Dead Letter도 90일 후 보관 (CTO 결정 1501-③ — 삭제 아님)
         this.queue.archiveDeadLetters(),
+        // 발행 판정 기록도 90일 후 보관 (CTO 결정 2501-⑤ — 삭제 아님)
+        this.governance.archive(),
       ]);
       return {
         ok: true,
         detail:
+          // 기준 시각이 서로 다르므로 하나로 뭉쳐 말하지 않는다:
+          // 경보·Dead Letter는 **해소 후**, 판정 기록은 **작성 후**다
           `경보 보관 ${alerts.archived}건 · Dead Letter 보관 ${queue.archived}건 ` +
-          `(해소 후 ${alerts.afterDays}일 경과) — 삭제하지 않습니다`,
+          `(해소 후 ${alerts.afterDays}일 경과) · ` +
+          `발행 판정 기록 보관 ${governance.archived}건 ` +
+          `(작성 후 ${governance.afterDays}일 경과) — 삭제하지 않습니다`,
         notified: [],
       };
     }

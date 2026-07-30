@@ -5,11 +5,13 @@ import type {
   ContentDto,
   ContentGovernanceDto,
   ContentStatusHistoryDto,
+  GovernancePreflightDto,
   ProductObjectDto,
   ProjectDetailDto,
 } from "@acos/shared";
 import { Badge } from "@acos/ui";
 import { ContentGovernancePanel } from "./content-governance";
+import { GovernancePreflightPanel } from "./governance-preflight";
 import { ContentStatusActions } from "./content-status-actions";
 import { ContentStatusBadge } from "./content-status";
 import { PipelineActions } from "./pipeline-actions";
@@ -42,9 +44,14 @@ export default async function ProjectDetailPage({
   if (!project) {
     notFound();
   }
-  const [latestObject, contentsBody] = await Promise.all([
+  const [latestObject, contentsBody, preflight] = await Promise.all([
     fetchJson<ProductObjectDto>(`/projects/${id}/product-object`),
     fetchJson<{ contents: ContentDto[] }>(`/projects/${id}/contents`),
+    // 발행 위반 스캔 (TASK-2601) — 이미 나간 것까지 함께 본다.
+    // 조회는 상태를 바꾸지 않으므로 화면을 여는 것만으로 안전하다.
+    fetchJson<GovernancePreflightDto>(
+      `/projects/${id}/governance/preflight?status=DRAFT,REVIEW,PUBLISHED`,
+    ),
   ]);
   const contents = contentsBody?.contents ?? [];
   // 발행 감사 이력 (TASK-0704) — 콘텐츠별 병렬 조회
@@ -170,6 +177,19 @@ export default async function ProjectDetailPage({
             ))}
           </ul>
         )}
+      </section>
+
+      <section
+        data-testid="preflight-section"
+        className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900"
+      >
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <h2 className="font-semibold">발행 위반 스캔</h2>
+          <span className="text-xs text-zinc-500">
+            상태를 바꾸지 않습니다 (CTO 결정 2501-①)
+          </span>
+        </div>
+        <GovernancePreflightPanel scan={preflight} />
       </section>
 
       <section>

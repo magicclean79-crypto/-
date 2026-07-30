@@ -572,6 +572,68 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({ contents: [pubContent] }));
     return;
   }
+  // 발행 위반 스캔 (TASK-2601) — 상태를 바꾸지 않는 조회
+  if (url.pathname === "/projects/proj-pub/governance/preflight") {
+    const verdict = pubGovernanceVerdict();
+    const released = pubContent.status === "PUBLISHED";
+    const blockedBy = verdict.blockers.map((check) => check.key);
+    const warnings = verdict.checks
+      .filter((check) => check.status === "WARNING")
+      .map((check) => check.key);
+    const violating = blockedBy.length > 0 || warnings.length > 0;
+    const items = violating
+      ? [
+          {
+            contentId: pubContent.id,
+            projectId: "proj-pub",
+            title: pubContent.title,
+            contentStatus: pubContent.status,
+            status: verdict.status,
+            blockedBy,
+            warnings,
+          },
+        ]
+      : [];
+    const byCheck = [
+      ...blockedBy.map((key) => ({ key, blocked: 1, warned: 0 })),
+      ...warnings.map((key) => ({ key, blocked: 0, warned: 1 })),
+    ];
+    const blocked = blockedBy.length > 0 && !released ? 1 : 0;
+    const publishedViolations = blockedBy.length > 0 && released ? 1 : 0;
+    const warned = blockedBy.length === 0 && warnings.length > 0 ? 1 : 0;
+    const parts = [];
+    if (publishedViolations > 0) {
+      parts.push(
+        `이미 발행된 위반 ${publishedViolations}건 (막을 수 없습니다 — 내려야 합니다)`,
+      );
+    }
+    if (blocked > 0) parts.push(`발행이 막힐 것 ${blocked}건`);
+    if (warned > 0) parts.push(`주의 ${warned}건`);
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify({
+        projectId: "proj-pub",
+        summary: {
+          scanned: 1,
+          blocked,
+          publishedViolations,
+          warned,
+          clean: violating ? 0 : 1,
+          byCheck,
+        },
+        items,
+        truncated: false,
+        omitted: 0,
+        detail:
+          parts.length === 0
+            ? "콘텐츠 1건 검사 — 위반 없음."
+            : `콘텐츠 1건 검사 — ${parts.join(" · ")}.` +
+              " 이 스캔은 상태를 바꾸지 않고 고치지도 않습니다.",
+        scannedAt: new Date().toISOString(),
+      }),
+    );
+    return;
+  }
   if (
     url.pathname === `/projects/proj-pub/contents/${pubContent.id}/governance`
   ) {

@@ -329,6 +329,35 @@ describe("Contents API (API Test)", () => {
       expect(response.body.records[1].actor).toBe("editor@acos.local");
     });
 
+    it("보관된 기록은 기본으로 담지 않고, 요청하면 볼 수 있다 (TASK-2601)", async () => {
+      const id = await reviewed("업계 1위 매트입니다.");
+      await request(app.getHttpServer())
+        .patch(`/projects/proj-1/contents/${id}/status`)
+        .set("Authorization", "Bearer editor-token")
+        .send({ status: "PUBLISHED" })
+        .expect(400);
+
+      // 이 기록을 보관 상태로 만든다
+      const record = prismaMock.governanceChecks.find(
+        (row) => row.contentId === id,
+      )!;
+      record.archivedAt = new Date();
+
+      const current = await request(app.getHttpServer())
+        .get(`/projects/proj-1/contents/${id}/governance/history`)
+        .expect(200);
+      expect(current.body.records).toHaveLength(0);
+
+      // 볼 길이 없으면 보관이 사실상 삭제다
+      const all = await request(app.getHttpServer())
+        .get(
+          `/projects/proj-1/contents/${id}/governance/history?includeArchived=1`,
+        )
+        .expect(200);
+      expect(all.body.records).toHaveLength(1);
+      expect(all.body.records[0].archivedAt).not.toBeNull();
+    });
+
     it("없는 콘텐츠의 판정·이력 조회는 404", async () => {
       await request(app.getHttpServer())
         .get("/projects/proj-1/contents/none/governance")

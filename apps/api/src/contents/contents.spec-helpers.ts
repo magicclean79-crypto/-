@@ -47,27 +47,56 @@ export function createPrismaMock() {
             createdAt: new Date(),
             published: false,
             actor: null,
+            archivedAt: null,
             ...data,
           } as ContentGovernanceCheck;
           governanceChecks.push(row);
           return { ...row };
         },
       ),
+      /**
+       * `where.archivedAt`를 **실제로 적용한다** (TASK-2601) — 무시하면
+       * "보관된 것은 현황에서 비켜 둔다"가 구조적으로 검증되지 않는다.
+       */
       findMany: jest.fn(
         async ({
           where,
           take,
         }: {
-          where: { contentId: string };
+          where: { contentId: string; archivedAt?: null };
           take?: number;
         }) => {
-          const rows = governanceChecks
-            .filter((row) => row.contentId === where.contentId)
-            .slice()
-            .reverse();
+          let rows = governanceChecks.filter(
+            (row) => row.contentId === where.contentId,
+          );
+          if (where.archivedAt === null) {
+            rows = rows.filter((row) => row.archivedAt === null);
+          }
+          rows = rows.slice().reverse();
           return (typeof take === "number" ? rows.slice(0, take) : rows).map(
             (row) => ({ ...row }),
           );
+        },
+      ),
+      updateMany: jest.fn(
+        async ({
+          where,
+          data,
+        }: {
+          where: { archivedAt: null; createdAt: { lte: Date } };
+          data: { archivedAt: Date };
+        }) => {
+          let count = 0;
+          for (const row of governanceChecks) {
+            if (
+              row.archivedAt === null &&
+              row.createdAt <= where.createdAt.lte
+            ) {
+              row.archivedAt = data.archivedAt;
+              count += 1;
+            }
+          }
+          return { count };
         },
       ),
     },
@@ -150,14 +179,34 @@ export function createPrismaMock() {
           return { ...row, productObject: linkedObject(row.productObjectId) };
         },
       ),
+      /**
+       * `projectId`·`status`·`take`를 **실제로 적용한다** (TASK-2601).
+       *
+       * 무시하면 Preflight의 범위(프로젝트/전체)와 상태 필터가 구조적으로
+       * 검증되지 않는다 — 스텁이 결함을 감추는 그 형태다.
+       */
       findMany: jest.fn(
-        async ({ where }: { where: { projectId: string } }) =>
-          [...contents.values()]
-            .filter((row) => row.projectId === where.projectId)
-            .map((row) => ({
-              ...row,
-              productObject: linkedObject(row.productObjectId),
-            })),
+        async (args?: {
+          where?: { projectId?: string; status?: { in: string[] } };
+          take?: number;
+        }) => {
+          let rows = [...contents.values()];
+          const projectId = args?.where?.projectId;
+          if (projectId !== undefined) {
+            rows = rows.filter((row) => row.projectId === projectId);
+          }
+          const statuses = args?.where?.status?.in;
+          if (statuses) {
+            rows = rows.filter((row) => statuses.includes(row.status));
+          }
+          if (typeof args?.take === "number") {
+            rows = rows.slice(0, args.take);
+          }
+          return rows.map((row) => ({
+            ...row,
+            productObject: linkedObject(row.productObjectId),
+          }));
+        },
       ),
       findFirst: jest.fn(
         async ({

@@ -176,3 +176,93 @@ test.describe("발행 거버넌스 Web UI (TASK-2501)", () => {
     await expect(panel).toContainText("추적할 수 없습니다");
   });
 });
+
+test.describe("발행 위반 스캔 Web UI (TASK-2601, CTO 결정 2501-①)", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem("acos_token", "stub-token");
+    });
+  });
+
+  async function ban(): Promise<void> {
+    await fetch(`${STUB}/__publishing/ban`, { method: "POST" });
+  }
+
+  test("위반이 있으면 무엇이 몇 건인지 세어 보여준다", async ({ page }) => {
+    await reset();
+    await ban();
+    await page.goto("/projects/proj-pub");
+
+    const panel = page.getByTestId("governance-preflight");
+    await expect(panel.getByTestId("preflight-detail")).toContainText(
+      "발행이 막힐 것 1건",
+    );
+    await expect(panel.getByTestId("preflight-blocked")).toContainText("1");
+    await expect(panel.getByTestId("preflight-by-check")).toContainText(
+      "금지어 검사",
+    );
+    await expect(panel.getByTestId("preflight-item")).toHaveCount(1);
+  });
+
+  test("상태를 바꾸지 않는다고 화면이 말하고, 고치는 버튼이 없다", async ({
+    page,
+  }) => {
+    await reset();
+    await ban();
+    await page.goto("/projects/proj-pub");
+
+    const section = page.getByTestId("preflight-section");
+    await expect(section).toContainText("상태를 바꾸지 않습니다");
+    await expect(
+      section.getByTestId("preflight-detail"),
+    ).toContainText("상태를 바꾸지 않고 고치지도 않습니다");
+    // "한 번에 고치기"가 있으면 누군가는 누른다 — 버튼을 두지 않았다
+    await expect(section.getByRole("button")).toHaveCount(0);
+  });
+
+  test("스캔을 봐도 콘텐츠 상태가 그대로다", async ({ page }) => {
+    await reset();
+    await ban();
+    await page.goto("/projects/proj-pub");
+    await expect(page.getByTestId("governance-preflight")).toBeVisible();
+
+    await expect(
+      page.getByTestId("content-item").getByTestId("content-status-badge"),
+    ).toHaveText("DRAFT");
+  });
+
+  test("이미 발행된 위반은 막을 수 없다고 따로 말한다", async ({ page }) => {
+    await reset();
+    await page.goto("/projects/proj-pub");
+    const item = page.getByTestId("content-item");
+
+    // 통과 상태로 발행한 뒤 금지어를 넣는다 — 이미 나간 위반이 된다
+    await item.getByRole("button", { name: "검토 요청 (REVIEW)" }).click();
+    await item.getByRole("button", { name: "발행 (PUBLISHED)" }).click();
+    await expect(item.getByTestId("content-status-badge")).toHaveText(
+      "PUBLISHED",
+    );
+    await ban();
+    await page.reload();
+
+    const panel = page.getByTestId("governance-preflight");
+    await expect(panel.getByTestId("preflight-released")).toContainText(
+      "막을 수 없습니다",
+    );
+    await expect(panel.getByTestId("preflight-published")).toContainText("1");
+    await expect(panel.getByTestId("preflight-blocked")).toContainText("0");
+    await expect(panel.getByTestId("preflight-item")).toContainText(
+      "이미 발행됨",
+    );
+  });
+
+  test("위반이 없으면 위반 없음이라고 말한다", async ({ page }) => {
+    await reset();
+    await page.goto("/projects/proj-pub");
+
+    const panel = page.getByTestId("governance-preflight");
+    // 근거 상품 연결이 없어 주의는 있지만 막히는 것은 없다
+    await expect(panel.getByTestId("preflight-blocked")).toContainText("0");
+    await expect(panel.getByTestId("preflight-warned")).toContainText("1");
+  });
+});

@@ -18,6 +18,10 @@ import { BackupService } from "./backup.service";
 import { DistributedLockService } from "./distributed-lock.service";
 import { NotificationQueueService } from "./notification-queue.service";
 import { NotificationService } from "./notification.service";
+import { CompanyBrainService } from "../company-brain/company-brain.service";
+import { ContentGovernanceService } from "../content-governance/content-governance.service";
+import { GovernanceRulesService } from "../content-governance/governance-rules.service";
+import { createCompanyBrainMock } from "../content-governance/governance.spec-helpers";
 import { MigrationGovernanceService } from "./migration-governance.service";
 import { RecoveryDrillService } from "./recovery-drill.service";
 import { RecoveryEvaluationService } from "./recovery-evaluation.service";
@@ -114,6 +118,16 @@ function createPrismaStub() {
    * 여기서 답한다. 목록을 돌려주지 않으면 "코드에 없는 마이그레이션" 판정이
    * 구조적으로 검증될 수 없다.
    */
+  /**
+   * 발행 판정 기록 (TASK-2601) — 보관 정리가 이 저장소를 건드린다.
+   * `where`를 실제로 적용한다: 무시하면 "이미 보관된 것을 다시 보관하지
+   * 않는다"와 "유예가 지난 것만 보관한다"가 검증되지 않는다.
+   */
+  const governanceChecks: {
+    id: string;
+    createdAt: Date;
+    archivedAt: Date | null;
+  }[] = [];
   const migrations = {
     // 기본은 **실제 디렉터리 그대로 적용됨** — 정상 상태에서 경보가 나지 않아야
     // 경보가 났을 때 그것이 신호가 된다
@@ -125,6 +139,7 @@ function createPrismaStub() {
   return {
     alerts,
     migrations,
+    governanceChecks,
     runs,
     deliveries,
     queue,
@@ -205,6 +220,27 @@ function createPrismaStub() {
             const existing = alerts.get(key);
             if (existing) {
               alerts.set(key, { ...existing, ...args.data } as AlertRow);
+              count += 1;
+            }
+          }
+          return { count };
+        },
+      },
+      contentGovernanceCheck: {
+        updateMany: async (args: {
+          where: {
+            archivedAt: null;
+            createdAt: { lte: Date };
+          };
+          data: { archivedAt: Date };
+        }) => {
+          let count = 0;
+          for (const row of governanceChecks) {
+            if (
+              row.archivedAt === null &&
+              row.createdAt <= args.where.createdAt.lte
+            ) {
+              row.archivedAt = args.data.archivedAt;
               count += 1;
             }
           }
@@ -528,6 +564,13 @@ async function build(overrides: Overrides = {}) {
       // 복구 판정의 단일 원천 (TASK-2401, 결정 2301-①) — 컨트롤러가 이것을 쓴다
       RecoveryEvaluationService,
       MigrationGovernanceService,
+      // 발행 판정 기록 보관이 예약 정리 작업에 편입됐다 (TASK-2601)
+      ContentGovernanceService,
+      GovernanceRulesService,
+      {
+        provide: CompanyBrainService,
+        useValue: createCompanyBrainMock({}),
+      },
       {
         provide: StorageService,
         useValue: {

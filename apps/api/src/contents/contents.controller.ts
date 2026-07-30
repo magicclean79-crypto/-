@@ -5,6 +5,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
   UseGuards,
 } from "@nestjs/common";
@@ -112,14 +113,25 @@ export class ContentsController {
     return this.governanceService.evaluate(projectId, contentId);
   }
 
-  /** 발행 거버넌스 판정 기록 (TASK-2501) — 최신순. 막힌 기록도 남아 있다 */
+  /**
+   * 발행 거버넌스 판정 기록 (TASK-2501) — 최신순. 막힌 기록도 남아 있다.
+   *
+   * 보관된 기록(90일 경과, CTO 결정 2501-⑤)은 기본으로 담지 않는다 — 보관은
+   * 현황에서 비켜 두는 것이다. `?includeArchived=1`로 볼 수 있다:
+   * **볼 길이 없으면 보관이 사실상 삭제가 된다.**
+   */
   @Get(":contentId/governance/history")
   async governanceHistory(
     @Param("projectId") projectId: string,
     @Param("contentId") contentId: string,
+    @Query("includeArchived") includeArchived?: string,
   ): Promise<{ records: ContentGovernanceRecordDto[] }> {
     return {
-      records: await this.governanceService.history(projectId, contentId),
+      records: await this.governanceService.history(projectId, contentId, {
+        includeArchived: ["1", "true", "yes"].includes(
+          (includeArchived ?? "").trim().toLowerCase(),
+        ),
+      }),
     };
   }
 

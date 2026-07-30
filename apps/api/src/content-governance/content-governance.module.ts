@@ -1,7 +1,10 @@
 import { Module } from "@nestjs/common";
+import { AuthModule } from "../auth/auth.module";
 import { CompanyBrainModule } from "../company-brain/company-brain.module";
 import { ContentGovernanceService } from "./content-governance.service";
+import { GovernancePreflightService } from "./governance-preflight.service";
 import { GovernanceRulesService } from "./governance-rules.service";
+import { GovernanceController } from "./governance.controller";
 
 /**
  * Content Governance 모듈. (TASK-2501, Sprint 25)
@@ -11,8 +14,17 @@ import { GovernanceRulesService } from "./governance-rules.service";
  * 둘 다 이 모듈을 가져다 쓴다 — 규칙이 두 곳에 있으면 두 곳이 갈라진다.
  */
 @Module({
-  imports: [CompanyBrainModule],
-  providers: [GovernanceRulesService, ContentGovernanceService],
-  exports: [GovernanceRulesService, ContentGovernanceService],
+  imports: [AuthModule, CompanyBrainModule],
+  controllers: [GovernanceController],
+  providers: [
+    GovernanceRulesService,
+    ContentGovernanceService,
+    GovernancePreflightService,
+  ],
+  exports: [
+    GovernanceRulesService,
+    ContentGovernanceService,
+    GovernancePreflightService,
+  ],
 })
 export class ContentGovernanceModule {}

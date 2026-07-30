@@ -1,5 +1,10 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
-import { evaluateContentGovernance } from "@acos/core";
+import {
+  describeGovernanceArchive,
+  evaluateContentGovernance,
+  planGovernanceArchive,
+  resolveGovernanceArchiveAfterDays,
+} from "@acos/core";
 import type { ContentGovernanceVerdict } from "@acos/core";
 import type {
   ContentGovernanceDto,
@@ -118,17 +123,26 @@ export class ContentGovernanceService {
     });
   }
 
-  /** 판정 기록 이력 — 최신순. 삭제하지 않는다 */
+  /**
+   * 판정 기록 이력 — 최신순.
+   *
+   * **보관된 것은 기본으로 담지 않는다** (CTO 결정 2501-⑤) — 보관은 현황에서
+   * 비켜 두는 것이다. 다만 `includeArchived`로 볼 수 있다: 삭제한 것이
+   * 아니므로 볼 길이 없으면 보관이 사실상 삭제가 된다.
+   */
   async history(
     projectId: string,
     contentId: string,
-    limit = 20,
+    options: { limit?: number; includeArchived?: boolean } = {},
   ): Promise<ContentGovernanceRecordDto[]> {
     await this.loadContent(projectId, contentId);
     const rows = await this.prisma.contentGovernanceCheck.findMany({
-      where: { contentId },
+      where: {
+        contentId,
+        ...(options.includeArchived ? {} : { archivedAt: null }),
+      },
       orderBy: { createdAt: "desc" },
-      take: limit,
+      take: options.limit ?? 20,
     });
     return rows.map((row) => ({
       id: row.id,
@@ -143,7 +157,47 @@ export class ContentGovernanceService {
       }) as unknown as ContentGovernanceRecordDto["appliedRules"],
       actor: row.actor,
       createdAt: row.createdAt.toISOString(),
+      archivedAt: row.archivedAt?.toISOString() ?? null,
     }));
+  }
+
+  /** 보관 유예(일) — 기본 90일 (CTO 결정 2501-⑤) */
+  get archiveAfterDays(): number {
+    return resolveGovernanceArchiveAfterDays(
+      process.env as Record<string, string | undefined>,
+    );
+  }
+
+  /**
+   * 판정 기록 보관 (CTO 결정 2501-⑤).
+   *
+   * **삭제하지 않는다.** `archivedAt`을 찍어 현황 조회에서 비켜 둘 뿐이다.
+   * 기준은 **작성 시각**이다 — 판정 기록에는 해소라는 개념이 없다.
+   *
+   * 이미 보관된 것은 다시 건드리지 않는다(`archivedAt: null` 조건) — 다시
+   * 찍으면 언제 보관했는지가 바뀌어 버린다.
+   */
+  async archive(): Promise<{
+    archived: number;
+    afterDays: number;
+    detail: string;
+  }> {
+    const afterDays = this.archiveAfterDays;
+    const { cutoff } = planGovernanceArchive({
+      afterDays,
+      now: Date.now(),
+    });
+
+    const { count } = await this.prisma.contentGovernanceCheck.updateMany({
+      where: { archivedAt: null, createdAt: { lte: new Date(cutoff) } },
+      data: { archivedAt: new Date() },
+    });
+
+    return {
+      archived: count,
+      afterDays,
+      detail: describeGovernanceArchive(count, afterDays),
+    };
   }
 
   private async loadContent(

@@ -238,6 +238,116 @@ describe("ContentGovernanceService (TASK-2501)", () => {
     });
   });
 
+
+  describe("판정 기록 보관 (TASK-2601, CTO 결정 2501-⑤)", () => {
+    const day = 24 * 60 * 60 * 1000;
+
+    /** 기록 1건을 만들고 작성 시각을 옮긴다 */
+    async function seedRecord(
+      service: ContentGovernanceService,
+      prisma: ReturnType<typeof createPrismaMock>,
+      contentId: string,
+      daysAgo: number,
+    ) {
+      const verdict = await service.judge({
+        id: contentId,
+        projectId: "proj-1",
+        status: "REVIEW",
+        title: "제목",
+        body: "본문",
+        productObject: null,
+      });
+      await service.record(contentId, verdict, {
+        published: true,
+        actor: null,
+      });
+      const row = prisma.governanceChecks[prisma.governanceChecks.length - 1];
+      row.createdAt = new Date(Date.now() - daysAgo * day);
+      return row;
+    }
+
+    afterEach(() => {
+      delete process.env.GOVERNANCE_ARCHIVE_AFTER_DAYS;
+    });
+
+    it("기본 유예는 90일 — 경보와 같은 정책이다", async () => {
+      const { service } = await build({});
+      expect(service.archiveAfterDays).toBe(90);
+    });
+
+    it("유예가 지난 기록만 보관한다", async () => {
+      const { service, prisma, contentId } = await build({});
+      await seedRecord(service, prisma, contentId, 100);
+      await seedRecord(service, prisma, contentId, 10);
+
+      const result = await service.archive();
+      expect(result.archived).toBe(1);
+      expect(result.afterDays).toBe(90);
+      expect(prisma.governanceChecks.filter((r) => r.archivedAt !== null)).toHaveLength(1);
+    });
+
+    it("보관은 삭제가 아니다 — 행이 그대로 남는다", async () => {
+      const { service, prisma, contentId } = await build({});
+      await seedRecord(service, prisma, contentId, 100);
+
+      await service.archive();
+      // 삭제는 되돌릴 수 없고 "그때 왜 막혔나"를 확인할 방법을 없앤다
+      expect(prisma.governanceChecks).toHaveLength(1);
+      expect(prisma.governanceChecks[0].archivedAt).not.toBeNull();
+      expect(service.archive).toBeDefined();
+    });
+
+    it("보관 문구가 삭제가 아님을 밝힌다", async () => {
+      const { service, prisma, contentId } = await build({});
+      await seedRecord(service, prisma, contentId, 100);
+      const result = await service.archive();
+      expect(result.detail).toContain("삭제하지 않습니다");
+      // 기준이 작성 시각임을 밝힌다 — 판정 기록에는 해소가 없다
+      expect(result.detail).toContain("작성 후 90일");
+    });
+
+    it("이미 보관된 것을 다시 보관하지 않는다", async () => {
+      const { service, prisma, contentId } = await build({});
+      await seedRecord(service, prisma, contentId, 100);
+
+      expect((await service.archive()).archived).toBe(1);
+      // 다시 찍으면 언제 보관했는지가 바뀐다
+      expect((await service.archive()).archived).toBe(0);
+    });
+
+    it("유예를 환경변수로 줄일 수 있다", async () => {
+      const { service, prisma, contentId } = await build({});
+      await seedRecord(service, prisma, contentId, 10);
+
+      expect((await service.archive()).archived).toBe(0);
+      process.env.GOVERNANCE_ARCHIVE_AFTER_DAYS = "5";
+      expect((await service.archive()).archived).toBe(1);
+    });
+
+    it("보관된 기록은 현황 조회에서 비켜 둔다", async () => {
+      const { service, prisma, contentId } = await build({});
+      await seedRecord(service, prisma, contentId, 100);
+      await seedRecord(service, prisma, contentId, 1);
+      await service.archive();
+
+      const current = await service.history("proj-1", contentId);
+      expect(current).toHaveLength(1);
+      expect(current[0].archivedAt).toBeNull();
+    });
+
+    it("보관된 것도 요청하면 볼 수 있다 — 볼 길이 없으면 보관이 삭제다", async () => {
+      const { service, prisma, contentId } = await build({});
+      await seedRecord(service, prisma, contentId, 100);
+      await service.archive();
+
+      const all = await service.history("proj-1", contentId, {
+        includeArchived: true,
+      });
+      expect(all).toHaveLength(1);
+      expect(all[0].archivedAt).not.toBeNull();
+    });
+  });
+
   describe("판정 함수는 하나다 (CTO 결정 2301-① 계열)", () => {
     it("미리보기와 게이트가 같은 답을 낸다", async () => {
       const { service, contentId } = await build(

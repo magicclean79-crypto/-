@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { AuthModule } from "../auth/auth.module";
+import { ContentGovernanceModule } from "../content-governance/content-governance.module";
 import { LlmModule } from "../llm/llm.module";
 import { StorageModule } from "../storage/storage.module";
 import { AlertService } from "./alert.service";
@@ -20,7 +21,8 @@ import { ScheduledChecksService } from "./scheduled-checks.service";
  * 로그와 (설정 시) 웹훅으로 내보낸다. 판정 로직은 전부 @acos/core에 있다.
  */
 @Module({
-  imports: [AuthModule, LlmModule, StorageModule],
+  // 발행 판정 기록 보관을 예약 정리 작업에 편입한다 (CTO 결정 2501-⑤)
+  imports: [AuthModule, LlmModule, StorageModule, ContentGovernanceModule],
   controllers: [OpsController],
   providers: [
     AlertService,

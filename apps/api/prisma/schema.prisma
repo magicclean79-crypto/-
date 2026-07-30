@@ -176,8 +176,12 @@ model ContentGovernanceCheck {
   appliedRules Json // 판정에 실제로 쓰인 기준 (금지어 수·적용 고지 id)
   actor        String? // 수행자 이메일
   createdAt    DateTime @default(now())
+  // 보관 시각 (TASK-2601, CTO 결정 2501-⑤) — 90일 경과 후 보관.
+  // 삭제가 아니다: 현황 조회에서 비켜 두되 이력은 남는다.
+  archivedAt   DateTime?
 
   @@index([contentId, createdAt])
+  @@index([archivedAt, createdAt])
   @@map("content_governance_checks")
 }
 
