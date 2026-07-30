@@ -4,17 +4,33 @@ import type { PrismaService } from "../prisma/prisma.service";
 import { LlmBudgetService } from "./llm-budget.service";
 import { LlmService } from "./llm.service";
 
-/** 일/월 지출을 지정해 반환하는 prisma aggregate mock */
-function createPrismaMock(daySpend: number, monthSpend: number) {
-  const aggregate = jest.fn(
-    async ({ where }: { where: { createdAt: { gte: Date } } }) => {
+/**
+ * 일/월 지출을 지정해 반환하는 prisma aggregate mock.
+ *
+ * **원장이 둘이다** (TASK-3001, CTO 결정 2901-④): LLM Execution과 OCR 실행
+ * 이력. 한쪽만 스텁하면 "OCR 지출이 예산에 들어가는가"가 검증되지 않는다.
+ */
+function createPrismaMock(
+  daySpend: number,
+  monthSpend: number,
+  ocr: { day: number; month: number } = { day: 0, month: 0 },
+) {
+  const of = (day: number, month: number) =>
+    jest.fn(async ({ where }: { where: { createdAt: { gte: Date } } }) => {
       const dayStart = utcDayStart(new Date()).getTime();
       const isDaily = where.createdAt.gte.getTime() >= dayStart;
-      return { _sum: { cost: isDaily ? daySpend : monthSpend } };
-    },
-  );
-  return { execution: { aggregate }, aggregate } as unknown as PrismaService & {
+      return { _sum: { cost: isDaily ? day : month } };
+    });
+  const aggregate = of(daySpend, monthSpend);
+  const ocrAggregate = of(ocr.day, ocr.month);
+  return {
+    execution: { aggregate },
+    ocrResult: { aggregate: ocrAggregate },
+    aggregate,
+    ocrAggregate,
+  } as unknown as PrismaService & {
     aggregate: jest.Mock;
+    ocrAggregate: jest.Mock;
   };
 }
 
@@ -96,6 +112,52 @@ describe("LLM 비용 예산 (TASK-0902)", () => {
     process.env.LLM_MONTHLY_BUDGET_USD = "50";
     await expect(service.assertWithinBudget()).rejects.toMatchObject({
       status: 429,
+    });
+  });
+
+  describe("OCR 지출도 같은 예산 안에 있다 (TASK-3001, CTO 결정 2901-④)", () => {
+    it("예산은 LLM과 OCR을 합해서 본다", async () => {
+      process.env.LLM_DAILY_BUDGET_USD = "10";
+      const service = new LlmBudgetService(
+        createPrismaMock(6, 6, { day: 3, month: 3 }),
+      );
+
+      const status = await service.status();
+      expect(status.daily.spend).toBe(9);
+      expect(status.bySource.daily).toEqual({ llm: 6, ocr: 3 });
+    });
+
+    it("OCR만으로도 예산을 넘길 수 있다 — 그전에는 상한 밖이었다", async () => {
+      process.env.LLM_DAILY_BUDGET_USD = "1";
+      const service = new LlmBudgetService(
+        createPrismaMock(0, 0, { day: 2, month: 2 }),
+      );
+
+      await expect(service.assertWithinBudget()).rejects.toMatchObject({
+        status: 429,
+      });
+    });
+
+    it("무엇이 막혔는지 문구가 말한다", async () => {
+      process.env.LLM_DAILY_BUDGET_USD = "1";
+      const service = new LlmBudgetService(
+        createPrismaMock(0, 0, { day: 2, month: 2 }),
+      );
+
+      await expect(
+        service.assertWithinBudget({ what: "OCR 호출" }),
+      ).rejects.toMatchObject({
+        // "LLM 예산"이라고만 하면 OCR을 눌렀다 429를 받은 사람이 엉뚱한 곳을 본다
+        response: expect.stringContaining("OCR 호출을 차단했습니다"),
+      });
+    });
+
+    it("예산 미설정이면 두 원장 모두 조회하지 않는다", async () => {
+      const prisma = createPrismaMock(999, 999, { day: 999, month: 999 });
+      const service = new LlmBudgetService(prisma);
+      await expect(service.assertWithinBudget()).resolves.toBeUndefined();
+      expect(prisma.aggregate).not.toHaveBeenCalled();
+      expect(prisma.ocrAggregate).not.toHaveBeenCalled();
     });
   });
 });

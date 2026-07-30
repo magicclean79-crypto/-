@@ -1,7 +1,9 @@
 import { Injectable, Logger } from "@nestjs/common";
 import {
   LLM_PROVIDER_REGISTRY,
+  OCR_UNIT_MODEL,
   ROLLOUT_EVIDENCE_WINDOW_DAYS,
+  describeOcrPricing,
   judgeProviderRollout,
   monitorProduction,
   pricedModels,
@@ -9,8 +11,13 @@ import {
   resolveMonitorOptions,
   validateApiKeyFormat,
   verifyCosts,
+  verifyOcrCosts,
 } from "@acos/core";
-import type { CostSample, MonitorSample } from "@acos/core";
+import type {
+  CostSample,
+  MonitorSample,
+  OcrCostSample,
+} from "@acos/core";
 import type {
   CostVerificationDto,
   LlmHealthDto,
@@ -166,16 +173,113 @@ export class ProviderProductionService {
       createdAt: record.createdAt.toISOString(),
     }));
 
+    // OCR도 같은 검증을 받는다 (TASK-3001, CTO 결정 2901-④) — 원장은 둘이지만
+    // "AI 비용이 맞는가"는 한 질문이다. 따로 보여 주면 한쪽만 보는 사각이 생긴다.
+    const ocrRecords = await this.prisma.ocrResult.findMany({
+      where: { createdAt: { gte: since }, status: "SUCCESS" },
+      select: {
+        id: true,
+        provider: true,
+        units: true,
+        cost: true,
+        createdAt: true,
+      },
+    });
+    const ocrSamples: OcrCostSample[] = ocrRecords.map((record) => ({
+      id: record.id,
+      provider: record.provider,
+      units: record.units,
+      cost: record.cost === null ? null : Number(record.cost),
+      createdAt: record.createdAt.toISOString(),
+    }));
+
     const result = verifyCosts(samples);
+    const ocr = verifyOcrCosts(ocrSamples);
     return {
-      ok: result.ok,
+      ok: result.ok && ocr.ok,
       hours,
-      checked: result.checked,
-      unpricedCalls: result.unpricedCalls,
-      recordedTotal: result.recordedTotal,
-      expectedTotal: result.expectedTotal,
-      issues: result.issues,
+      checked: result.checked + ocr.checked,
+      unpricedCalls: result.unpricedCalls + ocr.unpricedCalls,
+      recordedTotal: Number(
+        (result.recordedTotal + ocr.recordedTotal).toFixed(6),
+      ),
+      expectedTotal: Number(
+        (result.expectedTotal + ocr.expectedTotal).toFixed(6),
+      ),
+      issues: [...result.issues, ...ocr.issues],
+      // 원장별 합계를 밝힌다 — 총액만 보면 어디서 늘었는지 알 수 없다
+      bySource: {
+        llm: result.recordedTotal,
+        ocr: ocr.recordedTotal,
+      },
       pricing: pricedModels(),
+      ocrPricing: describeOcrPricing(),
+      checkedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * OCR 관측 (TASK-3001, CTO 결정 2901-④).
+   *
+   * LLM과 **같은 판정 함수**(`monitorProduction`)를 씁니다 — 성공률·지연·비용을
+   * 보는 기준이 엔진에 따라 다를 이유가 없고, 다르면 한쪽 기준이 조용히 낡습니다.
+   *
+   * 다만 **같은 표에 섞지는 않습니다**: OCR은 LLM 호출이 아니므로 토큰·모델·
+   * Failover 통계에 섞이면 판정이 흐려집니다. 결과는 별도 블록으로 돌려주고,
+   * 장애 경보는 같은 종류(`provider-failure`)로 냅니다 — 운영자에게는 "AI 경로가
+   * 죽었다"는 같은 사건입니다.
+   */
+  async monitorOcr(
+    options: { minutes?: number } = {},
+  ): Promise<ProductionMonitorDto> {
+    const minutes = Math.min(Math.max(options.minutes ?? 60, 1), 60 * 24 * 7);
+    const since = new Date(Date.now() - minutes * 60 * 1000);
+
+    const records = await this.prisma.ocrResult.findMany({
+      where: {
+        createdAt: { gte: since },
+        // 아직 돌고 있는 실행은 성공도 실패도 아니다 — 판정에 섞지 않는다
+        status: { in: ["SUCCESS", "FAILED"] },
+      },
+      select: {
+        provider: true,
+        status: true,
+        cost: true,
+        startedAt: true,
+        completedAt: true,
+        createdAt: true,
+      },
+    });
+
+    const samples: MonitorSample[] = records.map((record) => ({
+      provider: record.provider,
+      model: OCR_UNIT_MODEL,
+      success: record.status === "SUCCESS",
+      // 소요 시간은 시작~완료다 — 없으면 0으로 두되 성공/실패 판정은 그대로다
+      latencyMs:
+        record.startedAt && record.completedAt
+          ? Math.max(
+              0,
+              record.completedAt.getTime() - record.startedAt.getTime(),
+            )
+          : 0,
+      cost: record.cost === null ? null : Number(record.cost),
+      createdAt: record.createdAt.toISOString(),
+    }));
+
+    const result = monitorProduction(samples, {
+      ...resolveMonitorOptions(process.env as Record<string, string | undefined>),
+      windowMinutes: minutes,
+    });
+    return {
+      status: result.status,
+      windowMinutes: result.windowMinutes,
+      minSamples: result.minSamples,
+      totals: result.totals,
+      providers: result.providers,
+      alerts: result.alerts,
+      // OCR에는 진단 호출 개념이 없다 (Live Check 대상이 아니다)
+      diagnosticCalls: 0,
       checkedAt: new Date().toISOString(),
     };
   }

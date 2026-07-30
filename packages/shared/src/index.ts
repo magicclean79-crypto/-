@@ -241,7 +241,18 @@ export interface OcrResultDto {
   provider: string;
   status: OcrStatus;
   extractedText: string | null;
-  confidence: number | null; // 0.0 ~ 1.0
+  /** 0.0 ~ 1.0 — **Provider가 주지 않으면 null**(TASK-2901) */
+  confidence: number | null;
+  /**
+   * 이 실행의 예상 비용 (USD) — TASK-3001, CTO 결정 2901-④.
+   *
+   * `null`은 **가격표에 없어 산정하지 못했다**(미산정)는 뜻이고 0("과금 없는
+   * 엔진")과 다릅니다. 실패한 실행에는 붙지 않습니다 — 과금 여부를 우리가
+   * 알 수 없고, 모르는 것을 숫자로 적으면 예산이 거짓이 됩니다.
+   */
+  cost: number | null;
+  /** 과금 단위 수 (이미지 1장 · 검사 1종 = 1) */
+  units: number;
   rawJson?: unknown; // Provider 원본 응답 JSON
   error: string | null;
   attempts: number;
@@ -822,6 +833,16 @@ export interface BudgetWindowStatusDto {
 export interface LlmBudgetDto {
   daily: BudgetWindowStatusDto;
   monthly: BudgetWindowStatusDto;
+  /**
+   * 원장별 지출 (TASK-3001, CTO 결정 2901-④).
+   *
+   * 예산은 **LLM과 OCR 지출을 합해서** 봅니다. 총액만 보여 주면 "왜 늘었는가"에
+   * 답할 수 없어 예산을 올릴지 호출을 줄일지 판단할 수 없습니다.
+   */
+  bySource: {
+    daily: { llm: number; ocr: number };
+    monthly: { llm: number; ocr: number };
+  };
   /** 경고 임계 (기본 0.8 = 80%) */
   alertRatio: number;
   checkedAt: string;
@@ -1468,7 +1489,12 @@ export interface ProviderValidationReportDto {
 
 /** 비용 검증 문제 1건 */
 export interface CostIssueDto {
-  kind: "unpriced" | "mismatch" | "missing-usage";
+  /**
+   * `unrecorded`는 **산정할 수 있었는데 기록되지 않은 것**입니다 (TASK-3001).
+   * `null`을 0으로 보고 "기록 $0"이라고 말하면 기록된 값이 다르다는 뜻이 되어
+   * 사실과 어긋납니다 — 기록이 없는 것과 0이 기록된 것은 다릅니다.
+   */
+  kind: "unpriced" | "mismatch" | "missing-usage" | "unrecorded";
   provider: string;
   model: string;
   count: number;
@@ -1488,12 +1514,19 @@ export interface CostVerificationDto {
   recordedTotal: number;
   expectedTotal: number;
   issues: CostIssueDto[];
+  /**
+   * 원장별 기록 비용 (TASK-3001, CTO 결정 2901-④) — LLM과 OCR을 합해서
+   * 검증하지만, 어디서 나왔는지는 밝힌다.
+   */
+  bySource: { llm: number; ocr: number };
   /** 가격표에 등록된 모델 단가 (USD / 1M tokens) */
   pricing: {
     model: string;
     inputPerMillion: number;
     outputPerMillion: number;
   }[];
+  /** OCR 엔진 단가 (USD / 단위) — 무료 구간은 반영하지 않는다 */
+  ocrPricing: { provider: string; perUnitUsd: number; note: string }[];
   checkedAt: string;
 }
 

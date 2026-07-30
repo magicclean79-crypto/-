@@ -138,7 +138,23 @@ export class LlmController {
     return this.production.monitor({ minutes: Number(minutes) || undefined });
   }
 
-  /** 비용 예산 현황 (TASK-0902) — UTC 일/월 지출·예산·경고 상태 */
+  /**
+   * OCR 관측 (TASK-3001, CTO 결정 2901-④) — LLM과 **같은 판정 기준**으로
+   * OCR 엔진의 성공률·지연·비용을 본다. 같은 표에 섞지 않는 이유는 OCR이
+   * LLM 호출이 아니어서 토큰·모델·Failover 통계를 흐리기 때문이다. ADMIN 전용.
+   */
+  @Get("monitoring/ocr")
+  @UseGuards(AuthGuard)
+  @RequireRole("ADMIN")
+  async ocrMonitoring(
+    @Query("minutes") minutes?: string,
+  ): Promise<ProductionMonitorDto> {
+    return this.production.monitorOcr({
+      minutes: Number(minutes) || undefined,
+    });
+  }
+
+  /** 비용 예산 현황 (TASK-0902 → 3001) — UTC 일/월 AI 지출(LLM+OCR)·예산·경고 */
   @Get("budget")
   async budget(): Promise<LlmBudgetDto> {
     return this.budgetService.status();

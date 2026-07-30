@@ -565,6 +565,8 @@ interface Overrides {
   budget?: Record<string, unknown>;
   validation?: Record<string, unknown>;
   monitor?: Record<string, unknown>;
+  /** OCR 관측 (TASK-3001) */
+  ocrMonitor?: Record<string, unknown>;
   /** Provider 연결 순서 (TASK-2901) */
   rollout?: Record<string, unknown>;
 }
@@ -659,12 +661,40 @@ async function build(overrides: Overrides = {}) {
       checkedAt: new Date().toISOString(),
       ...overrides.monitor,
     }),
+    /**
+     * OCR 관측 (TASK-3001, CTO 결정 2901-④) — LLM과 **같은 종류의 경보**를
+     * 낸다. 목업이 빈 값을 돌려주면 "OCR 장애가 경보로 나가는가"가 검증되지
+     * 않으므로 테스트가 덮어쓸 수 있게 둔다.
+     */
+    monitorOcr: async () => ({
+      status: "healthy",
+      windowMinutes: 60,
+      minSamples: 5,
+      totals: {
+        calls: 4,
+        successCount: 4,
+        failedCount: 0,
+        successRate: 1,
+        cost: 0.006,
+        unpricedCalls: 0,
+      },
+      providers: [],
+      alerts: [],
+      diagnosticCalls: 0,
+      checkedAt: new Date().toISOString(),
+      ...overrides.ocrMonitor,
+    }),
   };
 
   const budget = {
     status: async () => ({
       daily: OFF,
       monthly: OFF,
+      // 원장별 지출 (TASK-3001) — 실제 서비스와 같은 모양으로 둔다
+      bySource: {
+        daily: { llm: 0, ocr: 0 },
+        monthly: { llm: 0, ocr: 0 },
+      },
       alertRatio: 0.8,
       checkedAt: new Date().toISOString(),
       ...overrides.budget,
@@ -3526,6 +3556,78 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
         .get("/ops/providers")
         .set("Authorization", "Bearer tok-editor")
         .expect(403);
+    });
+  });
+
+  describe("Enterprise AI Production Operations Platform (TASK-3001)", () => {
+    describe("OCR도 같은 관측·경보 대상이다 (CTO 결정 2901-④)", () => {
+      it("health-check 문구가 OCR 호출 수와 상태를 함께 말한다", async () => {
+        const built = await build();
+        app = built.app;
+
+        const result = await built.checks.run("health-check", "manual");
+        expect(result.detail).toContain("OCR 4건(healthy)");
+      });
+
+      it("OCR 엔진 장애도 provider-failure 경보로 나간다", async () => {
+        // 운영자에게는 "AI 경로가 죽었다"는 같은 사건이다
+        const built = await build({
+          ocrMonitor: {
+            status: "down",
+            providers: [
+              {
+                provider: "google-vision",
+                model: "text-detection",
+                status: "down",
+                calls: 8,
+                successCount: 0,
+                successRate: 0,
+                cost: null,
+                unpricedCalls: 0,
+                latency: null,
+              },
+            ],
+          },
+        });
+        app = built.app;
+
+        const result = await built.checks.run("health-check", "manual");
+        expect(result.notified.map((entry) => entry.key)).toContain(
+          "provider-failure:google-vision",
+        );
+        expect(
+          built.prisma.alerts.get("provider-failure:google-vision")?.status,
+        ).toBe("ACTIVE");
+      });
+
+      it("LLM 장애와 OCR 장애를 한 번에 동기화한다 — 서로를 지우지 않는다", async () => {
+        // 같은 종류를 두 번 sync하면 뒤 호출이 앞의 경보를 해소해 버린다
+        // (TASK-2801에서 배운 형태)
+        const down = (provider: string) => ({
+          provider,
+          model: "m",
+          status: "down",
+          calls: 8,
+          successCount: 0,
+          successRate: 0,
+          cost: null,
+          unpricedCalls: 0,
+          latency: null,
+        });
+        const built = await build({
+          monitor: { status: "down", providers: [down("openai")] },
+          ocrMonitor: { status: "down", providers: [down("google-vision")] },
+        });
+        app = built.app;
+
+        await built.checks.run("health-check", "manual");
+        expect(
+          built.prisma.alerts.get("provider-failure:openai")?.status,
+        ).toBe("ACTIVE");
+        expect(
+          built.prisma.alerts.get("provider-failure:google-vision")?.status,
+        ).toBe("ACTIVE");
+      });
     });
   });
 });

@@ -119,6 +119,10 @@ export default function ProductionOpsPage() {
   const [board, setBoard] = useState<AlertBoardDto | null>(null);
   const [queue, setQueue] = useState<NotificationQueueStatusDto | null>(null);
   const [rollout, setRollout] = useState<ProviderRolloutDto | null>(null);
+  // OCR 관측 (TASK-3001, CTO 결정 2901-④) — LLM과 같은 기준, 다른 표
+  const [ocrMonitor, setOcrMonitor] = useState<ProductionMonitorDto | null>(
+    null,
+  );
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [liveRunning, setLiveRunning] = useState(false);
@@ -152,6 +156,7 @@ export default function ProductionOpsPage() {
         nextBoard,
         nextQueue,
         nextRollout,
+        nextOcrMonitor,
       ] = await Promise.all([
         get<ProviderValidationReportDto>(
           `/llm/providers/validate${live ? "?live=1" : ""}`,
@@ -162,9 +167,14 @@ export default function ProductionOpsPage() {
         get<NotificationQueueStatusDto>("/ops/notifications/queue"),
         // Provider 연결 순서 (TASK-2901)
         get<ProviderRolloutDto>("/ops/providers"),
+        // OCR 관측 (TASK-3001)
+        get<ProductionMonitorDto>("/llm/monitoring/ocr?minutes=60"),
       ]);
       if (nextRollout) {
         setRollout(nextRollout);
+      }
+      if (nextOcrMonitor) {
+        setOcrMonitor(nextOcrMonitor);
       }
       if (nextValidation) {
         setError(null);
@@ -839,6 +849,64 @@ export default function ProductionOpsPage() {
         </section>
       ) : null}
 
+      {ocrMonitor ? (
+        <section
+          data-testid="ocr-monitor"
+          className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-lg font-semibold">OCR 관측</h2>
+            <span
+              data-testid="ocr-monitor-status"
+              className={`rounded-full px-2 py-0.5 text-xs font-medium ${MONITOR_STYLE[ocrMonitor.status]}`}
+            >
+              {MONITOR_LABEL[ocrMonitor.status]}
+            </span>
+            <span className="text-xs text-zinc-500">
+              최근 {ocrMonitor.windowMinutes}분 · 최소 표본 {ocrMonitor.minSamples}건
+            </span>
+          </div>
+          <p className="mt-1 text-sm">
+            호출 {ocrMonitor.totals.calls}건 · 성공률{" "}
+            {percent(ocrMonitor.totals.successRate)} · 비용{" "}
+            {money(ocrMonitor.totals.cost)} · 미산정{" "}
+            {ocrMonitor.totals.unpricedCalls}건
+          </p>
+          {/* 판정 기준은 LLM과 같다 — 엔진에 따라 다를 이유가 없다 */}
+          <p className="mt-1 text-xs text-zinc-500">
+            LLM과 같은 기준으로 판정합니다. 표본이 적으면 판정하지 않습니다
+            (1회 실패로 장애라고 말하지 않습니다).
+          </p>
+
+          {ocrMonitor.providers.length > 0 ? (
+            <ul data-testid="ocr-providers" className="mt-3 space-y-2 text-sm">
+              {ocrMonitor.providers.map((row) => (
+                <li
+                  key={row.provider}
+                  data-testid={`ocr-provider-${row.provider}`}
+                  className="flex flex-wrap items-center gap-2 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
+                >
+                  <span className="font-medium">{row.provider}</span>
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${MONITOR_STYLE[row.status]}`}
+                  >
+                    {MONITOR_LABEL[row.status]}
+                  </span>
+                  <span className="text-xs text-zinc-500">
+                    {row.calls}건 · 성공률 {percent(row.successRate)} · 비용{" "}
+                    {money(row.cost)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p data-testid="ocr-empty" className="mt-3 text-sm text-zinc-500">
+              관측 창 안에 OCR 호출이 없습니다 — 엔진이 멈췄다는 뜻은 아닙니다.
+            </p>
+          )}
+        </section>
+      ) : null}
+
       {cost ? (
         <section
           data-testid="cost-verification"
@@ -863,6 +931,13 @@ export default function ProductionOpsPage() {
           <p className="mt-1 text-sm">
             기록 {money(cost.recordedTotal)} · 재계산 {money(cost.expectedTotal)}{" "}
             · 미산정 {cost.unpricedCalls}건
+          </p>
+          {/*
+            원장별 합계 (TASK-3001, CTO 결정 2901-④) — 예산은 LLM과 OCR을
+            합해서 보지만, 총액만 보여 주면 어디서 늘었는지 알 수 없다.
+          */}
+          <p data-testid="cost-by-source" className="mt-1 text-xs text-zinc-500">
+            LLM {money(cost.bySource.llm)} · OCR {money(cost.bySource.ocr)}
           </p>
 
           {cost.issues.length > 0 ? (

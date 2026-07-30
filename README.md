@@ -522,6 +522,32 @@ TASK-1302가 남긴 두 부채를 갚습니다: **예약 점검의 인스턴스�
 | `POST` | `/ops/backup/verify-restore` | **지금 복원 검증 (ADMIN)** |
 | `POST` | `/ops/notifications/verify-smtp` | **메일 경로 확인 (ADMIN)** |
 
+## Enterprise AI 운영 (비용·관측 편입, TASK-3001, Sprint 30)
+
+CTO 결정 2901-①~④ 반영 — 주제는 **AI 지출을 하나로 보고, OCR도 같은 눈으로
+관측하는 것**입니다.
+
+- **예산은 "LLM 지출"이 아니라 "AI 지출 총액"입니다**(결정 2901-④): OCR도
+  호출당 과금되는 AI 호출이므로 같은 상한 안에 들어옵니다. 그러지 않으면 실
+  OCR 엔진을 붙인 순간부터 **예산 밖에서 돈이 나갑니다.** 원장은 성격대로
+  둘(LLM Execution · OCR 실행 이력)로 유지하고 **지출만 합칩니다**
+- **예산을 넘기면 OCR도 막힙니다**: LLM과 같은 관문(호출 전 검사·429·기록
+  없음)이고, **무엇이 막혔는지** 문구가 말합니다
+- **단가는 코드 선언 중앙 정의**(`DEFAULT_OCR_PRICING`): `google-vision`은
+  1,000단위당 $1.50. **무료 구간은 반영하지 않습니다** — 빼면 예산이 낙관적으로
+  보이고, 남은 무료 구간을 우리가 알 수 없습니다
+- **비용 문제를 네 가지로 가릅니다**: `unpriced`(가격표 없음 — 상한 무력) ·
+  **`unrecorded`(산정 가능했는데 기록 없음)** · `mismatch` · `missing-usage`.
+  `null`을 0으로 보고 "기록 $0"이라 말하면 기록된 값이 다르다는 뜻이 되어
+  사실과 어긋납니다
+- **관측은 같은 기준, 표는 따로**: OCR 성공률·지연·비용을 LLM과 같은 판정
+  함수로 보되 같은 표에 섞지 않습니다(토큰·Failover 통계를 흐립니다).
+  **장애 경보는 같은 종류**입니다 — 운영자에게는 "AI 경로가 죽었다"는 같은 사건
+- **완료 판정은 `/ops/providers`의 `connected`**(결정 2901-①) · **OCR 운영
+  표준은 Google Cloud Vision**(결정 2901-②) · **근거 기한 30일**(결정 2901-③)
+
+절차: [provider-rollout.md](docs/operations/provider-rollout.md) §4
+
 ## Enterprise AI Provider 운영 연결 (TASK-2901, Sprint 29)
 
 CTO 결정 2801-①~⑤ 반영 — 주제는 **실 Provider를 순서대로 붙이고, 붙었는지를

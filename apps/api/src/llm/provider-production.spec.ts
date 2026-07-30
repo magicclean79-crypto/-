@@ -26,11 +26,23 @@ interface ExecutionRow {
 interface FindManyArgs {
   where?: {
     createdAt?: { gte?: Date };
-    status?: string;
+    status?: string | { in: string[] };
     diagnostic?: boolean;
     feature?: string;
     provider?: { not?: string };
   };
+}
+
+/** OCR 실행 이력 표본 (TASK-3001) */
+interface OcrRow {
+  id: string;
+  provider: string;
+  status: "SUCCESS" | "FAILED" | "RUNNING";
+  units: number;
+  cost: number | null;
+  startedAt: Date | null;
+  completedAt: Date | null;
+  createdAt: Date;
 }
 
 const ORIGINAL_ENV = { ...process.env };
@@ -44,10 +56,13 @@ async function build(options: {
   llmSuccesses?: Record<string, number>;
   visionSuccesses?: number;
   ocrSuccesses?: Record<string, number>;
+  /** OCR 실행 이력 (비용 검증·관측용) */
+  ocrRows?: OcrRow[];
 }) {
   const calls: FindManyArgs[] = [];
   const countCalls: FindManyArgs[] = [];
   const groupByCalls: FindManyArgs[] = [];
+  const ocrFindManyCalls: FindManyArgs[] = [];
   /**
    * groupBy는 **조건을 실제로 본다** (TASK-2901): mock 제외·SUCCESS 조건을
    * 무시하면 "실패한 호출도 연결 근거로 세는" 결함이 검증되지 않는다.
@@ -82,6 +97,25 @@ async function build(options: {
         groupByCalls.push(args);
         return groupOf(options.ocrSuccesses ?? {}, args);
       },
+      /**
+       * OCR 비용 검증·관측이 읽는다 (TASK-3001) — **조건을 실제로 본다**:
+       * 무시하면 실패한 실행을 비용 검증에 넣거나, 아직 돌고 있는 실행을
+       * 성공률 판정에 섞는 결함이 검증되지 않는다.
+       */
+      findMany: async (args: FindManyArgs) => {
+        ocrFindManyCalls.push(args);
+        const rows = options.ocrRows ?? [];
+        const status = args.where?.status;
+        return rows.filter((row) => {
+          if (typeof status === "string") {
+            return row.status === status;
+          }
+          if (status && Array.isArray(status.in)) {
+            return status.in.includes(row.status);
+          }
+          return true;
+        });
+      },
     },
   };
   const llm = {
@@ -113,6 +147,23 @@ async function build(options: {
     calls,
     countCalls,
     groupByCalls,
+    ocrFindManyCalls,
+  };
+}
+
+/** OCR 실행 1건 */
+function ocrRow(overrides: Partial<OcrRow> = {}): OcrRow {
+  const now = new Date();
+  return {
+    id: "o-1",
+    provider: "google-vision",
+    status: "SUCCESS",
+    units: 1,
+    cost: 0.0015,
+    startedAt: new Date(now.getTime() - 300),
+    completedAt: now,
+    createdAt: now,
+    ...overrides,
   };
 }
 
@@ -410,6 +461,104 @@ describe("Provider Production API (TASK-1301)", () => {
       const payload = JSON.stringify(await service.rollout());
       expect(payload).not.toContain(OPENAI_KEY);
       expect(payload).not.toContain(GOOGLE_KEY);
+    });
+  });
+
+  describe("OCR 비용·관측 편입 (TASK-3001, CTO 결정 2901-④)", () => {
+    it("비용 검증이 LLM과 OCR을 합해 보고하고, 원장별로 밝힌다", async () => {
+      const { service } = await build({
+        rows: [
+          {
+            provider: "openai",
+            model: "gpt-4o",
+            status: "SUCCESS",
+            inputTokens: 1000,
+            outputTokens: 500,
+            cost: 0.0075,
+            createdAt: new Date(),
+          },
+        ],
+        ocrRows: [ocrRow(), ocrRow({ id: "o-2" })],
+      });
+
+      const result = await service.verifyCost({ hours: 24 });
+      expect(result.checked).toBe(3); // LLM 1 + OCR 2
+      expect(result.bySource).toEqual({ llm: 0.0075, ocr: 0.003 });
+      expect(result.recordedTotal).toBe(0.0105);
+      expect(result.ok).toBe(true);
+      // OCR 단가표도 함께 보여 준다
+      expect(result.ocrPricing.map((row) => row.provider)).toContain(
+        "google-vision",
+      );
+    });
+
+    it("가격표에 없는 OCR 엔진은 미산정으로 보고한다", async () => {
+      const { service } = await build({
+        ocrRows: [ocrRow({ provider: "clova", cost: null })],
+      });
+
+      const result = await service.verifyCost({ hours: 24 });
+      expect(result.ok).toBe(false);
+      expect(result.unpricedCalls).toBe(1);
+      expect(
+        result.issues.find((issue) => issue.provider === "clova")?.message,
+      ).toContain("예산 상한이 적용되지 않습니다");
+    });
+
+    it("비용 검증은 성공한 OCR 실행만 본다", async () => {
+      // 실패한 호출을 비용으로 세면 나가지 않은 돈이 지출로 잡힌다
+      const { service, ocrFindManyCalls } = await build({
+        ocrRows: [ocrRow(), ocrRow({ id: "o-2", status: "FAILED", cost: null })],
+      });
+
+      const result = await service.verifyCost({ hours: 24 });
+      expect(result.checked).toBe(1);
+      expect(ocrFindManyCalls[0].where?.status).toBe("SUCCESS");
+    });
+
+    it("OCR 관측은 LLM과 같은 판정 함수를 쓴다", async () => {
+      const { service } = await build({
+        ocrRows: [
+          ocrRow(),
+          ocrRow({ id: "o-2" }),
+          ocrRow({ id: "o-3", status: "FAILED", cost: null }),
+        ],
+      });
+
+      const monitor = await service.monitorOcr({ minutes: 60 });
+      expect(monitor.totals.calls).toBe(3);
+      expect(monitor.totals.successCount).toBe(2);
+      expect(monitor.providers[0].provider).toBe("google-vision");
+      // OCR에는 진단 호출 개념이 없다
+      expect(monitor.diagnosticCalls).toBe(0);
+    });
+
+    it("아직 돌고 있는 실행은 성공률 판정에 섞지 않는다", async () => {
+      const { service, ocrFindManyCalls } = await build({
+        ocrRows: [ocrRow(), ocrRow({ id: "o-2", status: "RUNNING", cost: null })],
+      });
+
+      const monitor = await service.monitorOcr({ minutes: 60 });
+      expect(monitor.totals.calls).toBe(1);
+      expect(
+        (ocrFindManyCalls.at(-1)!.where?.status as { in: string[] }).in.sort(),
+      ).toEqual(["FAILED", "SUCCESS"]);
+    });
+
+    it("소요 시간은 시작~완료로 센다", async () => {
+      const completedAt = new Date();
+      const { service } = await build({
+        ocrRows: Array.from({ length: 5 }, (_, index) =>
+          ocrRow({
+            id: `o-${index}`,
+            startedAt: new Date(completedAt.getTime() - 250),
+            completedAt,
+          }),
+        ),
+      });
+
+      const monitor = await service.monitorOcr({ minutes: 60 });
+      expect(monitor.providers[0].latency?.p50).toBe(250);
     });
   });
 });

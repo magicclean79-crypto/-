@@ -611,15 +611,27 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
       };
     }
 
-    // health-check — 이미 쌓인 Execution으로 판정한다 (새 호출을 만들지 않는다)
-    const monitor = await this.production.monitor({ minutes: 60 });
-    const detected = detectProviderAlerts(monitor.providers);
+    // health-check — 이미 쌓인 Execution으로 판정한다 (새 호출을 만들지 않는다).
+    // **OCR도 같은 판정을 받는다** (TASK-3001, CTO 결정 2901-④): OCR 엔진이
+    // 죽은 것도 운영자에게는 "AI 경로가 죽었다"는 같은 사건이다.
+    const [monitor, ocrMonitor] = await Promise.all([
+      this.production.monitor({ minutes: 60 }),
+      this.production.monitorOcr({ minutes: 60 }),
+    ]);
+    // **한 번에 동기화한다** — 같은 종류를 두 번 부르면 뒤 호출이 앞의 경보를
+    // "이번에 감지되지 않았다"며 해소한다 (TASK-2801에서 배운 형태)
+    const detected = [
+      ...detectProviderAlerts(monitor.providers),
+      ...detectProviderAlerts(ocrMonitor.providers),
+    ];
     const notified = await this.alerts.sync(JOB_ALERT_KINDS[job], detected);
     return {
       ok: detected.length === 0,
       detail:
         `상태 ${monitor.status} · 호출 ${monitor.totals.calls}건 · ` +
-        `Provider ${monitor.providers.length}개 · 경보 ${detected.length}건`,
+        `Provider ${monitor.providers.length}개 · ` +
+        `OCR ${ocrMonitor.totals.calls}건(${ocrMonitor.status}) · ` +
+        `경보 ${detected.length}건`,
       notified,
     };
   }

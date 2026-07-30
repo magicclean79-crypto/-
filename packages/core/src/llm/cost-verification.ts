@@ -1,4 +1,10 @@
 import { DEFAULT_LLM_PRICING, estimateLlmCost } from "../execution/execution";
+import {
+  DEFAULT_OCR_PRICING,
+  OCR_UNIT_MODEL,
+  estimateOcrCost,
+} from "../ocr/ocr-pricing";
+import type { OcrUnitPrice } from "../ocr/ocr-pricing";
 
 /**
  * Cost Verification. (TASK-1301, Sprint 13)
@@ -25,7 +31,18 @@ export interface CostSample {
   createdAt: string;
 }
 
-export type CostIssueKind = "unpriced" | "mismatch" | "missing-usage";
+export type CostIssueKind =
+  | "unpriced"
+  | "mismatch"
+  | "missing-usage"
+  /**
+   * 산정할 수 있었는데 **비용이 기록되지 않았다** (TASK-3001).
+   *
+   * `null`을 0으로 보고 "기록 $0 vs 기대 $0.003"이라고 말하면 **기록된 값이
+   * 다르다**는 뜻이 되어 사실과 어긋납니다 — 기록이 없는 것과 0이 기록된 것은
+   * 다릅니다. 라이브 검증에서 이 문구가 오해를 만드는 것을 확인해 갈랐습니다.
+   */
+  | "unrecorded";
 
 export interface CostIssue {
   kind: CostIssueKind;
@@ -73,6 +90,7 @@ export function verifyCosts(
   const unpriced = new Map<string, CostSample[]>();
   const mismatched = new Map<string, CostSample[]>();
   const missingUsage = new Map<string, CostSample[]>();
+  const unrecorded = new Map<string, CostSample[]>();
 
   let recordedTotal = 0;
   let expectedTotal = 0;
@@ -102,12 +120,46 @@ export function verifyCosts(
     }
 
     expectedTotal += expected;
-    if (Math.abs((sample.cost ?? 0) - expected) > TOLERANCE) {
+    if (sample.cost === null) {
+      // 기록이 없는 것과 0이 기록된 것은 다르다 (TASK-3001)
+      unrecorded.set(key, [...(unrecorded.get(key) ?? []), sample]);
+      continue;
+    }
+    if (Math.abs(sample.cost - expected) > TOLERANCE) {
       mismatched.set(key, [...(mismatched.get(key) ?? []), sample]);
     }
   }
 
   const issues: CostIssue[] = [];
+
+  for (const [key, group] of unrecorded) {
+    const [provider, model] = key.split("|");
+    issues.push({
+      kind: "unrecorded",
+      provider,
+      model,
+      count: group.length,
+      message:
+        "산정할 수 있는 호출인데 비용이 기록되지 않았습니다 — 이 기능을 켜기 전의 " +
+        "실행이거나 기록이 실패한 경우입니다. 예산 합계에서 빠집니다.",
+      sampleIds: group.slice(0, 3).map((sample) => sample.id),
+      expectedTotal: round(
+        group.reduce(
+          (sum, sample) =>
+            sum +
+            (estimateLlmCost(
+              sample.model,
+              {
+                inputTokens: sample.inputTokens,
+                outputTokens: sample.outputTokens,
+              },
+              pricing,
+            ) ?? 0),
+          0,
+        ),
+      ),
+    });
+  }
 
   for (const [key, group] of unpriced) {
     const [provider, model] = key.split("|");
@@ -182,4 +234,129 @@ export function pricedModels(
     model,
     ...price,
   }));
+}
+
+// ── OCR 비용 검증 (TASK-3001, CTO 결정 2901-④) ─────────────
+
+/** OCR 실행 1건의 비용 표본 */
+export interface OcrCostSample {
+  /** OCR 실행 식별자 (보고용) */
+  id: string;
+  provider: string;
+  /** 과금 단위 수 (이미지 1장 = 1) */
+  units: number;
+  /** 기록된 비용 (USD) — null이면 미산정 */
+  cost: number | null;
+  createdAt: string;
+}
+
+/**
+ * OCR 비용을 가격표로 재계산해 검증한다 (순수 함수).
+ *
+ * LLM 검증과 **같은 결과 모양**을 돌려줍니다 — 화면과 경보가 둘을 같은
+ * 방식으로 다뤄야 하고(결정 2901-④: 동일하게 편입), 모양이 갈라지면 한쪽만
+ * 보이는 사각이 생깁니다.
+ *
+ * `missing-usage`는 없습니다 — OCR은 토큰이 아니라 단위 수로 세고, 단위 수는
+ * 항상 있습니다. 대신 **가격표에 없는 Provider**가 미산정입니다: 그 상태에서는
+ * 비용이 예산 계산에서 빠지므로 상한이 조용히 무력해집니다.
+ */
+export function verifyOcrCosts(
+  samples: OcrCostSample[],
+  pricing: Record<string, OcrUnitPrice> = DEFAULT_OCR_PRICING,
+): CostVerificationResult {
+  const unpriced = new Map<string, OcrCostSample[]>();
+  const mismatched = new Map<string, OcrCostSample[]>();
+  const unrecorded = new Map<string, OcrCostSample[]>();
+
+  let recordedTotal = 0;
+  let expectedTotal = 0;
+  let unpricedCalls = 0;
+
+  for (const sample of samples) {
+    recordedTotal += sample.cost ?? 0;
+    const expected = estimateOcrCost(sample.provider, sample.units, pricing);
+    const key = sample.provider;
+
+    if (expected === null) {
+      unpricedCalls += 1;
+      unpriced.set(key, [...(unpriced.get(key) ?? []), sample]);
+      continue;
+    }
+
+    expectedTotal += expected;
+    if (sample.cost === null) {
+      // 기록이 없는 것과 0이 기록된 것은 다르다 (TASK-3001)
+      unrecorded.set(key, [...(unrecorded.get(key) ?? []), sample]);
+      continue;
+    }
+    if (Math.abs(sample.cost - expected) > TOLERANCE) {
+      mismatched.set(key, [...(mismatched.get(key) ?? []), sample]);
+    }
+  }
+
+  const issues: CostIssue[] = [];
+
+  for (const [provider, group] of unrecorded) {
+    issues.push({
+      kind: "unrecorded",
+      provider,
+      model: OCR_UNIT_MODEL,
+      count: group.length,
+      message:
+        "산정할 수 있는 OCR 실행인데 비용이 기록되지 않았습니다 — 비용 편입 " +
+        "이전의 실행이거나 기록이 실패한 경우입니다. 예산 합계에서 빠집니다.",
+      sampleIds: group.slice(0, 3).map((sample) => sample.id),
+      expectedTotal: round(
+        group.reduce(
+          (sum, sample) =>
+            sum + (estimateOcrCost(sample.provider, sample.units, pricing) ?? 0),
+          0,
+        ),
+      ),
+    });
+  }
+
+  for (const [provider, group] of unpriced) {
+    issues.push({
+      kind: "unpriced",
+      provider,
+      model: OCR_UNIT_MODEL,
+      count: group.length,
+      message:
+        "가격표에 없는 OCR 엔진입니다 — 비용이 집계되지 않아 예산 상한이 " +
+        `적용되지 않습니다. DEFAULT_OCR_PRICING에 ${provider} 단가를 등록하세요.`,
+      sampleIds: group.slice(0, 3).map((sample) => sample.id),
+    });
+  }
+
+  for (const [provider, group] of mismatched) {
+    const recorded = group.reduce((sum, sample) => sum + (sample.cost ?? 0), 0);
+    const expected = group.reduce(
+      (sum, sample) =>
+        sum + (estimateOcrCost(sample.provider, sample.units, pricing) ?? 0),
+      0,
+    );
+    issues.push({
+      kind: "mismatch",
+      provider,
+      model: OCR_UNIT_MODEL,
+      count: group.length,
+      message:
+        "기록된 OCR 비용이 가격표 재계산과 다릅니다 — 단가가 바뀌었거나 기록 " +
+        `시점 가격표가 달랐을 수 있습니다 (기록 $${round(recorded)} vs 기대 $${round(expected)}).`,
+      sampleIds: group.slice(0, 3).map((sample) => sample.id),
+      recordedTotal: round(recorded),
+      expectedTotal: round(expected),
+    });
+  }
+
+  return {
+    ok: issues.length === 0,
+    checked: samples.length,
+    unpricedCalls,
+    recordedTotal: round(recordedTotal),
+    expectedTotal: round(expectedTotal),
+    issues,
+  };
 }

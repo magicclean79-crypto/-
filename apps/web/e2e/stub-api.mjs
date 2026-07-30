@@ -2245,7 +2245,9 @@ const server = http.createServer((req, res) => {
   if (
     url.pathname === "/llm/providers/validate" ||
     url.pathname === "/llm/cost-verification" ||
-    url.pathname === "/llm/monitoring"
+    url.pathname === "/llm/monitoring" ||
+    // OCR 관측 (TASK-3001, CTO 결정 2901-④)
+    url.pathname === "/llm/monitoring/ocr"
   ) {
     if (req.headers.authorization !== "Bearer stub-token") {
       res.statusCode = req.headers.authorization ? 403 : 401;
@@ -2331,10 +2333,68 @@ const server = http.createServer((req, res) => {
                   sampleIds: ["exec-1", "exec-2", "exec-3"],
                 },
               ],
+          // 원장별 합계 (TASK-3001) — 예산은 LLM+OCR을 합해서 본다
+          bySource: healthy
+            ? { llm: 0.181213, ocr: 0.003 }
+            : { llm: 0, ocr: 0 },
           pricing: [
             { model: "gpt-4o", inputPerMillion: 2.5, outputPerMillion: 10 },
             { model: "claude-sonnet-5", inputPerMillion: 3, outputPerMillion: 15 },
           ],
+          ocrPricing: [
+            {
+              provider: "google-vision",
+              perUnitUsd: 0.0015,
+              note: "TEXT_DETECTION 1,000단위당 $1.50 (공개 단가) — 무료 구간은 반영하지 않습니다",
+            },
+            { provider: "mock", perUnitUsd: 0, note: "가짜 엔진 — 외부 호출이 없어 과금 0" },
+          ],
+          checkedAt: new Date().toISOString(),
+        }),
+      );
+      return;
+    }
+
+    // OCR 관측 — LLM과 같은 판정 기준, 다른 표 (TASK-3001)
+    if (url.pathname === "/llm/monitoring/ocr") {
+      res.end(
+        JSON.stringify({
+          status: healthy ? "healthy" : "down",
+          windowMinutes: Number(url.searchParams.get("minutes")) || 60,
+          minSamples: 5,
+          totals: {
+            calls: healthy ? 12 : 8,
+            successCount: healthy ? 12 : 0,
+            failedCount: healthy ? 0 : 8,
+            successRate: healthy ? 1 : 0,
+            cost: healthy ? 0.018 : null,
+            unpricedCalls: healthy ? 0 : 8,
+          },
+          providers: [
+            {
+              provider: "google-vision",
+              model: "text-detection",
+              status: healthy ? "healthy" : "down",
+              calls: healthy ? 12 : 8,
+              successCount: healthy ? 12 : 0,
+              successRate: healthy ? 1 : 0,
+              cost: healthy ? 0.018 : null,
+              unpricedCalls: healthy ? 0 : 8,
+              latency: healthy
+                ? { p50: 240, p95: 520, p99: 610, max: 640 }
+                : null,
+            },
+          ],
+          alerts: healthy
+            ? []
+            : [
+                {
+                  level: "critical",
+                  provider: "google-vision",
+                  message: "OCR 엔진 성공률 0% — 키·할당량·Google 장애를 확인하세요.",
+                },
+              ],
+          diagnosticCalls: 0,
           checkedAt: new Date().toISOString(),
         }),
       );

@@ -120,7 +120,14 @@ model OcrResult {
   imageId       String
   provider      String
   status        OcrStatus @default(PENDING)
-  confidence    Float? // 0.0 ~ 1.0
+  // 0.0 ~ 1.0 — **Provider가 주지 않으면 null**(TASK-2901): 1.0은 "확신한다"는
+  // 거짓이고 0은 실패처럼 읽힌다. 모른다는 사실이 뒤까지 전달되어야 한다.
+  confidence    Float?
+  // 예상 비용(USD) — 가격표에 없는 엔진은 null (TASK-3001, CTO 결정 2901-④).
+  // null은 "공짜"가 아니라 "모른다"다: 예산 계산에서 빠지므로 미산정 경보 대상.
+  cost          Decimal?  @db.Decimal(12, 6)
+  // 과금 단위 수 (이미지 1장 · 검사 1종 = 1)
+  units         Int       @default(1)
   extractedText String?
   rawJson       Json? // Provider 원본 응답
   error         String?
@@ -132,6 +139,8 @@ model OcrResult {
 
   @@index([imageId])
   @@index([status])
+  // 일·월 예산 집계가 기간으로 자른다 (TASK-3001)
+  @@index([createdAt])
   @@map("ocr_results")
 }
 

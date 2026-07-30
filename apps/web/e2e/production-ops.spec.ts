@@ -325,3 +325,42 @@ test.describe("Provider 연결 순서 (TASK-2901, CTO 결정 2801-⑤)", () => {
     );
   });
 });
+
+test.describe("OCR 비용·관측 편입 (TASK-3001, CTO 결정 2901-④)", () => {
+  test("OCR을 LLM과 같은 기준으로 관측해 보여준다", async ({ page }) => {
+    await setMode("data");
+    await openPage(page);
+
+    const section = page.getByTestId("ocr-monitor");
+    await expect(section).toBeVisible();
+    await expect(page.getByTestId("ocr-monitor-status")).toHaveText("정상");
+    await expect(section).toContainText("호출 12건");
+    await expect(section).toContainText("성공률 100.0%");
+    // 판정 기준이 LLM과 같다는 사실을 화면이 말한다
+    await expect(section).toContainText("LLM과 같은 기준으로 판정합니다");
+    await expect(page.getByTestId("ocr-provider-google-vision")).toContainText(
+      "google-vision",
+    );
+  });
+
+  test("OCR 엔진 장애를 장애로 보여준다", async ({ page }) => {
+    // 스텁의 "정상이 아닌" 모드 (mode !== "data")
+    await setMode("empty");
+    await openPage(page);
+
+    await expect(page.getByTestId("ocr-monitor-status")).toHaveText("장애");
+    await expect(page.getByTestId("ocr-provider-google-vision")).toContainText(
+      "성공률 0.0%",
+    );
+  });
+
+  test("비용을 원장별로 밝힌다 — 예산은 합해서 보되 출처를 감추지 않는다", async ({
+    page,
+  }) => {
+    await setMode("data");
+    await openPage(page);
+
+    await expect(page.getByTestId("cost-by-source")).toContainText("LLM $0.181213");
+    await expect(page.getByTestId("cost-by-source")).toContainText("OCR $0.003000");
+  });
+});
