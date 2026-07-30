@@ -17,6 +17,7 @@ import {
   LlmValidationError,
   pickVariant,
   ProviderHealthTracker,
+  resolveCallTarget,
   resolveRoute,
   validateLlmRequest,
   withTimeout,
@@ -146,6 +147,14 @@ export class LlmService {
                 pricing: async () => (await pricingService.effective()).llm,
               }
             : {}),
+          // 호출 대상을 **그 자리에서** 남긴다 (TASK-3501, CTO 정책 3501-④).
+          // 나중에 환경변수를 다시 읽어 추정하면 그 사이에 설정이 바뀐 경우
+          // 과거를 잘못 설명하게 되고, 그 설명이 전환 판정의 근거가 된다.
+          callTarget: (provider) =>
+            resolveCallTarget(
+              provider,
+              process.env as Record<string, string | undefined>,
+            ),
         })
       : null;
   }

@@ -2301,6 +2301,13 @@ export interface ProductionCutoverDto {
   /** 성공 기록을 근거로 인정하는 기한 (일) */
   evidenceWindowDays: number;
   /**
+   * 이 환경에서 전환을 **해야 하는가** (TASK-3501, CTO 정책 3501-①).
+   * 실 Provider 전환은 운영·Staging에서 수행한다. 개발에서 상시 빨간색을
+   * 띄우면 사람은 정작 운영의 빨간색도 무시하게 된다.
+   */
+  applicable: boolean;
+  environment: string;
+  /**
    * 공식 주소 도달 점검 (TASK-3501) — 비어 있으면 점검하지 않은 것이다.
    * 인증 실패(401·403)도 **닿은 것**으로 본다: 우리가 보는 것은 길이지
    * 권한이 아니다.

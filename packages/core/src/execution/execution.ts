@@ -38,6 +38,19 @@ export interface NewExecution {
    * 메타데이터 한 칸으로 구분해, 운영 통계에서 분리하되 이력에는 남긴다.
    */
   diagnostic?: boolean;
+  /**
+   * 실제 호출 대상 (TASK-3501, CTO 정책 3501-④·⑤).
+   *
+   * **호출하는 그 자리에서** 남깁니다. 나중에 환경변수를 다시 읽어 추정하면,
+   * 그 사이에 설정이 바뀐 경우 과거를 잘못 설명하게 됩니다 — 그리고 그
+   * 잘못된 설명이 "전환 완료" 판정의 근거가 됩니다(TASK-3501에서 실제로
+   * 그럴 뻔했습니다).
+   *
+   * 모르면 `null`입니다. **null은 "공식 주소였다"가 아니라 "모른다"** 입니다.
+   */
+  endpoint?: string | null;
+  baseUrl?: string | null;
+  calledAt?: Date | null;
 }
 
 /** Execution Domain 모델 — 저장소와 무관한 순수 표현 */
@@ -132,6 +145,17 @@ export interface ExecutionTrackerOptions {
   /** 기록 실패 훅 (로깅용) — 기록 실패는 호출을 실패시키지 않는다 */
   onRecordError?: (error: string) => void;
   pricing?: LlmPricingSource;
+  /**
+   * 호출 대상 해석기 (TASK-3501, CTO 정책 3501-④).
+   *
+   * core는 환경변수를 읽지 않습니다 — 어댑터가 "지금 이 Provider를 부르면
+   * 어디로 가는가"를 알려 줍니다. 주지 않으면 기록에 남지 않고, 그때 판정은
+   * **모른다**로 셉니다(공식이었다고 세지 않습니다).
+   */
+  callTarget?: (provider: string) => {
+    endpoint: string | null;
+    baseUrl: string | null;
+  } | null;
 }
 
 export interface TrackedLlmResult {
@@ -149,6 +173,7 @@ export class ExecutionTracker {
   private readonly now: () => number;
   private readonly onRecordError?: (error: string) => void;
   private readonly pricing: LlmPricingSource;
+  private readonly callTarget?: ExecutionTrackerOptions["callTarget"];
 
   constructor(
     private readonly store: ExecutionStore,
@@ -157,6 +182,17 @@ export class ExecutionTracker {
     this.now = options.now ?? Date.now;
     this.onRecordError = options.onRecordError;
     this.pricing = options.pricing ?? DEFAULT_LLM_PRICING;
+    this.callTarget = options.callTarget;
+  }
+
+  /** 호출 대상 — 모르면 세 칸 모두 null (모르는 것을 지어내지 않는다) */
+  private target(provider: string, calledAt: number) {
+    const resolved = this.callTarget?.(provider) ?? null;
+    return {
+      endpoint: resolved?.endpoint ?? null,
+      baseUrl: resolved?.baseUrl ?? null,
+      calledAt: new Date(calledAt),
+    };
   }
 
   /**
@@ -198,6 +234,8 @@ export class ExecutionTracker {
         latencyMs: this.now() - startedAt,
         error: null,
         diagnostic,
+        // 성공한 호출이 **누구를 상대로** 이뤄졌는지 남긴다 (정책 3501-④)
+        ...this.target(result.provider, startedAt),
       });
       return result;
     } catch (error) {
@@ -212,6 +250,7 @@ export class ExecutionTracker {
         latencyMs: this.now() - startedAt,
         error: error instanceof Error ? error.message : String(error),
         diagnostic,
+        ...this.target(fallback.provider, startedAt),
       });
       throw error;
     }

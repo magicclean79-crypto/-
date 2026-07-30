@@ -638,6 +638,22 @@ export default function ProductionOpsPage() {
             </span>
           </div>
           <p className="mt-1 text-sm text-zinc-500">{cutover.detail}</p>
+          {/*
+            전환은 운영·Staging에서 한다 (TASK-3501, CTO 정책 3501-①).
+            개발에서 상시 빨간색을 띄우면 사람은 그 빨간색을 무시하게 되고,
+            정작 운영에서 떴을 때도 무시한다. 판정은 감추지 않고, 이 환경이
+            대상이 아니라는 사실만 함께 말한다.
+          */}
+          {!cutover.applicable ? (
+            <p
+              data-testid="cutover-not-applicable"
+              className="mt-1 text-xs text-zinc-500"
+            >
+              이 환경({cutover.environment})은 전환 대상이 아닙니다 — 실 Provider
+              전환은 운영·Staging에서 수행합니다 (CTO 정책 3501-①). 아래는
+              참고용 판정입니다.
+            </p>
+          ) : null}
           <p className="mt-1 text-xs text-zinc-500">
             성공 기록은 최근 {cutover.evidenceWindowDays}일까지만 근거로
             인정합니다 — 오래전 한 번의 성공으로 지금도 붙어 있다고 말할 수
@@ -649,7 +665,7 @@ export default function ProductionOpsPage() {
             항목 넷을 나란히 두면 사람은 "그래서 뭐부터?"에서 멈춘다.
             남은 것 중 첫 번째를 골라 크게 보여 준다.
           */}
-          {!cutover.ready ? (
+          {!cutover.ready && cutover.applicable ? (
             <div
               data-testid="cutover-next"
               className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm dark:border-amber-900 dark:bg-amber-950"

@@ -1,5 +1,10 @@
 import { judgeCiRuns, judgeCiWorkflow } from "./ci-workflow";
-import { judgeEndpointOrigin, judgeProductionCutover } from "./production-cutover";
+import {
+  isOfficialCall,
+  judgeEndpointOrigin,
+  judgeProductionCutover,
+  resolveCallTarget,
+} from "./production-cutover";
 import type { CutoverInput } from "./production-cutover";
 
 /**
@@ -49,8 +54,9 @@ const REAL: CutoverInput = {
     S3_ACCESS_KEY: "AKIAREAL",
     S3_SECRET_KEY: "secret",
   },
-  llmSuccesses: { openai: 12 },
-  ocrSuccesses: { "google-vision": 4 },
+  // 공식 주소로 만들어진 성공 기록 (TASK-3501, 정책 3501-⑤)
+  llmSuccesses: { openai: { official: 12, total: 12 } },
+  ocrSuccesses: { "google-vision": { official: 4, total: 4 } },
   storage: { reachable: true, bucketExists: true, detail: "버킷 acos-prod 확인" },
   ci: OK_CI,
   egress: [],
@@ -199,7 +205,7 @@ describe("공식 주소 도달 점검 (TASK-3501)", () => {
 
 describe("운영 전환 판정 (TASK-3401)", () => {
   it("네 항목이 모두 실 연결이면 전환이 끝난 것이다", () => {
-    const report = judgeProductionCutover(REAL);
+    const report = judgeProductionCutover({ ...REAL, environment: "production" });
     expect(report.ready).toBe(true);
     expect(report.summary).toEqual({ verified: 4, total: 4 });
   });
@@ -386,6 +392,99 @@ describe("운영 전환 판정 (TASK-3401)", () => {
         "ci",
       );
       expect(view.status).toBe("invalid");
+    });
+  });
+});
+
+/**
+ * 승인된 정책 3501-①·④·⑤ (TASK-3501 이어서).
+ *
+ * ⑤가 핵심이다: **`verified` 판정은 실제 호출 대상 정보를 근거로 한다.**
+ * "성공했다"만으로는 누구를 상대로 성공했는지 알 수 없고, 그 빈 곳이 라이브
+ * 검증에서 "전환 완료"라는 거짓 판정을 만들 뻔했다.
+ */
+describe("호출 대상을 근거로 하는 판정 (CTO 정책 3501-④·⑤)", () => {
+  it("공식 주소로 부른 성공만 근거가 된다", () => {
+    const view = dep(
+      { ...REAL, llmSuccesses: { openai: { official: 3, total: 9 } } },
+      "llm",
+    );
+    expect(view.status).toBe("verified");
+    expect(view.evidence).toContain("공식 주소");
+    expect(view.evidence).toContain("3건");
+  });
+
+  it("성공은 있는데 공식 주소로 만든 것이 없으면 통과가 아니다", () => {
+    const view = dep(
+      { ...REAL, llmSuccesses: { openai: { official: 0, total: 7 } } },
+      "llm",
+    );
+    expect(view.status).toBe("unverified");
+    expect(view.detail).toContain("공식 주소로 만들어진 것은 없습니다");
+    expect(view.evidence).toBeNull();
+  });
+
+  it("OCR도 같다", () => {
+    const view = dep(
+      { ...REAL, ocrSuccesses: { "google-vision": { official: 0, total: 22 } } },
+      "vision",
+    );
+    expect(view.status).toBe("unverified");
+    expect(view.detail).toContain("22건");
+  });
+
+  describe("호출 대상 해석 (정책 3501-④)", () => {
+    it("재정의가 없으면 공식 주소를 기록한다", () => {
+      const target = resolveCallTarget("openai", {});
+      expect(target.baseUrl).toBe("https://api.openai.com");
+    });
+
+    it("재정의가 있으면 그것을 기록한다", () => {
+      const target = resolveCallTarget("openai", {
+        OPENAI_BASE_URL: "http://localhost:9300/v1",
+      });
+      expect(target.endpoint).toBe("http://localhost:9300/v1");
+      expect(target.baseUrl).toBe("http://localhost:9300");
+    });
+
+    it("Vision 엔드포인트도 같은 방식이다", () => {
+      const target = resolveCallTarget("google-vision", {
+        GOOGLE_VISION_ENDPOINT: "http://127.0.0.1:9100/v1/images:annotate",
+      });
+      expect(target.baseUrl).toBe("http://127.0.0.1:9100");
+    });
+
+    it("모르는 Provider는 지어내지 않는다", () => {
+      expect(resolveCallTarget("llama", {}).baseUrl).toBeNull();
+    });
+
+    it("기록이 없으면 공식으로 세지 않는다 — null은 모른다는 뜻이다", () => {
+      expect(isOfficialCall("openai", null)).toBe(false);
+      expect(isOfficialCall("openai", "")).toBe(false);
+      expect(isOfficialCall("openai", "https://api.openai.com")).toBe(true);
+      expect(isOfficialCall("openai", "http://localhost:9300")).toBe(false);
+    });
+  });
+
+  describe("전환 대상 환경 (정책 3501-①)", () => {
+    it("개발에서는 전환 대상이 아니라고 말한다", () => {
+      const report = judgeProductionCutover({ ...REAL, environment: "development" });
+      expect(report.applicable).toBe(false);
+      expect(report.detail).toContain("전환 대상이 아닙니다");
+      // 판정 자체는 감추지 않는다 — 참고용으로 그대로 둔다
+      expect(report.summary.verified).toBe(4);
+    });
+
+    it("운영·Staging은 전환 대상이다", () => {
+      for (const environment of ["production", "staging"]) {
+        expect(
+          judgeProductionCutover({ ...REAL, environment }).applicable,
+        ).toBe(true);
+      }
+    });
+
+    it("환경을 모르면 개발로 본다 — 모르는 곳에서 전환을 요구하지 않는다", () => {
+      expect(judgeProductionCutover(REAL).applicable).toBe(false);
     });
   });
 });

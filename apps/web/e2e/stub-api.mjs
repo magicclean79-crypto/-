@@ -2645,6 +2645,9 @@ const server = http.createServer((req, res) => {
             ],
         summary: { verified: verified ? 4 : 0, total: 4 },
         ready: verified,
+        // 전환 대상 환경 (TASK-3501, CTO 정책 3501-①)
+        applicable: mode !== "empty",
+        environment: mode === "empty" ? "development" : "production",
         detail: verified
           ? "운영 전환 4/4항목이 실제 연결로 확인됐습니다."
           : "운영 전환 0/4항목 확인 — 남은 항목: LLM (실 Provider 호출)(not-production), Google Cloud Vision (OCR)(not-production), Amazon S3 (운영 저장소)(not-production), GitHub Actions (품질 게이트)(invalid). 확인되지 않은 항목을 전환 완료로 세지 않습니다.",

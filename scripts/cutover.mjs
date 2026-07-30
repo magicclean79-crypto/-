@@ -76,7 +76,7 @@ try {
 
 console.log(
   `[cutover] ${report.summary.verified}/${report.summary.total} 확인됨` +
-    ` (근거 인정 기한 ${report.evidenceWindowDays}일)`,
+    ` (근거 인정 기한 ${report.evidenceWindowDays}일 · 환경 ${report.environment})`,
 );
 
 for (const probe of report.egress ?? []) {
@@ -98,6 +98,19 @@ for (const row of report.dependencies) {
 
 if (report.ready) {
   console.log("[cutover] 운영 전환이 끝났습니다.");
+  process.exit(0);
+}
+
+// 전환은 운영·Staging에서 한다 (CTO 정책 3501-①). 개발에서 매번 빨간불을
+// 내면 사람은 그 빨간불을 무시하게 되고, 정작 운영에서 떴을 때도 무시한다.
+// **판정을 감추지는 않는다** — 위에 그대로 찍혔고, 여기서는 이 환경이
+// 대상이 아니라는 사실만 말한다.
+if (!report.applicable) {
+  console.log(
+    `[cutover] 이 환경(${report.environment})은 전환 대상이 아닙니다 — ` +
+      "실 Provider 전환은 production·staging에서 수행합니다 (CTO 정책 3501-①). " +
+      "위 판정은 참고용입니다.",
+  );
   process.exit(0);
 }
 

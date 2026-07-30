@@ -172,12 +172,15 @@ function createPrismaStub() {
     status: string;
     cost: number | null;
     createdAt: Date;
+    /** 호출 대상 (TASK-3501, 정책 3501-④) — 없으면 모른다 */
+    baseUrl?: string | null;
   }[] = [];
   const ocrResults: {
     provider: string;
     status: string;
     cost: number | null;
     createdAt: Date;
+    baseUrl?: string | null;
   }[] = [];
   /** 단가 제안 (TASK-3101) — 검토 → 승인 → 적용 절차의 저장소 */
   const pricingProposals: Record<string, unknown>[] = [];
@@ -188,6 +191,55 @@ function createPrismaStub() {
    * Provider별 주기 판정도 이 기록을 읽는다.
    */
   const priceDetectionRuns: Record<string, unknown>[] = [];
+
+  /**
+   * Provider + 호출 대상(baseUrl)별 집계 (TASK-3501, 정책 3501-⑤).
+   * `baseUrl`이 없는 행은 `null` 묶음으로 남는다 — 모르는 것을 공식으로
+   * 세지 않으려면 그 구분이 스텁에도 있어야 한다.
+   */
+  const groupByTarget = (
+    rows: {
+      provider: string;
+      status: string;
+      createdAt: Date;
+      baseUrl?: string | null;
+    }[],
+    args: {
+      where?: {
+        createdAt?: { gte?: Date; lte?: Date };
+        status?: string;
+        provider?: { not?: string };
+      };
+    },
+  ) => {
+    const buckets = new Map<
+      string,
+      { provider: string; baseUrl: string | null; _count: { _all: number } }
+    >();
+    for (const row of rows) {
+      if (args.where?.status !== undefined && row.status !== args.where.status) {
+        continue;
+      }
+      const gte = args.where?.createdAt?.gte;
+      if (gte && row.createdAt.getTime() < gte.getTime()) continue;
+      if (
+        args.where?.provider?.not !== undefined &&
+        row.provider === args.where.provider.not
+      ) {
+        continue;
+      }
+      const baseUrl = row.baseUrl ?? null;
+      const key = `${row.provider}|${baseUrl ?? ""}`;
+      const bucket = buckets.get(key) ?? {
+        provider: row.provider,
+        baseUrl,
+        _count: { _all: 0 },
+      };
+      bucket._count._all += 1;
+      buckets.set(key, bucket);
+    }
+    return [...buckets.values()];
+  };
 
   /** 기간·상태 조건을 적용한 비용 집계 (Prisma groupBy와 같은 모양) */
   const groupCost = (
@@ -450,8 +502,19 @@ function createPrismaStub() {
        */
       execution: {
         groupBy: async (args: {
-          where?: { createdAt?: { gte?: Date; lte?: Date }; status?: string };
-        }) => groupCost(executions, args, true),
+          by?: string[];
+          where?: {
+            createdAt?: { gte?: Date; lte?: Date };
+            status?: string;
+            provider?: { not?: string };
+          };
+        }) =>
+          // 운영 전환 판정은 **호출 대상까지** 묶어 센다 (TASK-3501, 정책 3501-⑤).
+          // 이 조건을 무시하면 "성공했다"만으로 통과하게 되고, 이 기능의
+          // 본질이 검증되지 않는다.
+          args.by?.includes("baseUrl") === true
+            ? groupByTarget(executions, args)
+            : groupCost(executions, args, true),
         /**
          * 가격 감지 표본 (TASK-3201) — `status`·`createdAt`·`take`를 **실제로
          * 적용한다**. 무시하면 실패한 호출이나 옛 기록이 감지에 섞인다.
@@ -463,8 +526,16 @@ function createPrismaStub() {
       },
       ocrResult: {
         groupBy: async (args: {
-          where?: { createdAt?: { gte?: Date; lte?: Date }; status?: string };
-        }) => groupCost(ocrResults, args, false),
+          by?: string[];
+          where?: {
+            createdAt?: { gte?: Date; lte?: Date };
+            status?: string;
+            provider?: { not?: string };
+          };
+        }) =>
+          args.by?.includes("baseUrl") === true
+            ? groupByTarget(ocrResults, args)
+            : groupCost(ocrResults, args, false),
         findMany: async (args?: {
           where?: { status?: string; createdAt?: { gte?: Date } };
           take?: number;
@@ -5124,6 +5195,106 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
         );
         expect(created.effectiveFrom).toBeNull();
       });
+
+      /**
+       * CTO 정책 3501-② — 공지가 밝힌 발효 시각을 **예약 기본값**으로 쓴다.
+       * 사람이 공지를 다시 읽어 옮겨 적는 일은 옮겨 적기 실수를 부르고,
+       * 그 실수는 "언제부터 이 단가인가"를 틀리게 만든다.
+       */
+      it("적용할 때 공지가 밝힌 발효 시각이 기본값이 된다 (CTO 정책 3501-②)", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+        // 상한(365일) 안의 미래 — 기본값이라고 상한에 예외를 두지 않는다
+        const noticeAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+          .toISOString();
+        priceSource.url = "https://provider.example/pricing.json";
+        priceSource.verdict = {
+          status: "ok",
+          prices: [
+            {
+              target: "ocr",
+              key: "google-vision",
+              price: { perUnitUsd: 0.003 },
+              effectiveFrom: noticeAt,
+            },
+          ],
+          unparsed: [],
+          needsHumanCheck: false,
+          detail: "가격 공지 1건을 읽었습니다.",
+        };
+
+        const detected = await detect(server).expect(200);
+        const id = detected.body.created[0].id;
+        await advance(server, id, "approve").expect(200);
+        // 발효 시각을 **주지 않고** 적용한다
+        const applied = await advance(server, id, "apply").expect(200);
+
+        expect(applied.body.effectiveFrom).toBe(noticeAt);
+        expect(applied.body.scheduled).toBe(true);
+      });
+
+      it("운영자가 넣은 시각이 공지보다 우선한다 — 기본값은 제안일 뿐이다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+        const noticeAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+          .toISOString();
+        const operatorAt = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000)
+          .toISOString();
+        priceSource.url = "https://provider.example/pricing.json";
+        priceSource.verdict = {
+          status: "ok",
+          prices: [
+            {
+              target: "ocr",
+              key: "google-vision",
+              price: { perUnitUsd: 0.003 },
+              effectiveFrom: noticeAt,
+            },
+          ],
+          unparsed: [],
+          needsHumanCheck: false,
+          detail: "가격 공지 1건을 읽었습니다.",
+        };
+
+        const detected = await detect(server).expect(200);
+        const id = detected.body.created[0].id;
+        await advance(server, id, "approve").expect(200);
+        const applied = await advance(server, id, "apply", {
+          effectiveFrom: operatorAt,
+        }).expect(200);
+
+        expect(applied.body.effectiveFrom).toBe(operatorAt);
+      });
+
+      it("공지 시각이 이미 지났으면 그 값으로 예약하지 않는다", async () => {
+        // 과거 시각은 거부된다 (정책 3201-③) — 기본값이라고 예외를 두지 않는다
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+        priceSource.url = "https://provider.example/pricing.json";
+        priceSource.verdict = {
+          status: "ok",
+          prices: [
+            {
+              target: "ocr",
+              key: "google-vision",
+              price: { perUnitUsd: 0.003 },
+              effectiveFrom: "2020-01-01T00:00:00.000Z",
+            },
+          ],
+          unparsed: [],
+          needsHumanCheck: false,
+          detail: "가격 공지 1건을 읽었습니다.",
+        };
+
+        const detected = await detect(server).expect(200);
+        const id = detected.body.created[0].id;
+        await advance(server, id, "approve").expect(200);
+        const rejected = await advance(server, id, "apply").expect(400);
+        expect(rejected.body.message).toContain("과거");
+      });
     });
 
     describe("2단계 승인 (CTO 정책 3301-②)", () => {
@@ -5782,6 +5953,8 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
           status: "SUCCESS",
           cost: 0.01,
           createdAt: new Date(),
+          // 호출 대상이 기록돼 있어야 근거가 된다 (정책 3501-⑤)
+          baseUrl: "https://api.openai.com",
         });
 
         const response = await cutover(built).expect(200);
@@ -5851,6 +6024,72 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
         const response = await cutover(built).expect(200);
         expect(view(response.body, "llm").status).not.toBe("unreachable");
         expect(response.body.egress).toEqual([]);
+      });
+
+      it("성공 기록이 있어도 호출 대상이 없으면 통과가 아니다 (CTO 정책 3501-⑤)", async () => {
+        const built = await build();
+        app = built.app;
+        process.env.LLM_PROVIDER = "openai";
+        process.env.OPENAI_API_KEY = "sk-live";
+        // 옛 기록 — 누구를 상대로 성공했는지 모른다
+        built.prisma.executions.push({
+          provider: "openai",
+          model: "gpt-4o",
+          status: "SUCCESS",
+          cost: 0.01,
+          createdAt: new Date(),
+        });
+
+        const response = await cutover(built).expect(200);
+        const llm = view(response.body, "llm");
+        expect(llm.status).toBe("unverified");
+        expect(llm.detail).toContain("공식 주소로 만들어진 것은 없습니다");
+      });
+
+      it("스텁을 상대로 남은 기록도 근거가 되지 않는다 (CTO 정책 3501-⑤)", async () => {
+        const built = await build();
+        app = built.app;
+        process.env.LLM_PROVIDER = "openai";
+        process.env.OPENAI_API_KEY = "sk-live";
+        built.prisma.executions.push({
+          provider: "openai",
+          model: "gpt-4o",
+          status: "SUCCESS",
+          cost: 0.01,
+          createdAt: new Date(),
+          baseUrl: "http://localhost:9300",
+        });
+
+        const response = await cutover(built).expect(200);
+        expect(view(response.body, "llm").status).toBe("unverified");
+      });
+
+      it("개발 환경은 전환 대상이 아니라고 말한다 (CTO 정책 3501-①)", async () => {
+        const built = await build();
+        app = built.app;
+        const original = process.env.NODE_ENV;
+        process.env.NODE_ENV = "development";
+        try {
+          const response = await cutover(built).expect(200);
+          expect(response.body.applicable).toBe(false);
+          expect(response.body.environment).toBe("development");
+          expect(response.body.detail).toContain("전환 대상이 아닙니다");
+        } finally {
+          process.env.NODE_ENV = original;
+        }
+      });
+
+      it("운영 환경은 전환 대상이다", async () => {
+        const built = await build();
+        app = built.app;
+        const original = process.env.NODE_ENV;
+        process.env.NODE_ENV = "production";
+        try {
+          const response = await cutover(built).expect(200);
+          expect(response.body.applicable).toBe(true);
+        } finally {
+          process.env.NODE_ENV = original;
+        }
       });
 
       it("실행 이력이 없으면 CI를 초록으로 세지 않는다", async () => {

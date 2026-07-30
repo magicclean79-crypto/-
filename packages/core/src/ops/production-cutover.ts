@@ -151,8 +151,21 @@ export interface CutoverReport {
   summary: { verified: number; total: number };
   /** 전부 `verified`인가 — 하나라도 아니면 운영 전환은 끝난 것이 아니다 */
   ready: boolean;
+  /**
+   * 이 환경에서 전환을 **해야 하는가** (TASK-3501 — CTO 정책 3501-①).
+   *
+   * 실 Provider 전환은 운영·Staging에서 수행합니다. 개발에서 상시 빨간색을
+   * 띄우면 사람은 그 빨간색을 무시하게 되고, 정작 운영에서 떴을 때도
+   * 무시합니다. **판정을 감추지는 않습니다** — 항목별 상태는 그대로 두고,
+   * "이 환경은 전환 대상이 아니다"라는 사실만 함께 말합니다.
+   */
+  applicable: boolean;
+  environment: string;
   detail: string;
 }
+
+/** 전환을 수행하는 환경 (CTO 정책 3501-①) */
+export const CUTOVER_ENVIRONMENTS = ["production", "staging"];
 
 /** LLM Provider별 공식 주소와 주소 재정의 환경변수 */
 const LLM_PROVIDERS: Record<
@@ -179,6 +192,94 @@ const LLM_PROVIDERS: Record<
 
 export const GOOGLE_VISION_OFFICIAL_HOST = "vision.googleapis.com";
 export const AWS_S3_OFFICIAL_HOST = "amazonaws.com";
+
+/** Provider별 공식 기본 주소 — 재정의가 없을 때 SDK가 부르는 곳 */
+export const OFFICIAL_BASE_URL: Record<string, string> = {
+  openai: "https://api.openai.com",
+  anthropic: "https://api.anthropic.com",
+  gemini: "https://generativelanguage.googleapis.com",
+  "google-vision": `https://${GOOGLE_VISION_OFFICIAL_HOST}`,
+};
+
+/**
+ * 호출 대상 (TASK-3501 — CTO 정책 3501-④).
+ *
+ * 호출할 때 **그 자리에서** 기록할 값입니다. 나중에 환경변수를 다시 읽어
+ * 추정하면, 그 사이에 설정이 바뀐 경우 과거를 잘못 설명하게 됩니다.
+ */
+export interface CallTarget {
+  provider: string;
+  /** 실제로 부른 주소 (알면) */
+  endpoint: string | null;
+  /** 그 주소의 기준점 (origin) */
+  baseUrl: string | null;
+}
+
+/**
+ * 지금 설정이 가리키는 호출 대상을 만든다 (순수 함수).
+ *
+ * 어댑터가 호출 직전에 불러 기록에 넣습니다 — 판정이 나중에 환경변수를
+ * 다시 읽지 않아도 되도록.
+ */
+export function resolveCallTarget(
+  provider: string,
+  env: Record<string, string | undefined>,
+): CallTarget {
+  const name = provider.trim().toLowerCase();
+  const override =
+    name === "google-vision"
+      ? env.GOOGLE_VISION_ENDPOINT
+      : LLM_PROVIDERS[name]?.baseUrlEnv
+        ? env[LLM_PROVIDERS[name].baseUrlEnv as string]
+        : undefined;
+
+  const endpoint =
+    override !== undefined && override.trim() !== ""
+      ? override.trim()
+      : (OFFICIAL_BASE_URL[name] ?? null);
+
+  let baseUrl: string | null = null;
+  if (endpoint !== null) {
+    try {
+      baseUrl = new URL(endpoint).origin;
+    } catch {
+      baseUrl = null;
+    }
+  }
+  return { provider: name, endpoint, baseUrl };
+}
+
+/**
+ * 이 기록이 **공식 주소를 상대로** 만들어졌는가 (순수 함수).
+ *
+ * `null`은 **모른다**입니다 — 옛 기록에는 호출 대상이 없고, 그것을 "공식
+ * 이었다"로 세면 판정이 다시 거짓이 됩니다(TASK-3501에서 실제로 그럴 뻔했습니다).
+ */
+export function isOfficialCall(
+  provider: string,
+  baseUrl: string | null | undefined,
+): boolean {
+  if (baseUrl === null || baseUrl === undefined || baseUrl.trim() === "") {
+    return false;
+  }
+  const name = provider.trim().toLowerCase();
+  const official =
+    name === "google-vision"
+      ? [GOOGLE_VISION_OFFICIAL_HOST]
+      : (LLM_PROVIDERS[name]?.official ?? []);
+  if (official.length === 0) {
+    return false;
+  }
+  return judgeEndpointOrigin(baseUrl, official).origin === "official";
+}
+
+/** Provider별 성공 기록 — **공식 주소로 만든 것**과 전체를 나눠 센다 */
+export interface SuccessCount {
+  /** 호출 대상이 공식 주소로 기록된 성공 수 */
+  official: number;
+  /** 성공 전체 (호출 대상을 모르는 옛 기록 포함) */
+  total: number;
+}
 
 /**
  * 공식 주소 도달 점검 결과 (TASK-3501 — CTO 지시 2).
@@ -217,10 +318,18 @@ export interface EgressProbe {
 
 export interface CutoverInput {
   env: Record<string, string | undefined>;
-  /** LLM Provider별 최근 성공한 실 호출 수 */
-  llmSuccesses: Record<string, number>;
-  /** OCR 엔진별 최근 성공한 실행 수 */
-  ocrSuccesses: Record<string, number>;
+  /** LLM Provider별 최근 성공한 실 호출 수 (공식 주소분 / 전체) */
+  llmSuccesses: Record<string, SuccessCount>;
+  /** OCR 엔진별 최근 성공한 실행 수 (공식 주소분 / 전체) */
+  ocrSuccesses: Record<string, SuccessCount>;
+  /**
+   * 이 환경이 **전환 대상인가** (TASK-3501 — CTO 정책 3501-①).
+   *
+   * 실 Provider 전환은 운영·Staging에서 수행합니다. 개발에서 상시 빨간색을
+   * 띄우면 사람은 그 빨간색을 무시하게 되고, 정작 운영에서 빨간색이 떴을 때도
+   * 무시합니다.
+   */
+  environment?: string;
   /** 저장소 접근 점검 — 모르면 null (모르는 것을 통과로 세지 않는다) */
   storage: { reachable: boolean; bucketExists: boolean; detail: string } | null;
   /** CI 파일·실행 판정 — 모르면 null */
@@ -298,7 +407,8 @@ function judgeLlm(input: CutoverInput): CutoverDependency {
     spec.baseUrlEnv === null
       ? ({ origin: "unset", host: null, detail: "" } as EndpointJudgement)
       : judgeEndpointOrigin(input.env[spec.baseUrlEnv], spec.official);
-  const successes = input.llmSuccesses[name] ?? 0;
+  const count = input.llmSuccesses[name] ?? { official: 0, total: 0 };
+  const successes = count.official;
 
   if (endpoint.origin === "local" || endpoint.origin === "third-party") {
     return {
@@ -347,9 +457,26 @@ function judgeLlm(input: CutoverInput): CutoverDependency {
       ...base,
       env,
       status: "verified",
-      detail: `${name} 공식 주소로 최근 성공한 실 호출이 ${successes}건 있습니다.`,
-      evidence: `${name} 실 호출 성공 ${successes}건`,
+      detail:
+        `${name} 공식 주소로 최근 성공한 실 호출이 ${successes}건 있습니다 ` +
+        "(기록에 남은 호출 대상 기준 — CTO 정책 3501-⑤).",
+      evidence: `${name} 공식 주소 실 호출 성공 ${successes}건`,
       next: "추가 조치가 없습니다.",
+    };
+  }
+
+  // 성공은 있는데 **공식 주소로 만든 것이 아니다** (정책 3501-⑤)
+  if (count.total > 0) {
+    return {
+      ...base,
+      env,
+      status: "unverified",
+      detail:
+        `최근 성공 기록 ${count.total}건이 있지만 공식 주소로 만들어진 것은 ` +
+        "없습니다 — 호출 대상이 기록되지 않은 옛 기록이거나 다른 주소를 상대로 " +
+        "만들어진 기록입니다. 기록에 없는 것을 근거로 세지 않습니다 (CTO 정책 3501-⑤).",
+      evidence: null,
+      next: "실제 생성 1회를 돌려 공식 주소 호출 기록을 남기세요.",
     };
   }
 
@@ -416,7 +543,8 @@ function judgeVision(input: CutoverInput): CutoverDependency {
   const endpoint = judgeEndpointOrigin(input.env.GOOGLE_VISION_ENDPOINT, [
     GOOGLE_VISION_OFFICIAL_HOST,
   ]);
-  const successes = input.ocrSuccesses["google-vision"] ?? 0;
+  const count = input.ocrSuccesses["google-vision"] ?? { official: 0, total: 0 };
+  const successes = count.official;
 
   if (endpoint.origin === "local" || endpoint.origin === "third-party") {
     return {
@@ -449,9 +577,24 @@ function judgeVision(input: CutoverInput): CutoverDependency {
     return {
       ...base,
       status: "verified",
-      detail: `공식 주소(${GOOGLE_VISION_OFFICIAL_HOST})로 최근 성공한 OCR이 ${successes}건 있습니다.`,
-      evidence: `google-vision OCR 성공 ${successes}건`,
+      detail:
+        `공식 주소(${GOOGLE_VISION_OFFICIAL_HOST})로 최근 성공한 OCR이 ${successes}건 ` +
+        "있습니다 (기록에 남은 호출 대상 기준 — CTO 정책 3501-⑤).",
+      evidence: `google-vision 공식 주소 OCR 성공 ${successes}건`,
       next: "추가 조치가 없습니다.",
+    };
+  }
+
+  if (count.total > 0) {
+    return {
+      ...base,
+      status: "unverified",
+      detail:
+        `최근 성공한 OCR ${count.total}건이 있지만 공식 주소로 만들어진 것은 ` +
+        "없습니다 — 호출 대상이 기록되지 않았거나 다른 주소를 상대로 만들어진 " +
+        "기록입니다 (CTO 정책 3501-⑤).",
+      evidence: null,
+      next: "이미지 1장으로 POST /images/:id/ocr을 돌려 공식 주소 기록을 남기세요.",
     };
   }
 
@@ -650,15 +793,26 @@ export function judgeProductionCutover(input: CutoverInput): CutoverReport {
   const verified = dependencies.filter((row) => row.status === "verified").length;
   const pending = dependencies.filter((row) => row.status !== "verified");
 
+  const environment = (input.environment ?? "development").trim().toLowerCase();
+  const applicable = CUTOVER_ENVIRONMENTS.includes(environment);
+
+  const base =
+    pending.length === 0
+      ? `운영 전환 ${verified}/${dependencies.length}항목이 실제 연결로 확인됐습니다.`
+      : `운영 전환 ${verified}/${dependencies.length}항목 확인 — 남은 항목: ` +
+        `${pending.map((row) => `${row.title}(${row.status})`).join(", ")}. ` +
+        "확인되지 않은 항목을 전환 완료로 세지 않습니다.";
+
   return {
     dependencies,
     summary: { verified, total: dependencies.length },
     ready: pending.length === 0,
-    detail:
-      pending.length === 0
-        ? `운영 전환 ${verified}/${dependencies.length}항목이 실제 연결로 확인됐습니다.`
-        : `운영 전환 ${verified}/${dependencies.length}항목 확인 — 남은 항목: ` +
-          `${pending.map((row) => `${row.title}(${row.status})`).join(", ")}. ` +
-          "확인되지 않은 항목을 전환 완료로 세지 않습니다.",
+    applicable,
+    environment,
+    detail: applicable
+      ? base
+      : `이 환경(${environment})은 전환 대상이 아닙니다 — 실 Provider 전환은 ` +
+        `${CUTOVER_ENVIRONMENTS.join("·")}에서 수행합니다 (CTO 정책 3501-①). ` +
+        `아래는 참고용 판정입니다: ${base}`,
   };
 }

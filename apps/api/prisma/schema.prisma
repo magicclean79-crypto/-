@@ -134,6 +134,13 @@ model OcrResult {
   attempts      Int       @default(0)
   startedAt     DateTime?
   completedAt   DateTime?
+  /**
+   * 실제 호출 대상 (TASK-3501, CTO 정책 3501-④·⑤) — Execution과 같은 이유다.
+   * OCR도 같은 판정(`/ops/cutover`)의 근거가 되므로 같은 칸을 둔다.
+   */
+  endpoint      String?
+  baseUrl       String?
+  calledAt      DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -141,6 +148,8 @@ model OcrResult {
   @@index([status])
   // 일·월 예산 집계가 기간으로 자른다 (TASK-3001)
   @@index([createdAt])
+  // 전환 판정이 "공식 주소로 성공한 기록"을 센다 (TASK-3501)
+  @@index([provider, baseUrl, createdAt])
   @@map("ocr_results")
 }
 
@@ -243,43 +252,43 @@ model GovernanceScanRun {
 // (Append Only, 정책 3101-②). 그래서 이 표는 "언제부터 어떤 단가였는가"의
 // 이력이 되고, 비용 검증은 **그 시점에 유효했던 단가**로 대조한다.
 model PricingProposal {
-  id             String    @id @default(cuid())
-  target         String // llm | ocr
-  key            String // LLM은 모델 이름, OCR은 엔진 이름
-  price          Json // 제안 단가
+  id              String    @id @default(cuid())
+  target          String // llm | ocr
+  key             String // LLM은 모델 이름, OCR은 엔진 이름
+  price           Json // 제안 단가
   // 출처 (TASK-3201) — manual(사람) | detected(자동 감지).
   // 가르지 않으면 자동화가 만든 제안을 사람이 낸 것처럼 읽는다.
-  origin         String    @default("manual")
+  origin          String    @default("manual")
   // 감지 근거 (표본 수·기간·표본 id·차이) — 근거 없는 제안은 승인할 수 없다
-  evidence       Json?
+  evidence        Json?
   // 제안 당시의 유효 단가 — 가격표에 없던 항목이면 null.
-  currentPrice   Json?
-  reason         String
+  currentPrice    Json?
+  reason          String
   // 단계를 건너뛸 수 없다 (검토 없이 승인·승인 없이 적용 금지)
-  stage          String    @default("DRAFT")
-  proposedBy     String?
-  reviewedBy     String?
-  reviewedAt     DateTime?
-  approvedBy     String?
-  approvedAt     DateTime?
+  stage           String    @default("DRAFT")
+  proposedBy      String?
+  reviewedBy      String?
+  reviewedAt      DateTime?
+  approvedBy      String?
+  approvedAt      DateTime?
   // 2차 승인 (TASK-3301, CTO 정책 3301-②) — 시스템이 만든 제안은 운영에서
   // 다른 ADMIN의 최종 승인을 한 번 더 거친다
-  confirmedBy    String?
-  confirmedAt    DateTime?
-  appliedBy      String?
-  appliedAt      DateTime?
+  confirmedBy     String?
+  confirmedAt     DateTime?
+  appliedBy       String?
+  appliedAt       DateTime?
   // 발효 시각 (TASK-3201, CTO 정책 3201-③) — 적용은 결정이고 발효는 시각이다.
   // 미래로 예약되면 그 시각까지 어떤 계산에도 쓰이지 않는다.
-  effectiveFrom  DateTime?
+  effectiveFrom   DateTime?
   // 예약 취소 (TASK-3301, CTO 정책 3301-③) — 삭제하지 않고 남긴다
-  cancelledBy    String?
-  cancelledAt    DateTime?
+  cancelledBy     String?
+  cancelledAt     DateTime?
   cancelledReason String?
-  rejectedBy     String?
-  rejectedAt     DateTime?
-  rejectedReason String?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  rejectedBy      String?
+  rejectedAt      DateTime?
+  rejectedReason  String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   // 실효 단가 해석이 **발효된** 것만 시각순으로 읽는다 (TASK-3201)
   @@index([target, key, effectiveFrom])
@@ -518,10 +527,22 @@ model Execution {
   // 진단 호출(Health Check·Live Check) 여부 — CTO 결정 1301-③.
   // feature를 새로 만들지 않고 메타데이터로 구분해 운영 통계에서 분리한다.
   diagnostic   Boolean         @default(false)
+  /**
+   * 실제 호출 대상 (TASK-3501, CTO 정책 3501-④·⑤).
+   * 이 세 칸이 없으면 "이 성공 기록이 **누구를 상대로** 만들어졌는가"에 답할
+   * 수 없다. TASK-3501 라이브 검증에서 판정이 과거에 심어 둔 행을 근거로
+   * "전환 완료"라고 말할 뻔했고, 그 사고의 뿌리가 여기였다.
+   * 옛 기록은 null이며, **null은 "공식 주소였다"가 아니라 "모른다"** 이다.
+   */
+  endpoint     String?
+  baseUrl      String?
+  calledAt     DateTime?
   createdAt    DateTime        @default(now())
 
   @@index([feature, createdAt])
   @@index([diagnostic, createdAt])
+  // 전환 판정이 "공식 주소로 성공한 기록"을 센다 (TASK-3501)
+  @@index([provider, baseUrl, createdAt])
   @@map("executions")
 }
 

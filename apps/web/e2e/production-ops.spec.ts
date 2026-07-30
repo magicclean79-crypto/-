@@ -462,3 +462,30 @@ test.describe("운영 전환 UX (TASK-3501)", () => {
     await expect(page.getByTestId("cutover-next")).toHaveCount(0);
   });
 });
+
+/**
+ * 전환 대상 환경 (TASK-3501 — CTO 정책 3501-①).
+ *
+ * 개발에서 상시 빨간색을 띄우면 사람은 그 빨간색을 무시하게 되고, 정작
+ * 운영에서 떴을 때도 무시합니다. 판정은 감추지 않되 사실만 함께 말합니다.
+ */
+test.describe("전환 대상 환경 (TASK-3501)", () => {
+  test("개발 환경이면 전환 대상이 아니라고 말한다", async ({ page }) => {
+    await setMode("empty");
+    await openPage(page);
+
+    const note = page.getByTestId("cutover-not-applicable");
+    await expect(note).toContainText("전환 대상이 아닙니다");
+    await expect(note).toContainText("운영·Staging");
+    // 대상이 아닌 환경에서는 "지금 할 일"을 재촉하지 않는다
+    await expect(page.getByTestId("cutover-next")).toHaveCount(0);
+  });
+
+  test("운영 환경이면 지금 할 일을 재촉한다", async ({ page }) => {
+    await setMode("data");
+    await openPage(page);
+
+    await expect(page.getByTestId("cutover-not-applicable")).toHaveCount(0);
+    await expect(page.getByTestId("cutover-next")).toBeVisible();
+  });
+});

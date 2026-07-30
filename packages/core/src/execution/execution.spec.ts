@@ -103,6 +103,10 @@ describe("ExecutionTracker", () => {
       error: null,
       // 일반 호출은 진단이 아니다 (TASK-1302, CTO 결정 1301-③)
       diagnostic: false,
+      // 호출 대상 해석기를 주지 않으면 남지 않는다 (TASK-3501, 정책 3501-④)
+      endpoint: null,
+      baseUrl: null,
+      calledAt: expect.any(Date),
     });
   });
 

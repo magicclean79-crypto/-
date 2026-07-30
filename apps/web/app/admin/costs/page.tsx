@@ -141,6 +141,15 @@ export default function CostIntelligencePage() {
   /** 적용 예약 시각 (datetime-local) — 비우면 즉시 발효 (정책 3201-③) */
   const [effectiveFrom, setEffectiveFrom] = useState("");
 
+  /**
+   * 공지가 밝힌 발효 시각 (TASK-3501, CTO 정책 3501-②).
+   * 공지 기반 제안에만 있고, 없으면 null(즉시 발효).
+   */
+  const noticeAt = (proposal: PricingProposalDto): string | null =>
+    proposal.origin === "published"
+      ? (proposal.evidence?.publishedEffectiveFrom ?? null)
+      : null;
+
   async function get<T>(path: string): Promise<T | null> {
     const response = await fetch(`${API_URL}${path}`, authFetchInit());
     if (!response.ok) {
@@ -693,11 +702,23 @@ export default function CostIntelligencePage() {
                   ) : null}
                   {actionFor(proposal) === "apply" ? (
                     <label className="mt-2 block text-xs text-zinc-500">
-                      발효 시각 (비우면 즉시) — 적용은 결정이고 발효는 시각입니다
+                      {/*
+                        공지가 밝힌 발효 시각을 **기본값으로** 씁니다
+                        (TASK-3501, CTO 정책 3501-②). 사람이 공지를 다시 읽어
+                        옮겨 적는 일은 옮겨 적기 실수를 부르고, 그 실수는
+                        "언제부터 이 단가인가"를 틀리게 만듭니다.
+                        운영자가 값을 넣으면 그쪽이 이깁니다.
+                      */}
+                      {noticeAt(proposal) === null
+                        ? "발효 시각 (비우면 즉시) — 적용은 결정이고 발효는 시각입니다"
+                        : `발효 시각 — 비우면 공지가 밝힌 시각(${new Date(
+                            noticeAt(proposal)!,
+                          ).toLocaleString("ko-KR")})으로 예약합니다. 고쳐도 됩니다`}
                       <input
                         type="datetime-local"
                         data-testid="pricing-effective-from"
                         value={effectiveFrom}
+                        placeholder={noticeAt(proposal) ?? ""}
                         onChange={(event) => setEffectiveFrom(event.target.value)}
                         className="mt-1 block w-full rounded-lg border border-zinc-300 px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
                       />

@@ -1,5 +1,10 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { ROLLOUT_EVIDENCE_WINDOW_DAYS, judgeProductionCutover } from "@acos/core";
+import {
+  ROLLOUT_EVIDENCE_WINDOW_DAYS,
+  isOfficialCall,
+  judgeProductionCutover,
+} from "@acos/core";
+import type { SuccessCount } from "@acos/core";
 import type { ProductionCutoverDto } from "@acos/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
@@ -38,8 +43,11 @@ export class ProductionCutoverService {
     );
 
     const [llmGroups, ocrGroups, storage, workflow, runs, egress] = await Promise.all([
+      // **호출 대상까지 함께 센다** (TASK-3501, CTO 정책 3501-⑤) — "성공했다"만
+      // 으로는 누구를 상대로 성공했는지 알 수 없다. baseUrl이 null인 옛 기록은
+      // 공식으로 세지 않는다: null은 "공식이었다"가 아니라 "모른다"다.
       this.prisma.execution.groupBy({
-        by: ["provider"],
+        by: ["provider", "baseUrl"],
         where: {
           status: "SUCCESS",
           provider: { not: "mock" },
@@ -48,7 +56,7 @@ export class ProductionCutoverService {
         _count: { _all: true },
       }),
       this.prisma.ocrResult.groupBy({
-        by: ["provider"],
+        by: ["provider", "baseUrl"],
         where: {
           status: "SUCCESS",
           provider: { not: "mock" },
@@ -64,8 +72,10 @@ export class ProductionCutoverService {
 
     const report = judgeProductionCutover({
       env: process.env as Record<string, string | undefined>,
-      llmSuccesses: countByProvider(llmGroups),
-      ocrSuccesses: countByProvider(ocrGroups),
+      llmSuccesses: countByTarget(llmGroups),
+      ocrSuccesses: countByTarget(ocrGroups),
+      // 이 환경이 전환 대상인가 (CTO 정책 3501-①)
+      environment: process.env.NODE_ENV,
       storage,
       // 워크플로 파일을 못 읽었으면 CI 판정 자체를 하지 않는다
       ci: workflow === null ? null : { workflow, runs },
@@ -78,6 +88,8 @@ export class ProductionCutoverService {
       ready: report.ready,
       detail: report.detail,
       evidenceWindowDays: ROLLOUT_EVIDENCE_WINDOW_DAYS,
+      applicable: report.applicable,
+      environment: report.environment,
       egress,
       checkedAt: new Date().toISOString(),
     };
@@ -105,9 +117,24 @@ export class ProductionCutoverService {
   }
 }
 
-/** groupBy 결과를 { provider: 성공 수 }로 — 없는 Provider는 키가 없다 */
-function countByProvider(
-  groups: { provider: string; _count: { _all: number } }[],
-): Record<string, number> {
-  return Object.fromEntries(groups.map((group) => [group.provider, group._count._all]));
+/**
+ * groupBy 결과를 `{ provider: {official, total} }`로 (TASK-3501, 정책 3501-⑤).
+ *
+ * `official`은 **기록에 남은 호출 대상이 공식 주소인 것만** 셉니다.
+ * `baseUrl`이 없는 옛 기록은 `total`에만 들어갑니다 — 모르는 것을 공식으로
+ * 세면 판정이 다시 거짓이 됩니다.
+ */
+function countByTarget(
+  groups: { provider: string; baseUrl: string | null; _count: { _all: number } }[],
+): Record<string, SuccessCount> {
+  const counts: Record<string, SuccessCount> = {};
+  for (const group of groups) {
+    const row = counts[group.provider] ?? { official: 0, total: 0 };
+    row.total += group._count._all;
+    if (isOfficialCall(group.provider, group.baseUrl)) {
+      row.official += group._count._all;
+    }
+    counts[group.provider] = row;
+  }
+  return counts;
 }

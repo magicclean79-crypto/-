@@ -314,15 +314,22 @@ export class PricingService implements OnModuleInit {
       data.cancelledReason = reason;
     } else if (to === "APPLIED") {
       // **적용은 결정이고 발효는 시각이다** (CTO 정책 3201-③).
-      // 미지정이면 즉시 발효한다 — 예약은 명시적으로만 한다.
+      //
+      // 미지정일 때 **공지가 밝힌 발효 시각을 기본값으로 씁니다**
+      // (TASK-3501, CTO 정책 3501-②). 사람이 공지를 다시 읽어 옮겨 적는
+      // 일은 옮겨 적기 실수를 부르고, 그 실수는 "언제부터 이 단가인가"를
+      // 틀리게 만듭니다. 운영자가 값을 넣으면 **그쪽이 이깁니다** — 기본값은
+      // 제안일 뿐 결정이 아닙니다.
       const requested = this.parseEffectiveFrom(options.effectiveFrom);
-      const invalidFrom = validateEffectiveFrom(requested, now);
+      const fallback =
+        requested ?? this.publishedEffectiveFrom(record as PricingProposal);
+      const invalidFrom = validateEffectiveFrom(fallback, now);
       if (invalidFrom !== null) {
         throw new BadRequestException(invalidFrom);
       }
       data.appliedBy = actor;
       data.appliedAt = now;
-      data.effectiveFrom = requested ?? now;
+      data.effectiveFrom = fallback ?? now;
     } else {
       const reason =
         typeof options.reason === "string" ? options.reason.trim() : "";
@@ -873,6 +880,23 @@ export class PricingService implements OnModuleInit {
         "제안을 등록했습니다. 승인 후 적용됩니다 (CTO 정책 3201-① · 3301-②).",
     );
     return this.toDto(record);
+  }
+
+  /**
+   * 공지가 밝힌 발효 시각 (TASK-3501 — CTO 정책 3501-②).
+   *
+   * 공지 기반 제안(`published`)의 근거에 남아 있는 값입니다. **해석할 수
+   * 없으면 null**이고, 그때는 즉시 발효로 돌아갑니다 — 잘못 읽은 시각으로
+   * 예약하면 엉뚱한 날 단가가 바뀝니다.
+   */
+  private publishedEffectiveFrom(record: PricingProposal): Date | null {
+    const evidence = record.evidence as { publishedEffectiveFrom?: unknown } | null;
+    const raw = evidence?.publishedEffectiveFrom;
+    if (typeof raw !== "string" || raw.trim() === "") {
+      return null;
+    }
+    const parsed = new Date(raw);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
   }
 
   /** Provider별 마지막 감지 시각 (정책 3301-④) */

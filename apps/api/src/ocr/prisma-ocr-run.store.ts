@@ -1,5 +1,5 @@
 import { Injectable, Optional } from "@nestjs/common";
-import { estimateOcrCost } from "@acos/core";
+import { estimateOcrCost, resolveCallTarget } from "@acos/core";
 import type { OcrRecognition, OcrRun, OcrRunStore } from "@acos/core";
 import { Prisma, type OcrResult } from "@prisma/client";
 import { PricingService } from "../pricing/pricing.service";
@@ -72,6 +72,14 @@ export class PrismaOcrRunStore implements OcrRunStore {
     const table = this.pricing ? (await this.pricing.effective()).ocr : undefined;
     const cost = estimateOcrCost(current.provider, current.units, table);
 
+    // 이 성공이 **누구를 상대로** 만들어졌는지 남긴다 (TASK-3501, 정책 3501-④).
+    // 나중에 환경변수를 다시 읽어 추정하면 그 사이에 설정이 바뀐 경우 과거를
+    // 잘못 설명하게 되고, 그 설명이 전환 판정의 근거가 된다.
+    const target = resolveCallTarget(
+      current.provider,
+      process.env as Record<string, string | undefined>,
+    );
+
     const record = await this.prisma.ocrResult.update({
       where: { id },
       data: {
@@ -83,6 +91,9 @@ export class PrismaOcrRunStore implements OcrRunStore {
         attempts,
         cost,
         completedAt: new Date(),
+        endpoint: target.endpoint,
+        baseUrl: target.baseUrl,
+        calledAt: new Date(),
       },
     });
     return toOcrRun(record);
