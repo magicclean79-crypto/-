@@ -20,7 +20,9 @@ import { NotificationQueueService } from "./notification-queue.service";
 import { NotificationService } from "./notification.service";
 import { CompanyBrainService } from "../company-brain/company-brain.service";
 import { ContentGovernanceService } from "../content-governance/content-governance.service";
+import { GovernancePreflightService } from "../content-governance/governance-preflight.service";
 import { GovernanceRulesService } from "../content-governance/governance-rules.service";
+import { GovernanceScanService } from "../content-governance/governance-scan.service";
 import { createCompanyBrainMock } from "../content-governance/governance.spec-helpers";
 import { MigrationGovernanceService } from "./migration-governance.service";
 import { RecoveryDrillService } from "./recovery-drill.service";
@@ -128,6 +130,12 @@ function createPrismaStub() {
     createdAt: Date;
     archivedAt: Date | null;
   }[] = [];
+  /**
+   * 예약 스캔 실행 기록 (TASK-2701) — 지난 결과와 비교하려면 남아 있어야
+   * 한다. `where.scope`를 실제로 적용한다: 무시하면 범위별 비교가 검증되지
+   * 않는다.
+   */
+  const governanceScanRuns: Record<string, unknown>[] = [];
   const migrations = {
     // 기본은 **실제 디렉터리 그대로 적용됨** — 정상 상태에서 경보가 나지 않아야
     // 경보가 났을 때 그것이 신호가 된다
@@ -140,6 +148,7 @@ function createPrismaStub() {
     alerts,
     migrations,
     governanceChecks,
+    governanceScanRuns,
     runs,
     deliveries,
     queue,
@@ -225,6 +234,49 @@ function createPrismaStub() {
           }
           return { count };
         },
+      },
+      governanceScanRun: {
+        create: async ({ data }: { data: Record<string, unknown> }) => {
+          seq += 1;
+          const row = {
+            id: `scan-${seq}`,
+            createdAt: new Date(),
+            alerted: false,
+            previousTotal: null,
+            ...data,
+          };
+          governanceScanRuns.push(row);
+          return { ...row };
+        },
+        findFirst: async (args?: { where?: { scope?: string } }) => {
+          const scope = args?.where?.scope;
+          const rows = governanceScanRuns.filter(
+            (row) => scope === undefined || row.scope === scope,
+          );
+          const found = rows[rows.length - 1];
+          return found ? { ...found } : null;
+        },
+        findMany: async (args?: {
+          where?: { scope?: string };
+          take?: number;
+        }) => {
+          const scope = args?.where?.scope;
+          let rows = governanceScanRuns.filter(
+            (row) => scope === undefined || row.scope === scope,
+          );
+          rows = rows.slice().reverse();
+          if (typeof args?.take === "number") {
+            rows = rows.slice(0, args.take);
+          }
+          return rows.map((row) => ({ ...row }));
+        },
+      },
+      content: {
+        // 위반 스캔이 읽는다 — 이 스텁에는 콘텐츠가 없으므로 항상 빈 목록이다
+        findMany: async () => [],
+      },
+      project: {
+        findUnique: async () => null,
       },
       contentGovernanceCheck: {
         updateMany: async (args: {
@@ -567,6 +619,9 @@ async function build(overrides: Overrides = {}) {
       // 발행 판정 기록 보관이 예약 정리 작업에 편입됐다 (TASK-2601)
       ContentGovernanceService,
       GovernanceRulesService,
+      // 예약 위반 스캔 (TASK-2701) — 예약 점검에 편입됐다
+      GovernanceScanService,
+      GovernancePreflightService,
       {
         provide: CompanyBrainService,
         useValue: createCompanyBrainMock({}),
@@ -926,6 +981,8 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
         "provider-smoke",
         // 원격 사본 대조 (TASK-2101, CTO 결정 2001-②)
         "remote-verify",
+        // 발행 위반 예약 스캔 (TASK-2701, CTO 결정 2601-②)
+        "governance-scan",
       ]);
       // 마지막 실행 결과가 붙는다
       expect(
@@ -952,8 +1009,9 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
         .post("/ops/checks/run")
         .set("Authorization", "Bearer tok-admin")
         .expect(200);
-      // provider-smoke는 기본 꺼짐이라 runAll 대상이 아니다 (과금 방지)
-      expect(all.body).toHaveLength(6);
+      // provider-smoke는 기본 꺼짐이라 runAll 대상이 아니다 (과금 방지).
+      // 위반 스캔이 추가돼 7종이 돈다 (TASK-2701)
+      expect(all.body).toHaveLength(7);
       expect(all.body.map((entry: { job: string }) => entry.job)).not.toContain(
         "provider-smoke",
       );

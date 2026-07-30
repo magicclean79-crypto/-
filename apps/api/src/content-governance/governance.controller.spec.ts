@@ -12,6 +12,7 @@ import {
 import { ContentGovernanceService } from "./content-governance.service";
 import { GovernancePreflightService } from "./governance-preflight.service";
 import { GovernanceRulesService } from "./governance-rules.service";
+import { GovernanceScanService } from "./governance-scan.service";
 import { GovernanceController } from "./governance.controller";
 import { createCompanyBrainMock } from "./governance.spec-helpers";
 
@@ -50,6 +51,7 @@ describe("Governance Preflight API (TASK-2601)", () => {
         GovernancePreflightService,
         ContentGovernanceService,
         GovernanceRulesService,
+        GovernanceScanService,
         { provide: PrismaService, useValue: prisma },
         {
           provide: CompanyBrainService,
@@ -151,6 +153,79 @@ describe("Governance Preflight API (TASK-2601)", () => {
     expect(response.body.truncated).toBe(true);
     expect(response.body.omitted).toBe(1);
     expect(response.body.detail).toContain("1건 생략");
+  });
+
+  describe("페이지 (TASK-2701, CTO 결정 2601-④)", () => {
+    it("Summary는 항상 전체 기준이고 목록만 페이지로 자른다", async () => {
+      const first = await request(app.getHttpServer())
+        .get("/projects/proj-1/governance/preflight?limit=1&offset=0")
+        .expect(200);
+      const second = await request(app.getHttpServer())
+        .get("/projects/proj-1/governance/preflight?limit=1&offset=1")
+        .expect(200);
+
+      for (const response of [first, second]) {
+        // 한 페이지에 1건이 보인다고 위반이 1건인 것이 아니다
+        expect(response.body.summary.blocked).toBe(2);
+        expect(response.body.page.total).toBe(2);
+        expect(response.body.items).toHaveLength(1);
+      }
+      expect(first.body.page.hasMore).toBe(true);
+      expect(second.body.page.hasMore).toBe(false);
+      // 페이지를 이어 붙이면 겹치지 않는다
+      expect(first.body.items[0].contentId).not.toBe(
+        second.body.items[0].contentId,
+      );
+    });
+
+    it("문구가 몇 번째를 보고 있는지 말한다", async () => {
+      const response = await request(app.getHttpServer())
+        .get("/projects/proj-1/governance/preflight?limit=1&offset=1")
+        .expect(200);
+      expect(response.body.detail).toContain("2건 중 2~2번째");
+    });
+
+    it("잘못된 offset은 400 — 다른 페이지를 보고 있는 줄 모르게 되면 안 된다", async () => {
+      for (const offset of ["-1", "1.5", "abc"]) {
+        await request(app.getHttpServer())
+          .get(`/projects/proj-1/governance/preflight?offset=${offset}`)
+          .expect(400);
+      }
+    });
+
+    it("범위를 넘는 offset은 빈 페이지이고 요약은 그대로다", async () => {
+      const response = await request(app.getHttpServer())
+        .get("/projects/proj-1/governance/preflight?offset=99")
+        .expect(200);
+      expect(response.body.items).toEqual([]);
+      expect(response.body.summary.blocked).toBe(2);
+      expect(response.body.page.total).toBe(2);
+      expect(response.body.page.hasMore).toBe(false);
+    });
+  });
+
+  describe("예약 스캔 이력 API (TASK-2701)", () => {
+    it("전체 범위 이력은 ADMIN 전용", async () => {
+      await request(app.getHttpServer()).get("/governance/scans").expect(401);
+      await request(app.getHttpServer())
+        .get("/governance/scans")
+        .set("Authorization", "Bearer editor-token")
+        .expect(403);
+      await request(app.getHttpServer())
+        .get("/governance/scans")
+        .set("Authorization", "Bearer admin-token")
+        .expect(200);
+    });
+
+    it("프로젝트 범위 이력은 그 범위만 돌려준다", async () => {
+      const response = await request(app.getHttpServer())
+        .get("/projects/proj-1/governance/scans")
+        .expect(200);
+      expect(Array.isArray(response.body.runs)).toBe(true);
+      for (const run of response.body.runs) {
+        expect(run.scope).toBe("project:proj-1");
+      }
+    });
   });
 
   it("없는 프로젝트는 404", async () => {

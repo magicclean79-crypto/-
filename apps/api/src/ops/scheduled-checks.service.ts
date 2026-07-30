@@ -35,6 +35,7 @@ import { BackupService } from "./backup.service";
 import { DistributedLockService } from "./distributed-lock.service";
 import { NotificationQueueService } from "./notification-queue.service";
 import { ContentGovernanceService } from "../content-governance/content-governance.service";
+import { GovernanceScanService } from "../content-governance/governance-scan.service";
 import { MigrationGovernanceService } from "./migration-governance.service";
 import { RecoveryDrillService } from "./recovery-drill.service";
 
@@ -75,6 +76,8 @@ const JOB_ALERT_KINDS: Record<ScheduledJob, AlertKind[]> = {
   "provider-smoke": [],
   // 원격 대조 결과는 watchdog이 backup-integrity 경보로 낸다
   "remote-verify": [],
+  // 위반 스캔은 자기 종류만 책임진다 (TASK-2701, CTO 결정 2601-③)
+  "governance-scan": ["governance-scan"],
 };
 
 /** 사람이 읽는 주기 설명 (경보 문구용) */
@@ -145,6 +148,8 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
     private readonly migrations: MigrationGovernanceService,
     // 발행 판정 기록 보관 (TASK-2601, CTO 결정 2501-⑤)
     private readonly governance: ContentGovernanceService,
+    // 예약 위반 스캔 (TASK-2701, CTO 결정 2601-②)
+    private readonly governanceScan: GovernanceScanService,
   ) {}
 
   /** 점검 1건의 잠금 이름 */
@@ -382,7 +387,7 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
     const startedAt = Date.now();
 
     try {
-      const outcome = await this.execute(job);
+      const outcome = await this.execute(job, trigger);
       const durationMs = Date.now() - startedAt;
       await this.record({
         job,
@@ -450,6 +455,8 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
 
   private async execute(
     job: ScheduledJob,
+    // 위반 스캔은 예약과 수동을 구분해 기록한다 (TASK-2701)
+    trigger: "schedule" | "manual" = "manual",
   ): Promise<{ ok: boolean; detail: string; notified: CheckRunResultDto["notified"] }> {
     if (job === "cost-verification") {
       const [cost, budgetStatus] = await Promise.all([
@@ -571,6 +578,28 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
           `발행 판정 기록 보관 ${governance.archived}건 ` +
           `(작성 후 ${governance.afterDays}일 경과) — 삭제하지 않습니다`,
         notified: [],
+      };
+    }
+
+    if (job === "governance-scan") {
+      // 스캔 자체는 **아무것도 바꾸지 않는다** (CTO 결정 2501-①).
+      // 경보는 **늘었을 때만** 나간다 (CTO 결정 2601-③) — 같은 결과로
+      // 반복해서 부르면 그 경보는 배경 소음이 된다.
+      const { outcome, detected, shouldSync } = await this.governanceScan.run({
+        trigger,
+      });
+      // **늘었을 때와 0이 됐을 때만** 경보 저장소를 건드린다 (결정 2601-③).
+      // 아무 때나 sync를 부르면 늘지 않은 실행에서 경보가 새로 생기거나,
+      // 남아 있는 위반이 "풀렸다"로 해소된다.
+      const notified = shouldSync
+        ? await this.alerts.sync(JOB_ALERT_KINDS[job], detected)
+        : [];
+      return {
+        // 위반이 있는 것은 시스템 장애가 아니다 — 점검 자체는 성공이다.
+        // ok=false로 두면 예약 점검 실패로 읽혀 엉뚱한 곳을 보게 된다
+        ok: true,
+        detail: outcome.run.detail,
+        notified,
       };
     }
 

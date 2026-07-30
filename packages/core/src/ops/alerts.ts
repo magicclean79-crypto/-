@@ -29,6 +29,8 @@ export const ALERT_KINDS = [
   "backup-integrity",
   // 스키마 거버넌스 (TASK-2401, CTO 결정 2301-②)
   "migration-governance",
+  // 발행 위반 예약 스캔 (TASK-2701, CTO 결정 2601-③) — 늘었을 때만 부른다
+  "governance-scan",
 ] as const;
 
 export type AlertKind = (typeof ALERT_KINDS)[number];
@@ -446,6 +448,8 @@ export const ALERT_COOLDOWN_ENV: Record<AlertKind, string> = {
   "recovery-drill": "ALERT_COOLDOWN_DRILL_MS",
   "backup-performance": "ALERT_COOLDOWN_BACKUP_PERF_MS",
   "backup-integrity": "ALERT_COOLDOWN_BACKUP_INTEGRITY_MS",
+  // 예약 스캔은 늘었을 때만 부르므로 쿨다운은 재알림만 막는다
+  "governance-scan": "ALERT_COOLDOWN_GOVERNANCE_SCAN_MS",
 };
 
 /** 전체 기본값 환경변수 (종류별 값이 없을 때) */

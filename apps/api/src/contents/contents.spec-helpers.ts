@@ -17,6 +17,11 @@ export function createPrismaMock() {
   const productObjects: Partial<ProductObject>[] = [];
   const statusHistory: ContentStatusHistory[] = [];
   const governanceChecks: ContentGovernanceCheck[] = [];
+  /**
+   * 예약 스캔 실행 기록 (TASK-2701) — `where.scope`를 실제로 적용한다:
+   * 무시하면 범위별 비교(전체/프로젝트)가 구조적으로 검증되지 않는다.
+   */
+  const governanceScanRuns: Record<string, unknown>[] = [];
   let sequence = 0;
 
   /** 실제 서비스의 select와 같은 모양 */
@@ -36,9 +41,44 @@ export function createPrismaMock() {
     productObjects,
     statusHistory,
     governanceChecks,
+    governanceScanRuns,
     $transaction: jest.fn(async (operations: Promise<unknown>[]) =>
       Promise.all(operations),
     ),
+    governanceScanRun: {
+      create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => {
+        const row = {
+          id: `scan-${governanceScanRuns.length + 1}`,
+          createdAt: new Date(),
+          alerted: false,
+          previousTotal: null,
+          ...data,
+        };
+        governanceScanRuns.push(row);
+        return { ...row };
+      }),
+      findFirst: jest.fn(async (args?: { where?: { scope?: string } }) => {
+        const scope = args?.where?.scope;
+        const rows = governanceScanRuns.filter(
+          (row) => scope === undefined || row.scope === scope,
+        );
+        const found = rows[rows.length - 1];
+        return found ? { ...found } : null;
+      }),
+      findMany: jest.fn(
+        async (args?: { where?: { scope?: string }; take?: number }) => {
+          const scope = args?.where?.scope;
+          let rows = governanceScanRuns.filter(
+            (row) => scope === undefined || row.scope === scope,
+          );
+          rows = rows.slice().reverse();
+          if (typeof args?.take === "number") {
+            rows = rows.slice(0, args.take);
+          }
+          return rows.map((row) => ({ ...row }));
+        },
+      ),
+    },
     contentGovernanceCheck: {
       create: jest.fn(
         async ({ data }: { data: Partial<ContentGovernanceCheck> }) => {

@@ -175,6 +175,7 @@ let pubContent;
 let pubHistory;
 let pubGovernanceBlocked;
 let pubGovernanceRecords;
+let pubScanRuns;
 
 /**
  * 발행 거버넌스 판정 (TASK-2501).
@@ -259,6 +260,49 @@ function resetPublishing() {
   // POST /__publishing/ban 으로 만든다 (막힌 화면도 검증되어야 한다)
   pubGovernanceBlocked = false;
   pubGovernanceRecords = [];
+  // 예약 스캔 이력 (TASK-2701) — 기준선 → 늘었음 두 건을 둔다
+  pubScanRuns = [
+    {
+      id: "scan-2",
+      scope: "project:proj-pub",
+      summary: {
+        scanned: 1,
+        blocked: 1,
+        publishedViolations: 0,
+        warned: 0,
+        clean: 0,
+        byCheck: [{ key: "banned-words", blocked: 1, warned: 0 }],
+      },
+      verdict: "increased",
+      previousTotal: 0,
+      total: 1,
+      alerted: true,
+      trigger: "schedule",
+      detail:
+        "콘텐츠 1건 검사 · 위반 1건 — 지난번 0건보다 1건 늘어 경보했습니다.",
+      createdAt: "2026-07-30T03:50:00.000Z",
+    },
+    {
+      id: "scan-1",
+      scope: "project:proj-pub",
+      summary: {
+        scanned: 1,
+        blocked: 0,
+        publishedViolations: 0,
+        warned: 1,
+        clean: 0,
+        byCheck: [],
+      },
+      verdict: "baseline",
+      previousTotal: null,
+      total: 0,
+      alerted: false,
+      trigger: "schedule",
+      detail:
+        "콘텐츠 1건 검사 · 위반 0건 — 첫 스캔이므로 기준선으로 삼고 경보하지 않았습니다.",
+      createdAt: "2026-07-29T03:50:00.000Z",
+    },
+  ];
 }
 resetPublishing();
 
@@ -573,6 +617,12 @@ const server = http.createServer((req, res) => {
     return;
   }
   // 발행 위반 스캔 (TASK-2601) — 상태를 바꾸지 않는 조회
+  // 예약 스캔 이력 (TASK-2701) — 경보를 만들지 않은 실행도 남는다
+  if (url.pathname === "/projects/proj-pub/governance/scans") {
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ runs: pubScanRuns }));
+    return;
+  }
   if (url.pathname === "/projects/proj-pub/governance/preflight") {
     const verdict = pubGovernanceVerdict();
     const released = pubContent.status === "PUBLISHED";
@@ -598,6 +648,8 @@ const server = http.createServer((req, res) => {
       ...blockedBy.map((key) => ({ key, blocked: 1, warned: 0 })),
       ...warnings.map((key) => ({ key, blocked: 0, warned: 1 })),
     ];
+    const offset = Number(url.searchParams.get("offset") ?? 0) || 0;
+    const shown = offset > 0 ? [] : items;
     const blocked = blockedBy.length > 0 && !released ? 1 : 0;
     const publishedViolations = blockedBy.length > 0 && released ? 1 : 0;
     const warned = blockedBy.length === 0 && warnings.length > 0 ? 1 : 0;
@@ -621,9 +673,15 @@ const server = http.createServer((req, res) => {
           clean: violating ? 0 : 1,
           byCheck,
         },
-        items,
-        truncated: false,
-        omitted: 0,
+        items: shown,
+        page: {
+          offset: Math.min(offset, items.length),
+          limit: Number(url.searchParams.get("limit") ?? 10) || 10,
+          total: items.length,
+          hasMore: false,
+        },
+        truncated: shown.length < items.length,
+        omitted: items.length - shown.length,
         detail:
           parts.length === 0
             ? "콘텐츠 1건 검사 — 위반 없음."

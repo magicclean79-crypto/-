@@ -13,6 +13,7 @@ import type {
 } from "@acos/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { GovernanceRulesService } from "./governance-rules.service";
+import type { GovernanceRulesSnapshot } from "./governance-rules.service";
 
 interface ContentWithSource {
   id: string;
@@ -72,11 +73,19 @@ export class ContentGovernanceService {
    *
    * 발행 트랜잭션은 콘텐츠를 이미 읽었으므로 다시 읽지 않는다. 다시 읽으면
    * **판정한 내용과 발행되는 내용이 다를 수 있다.**
+   *
+   * `snapshot`을 주면 규칙을 다시 읽지 않는다 (CTO 결정 2601-⑤ Request
+   * Scope) — 여러 건을 판정하는 스캔이 쓴다. 주지 않으면 매번 읽는다.
    */
-  async judge(content: ContentWithSource): Promise<ContentGovernanceVerdict> {
+  async judge(
+    content: ContentWithSource,
+    snapshot?: GovernanceRulesSnapshot,
+  ): Promise<ContentGovernanceVerdict> {
     const [bannedWords, disclosures, relatedRules] = await Promise.all([
-      this.rules.bannedWords(),
-      this.rules.disclosures(),
+      snapshot?.bannedWords ?? this.rules.bannedWords(),
+      snapshot?.disclosures ?? this.rules.disclosures(),
+      // 관련 규칙은 **제목으로 검색**하므로 콘텐츠마다 다르다 — 스냅샷에
+      // 담을 수 없다
       this.rules.relatedRules(content.projectId, content.title),
     ]);
 

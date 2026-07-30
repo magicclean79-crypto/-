@@ -66,18 +66,36 @@ export interface PreflightSummary {
   byCheck: PreflightByCheck[];
 }
 
+/**
+ * 목록 페이지 정보 (TASK-2701, CTO 결정 2601-④).
+ *
+ * **Summary는 항상 전체 기준이다.** 페이지는 목록만 자른다 — 한 페이지에
+ * 20건이 보인다고 위반이 20건인 것이 아니다.
+ */
+export interface PreflightPage {
+  /** 건너뛴 위반 수 */
+  offset: number;
+  /** 이 페이지에 담은 최대 건수 */
+  limit: number;
+  /** **위반 전체 수** (페이지와 무관) */
+  total: number;
+  /** 다음 페이지가 있는가 */
+  hasMore: boolean;
+}
+
 export interface PreflightResult {
   summary: PreflightSummary;
-  /** 위반이 있는 것만, 심한 것부터 */
+  /** 위반이 있는 것만, 심한 것부터 — 이 페이지 분량 */
   items: PreflightItem[];
+  page: PreflightPage;
   /**
-   * 결과를 잘랐는가.
+   * 목록이 전체보다 적은가.
    *
    * **조용히 자르지 않는다** — 100건만 보여 주면서 "위반 100건"이라고 하면
    * 실제로 몇 건인지 아무도 모른다. 요약의 숫자는 **자르기 전 전체**다.
    */
   truncated: boolean;
-  /** 잘려서 목록에 담기지 않은 건수 */
+  /** 이 페이지에 담기지 않은 건수 (앞·뒤 합) */
   omitted: number;
 }
 
@@ -95,12 +113,13 @@ const SEVERITY: Record<GovernanceStatus, number> = {
 /**
  * 스캔 결과 요약 (순수 함수).
  *
- * `limit`은 **목록만** 자른다 — 요약의 숫자는 전체를 센다. 그래야 "위반
- * 3건"과 "위반 300건 중 3건 표시"를 구분할 수 있다.
+ * `limit`·`offset`은 **목록만** 자른다 — 요약의 숫자는 전체를 센다
+ * (CTO 결정 2601-④). 그래야 "위반 3건"과 "위반 300건 중 3건 표시"를
+ * 구분할 수 있다.
  */
 export function summarizePreflight(
   items: PreflightItem[],
-  options: { limit?: number } = {},
+  options: { limit?: number; offset?: number } = {},
 ): PreflightResult {
   const byCheck = new Map<string, { blocked: number; warned: number }>();
   let blocked = 0;
@@ -151,11 +170,16 @@ export function summarizePreflight(
         a.contentId.localeCompare(b.contentId),
     );
 
-  const limit = options.limit;
-  const shown =
-    typeof limit === "number" && limit >= 0
-      ? violations.slice(0, limit)
-      : violations;
+  const total = violations.length;
+  const offset =
+    typeof options.offset === "number" && options.offset > 0
+      ? Math.min(options.offset, total)
+      : 0;
+  const limit =
+    typeof options.limit === "number" && options.limit >= 0
+      ? options.limit
+      : total;
+  const shown = violations.slice(offset, offset + limit);
 
   return {
     summary: {
@@ -174,8 +198,14 @@ export function summarizePreflight(
         ),
     },
     items: shown,
-    truncated: shown.length < violations.length,
-    omitted: violations.length - shown.length,
+    page: {
+      offset,
+      limit,
+      total,
+      hasMore: offset + shown.length < total,
+    },
+    truncated: shown.length < total,
+    omitted: total - shown.length,
   };
 }
 
@@ -207,8 +237,9 @@ export function describePreflight(result: PreflightResult): string {
     return `콘텐츠 ${summary.scanned}건 검사 — 위반 없음.`;
   }
 
+  const { page } = result;
   const tail = result.truncated
-    ? ` 목록에는 ${result.items.length}건만 담았습니다 (${result.omitted}건 생략).`
+    ? ` 목록에는 ${page.total}건 중 ${page.offset + 1}~${page.offset + result.items.length}번째를 담았습니다 (${result.omitted}건 생략).`
     : "";
   return (
     `콘텐츠 ${summary.scanned}건 검사 — ${parts.join(" · ")}.` +

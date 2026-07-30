@@ -44,12 +44,40 @@ test.describe("발행 파이프라인 Web UI (TASK-0704)", () => {
     await expect(history).toContainText("REVIEW → PUBLISHED");
     await expect(history).toContainText("DRAFT → REVIEW");
 
-    // PUBLISHED → ARCHIVED: 종결 상태 (전이 버튼 없음)
+    // PUBLISHED → ARCHIVED: 되살리기만 남는다 (TASK-2701, CTO 결정 2601-①)
     await item.getByRole("button", { name: "보관 (ARCHIVED)" }).click();
     await expect(badge).toHaveText("ARCHIVED");
-    await expect(item.getByText("종결됨 (전이 불가)")).toBeVisible();
+    // 공식 절차가 PUBLISHED → ARCHIVED → 수정 → 재발행이므로 되살릴 길이 있다
+    await expect(
+      item.getByRole("button", { name: "DRAFT로 되돌리기" }),
+    ).toBeVisible();
+    // 발행으로 직행하는 버튼은 없다 — 게이트를 다시 거쳐야 한다
+    await expect(
+      item.getByRole("button", { name: "발행 (PUBLISHED)" }),
+    ).toHaveCount(0);
     // publishedAt은 보관 후에도 보존 (CTO 결정)
     await expect(item.getByTestId("content-published-at")).toBeVisible();
+  });
+
+  test("보관된 콘텐츠를 되살려 다시 발행할 수 있다 (TASK-2701, CTO 결정 2601-①)", async ({
+    page,
+  }) => {
+    await reset();
+    await page.goto("/projects/proj-pub");
+    const item = page.getByTestId("content-item");
+    const badge = item.getByTestId("content-status-badge");
+
+    await item.getByRole("button", { name: "검토 요청 (REVIEW)" }).click();
+    await item.getByRole("button", { name: "발행 (PUBLISHED)" }).click();
+    await item.getByRole("button", { name: "보관 (ARCHIVED)" }).click();
+    await expect(badge).toHaveText("ARCHIVED");
+
+    // 되살리기 → 검토 → 재발행: 게이트가 다시 돈다
+    await item.getByRole("button", { name: "DRAFT로 되돌리기" }).click();
+    await expect(badge).toHaveText("DRAFT");
+    await item.getByRole("button", { name: "검토 요청 (REVIEW)" }).click();
+    await item.getByRole("button", { name: "발행 (PUBLISHED)" }).click();
+    await expect(badge).toHaveText("PUBLISHED");
   });
 
   test("REVIEW → DRAFT 되돌리기 버튼이 동작한다", async ({ page }) => {
@@ -264,5 +292,76 @@ test.describe("발행 위반 스캔 Web UI (TASK-2601, CTO 결정 2501-①)", ()
     // 근거 상품 연결이 없어 주의는 있지만 막히는 것은 없다
     await expect(panel.getByTestId("preflight-blocked")).toContainText("0");
     await expect(panel.getByTestId("preflight-warned")).toContainText("1");
+  });
+});
+
+test.describe("예약 스캔 이력 Web UI (TASK-2701, CTO 결정 2601-②③)", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem("acos_token", "stub-token");
+    });
+  });
+
+  test("경보를 만들지 않은 실행도 보여준다 — 조용한 것과 안 돈 것은 다르다", async ({
+    page,
+  }) => {
+    await reset();
+    await page.goto("/projects/proj-pub");
+
+    const history = page.getByTestId("scan-history");
+    await expect(page.getByTestId("scan-run")).toHaveCount(2);
+    // 첫 스캔은 기준선이고 경보하지 않았다
+    await expect(history).toContainText("기준선");
+    await expect(history).toContainText("조용");
+    // 늘어난 실행은 경보로 표시된다
+    await expect(history).toContainText("늘었음");
+    await expect(history).toContainText("경보");
+  });
+
+  test("지난번 대비 위반 수를 함께 보여준다", async ({ page }) => {
+    await reset();
+    await page.goto("/projects/proj-pub");
+    await expect(page.getByTestId("scan-history")).toContainText(
+      "지난번 0건",
+    );
+  });
+});
+
+test.describe("위반 목록 페이지 (TASK-2701, CTO 결정 2601-④)", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem("acos_token", "stub-token");
+    });
+  });
+
+  test("범위를 넘는 페이지에서도 요약은 전체 기준이다", async ({ page }) => {
+    await reset();
+    await fetch(`${STUB}/__publishing/ban`, { method: "POST" });
+    await page.goto("/projects/proj-pub?violations=10");
+
+    const panel = page.getByTestId("governance-preflight");
+    // 목록은 비어도 요약은 전체를 말한다
+    await expect(panel.getByTestId("preflight-item")).toHaveCount(0);
+    await expect(panel.getByTestId("preflight-blocked")).toContainText("1");
+    await expect(panel.getByTestId("preflight-page")).toContainText(
+      "위반 1건 중",
+    );
+  });
+
+  test("첫 페이지에서는 이전 버튼이 없다", async ({ page }) => {
+    await reset();
+    await fetch(`${STUB}/__publishing/ban`, { method: "POST" });
+    await page.goto("/projects/proj-pub");
+    await expect(page.getByTestId("preflight-prev")).toHaveCount(0);
+  });
+
+  test("잘못된 페이지 값은 첫 페이지로 본다", async ({ page }) => {
+    await reset();
+    await fetch(`${STUB}/__publishing/ban`, { method: "POST" });
+    await page.goto("/projects/proj-pub?violations=abc");
+    // 400을 내지 않고 목록이 그대로 보인다
+    await expect(
+      page.getByTestId("governance-preflight").getByTestId("preflight-item"),
+    ).toHaveCount(1);
   });
 });

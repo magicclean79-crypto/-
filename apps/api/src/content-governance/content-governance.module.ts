@@ -3,6 +3,7 @@ import { AuthModule } from "../auth/auth.module";
 import { CompanyBrainModule } from "../company-brain/company-brain.module";
 import { ContentGovernanceService } from "./content-governance.service";
 import { GovernancePreflightService } from "./governance-preflight.service";
+import { GovernanceScanService } from "./governance-scan.service";
 import { GovernanceRulesService } from "./governance-rules.service";
 import { GovernanceController } from "./governance.controller";
 
@@ -20,11 +21,13 @@ import { GovernanceController } from "./governance.controller";
     GovernanceRulesService,
     ContentGovernanceService,
     GovernancePreflightService,
+    GovernanceScanService,
   ],
   exports: [
     GovernanceRulesService,
     ContentGovernanceService,
     GovernancePreflightService,
+    GovernanceScanService,
   ],
 })
 export class ContentGovernanceModule {}

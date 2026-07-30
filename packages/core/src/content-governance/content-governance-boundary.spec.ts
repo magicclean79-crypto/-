@@ -5,6 +5,8 @@ import {
   evaluateContentGovernance,
 } from "./content-governance";
 import { scanBannedWords } from "../ready-validation/ready-validation";
+import { allowedTransitions } from "../content/content-status";
+import { CONTENT_STATUSES } from "@acos/shared";
 
 /**
  * 하지 않기로 한 것을 고정한다. (TASK-2601 — CTO 결정 2501-②③④)
@@ -109,6 +111,45 @@ describe("Governance 경계 — 하지 않기로 한 것 (TASK-2601)", () => {
       expect(applicableDisclosures(rules, "식품").map((r) => r.id)).toEqual([
         "all",
       ]);
+    });
+  });
+
+  describe("규칙 캐시는 Request Scope만 (CTO 결정 2601-⑤)", () => {
+    it("core 판정 계층에 캐시가 없다 — 규칙은 호출부가 주입한다", () => {
+      // 순수 판정에 캐시가 생기면 같은 입력이 다른 답을 낼 수 있다
+      const code = source("./content-governance.ts");
+      for (const forbidden of ["cache", "Cache", "ttl", "TTL", "memo"]) {
+        expect(code).not.toContain(forbidden);
+      }
+    });
+
+    it("스캔 계층에도 전역 저장소가 없다", () => {
+      // 모듈 수준 Map/Set은 프로세스 전역 캐시가 되고, 그러면 규칙을 고친
+      // 운영자가 언제 반영되는지 알 수 없다
+      const code = source("./preflight.ts");
+      expect(code).not.toContain("new Map(");
+      expect(code).not.toContain("new Set(");
+      expect(code).not.toContain("globalThis");
+    });
+  });
+
+  describe("보관된 콘텐츠 되살리기 경로 (CTO 결정 2601-①)", () => {
+    it("상태를 새로 만들지 않았다 — 되살리는 길은 ARCHIVED → DRAFT 하나다", () => {
+      // 별도 상태(SUSPENDED)를 만들지 않기로 한 결정. 상태 목록이 그 사실의
+      // 원천이므로 목록 자체를 고정한다 — 주석이 아니라 값을 본다.
+      expect(CONTENT_STATUSES).toEqual([
+        "DRAFT",
+        "REVIEW",
+        "PUBLISHED",
+        "ARCHIVED",
+      ]);
+      expect(allowedTransitions("ARCHIVED")).toEqual(["DRAFT"]);
+    });
+
+    it("되살린 뒤 발행으로 직행하는 길이 없다", () => {
+      // 내린 이유를 고치지 않은 채 되돌아가면 내린 것이 무의미하다
+      expect(allowedTransitions("ARCHIVED")).not.toContain("PUBLISHED");
+      expect(allowedTransitions("ARCHIVED")).not.toContain("REVIEW");
     });
   });
 

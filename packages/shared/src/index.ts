@@ -668,6 +668,18 @@ export interface PreflightItemDto {
   warnings: string[];
 }
 
+/**
+ * 목록 페이지 (TASK-2701, CTO 결정 2601-④).
+ * **Summary는 항상 전체 기준이다** — 페이지는 목록만 자른다.
+ */
+export interface PreflightPageDto {
+  offset: number;
+  limit: number;
+  /** 위반 전체 수 (페이지와 무관) */
+  total: number;
+  hasMore: boolean;
+}
+
 export interface PreflightSummaryDto {
   scanned: number;
   /** 아직 발행되지 않았고 위반이 있는 것 — 발행 시 막힌다 */
@@ -689,12 +701,32 @@ export interface GovernancePreflightDto {
   projectId: string | null;
   summary: PreflightSummaryDto;
   items: PreflightItemDto[];
+  page: PreflightPageDto;
   /** 목록을 잘랐는가 — 요약의 숫자는 자르기 전 전체다 */
   truncated: boolean;
   omitted: number;
   /** 사람이 읽을 한 줄 */
   detail: string;
   scannedAt: string;
+}
+
+/** 예약 스캔 실행 기록 (TASK-2701, CTO 결정 2601-②③) */
+export interface GovernanceScanRunDto {
+  id: string;
+  /** `all` 또는 `project:<id>` */
+  scope: string;
+  summary: PreflightSummaryDto;
+  /** 지난 결과와 비교한 판정 */
+  verdict: "baseline" | "increased" | "decreased" | "unchanged" | "resolved";
+  /** 직전 위반 총합 — 첫 스캔이면 null */
+  previousTotal: number | null;
+  /** 이번 위반 총합 (막힐 것 + 이미 나간 것) */
+  total: number;
+  /** 이 실행이 경보를 만들었는가 */
+  alerted: boolean;
+  trigger: string;
+  detail: string;
+  createdAt: string;
 }
 
 // ── LLM Gateway (TASK-0501, Sprint 5 — AI Execution) ───

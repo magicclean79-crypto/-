@@ -6,12 +6,16 @@ import type {
   ContentGovernanceDto,
   ContentStatusHistoryDto,
   GovernancePreflightDto,
+  GovernanceScanRunDto,
   ProductObjectDto,
   ProjectDetailDto,
 } from "@acos/shared";
 import { Badge } from "@acos/ui";
 import { ContentGovernancePanel } from "./content-governance";
-import { GovernancePreflightPanel } from "./governance-preflight";
+import {
+  GovernancePreflightPanel,
+  GovernanceScanHistory,
+} from "./governance-preflight";
 import { ContentStatusActions } from "./content-status-actions";
 import { ContentStatusBadge } from "./content-status";
 import { PipelineActions } from "./pipeline-actions";
@@ -36,21 +40,37 @@ async function fetchJson<T>(path: string): Promise<T | null> {
 
 export default async function ProjectDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { id } = await params;
+  const query = await searchParams;
+  // 위반 목록의 페이지 (TASK-2701) — 잘못된 값은 첫 페이지로 본다.
+  // API는 잘못된 값을 400으로 거절하므로 화면이 먼저 걸러 낸다.
+  const rawOffset = Array.isArray(query.violations)
+    ? query.violations[0]
+    : query.violations;
+  const parsedOffset = Number(rawOffset);
+  const violationOffset =
+    Number.isInteger(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
   const project = await fetchJson<ProjectDetailDto>(`/projects/${id}`);
   if (!project) {
     notFound();
   }
-  const [latestObject, contentsBody, preflight] = await Promise.all([
+  const [latestObject, contentsBody, preflight, scansBody] = await Promise.all([
     fetchJson<ProductObjectDto>(`/projects/${id}/product-object`),
     fetchJson<{ contents: ContentDto[] }>(`/projects/${id}/contents`),
     // 발행 위반 스캔 (TASK-2601) — 이미 나간 것까지 함께 본다.
     // 조회는 상태를 바꾸지 않으므로 화면을 여는 것만으로 안전하다.
     fetchJson<GovernancePreflightDto>(
-      `/projects/${id}/governance/preflight?status=DRAFT,REVIEW,PUBLISHED`,
+      `/projects/${id}/governance/preflight?status=DRAFT,REVIEW,PUBLISHED` +
+        `&limit=10&offset=${violationOffset}`,
+    ),
+    // 예약 스캔 이력 (TASK-2701) — 경보를 만들지 않은 실행도 보여준다
+    fetchJson<{ runs: GovernanceScanRunDto[] }>(
+      `/projects/${id}/governance/scans?limit=5`,
     ),
   ]);
   const contents = contentsBody?.contents ?? [];
@@ -189,7 +209,13 @@ export default async function ProjectDetailPage({
             상태를 바꾸지 않습니다 (CTO 결정 2501-①)
           </span>
         </div>
-        <GovernancePreflightPanel scan={preflight} />
+        <GovernancePreflightPanel scan={preflight} projectId={project.id} />
+        <div className="mt-4 border-t border-zinc-100 pt-3 dark:border-zinc-800">
+          <p className="mb-2 text-xs font-medium text-zinc-600 dark:text-zinc-400">
+            예약 스캔 이력 — 경보를 만들지 않은 실행도 남습니다
+          </p>
+          <GovernanceScanHistory runs={scansBody?.runs ?? []} />
+        </div>
       </section>
 
       <section>

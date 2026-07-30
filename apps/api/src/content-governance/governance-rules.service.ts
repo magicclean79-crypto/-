@@ -23,6 +23,24 @@ function sectionItems<T>(
 }
 
 /**
+ * 한 번의 요청 안에서 재사용하는 규칙 묶음. (TASK-2701, CTO 결정 2601-⑤)
+ *
+ * **Request Scope만 허용한다. Global Cache는 만들지 않는다.**
+ *
+ * 스캔은 콘텐츠마다 규칙을 읽으므로 500건이면 조회가 500회다. 그런데 **한 번의
+ * 스캔 안에서 규칙은 바뀌지 않으므로** 한 번 읽어 그 스캔 내내 쓰는 것은
+ * 판정의 단일 원천을 흐리지 않는다.
+ *
+ * 프로세스 전역 캐시를 두지 않는 이유: 규칙을 고친 운영자가 **언제 반영되는지
+ * 알 수 없게 된다.** "고쳤는데 왜 그대로인가"를 TTL로 설명해야 하는 상태는
+ * 규칙을 신뢰할 수 없게 만든다. 요청이 끝나면 스냅샷도 사라진다.
+ */
+export interface GovernanceRulesSnapshot {
+  bannedWords: { value: string[] | null; source: RuleSource };
+  disclosures: { value: DisclosureRule[] | null; source: RuleSource };
+}
+
+/**
  * 거버넌스 규칙 읽기. (TASK-2501, Sprint 25)
  *
  * **규칙을 읽는 곳은 하나다.**
@@ -65,6 +83,20 @@ export class GovernanceRulesService {
       return { value: null, source: "invalid" };
     }
     return { value: parsed, source: "configured" };
+  }
+
+  /**
+   * 요청 1회용 규칙 스냅샷 (CTO 결정 2601-⑤).
+   *
+   * 스캔처럼 여러 건을 판정할 때 **한 번만 읽는다.** 전역 캐시가 아니므로
+   * 다음 요청은 다시 읽는다 — 규칙을 고치면 곧바로 반영된다.
+   */
+  async snapshot(): Promise<GovernanceRulesSnapshot> {
+    const [bannedWords, disclosures] = await Promise.all([
+      this.bannedWords(),
+      this.disclosures(),
+    ]);
+    return { bannedWords, disclosures };
   }
 
   /** 필수 고지 규칙 — 값과 왜 못 읽었는지를 함께 돌려준다 */

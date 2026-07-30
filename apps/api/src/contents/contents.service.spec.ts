@@ -164,16 +164,29 @@ describe("ContentsService (Service Test)", () => {
       expect(back.status).toBe("DRAFT");
     });
 
-    it("DRAFT → PUBLISHED 건너뛰기·ARCHIVED 이후 전이는 400", async () => {
+    it("DRAFT → PUBLISHED 건너뛰기는 400", async () => {
       const { service, content } = await setup();
       await expect(
         service.updateStatus("proj-1", content.id, "PUBLISHED"),
       ).rejects.toThrow(BadRequestException);
+    });
 
+    it("보관된 콘텐츠는 DRAFT로만 되살릴 수 있다 (TASK-2701, CTO 결정 2601-①)", async () => {
+      const { service, content } = await setup();
       await service.updateStatus("proj-1", content.id, "ARCHIVED");
+
+      // 발행으로 직행하면 게이트를 우회한다 — 안내가 경로를 말한다
       await expect(
-        service.updateStatus("proj-1", content.id, "DRAFT"),
+        service.updateStatus("proj-1", content.id, "PUBLISHED"),
+      ).rejects.toThrow(/DRAFT로 되살린 뒤 REVIEW를 거쳐/);
+      await expect(
+        service.updateStatus("proj-1", content.id, "REVIEW"),
       ).rejects.toThrow(BadRequestException);
+
+      // 공식 절차: PUBLISHED → ARCHIVED → 수정 → 재발행
+      expect(
+        (await service.updateStatus("proj-1", content.id, "DRAFT")).status,
+      ).toBe("DRAFT");
     });
 
     it("본문이 비어 있으면 발행(400) — isPublishable 검증", async () => {

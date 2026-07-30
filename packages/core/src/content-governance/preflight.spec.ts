@@ -207,7 +207,8 @@ describe("Governance Preflight Scan (TASK-2601, CTO 결정 2501-①)", () => {
     it("잘랐다는 사실과 생략 건수를 문구에 적는다", () => {
       const detail = describePreflight(summarizePreflight(many, { limit: 2 }));
       expect(detail).toContain("발행이 막힐 것 5건");
-      expect(detail).toContain("2건만 담았습니다");
+      // 몇 번째를 보고 있는지까지 적는다 (TASK-2701 페이지)
+      expect(detail).toContain("5건 중 1~2번째");
       expect(detail).toContain("3건 생략");
     });
 
@@ -216,6 +217,79 @@ describe("Governance Preflight Scan (TASK-2601, CTO 결정 2501-①)", () => {
       expect(result.truncated).toBe(false);
       expect(result.omitted).toBe(0);
       expect(describePreflight(result)).not.toContain("생략");
+    });
+  });
+
+  describe("페이지 (TASK-2701, CTO 결정 2601-④)", () => {
+    const many = Array.from({ length: 5 }, (_, index) =>
+      item({
+        contentId: `c-${index}`,
+        status: "FAIL",
+        blockedBy: ["banned-words"],
+      }),
+    );
+
+    it("Summary는 항상 전체 기준이다 — 페이지와 무관하다", () => {
+      for (const offset of [0, 2, 4]) {
+        const result = summarizePreflight(many, { limit: 2, offset });
+        // 한 페이지에 2건이 보인다고 위반이 2건인 것이 아니다
+        expect(result.summary.scanned).toBe(5);
+        expect(result.summary.blocked).toBe(5);
+        expect(result.page.total).toBe(5);
+      }
+    });
+
+    it("offset만큼 건너뛴다", () => {
+      const first = summarizePreflight(many, { limit: 2, offset: 0 });
+      const second = summarizePreflight(many, { limit: 2, offset: 2 });
+      expect(first.items.map((entry) => entry.contentId)).toEqual([
+        "c-0",
+        "c-1",
+      ]);
+      expect(second.items.map((entry) => entry.contentId)).toEqual([
+        "c-2",
+        "c-3",
+      ]);
+    });
+
+    it("마지막 페이지에서 hasMore가 꺼진다", () => {
+      expect(summarizePreflight(many, { limit: 2, offset: 0 }).page.hasMore).toBe(
+        true,
+      );
+      expect(summarizePreflight(many, { limit: 2, offset: 4 }).page.hasMore).toBe(
+        false,
+      );
+    });
+
+    it("페이지를 이어 붙이면 전체가 된다 — 빠지거나 겹치지 않는다", () => {
+      const seen: string[] = [];
+      for (let offset = 0; offset < 5; offset += 2) {
+        seen.push(
+          ...summarizePreflight(many, { limit: 2, offset }).items.map(
+            (entry) => entry.contentId,
+          ),
+        );
+      }
+      expect(seen).toEqual(["c-0", "c-1", "c-2", "c-3", "c-4"]);
+      expect(new Set(seen).size).toBe(5);
+    });
+
+    it("범위를 넘는 offset은 빈 페이지이고 전체 수는 그대로다", () => {
+      const result = summarizePreflight(many, { limit: 2, offset: 99 });
+      expect(result.items).toEqual([]);
+      expect(result.page.total).toBe(5);
+      expect(result.page.offset).toBe(5);
+      expect(result.page.hasMore).toBe(false);
+      // 다 건너뛴 것도 "생략"이다 — 요약은 여전히 전체를 말한다
+      expect(result.omitted).toBe(5);
+      expect(result.summary.blocked).toBe(5);
+    });
+
+    it("문구가 몇 번째를 보고 있는지 말한다", () => {
+      const detail = describePreflight(
+        summarizePreflight(many, { limit: 2, offset: 2 }),
+      );
+      expect(detail).toContain("5건 중 3~4번째");
     });
   });
 

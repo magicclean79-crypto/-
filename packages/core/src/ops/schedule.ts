@@ -21,6 +21,8 @@ export const SCHEDULED_JOBS = [
   "provider-smoke",
   // 원격 사본 대조 (TASK-2101, CTO 결정 2001-②) — 주 1회, 운영에서만
   "remote-verify",
+  // 발행 위반 예약 스캔 (TASK-2701, CTO 결정 2601-②) — 하루 1회
+  "governance-scan",
 ] as const;
 
 export type ScheduledJob = (typeof SCHEDULED_JOBS)[number];
@@ -43,6 +45,9 @@ export const DEFAULT_JOB_INTERVALS: Record<ScheduledJob, number> = {
   "provider-smoke": 24 * 60 * 60 * 1000,
   // 원격 대조는 **전송 비용**이 든다 — 주 1회 (CTO 결정 2001-②)
   "remote-verify": 7 * 24 * 60 * 60 * 1000,
+  // 위반 스캔은 DB만 읽는다(과금 없음). 다만 콘텐츠 전량을 판정하므로
+  // 하루 1회 **시각**으로 돌린다 — 아래 DAILY_JOBS
+  "governance-scan": 24 * 60 * 60 * 1000,
 };
 
 /**
@@ -84,11 +89,15 @@ export const DAILY_JOBS: Partial<Record<ScheduledJob, string>> = {
   "alert-archive": "OPS_CHECK_ARCHIVE_AT",
   "restore-verify": "OPS_CHECK_RESTORE_AT",
   "provider-smoke": "OPS_CHECK_SMOKE_AT",
+  // 위반 스캔 (TASK-2701) — 보관 정리보다 앞에 둔다: 스캔이 남긴 결과를
+  // 보관이 곧바로 치우면 방금 만든 기록을 못 보게 된다
+  "governance-scan": "OPS_CHECK_GOVERNANCE_SCAN_AT",
 };
 
 /** 점검별 기본 실행 시각 — 서로 겹치지 않게 둔다 (백업 → 복구 검증 → 보관) */
 export const DEFAULT_DAILY_TIMES: Partial<Record<ScheduledJob, string>> = {
   "restore-verify": "03:30",
+  "governance-scan": "03:50",
   "alert-archive": "04:00",
   "provider-smoke": "05:00",
 };
@@ -162,6 +171,7 @@ export const JOB_INTERVAL_ENV: Record<ScheduledJob, string> = {
   "restore-verify": "OPS_CHECK_RESTORE_AT",
   "provider-smoke": "OPS_CHECK_SMOKE_AT",
   "remote-verify": "OPS_CHECK_REMOTE_VERIFY_INTERVAL",
+  "governance-scan": "OPS_CHECK_GOVERNANCE_SCAN_AT",
 };
 
 /**

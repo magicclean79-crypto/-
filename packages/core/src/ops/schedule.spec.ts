@@ -86,17 +86,28 @@ describe("Scheduled Checks (TASK-1302)", () => {
       expect(byJob["cost-verification"].enabled).toBe(true);
     });
 
-    it("선언된 점검 8종을 빠짐없이 돌려준다", () => {
+    it("선언된 점검 9종을 빠짐없이 돌려준다", () => {
       expect(resolveSchedules({}).map((entry) => entry.job).sort()).toEqual([
         "alert-archive",
         "backup",
         "cost-verification",
+        "governance-scan",
         "health-check",
         "provider-smoke",
         "provider-validation",
         "remote-verify",
         "restore-verify",
       ]);
+    });
+
+    it("위반 스캔은 보관 정리보다 앞선 시각에 돈다 (TASK-2701)", () => {
+      // 스캔이 남긴 기록을 보관이 곧바로 치우면 방금 만든 것을 못 보게 된다
+      const byJob = Object.fromEntries(
+        resolveSchedules({}).map((entry) => [entry.job, entry]),
+      );
+      expect(byJob["governance-scan"].dailyAtMinutes).toBeLessThan(
+        byJob["alert-archive"].dailyAtMinutes!,
+      );
     });
 
     it("과금되는 스모크는 기본이 꺼짐 — 모르는 사이 돈이 나가지 않게 (TASK-1601)", () => {

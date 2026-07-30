@@ -64,9 +64,7 @@ export function ContentStatusActions({
   }
 
   if (targets.length === 0) {
-    return (
-      <span className="text-xs text-zinc-400">종결됨 (전이 불가)</span>
-    );
+    return <span className="text-xs text-zinc-400">전이 불가</span>;
   }
 
   return (

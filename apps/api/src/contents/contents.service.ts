@@ -165,7 +165,11 @@ export class ContentsService {
         `${record.status}에서 ${target}(으)로 전이할 수 없습니다.` +
           (allowed.length > 0
             ? ` 가능한 전이: ${allowed.join(", ")}`
-            : " (ARCHIVED는 종결 상태입니다)"),
+            : "") +
+          // 되살린 것은 게이트를 다시 거쳐야 한다 (CTO 결정 2601-①)
+          (record.status === "ARCHIVED" && target === "PUBLISHED"
+            ? " 보관된 콘텐츠는 DRAFT로 되살린 뒤 REVIEW를 거쳐 다시 발행하세요 — 그래야 거버넌스 판정이 다시 돕니다."
+            : ""),
       );
     }
     if (target === "PUBLISHED" && !isPublishable(record)) {
