@@ -23,6 +23,10 @@ export const SCHEDULED_JOBS = [
   "remote-verify",
   // 발행 위반 예약 스캔 (TASK-2701, CTO 결정 2601-②) — 하루 1회
   "governance-scan",
+  // 가격 변경 감지 (TASK-3201, CTO 정책 3201-①) — 기록과 가격표를 대조한다
+  "pricing-detect",
+  // 월말 비용 예측 경보 (TASK-3201, CTO 정책 3201-④) — 하루 1회, **경보만**
+  "cost-forecast",
 ] as const;
 
 export type ScheduledJob = (typeof SCHEDULED_JOBS)[number];
@@ -48,6 +52,11 @@ export const DEFAULT_JOB_INTERVALS: Record<ScheduledJob, number> = {
   // 위반 스캔은 DB만 읽는다(과금 없음). 다만 콘텐츠 전량을 판정하므로
   // 하루 1회 **시각**으로 돌린다 — 아래 DAILY_JOBS
   "governance-scan": 24 * 60 * 60 * 1000,
+  // 가격 감지는 DB만 읽는다. Provider 단가는 자주 바뀌지 않으므로 6시간마다
+  // 보면 충분하고, 더 자주 보면 같은 제안을 두고 경보만 반복된다
+  "pricing-detect": 6 * 60 * 60 * 1000,
+  // 예측은 하루 단위 사안이다 — 시각으로 돌린다 (아래 DAILY_JOBS)
+  "cost-forecast": 24 * 60 * 60 * 1000,
 };
 
 /**
@@ -92,11 +101,15 @@ export const DAILY_JOBS: Partial<Record<ScheduledJob, string>> = {
   // 위반 스캔 (TASK-2701) — 보관 정리보다 앞에 둔다: 스캔이 남긴 결과를
   // 보관이 곧바로 치우면 방금 만든 기록을 못 보게 된다
   "governance-scan": "OPS_CHECK_GOVERNANCE_SCAN_AT",
+  // 비용 예측 (TASK-3201) — 하루가 끝난 뒤 봐야 관측 일수가 채워진다
+  "cost-forecast": "OPS_CHECK_FORECAST_AT",
 };
 
 /** 점검별 기본 실행 시각 — 서로 겹치지 않게 둔다 (백업 → 복구 검증 → 보관) */
 export const DEFAULT_DAILY_TIMES: Partial<Record<ScheduledJob, string>> = {
   "restore-verify": "03:30",
+  // 예측은 밤에 쌓인 하루가 집계된 뒤 본다
+  "cost-forecast": "06:00",
   "governance-scan": "03:50",
   "alert-archive": "04:00",
   "provider-smoke": "05:00",
@@ -172,6 +185,8 @@ export const JOB_INTERVAL_ENV: Record<ScheduledJob, string> = {
   "provider-smoke": "OPS_CHECK_SMOKE_AT",
   "remote-verify": "OPS_CHECK_REMOTE_VERIFY_INTERVAL",
   "governance-scan": "OPS_CHECK_GOVERNANCE_SCAN_AT",
+  "pricing-detect": "OPS_CHECK_PRICING_DETECT_INTERVAL",
+  "cost-forecast": "OPS_CHECK_FORECAST_AT",
 };
 
 /**

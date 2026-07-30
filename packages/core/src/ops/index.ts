@@ -15,3 +15,4 @@ export * from "./storage-provisioning";
 export * from "./migration-governance";
 export * from "./provider-rollout";
 export * from "./pricing-governance";
+export * from "./price-detection";

@@ -31,6 +31,7 @@ import type {
   CheckRunResultDto,
   CostForecastDto,
   PricingBoardDto,
+  PricingDetectionDto,
   PricingProposalDto,
   ProposePricingRequest,
   NotificationDeliveryDto,
@@ -602,7 +603,22 @@ export class OpsController {
     }
     return this.pricing.advance(id, action, request.user?.email ?? null, {
       reason: body?.reason,
+      // 적용에만 쓰인다 — 미지정이면 즉시 발효 (CTO 정책 3201-③)
+      effectiveFrom: body?.effectiveFrom,
     });
+  }
+
+  /**
+   * 가격 변경 감지 (POST /ops/pricing/detect) — 예약을 기다리지 않고 지금.
+   *
+   * **감지는 적용이 아닙니다** (CTO 정책 3201-①): 기록과 가격표를 대조해
+   * `DETECTED` 제안을 만들 뿐이고, 승인·적용은 사람이 합니다.
+   */
+  @Post("pricing/detect")
+  @HttpCode(200)
+  async detectPricing(): Promise<PricingDetectionDto> {
+    const result = await this.pricing.detect();
+    return { ...result, checkedAt: new Date().toISOString() };
   }
 
   // ── 비용 인텔리전스 (TASK-3101, CTO 정책 3101-③④) ─────────────

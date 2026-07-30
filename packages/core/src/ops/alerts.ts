@@ -31,6 +31,10 @@ export const ALERT_KINDS = [
   "migration-governance",
   // 발행 위반 예약 스캔 (TASK-2701, CTO 결정 2601-③) — 늘었을 때만 부른다
   "governance-scan",
+  // 가격 변경 감지 (TASK-3201, CTO 정책 3201-①) — 승인을 기다리는 제안이 있다
+  "pricing-drift",
+  // 월말 비용 예측 (TASK-3201, CTO 정책 3201-④) — **경보만** 낸다, 차단은 없다
+  "cost-forecast",
 ] as const;
 
 export type AlertKind = (typeof ALERT_KINDS)[number];
@@ -224,6 +228,106 @@ export function detectConfigurationAlerts(input: {
   }
 
   return alerts;
+}
+
+/**
+ * Pricing Drift Alert — 가격 변경이 감지되어 **승인을 기다린다**.
+ * (TASK-3201, CTO 정책 3201-①)
+ *
+ * 감지만 하고 알리지 않으면 제안이 목록에 쌓인 채 아무도 모릅니다 — 그러면
+ * 자동화는 "돌고 있지만 아무 일도 하지 않는" 상태가 됩니다.
+ *
+ * **차단하지 않습니다.** 단가가 어긋난 것과 호출을 막는 것은 다른 일입니다
+ * (결정 1301-⑤와 같은 결).
+ */
+export function detectPricingDriftAlerts(input: {
+  /** 감지되어 제안이 만들어진 변경 */
+  changes: {
+    target: string;
+    key: string;
+    impliedPrice: { perUnitUsd: number };
+    currentPrice: { perUnitUsd: number };
+    samples: number;
+  }[];
+  /** 어긋났지만 단가를 계산할 수 없는 신호 (LLM) */
+  unresolved: { target: string; key: string; provider: string; samples: number }[];
+}): DetectedAlert[] {
+  const alerts: DetectedAlert[] = [];
+  for (const change of input.changes) {
+    alerts.push({
+      kind: "pricing-drift",
+      key: `pricing-drift:${change.target}:${change.key}`,
+      level: "warning",
+      title: `단가 변경 감지 — ${change.key}`,
+      message:
+        `${change.target}/${change.key} 최근 ${change.samples}건이 단위당 ` +
+        `$${change.impliedPrice.perUnitUsd}를 가리킵니다 (가격표 $${change.currentPrice.perUnitUsd}). ` +
+        "제안이 등록됐습니다 — 승인 후 적용해 주세요 (CTO 정책 3201-①). " +
+        "감지만으로 단가가 바뀌지는 않으며, 호출을 차단하지도 않습니다.",
+    });
+  }
+  for (const signal of input.unresolved) {
+    alerts.push({
+      kind: "pricing-drift",
+      key: `pricing-drift:${signal.target}:${signal.key}`,
+      level: "warning",
+      title: `단가 어긋남 — ${signal.key}`,
+      message:
+        `${signal.provider}/${signal.key} ${signal.samples}건의 기록이 가격표와 어긋납니다. ` +
+        "입력·출력 단가 중 어느 것이 바뀌었는지는 기록만으로 가를 수 없어 제안을 " +
+        "만들지 않았습니다 — Provider 공지를 확인해 직접 제안을 내주세요.",
+    });
+  }
+  return alerts;
+}
+
+/**
+ * Cost Forecast Alert — 이 추세면 월 예산을 넘는다. (TASK-3201, CTO 정책 3201-④)
+ *
+ * **Forecast는 Alert만 발생시키며 Budget Gate에는 연결하지 않습니다.**
+ * 알리는 것과 막는 것은 다릅니다: 예측으로 막으면 **아직 쓰지 않은 돈** 때문에
+ * 서비스가 멈추고, 추정이 틀렸을 때 되돌릴 방법도 없습니다. 그래서 이 함수는
+ * 경보를 만들고, 그 문구가 **차단하지 않는다는 사실**을 직접 말합니다.
+ *
+ * 표본이 부족하면(`verdict !== "projected"`) 경보하지 않습니다 — 짐작으로
+ * 사람을 부르면 다음 경보도 짐작으로 취급됩니다.
+ */
+export function detectForecastAlerts(input: {
+  verdict: string;
+  projectedMonthEnd: number | null;
+  projectedRatio: number | null;
+  projectedExceeds: boolean;
+  budget: number | null;
+  observedDays: number;
+}): DetectedAlert[] {
+  if (
+    input.verdict !== "projected" ||
+    !input.projectedExceeds ||
+    input.projectedMonthEnd === null ||
+    input.budget === null
+  ) {
+    return [];
+  }
+  const ratio =
+    input.projectedRatio === null
+      ? "?"
+      : `${(input.projectedRatio * 100).toFixed(0)}%`;
+  return [
+    {
+      kind: "cost-forecast",
+      // 예산 창은 월 하나뿐이므로 키도 하나다 — 모델별로 쪼개면 같은 사안이
+      // 여러 경보로 흩어져 "얼마나 넘는가"를 아무도 못 본다
+      key: "cost-forecast:monthly",
+      level: "warning",
+      title: "이 추세면 월 AI 예산을 넘습니다",
+      message:
+        `관측 ${input.observedDays}일 기준 월말 예상 $${input.projectedMonthEnd.toFixed(6)} / ` +
+        `예산 $${input.budget} (${ratio}). ` +
+        // 마크다운 강조는 쓰지 않는다 — Slack·메일에서 별표가 그대로 보인다
+        "참고용 추정입니다 — 이 값으로 호출을 차단하지 않습니다 (CTO 정책 3201-④). " +
+        "예산 상향 또는 사용량 조정을 검토해 주세요.",
+    },
+  ];
 }
 
 export interface SchedulerStateInput {
@@ -472,6 +576,10 @@ export const ALERT_COOLDOWN_ENV: Record<AlertKind, string> = {
   "backup-integrity": "ALERT_COOLDOWN_BACKUP_INTEGRITY_MS",
   // 예약 스캔은 늘었을 때만 부르므로 쿨다운은 재알림만 막는다
   "governance-scan": "ALERT_COOLDOWN_GOVERNANCE_SCAN_MS",
+  // 단가 변경은 사람이 승인해야 사라진다 — 30분마다 부르면 소음이 된다
+  "pricing-drift": "ALERT_COOLDOWN_PRICING_DRIFT_MS",
+  // 예측은 하루 단위 사안이다 (권장: ALERT_COOLDOWN_FORECAST_MS=86400000)
+  "cost-forecast": "ALERT_COOLDOWN_FORECAST_MS",
 };
 
 /** 전체 기본값 환경변수 (종류별 값이 없을 때) */

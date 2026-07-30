@@ -6,6 +6,8 @@ import type {
   BillingReportDto,
   CostForecastDto,
   PricingBoardDto,
+  PricingDetectionDto,
+  PricingOriginDto,
   PricingProposalDto,
   PricingStageDto,
   PricingTargetDto,
@@ -15,6 +17,7 @@ import { authFetchInit } from "../../../lib/auth-client";
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
 const STAGE_LABEL: Record<PricingStageDto, string> = {
+  DETECTED: "감지됨",
   DRAFT: "작성됨",
   REVIEWED: "검토됨",
   APPROVED: "승인됨",
@@ -23,6 +26,9 @@ const STAGE_LABEL: Record<PricingStageDto, string> = {
 };
 
 const STAGE_STYLE: Record<PricingStageDto, string> = {
+  // 감지는 "무엇인가 달라졌다"는 신호다 — 정상(초록)도 실패(빨강)도 아니다
+  DETECTED:
+    "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
   DRAFT: "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
   REVIEWED: "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300",
   APPROVED:
@@ -32,8 +38,16 @@ const STAGE_STYLE: Record<PricingStageDto, string> = {
   REJECTED: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300",
 };
 
+/** 사람이 낸 제안과 자동 감지를 화면에서 가른다 (TASK-3201) */
+const ORIGIN_LABEL: Record<PricingOriginDto, string> = {
+  manual: "직접 제안",
+  detected: "자동 감지",
+};
+
 /** 단계별로 지금 누를 수 있는 버튼 (경로 이름 = 행동) */
 const STAGE_ACTION: Record<PricingStageDto, string> = {
+  // 감지가 검토를 대신한다 — 근거를 보고 승인만 하면 된다 (정책 3201-①)
+  DETECTED: "approve",
   DRAFT: "review",
   REVIEWED: "approve",
   APPROVED: "apply",
@@ -70,7 +84,11 @@ function priceText(
 }
 
 /**
- * AI 비용 인텔리전스 (TASK-3101, Sprint 31) — ADMIN 전용.
+ * AI 비용 인텔리전스·자동화 (TASK-3101 · 3201) — ADMIN 전용.
+ *
+ * 가격 변경은 **감지 → 승인 → 적용**이고(정책 3201-①), 감지는 근거를 들고
+ * 오지만 **적용은 사람이** 한다. 적용은 결정이고 **발효는 시각**이다
+ * (정책 3201-③) — 예약된 단가는 그 시각까지 어떤 계산에도 쓰이지 않는다.
  *
  * 세 가지를 한 화면에 둔다. **셋의 성격이 서로 다르다는 사실**을 화면이 직접
  * 말한다 — 섞이면 사람은 추정을 청구서로, 리포트를 회계로 다룬다:
@@ -95,6 +113,8 @@ export default function CostIntelligencePage() {
   const [output, setOutput] = useState("");
   const [perUnit, setPerUnit] = useState("");
   const [reason, setReason] = useState("");
+  /** 적용 예약 시각 (datetime-local) — 비우면 즉시 발효 (정책 3201-③) */
+  const [effectiveFrom, setEffectiveFrom] = useState("");
 
   async function get<T>(path: string): Promise<T | null> {
     const response = await fetch(`${API_URL}${path}`, authFetchInit());
@@ -177,6 +197,41 @@ export default function CostIntelligencePage() {
     }
   }
 
+  /** 가격 변경 감지 — 예약을 기다리지 않고 지금 (정책 3201-①) */
+  async function detect() {
+    setBusy(true);
+    setNote(null);
+    try {
+      const response = await fetch(`${API_URL}/ops/pricing/detect`, {
+        ...authFetchInit(),
+        method: "POST",
+      });
+      if (!response.ok) {
+        setError(
+          response.status === 401 || response.status === 403
+            ? "ADMIN 권한이 필요합니다 — 관리자 계정으로 로그인해 주세요."
+            : `감지 실패 (HTTP ${response.status})`,
+        );
+        return;
+      }
+      const result = (await response.json()) as PricingDetectionDto;
+      setError(null);
+      // 감지는 적용이 아니다 — 무엇이 만들어졌고 무엇을 해야 하는지 말한다
+      setNote(
+        result.created.length > 0
+          ? `${result.created.length}건을 감지해 제안을 등록했습니다 — 근거를 확인하고 승인해 주세요. 감지만으로 단가는 바뀌지 않습니다.`
+          : result.unresolved.length > 0
+            ? `${result.unresolved.length}건이 가격표와 어긋나지만 단가를 가를 수 없어 제안을 만들지 않았습니다 — 직접 제안을 내주세요.`
+            : "가격표와 어긋나는 기록이 없습니다.",
+      );
+      await load();
+    } catch {
+      setError("API 서버에 연결할 수 없습니다.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   /** 단계 진행 (검토·승인·적용·반려) */
   async function advance(
     proposal: PricingProposalDto,
@@ -196,7 +251,12 @@ export default function CostIntelligencePage() {
             "content-type": "application/json",
           },
           body: JSON.stringify(
-            rejectReason === undefined ? {} : { reason: rejectReason },
+            rejectReason !== undefined
+              ? { reason: rejectReason }
+              : // 적용에만 발효 시각을 보낸다 — 비어 있으면 즉시 발효
+                action === "apply" && effectiveFrom !== ""
+                ? { effectiveFrom: new Date(effectiveFrom).toISOString() }
+                : {},
           ),
         },
       );
@@ -212,9 +272,14 @@ export default function CostIntelligencePage() {
       setError(null);
       setNote(
         action === "apply"
-          ? "적용했습니다 — 이후 호출에 이 단가가 쓰입니다. 과거 비용 기록은 바뀌지 않습니다."
+          ? effectiveFrom === ""
+            ? "적용했습니다 — 이후 호출에 이 단가가 쓰입니다. 과거 비용 기록은 바뀌지 않습니다."
+            : `적용했습니다 — ${new Date(effectiveFrom).toLocaleString("ko-KR")}부터 이 단가가 쓰입니다 (예약). 그때까지는 이전 단가로 계산합니다.`
           : `${ACTION_LABEL[action] ?? "반려"} 처리했습니다.`,
       );
+      if (action === "apply") {
+        setEffectiveFrom("");
+      }
       await load();
     } catch {
       setError("API 서버에 연결할 수 없습니다.");
@@ -314,6 +379,28 @@ export default function CostIntelligencePage() {
             </table>
           </div>
 
+          {board.effective.scheduled.length > 0 ? (
+            <div
+              className="mt-4 rounded-lg border border-sky-200 bg-sky-50 p-3 text-sm dark:border-sky-900 dark:bg-sky-950"
+              data-testid="scheduled-pricing"
+            >
+              {/* 발효된 것과 섞으면 예약된 단가가 이미 쓰이는 것처럼 보인다 */}
+              <p className="font-medium">
+                예약된 변경 {board.effective.scheduled.length}건 — 아직 계산에
+                쓰이지 않습니다
+              </p>
+              <ul className="mt-1 space-y-1 text-zinc-600 dark:text-zinc-400">
+                {board.effective.scheduled.map((row) => (
+                  <li key={`${row.target}-${row.key}-${row.effectiveFrom}`}>
+                    {row.target}/{row.key}:{" "}
+                    {priceText(row.target, row.price)} —{" "}
+                    {new Date(row.effectiveFrom).toLocaleString("ko-KR")}부터
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
           <h3 className="mt-6 text-sm font-semibold">
             진행 중인 제안 ({board.open.length}건)
           </h3>
@@ -334,6 +421,13 @@ export default function CostIntelligencePage() {
                     >
                       {STAGE_LABEL[proposal.stage]}
                     </span>
+                    {/* 자동화가 만든 제안을 사람이 낸 것으로 읽지 않게 한다 */}
+                    <span
+                      data-testid={`origin-${proposal.origin}`}
+                      className="rounded border border-zinc-300 px-2 py-0.5 text-xs text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
+                    >
+                      {ORIGIN_LABEL[proposal.origin]}
+                    </span>
                     <span className="font-medium">
                       {proposal.target}/{proposal.key}
                     </span>
@@ -343,8 +437,27 @@ export default function CostIntelligencePage() {
                     </span>
                   </div>
                   <p className="mt-1 text-zinc-500">사유: {proposal.reason}</p>
+                  {proposal.evidence !== null ? (
+                    // 근거 없는 제안은 승인할 수 없다 — 무엇을 보고 판단했는지
+                    // 화면에 있어야 승인이 확인이 된다
+                    <p
+                      className="mt-1 text-xs text-zinc-500"
+                      data-testid="proposal-evidence"
+                    >
+                      근거: 표본 {proposal.evidence.sampleIds.length}건 ·{" "}
+                      {new Date(proposal.evidence.from).toLocaleString("ko-KR")} ~{" "}
+                      {new Date(proposal.evidence.to).toLocaleString("ko-KR")} · 차이{" "}
+                      {(proposal.evidence.relativeDiff * 100).toFixed(1)}%
+                    </p>
+                  ) : null}
                   <p className="mt-1 text-xs text-zinc-500">
-                    제안 {proposal.proposedBy ?? "알 수 없음"}
+                    {/* 감지된 제안의 제안자는 "알 수 없음"이 아니라 시스템이다 —
+                        모르는 것과 사람이 아닌 것은 다르다 */}
+                    제안{" "}
+                    {proposal.proposedBy ??
+                      (proposal.origin === "detected"
+                        ? "시스템 (자동 감지)"
+                        : "알 수 없음")}
                     {proposal.reviewedBy
                       ? ` · 검토 ${proposal.reviewedBy}`
                       : ""}
@@ -359,6 +472,18 @@ export default function CostIntelligencePage() {
                     >
                       {proposal.selfApproval}
                     </p>
+                  ) : null}
+                  {STAGE_ACTION[proposal.stage] === "apply" ? (
+                    <label className="mt-2 block text-xs text-zinc-500">
+                      발효 시각 (비우면 즉시) — 적용은 결정이고 발효는 시각입니다
+                      <input
+                        type="datetime-local"
+                        data-testid="pricing-effective-from"
+                        value={effectiveFrom}
+                        onChange={(event) => setEffectiveFrom(event.target.value)}
+                        className="mt-1 block w-full rounded-lg border border-zinc-300 px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+                      />
+                    </label>
                   ) : null}
                   <div className="mt-2 flex flex-wrap gap-2">
                     {STAGE_ACTION[proposal.stage] ? (
@@ -461,15 +586,27 @@ export default function CostIntelligencePage() {
               />
             </label>
           </div>
-          <button
-            type="button"
-            data-testid="pricing-propose"
-            disabled={busy}
-            onClick={() => void propose()}
-            className="mt-3 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            제안 등록
-          </button>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              data-testid="pricing-propose"
+              disabled={busy}
+              onClick={() => void propose()}
+              className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+            >
+              제안 등록
+            </button>
+            {/* 예약(6시간)을 기다리지 않고 지금 대조한다 — 감지는 적용이 아니다 */}
+            <button
+              type="button"
+              data-testid="pricing-detect"
+              disabled={busy}
+              onClick={() => void detect()}
+              className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+            >
+              지금 감지
+            </button>
+          </div>
 
           {board.closed.length > 0 ? (
             <>
@@ -530,7 +667,9 @@ export default function CostIntelligencePage() {
           </dl>
           <p className="mt-2 text-xs text-zinc-500">
             관측 {forecast.observedDays}일 / 최소 {forecast.minDays}일 · 예산
-            차단은 실제 비용만 사용합니다.
+            차단은 실제 비용만 사용합니다. 예상이 예산을 넘으면{" "}
+            <strong>경보만</strong> 나가고 호출은 막히지 않습니다 (CTO 정책
+            3201-④).
           </p>
         </section>
       ) : null}

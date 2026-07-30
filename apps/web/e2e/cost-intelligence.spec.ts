@@ -151,3 +151,116 @@ test.describe("AI 비용 관리 (TASK-3101)", () => {
     );
   });
 });
+
+test.describe("가격 자동화 (TASK-3201)", () => {
+  test("감지된 제안은 출처와 근거를 함께 보여준다 (CTO 정책 3201-①)", async ({
+    page,
+  }) => {
+    await setMode("data");
+    await openPage(page);
+
+    await page.getByTestId("pricing-detect").click();
+    await expect(page.getByTestId("costs-note")).toContainText(
+      "감지만으로 단가는 바뀌지 않습니다",
+    );
+
+    const open = page.getByTestId("open-proposals");
+    await expect(open).toContainText("감지됨");
+    // 자동화가 만든 제안을 사람이 낸 것으로 읽지 않게 한다
+    await expect(page.getByTestId("origin-detected")).toBeVisible();
+    // 근거 없는 제안은 승인할 수 없다
+    await expect(page.getByTestId("proposal-evidence")).toContainText("표본 5건");
+    // 제안자가 "알 수 없음"이 아니라 시스템이다 — 모르는 것과 사람이 아닌
+    // 것은 다르다 (라이브 화면에서 "제안 알 수 없음"으로 보이던 것을 갈랐다)
+    await expect(open).toContainText("제안 시스템 (자동 감지)");
+    // 감지가 검토를 대신한다 — 바로 승인 버튼이 뜬다
+    await expect(open.getByRole("button", { name: "승인" })).toBeVisible();
+    await expect(open.getByRole("button", { name: "검토 완료" })).toHaveCount(0);
+
+    // 감지만으로는 실효 가격표가 바뀌지 않는다
+    await expect(page.getByTestId("effective-pricing")).toContainText(
+      "단위당 $0.0015",
+    );
+  });
+
+  test("감지된 제안을 승인하면 사람의 확인이 1회라는 사실을 밝힌다", async ({
+    page,
+  }) => {
+    await setMode("data");
+    await openPage(page);
+
+    await page.getByTestId("pricing-detect").click();
+    await page.getByRole("button", { name: "승인" }).click();
+    await expect(page.getByTestId("self-approval-warning")).toContainText(
+      "사람의 확인은 1회입니다",
+    );
+  });
+
+  test("발효 시각을 예약하면 그때까지 이전 단가로 계산한다 (CTO 정책 3201-③)", async ({
+    page,
+  }) => {
+    await setMode("data");
+    await openPage(page);
+
+    await propose(page, "8월 1일부터 인상 공지");
+    await page.getByRole("button", { name: "검토 완료" }).click();
+    await page.getByRole("button", { name: "승인" }).click();
+
+    // 적용은 결정이고 발효는 시각이다
+    const later = new Date(Date.now() + 3 * 86_400_000);
+    const local = new Date(later.getTime() - later.getTimezoneOffset() * 60_000)
+      .toISOString()
+      .slice(0, 16);
+    await page.getByTestId("pricing-effective-from").fill(local);
+    await page.getByRole("button", { name: "적용" }).click();
+
+    await expect(page.getByTestId("costs-note")).toContainText("예약");
+    await expect(page.getByTestId("scheduled-pricing")).toContainText(
+      "아직 계산에 쓰이지 않습니다",
+    );
+    // 실효 가격표는 그대로다
+    await expect(page.getByTestId("effective-pricing")).toContainText(
+      "단위당 $0.0015",
+    );
+  });
+
+  test("과거 시점 적용은 거부되고 이유가 보인다", async ({ page }) => {
+    await setMode("data");
+    await openPage(page);
+
+    await propose(page, "소급 적용 시도");
+    await page.getByRole("button", { name: "검토 완료" }).click();
+    await page.getByRole("button", { name: "승인" }).click();
+
+    const past = new Date(Date.now() - 3 * 86_400_000);
+    const local = new Date(past.getTime() - past.getTimezoneOffset() * 60_000)
+      .toISOString()
+      .slice(0, 16);
+    await page.getByTestId("pricing-effective-from").fill(local);
+    await page.getByRole("button", { name: "적용" }).click();
+
+    await expect(page.getByTestId("costs-error")).toContainText(
+      "과거 시점으로 적용할 수 없습니다",
+    );
+  });
+
+  test("예측은 경보만 낸다고 화면이 말한다 (CTO 정책 3201-④)", async ({ page }) => {
+    await setMode("data");
+    await openPage(page);
+
+    const forecast = page.getByTestId("cost-forecast");
+    await expect(forecast).toContainText("경보만");
+    await expect(forecast).toContainText("호출은 막히지 않습니다");
+  });
+
+  test("단가를 가를 수 없는 어긋남은 직접 제안을 내라고 말한다", async ({ page }) => {
+    // LLM은 입력·출력 단가를 기록만으로 나눌 수 없다 — 숫자를 지어내지 않는다
+    await setMode("empty");
+    await openPage(page);
+
+    await page.getByTestId("pricing-detect").click();
+    await expect(page.getByTestId("costs-note")).toContainText(
+      "단가를 가를 수 없어 제안을 만들지 않았습니다",
+    );
+  });
+});

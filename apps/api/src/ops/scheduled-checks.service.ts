@@ -3,6 +3,8 @@ import {
   SCHEDULED_JOBS,
   detectBudgetAlerts,
   detectConfigurationAlerts,
+  detectForecastAlerts,
+  detectPricingDriftAlerts,
   detectProviderAlerts,
   detectBackupChainAlert,
   detectBackupPerformanceAlert,
@@ -28,9 +30,11 @@ import type {
   SchedulerCoordinationDto,
 } from "@acos/shared";
 import { LlmBudgetService } from "../llm/llm-budget.service";
+import { PricingService } from "../pricing/pricing.service";
 import { ProviderProductionService } from "../llm/provider-production.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { AlertService } from "./alert.service";
+import { CostIntelligenceService } from "./cost-intelligence.service";
 import { BackupService } from "./backup.service";
 import { DistributedLockService } from "./distributed-lock.service";
 import { NotificationQueueService } from "./notification-queue.service";
@@ -78,6 +82,9 @@ const JOB_ALERT_KINDS: Record<ScheduledJob, AlertKind[]> = {
   "remote-verify": [],
   // 위반 스캔은 자기 종류만 책임진다 (TASK-2701, CTO 결정 2601-③)
   "governance-scan": ["governance-scan"],
+  // 가격 감지·예측도 자기 종류만 책임진다 (TASK-3201, 정책 3201-①④)
+  "pricing-detect": ["pricing-drift"],
+  "cost-forecast": ["cost-forecast"],
 };
 
 /** 사람이 읽는 주기 설명 (경보 문구용) */
@@ -150,6 +157,10 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
     private readonly governance: ContentGovernanceService,
     // 예약 위반 스캔 (TASK-2701, CTO 결정 2601-②)
     private readonly governanceScan: GovernanceScanService,
+    // 가격 변경 감지 (TASK-3201, CTO 정책 3201-①)
+    private readonly pricing: PricingService,
+    // 월말 비용 예측 경보 (TASK-3201, CTO 정책 3201-④) — 경보만, 차단 없음
+    private readonly costs: CostIntelligenceService,
   ) {}
 
   /** 점검 1건의 잠금 이름 */
@@ -607,6 +618,46 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
         // ok=false로 두면 예약 점검 실패로 읽혀 엉뚱한 곳을 보게 된다
         ok: true,
         detail,
+        notified,
+      };
+    }
+
+    if (job === "pricing-detect") {
+      // **감지는 적용이 아니다** (CTO 정책 3201-①) — 제안까지만 만들고,
+      // 승인·적용은 사람이 한다. 자동 적용을 허용하면 Provider 쪽 이상이나
+      // 우리 계산 오류가 곧바로 돈의 기준을 바꾼다.
+      const result = await this.pricing.detect();
+      const detected = detectPricingDriftAlerts({
+        changes: result.changes,
+        unresolved: result.unresolved,
+      });
+      const notified = await this.alerts.sync(JOB_ALERT_KINDS[job], detected);
+      return {
+        // 단가가 어긋난 것은 시스템 장애가 아니다 — 점검 자체는 성공이다
+        ok: true,
+        detail: result.detail,
+        notified,
+      };
+    }
+
+    if (job === "cost-forecast") {
+      // **Forecast는 Alert만 발생시키며 Budget Gate에는 연결하지 않는다**
+      // (CTO 정책 3201-④). 알리는 것과 막는 것은 다르다: 예측으로 막으면
+      // 아직 쓰지 않은 돈 때문에 서비스가 멈춘다.
+      const forecast = await this.costs.forecast();
+      const detected = detectForecastAlerts({
+        verdict: forecast.verdict,
+        projectedMonthEnd: forecast.projectedMonthEnd,
+        projectedRatio: forecast.projectedRatio,
+        projectedExceeds: forecast.projectedExceeds,
+        budget: forecast.budget,
+        observedDays: forecast.observedDays,
+      });
+      const notified = await this.alerts.sync(JOB_ALERT_KINDS[job], detected);
+      return {
+        // 예상이 예산을 넘는 것도 장애가 아니다 — 판단 재료다
+        ok: true,
+        detail: `${forecast.detail} 경보 ${detected.length}건`,
         notified,
       };
     }

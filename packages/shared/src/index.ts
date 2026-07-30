@@ -2138,16 +2138,33 @@ export interface OperationsReadinessDto {
 export type PricingTargetDto = "llm" | "ocr";
 
 export type PricingStageDto =
+  /** 시스템이 찾아낸 변화 (TASK-3201, CTO 정책 3201-①) — 승인을 기다린다 */
+  | "DETECTED"
   | "DRAFT"
   | "REVIEWED"
   | "APPROVED"
   | "APPLIED"
   | "REJECTED";
 
+/** 제안의 출처 — `detected`는 자동화가 찾아낸 것이다 (TASK-3201) */
+export type PricingOriginDto = "manual" | "detected";
+
 /** 단가 제안 1건 (GET /ops/pricing) */
 export interface PricingProposalDto {
   id: string;
   target: PricingTargetDto;
+  /**
+   * 출처 (TASK-3201) — 사람이 낸 제안과 자동 감지를 가른다.
+   * 가르지 않으면 자동화가 만든 제안을 사람이 낸 것으로 읽는다.
+   */
+  origin: PricingOriginDto;
+  /** 감지 근거 (자동 감지만) — 근거 없는 제안은 승인할 수 없다 */
+  evidence: {
+    from: string;
+    to: string;
+    sampleIds: string[];
+    relativeDiff: number;
+  } | null;
   /** LLM은 모델 이름, OCR은 엔진 이름 */
   key: string;
   /** llm: `{inputPerMillion, outputPerMillion}` · ocr: `{perUnitUsd}` */
@@ -2165,6 +2182,13 @@ export interface PricingProposalDto {
   approvedAt: string | null;
   appliedBy: string | null;
   appliedAt: string | null;
+  /**
+   * 발효 시각 (TASK-3201, CTO 정책 3201-③) — **적용은 결정이고 발효는 시각이다.**
+   * 미래면 그 시각까지 어떤 계산에도 쓰이지 않는다.
+   */
+  effectiveFrom: string | null;
+  /** 발효가 아직 오지 않았는가 (표시용) */
+  scheduled: boolean;
   rejectedBy: string | null;
   rejectedAt: string | null;
   rejectedReason: string | null;
@@ -2190,10 +2214,22 @@ export interface EffectivePricingDto {
     note: string;
   }[];
   ocr: { provider: string; perUnitUsd: number; note: string }[];
-  /** 적용 이력 건수 */
+  /** **발효된** 적용 이력 건수 (예약분은 세지 않는다) */
   appliedCount: number;
-  /** 마지막 적용 시각 (없으면 null) */
+  /** 마지막으로 발효된 시각 (없으면 null) */
   lastAppliedAt: string | null;
+  /**
+   * 예약된 변경 (TASK-3201, CTO 정책 3201-③) — 아직 계산에 쓰이지 않는다.
+   * 발효된 것과 섞으면 예약된 단가가 이미 쓰이는 것처럼 보인다.
+   */
+  scheduled: {
+    target: PricingTargetDto;
+    key: string;
+    price: Record<string, number>;
+    effectiveFrom: string;
+  }[];
+  /** 다음으로 가격표가 바뀌는 시각 (없으면 null) */
+  nextChangeAt: string | null;
 }
 
 export interface PricingBoardDto {
@@ -2218,6 +2254,45 @@ export interface ProposePricingRequest {
 export interface AdvancePricingRequest {
   /** 반려 사유 (반려에만 쓰인다) */
   reason?: string;
+  /**
+   * 발효 시각 (적용에만 쓰인다 — TASK-3201, CTO 정책 3201-③).
+   * 미지정이면 즉시 발효한다. 과거 시점은 거부된다.
+   */
+  effectiveFrom?: string;
+}
+
+/** 가격 변경 감지 결과 (POST /ops/pricing/detect) */
+export interface PricingDetectionDto {
+  /** 감지되어 제안이 만들어진 변경 */
+  changes: {
+    target: PricingTargetDto;
+    key: string;
+    impliedPrice: Record<string, number>;
+    currentPrice: Record<string, number>;
+    samples: number;
+    reason: string;
+  }[];
+  /**
+   * 어긋났지만 **단가를 계산할 수 없는** 신호.
+   * LLM은 입력·출력 단가를 기록만으로 가를 수 없어 제안을 만들지 않는다 —
+   * 숫자를 지어내는 대신 사람에게 넘긴다.
+   */
+  unresolved: {
+    target: PricingTargetDto;
+    key: string;
+    provider: string;
+    samples: number;
+    recordedTotal: number;
+    expectedTotal: number;
+    reason: string;
+  }[];
+  /** 이번에 등록된 제안 */
+  created: PricingProposalDto[];
+  /** 이미 진행 중인 제안이 있어 건너뛴 항목 */
+  skipped: string[];
+  checked: number;
+  detail: string;
+  checkedAt: string;
 }
 
 /** 월말 비용 예측 (GET /ops/cost-forecast) — 참고자료다 */

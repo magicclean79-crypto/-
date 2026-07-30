@@ -431,6 +431,38 @@ export const ENV_SPECS: EnvSpec[] = [
     fallback: "1h",
   },
   {
+    // 가격 변경 감지 (TASK-3201, CTO 정책 3201-①)
+    name: "OPS_CHECK_PRICING_DETECT_INTERVAL",
+    category: "ops",
+    description:
+      "가격 변경 감지 간격 (기록과 가격표를 대조 — off로 중단). 감지는 제안까지만 만들고 적용은 사람이 한다",
+    fallback: "6h",
+  },
+  {
+    // 월말 비용 예측 경보 (TASK-3201, CTO 정책 3201-④)
+    name: "OPS_CHECK_FORECAST_AT",
+    category: "ops",
+    description:
+      "월말 비용 예측 경보 실행 시각 HH:MM (운영 서버 로컬 시각) — off로 중단. 경보만 내고 호출은 막지 않는다",
+    fallback: "06:00 로컬",
+  },
+  {
+    name: "ALERT_COOLDOWN_PRICING_DRIFT_MS",
+    category: "ops",
+    description:
+      "단가 변경 감지 재알림 간격 — 사람이 승인해야 사라지므로 30분마다 부르면 소음이 된다",
+    validate: positiveNumber("ALERT_COOLDOWN_PRICING_DRIFT_MS"),
+    fallback: "ALERT_COOLDOWN_MS 또는 30분",
+  },
+  {
+    name: "ALERT_COOLDOWN_FORECAST_MS",
+    category: "ops",
+    description:
+      "월말 예측 경보 재알림 간격 — 하루 단위 사안이므로 86400000 권장",
+    validate: positiveNumber("ALERT_COOLDOWN_FORECAST_MS"),
+    fallback: "ALERT_COOLDOWN_MS 또는 30분",
+  },
+  {
     name: "ALERT_WEBHOOK_URL",
     category: "ops",
     description: "경보 전달 웹훅 주소 — 미설정이면 로그로만 남는다",

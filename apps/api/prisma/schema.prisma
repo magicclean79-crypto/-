@@ -247,6 +247,11 @@ model PricingProposal {
   target         String // llm | ocr
   key            String // LLM은 모델 이름, OCR은 엔진 이름
   price          Json // 제안 단가
+  // 출처 (TASK-3201) — manual(사람) | detected(자동 감지).
+  // 가르지 않으면 자동화가 만든 제안을 사람이 낸 것처럼 읽는다.
+  origin         String    @default("manual")
+  // 감지 근거 (표본 수·기간·표본 id·차이) — 근거 없는 제안은 승인할 수 없다
+  evidence       Json?
   // 제안 당시의 유효 단가 — 가격표에 없던 항목이면 null.
   currentPrice   Json?
   reason         String
@@ -259,13 +264,17 @@ model PricingProposal {
   approvedAt     DateTime?
   appliedBy      String?
   appliedAt      DateTime?
+  // 발효 시각 (TASK-3201, CTO 정책 3201-③) — 적용은 결정이고 발효는 시각이다.
+  // 미래로 예약되면 그 시각까지 어떤 계산에도 쓰이지 않는다.
+  effectiveFrom  DateTime?
   rejectedBy     String?
   rejectedAt     DateTime?
   rejectedReason String?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  // 실효 단가 해석이 적용된 것만 시각순으로 읽는다
+  // 실효 단가 해석이 **발효된** 것만 시각순으로 읽는다 (TASK-3201)
+  @@index([target, key, effectiveFrom])
   @@index([target, key, appliedAt])
   @@index([stage, createdAt])
   @@map("pricing_proposals")

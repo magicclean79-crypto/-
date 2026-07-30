@@ -1,14 +1,21 @@
 import { DEFAULT_LLM_PRICING } from "../execution/execution";
 import { DEFAULT_OCR_PRICING } from "../ocr/ocr-pricing";
 import {
+  EFFECTIVE_FROM_MAX_DAYS,
+  PRICING_ORIGINS,
   PRICING_STAGES,
   PRICING_TARGETS,
   canAdvancePricing,
+  describeEffectiveFrom,
   describePricingProposal,
+  describeSelfApproval,
   judgePricingTransition,
+  judgeSelfApproval,
+  nextPricingChangeAt,
   nextPricingStages,
   resolvePricingAt,
-  selfApprovalWarning,
+  startStage,
+  validateEffectiveFrom,
   validateProposedPrice,
 } from "./pricing-governance";
 import type { AppliedPricing } from "./pricing-governance";
@@ -20,6 +27,7 @@ describe("가격표 거버넌스 (TASK-3101, CTO 정책 3101-①②)", () => {
   it("대상과 단계를 값으로 고정한다", () => {
     expect([...PRICING_TARGETS]).toEqual(["llm", "ocr"]);
     expect([...PRICING_STAGES]).toEqual([
+      "DETECTED",
       "DRAFT",
       "REVIEWED",
       "APPROVED",
@@ -114,28 +122,217 @@ describe("가격표 거버넌스 (TASK-3101, CTO 정책 3101-①②)", () => {
     });
   });
 
-  describe("교차 확인", () => {
-    it("제안자와 승인자가 같으면 사실을 남긴다 — 막지는 않는다", () => {
-      // 운영자가 한 명인 환경에서 절차가 막히면 사람은 코드를 직접 고쳐
-      // 우회하고, 그러면 이력이 아예 없어진다 (결정 2601-① 교훈)
-      const warning = selfApprovalWarning({
-        proposedBy: "admin@acos.local",
+  describe("교차 확인 (TASK-3201, CTO 정책 3201-②)", () => {
+    const same = { proposedBy: "admin@acos.local", approvedBy: "admin@acos.local" };
+
+    it("운영에서는 자기 승인을 차단한다", () => {
+      const judged = judgeSelfApproval({ ...same, environment: "production" });
+      expect(judged.allowed).toBe(false);
+      expect(judged.level).toBe("blocked");
+      expect(judged.message).toContain("운영에서는 자기 승인을 허용하지 않습니다");
+      // 무엇을 하면 되는지 말한다 — 막기만 하면 사람은 코드를 고친다
+      expect(judged.message).toContain("다른 ADMIN 계정으로 승인");
+    });
+
+    it("개발에서는 허용하되 사실을 남긴다", () => {
+      // 개발에서 절차가 막히면 사람은 코드를 직접 고쳐 우회하고, 그러면
+      // 이력이 아예 없어진다 (결정 2601-① 교훈)
+      const judged = judgeSelfApproval({ ...same, environment: "development" });
+      expect(judged.allowed).toBe(true);
+      expect(judged.level).toBe("warning");
+      expect(judged.message).toContain("교차 확인은 이뤄지지 않았습니다");
+      // 운영에서는 다르다는 사실도 함께 말한다
+      expect(judged.message).toContain("운영에서는 차단됩니다");
+    });
+
+    it("환경 미설정은 운영이 아니다 — 개발로 본다", () => {
+      expect(judgeSelfApproval({ ...same, environment: undefined }).allowed).toBe(
+        true,
+      );
+    });
+
+    it("다르면 어느 환경에서도 통과한다", () => {
+      for (const environment of ["production", "development"]) {
+        const judged = judgeSelfApproval({
+          proposedBy: "a@x",
+          approvedBy: "b@x",
+          environment,
+        });
+        expect(judged.allowed).toBe(true);
+        expect(judged.message).toBeNull();
+      }
+    });
+
+    it("아직 승인되지 않았으면 판정할 것이 없다", () => {
+      expect(
+        judgeSelfApproval({
+          proposedBy: "a@x",
+          approvedBy: null,
+          environment: "production",
+        }).message,
+      ).toBeNull();
+    });
+
+    it("감지된 제안은 제안자가 사람이 아니므로 통과한다 — 다만 사실을 밝힌다", () => {
+      // 시스템이 제안한 것을 사람이 승인하면 "두 사람이 봤다"가 아니다
+      const judged = judgeSelfApproval({
+        proposedBy: null,
         approvedBy: "admin@acos.local",
+        environment: "production",
       });
-      expect(warning).toContain("제안자와 승인자가 같습니다");
-      expect(warning).toContain("교차 확인은 이뤄지지 않았습니다");
+      expect(judged.allowed).toBe(true);
+      expect(
+        describeSelfApproval({
+          origin: "detected",
+          proposedBy: null,
+          approvedBy: "admin@acos.local",
+          environment: "production",
+        }),
+      ).toContain("사람의 확인은 1회입니다");
+    });
+  });
+
+  describe("감지 → 승인 → 적용 (TASK-3201, CTO 정책 3201-①)", () => {
+    it("출처를 값으로 고정한다", () => {
+      expect([...PRICING_ORIGINS]).toEqual(["manual", "detected"]);
+      expect(startStage("detected")).toBe("DETECTED");
+      expect(startStage("manual")).toBe("DRAFT");
     });
 
-    it("다르면 경고가 없다", () => {
+    it("감지된 제안은 승인으로 바로 간다 — 감지가 검토를 대신한다", () => {
+      expect(nextPricingStages("DETECTED")).toEqual(["APPROVED", "REJECTED"]);
+    });
+
+    it("감지만으로 적용되지 않는다 — 사람의 승인이 반드시 있다", () => {
+      // 자동 적용을 허용하면 Provider 쪽 이상이나 우리 계산 오류가 곧바로
+      // 돈의 기준을 바꾼다
+      const judged = judgePricingTransition("DETECTED", "APPLIED");
+      expect(judged.ok).toBe(false);
+      expect(judged.reason).toContain("감지 → 승인 → 적용");
+    });
+
+    it("감지된 제안도 반려할 수 있다", () => {
+      expect(canAdvancePricing("DETECTED", "REJECTED")).toBe(true);
+    });
+  });
+
+  describe("미래 시점 적용 (TASK-3201, CTO 정책 3201-③)", () => {
+    const now = at("2026-08-01T00:00:00.000Z");
+
+    it("미지정은 즉시 적용이다", () => {
+      expect(validateEffectiveFrom(null, now)).toBeNull();
+      expect(validateEffectiveFrom(undefined, now)).toBeNull();
+    });
+
+    it("미래 시각은 예약할 수 있다", () => {
+      expect(validateEffectiveFrom(at("2026-09-01T00:00:00.000Z"), now)).toBeNull();
+    });
+
+    it("과거 시점은 거부한다 — 이미 기록된 비용을 소급해 다시 해석한다", () => {
+      const reason = validateEffectiveFrom(at("2026-07-01T00:00:00.000Z"), now);
+      expect(reason).toContain("과거 시점으로 적용할 수 없습니다");
+      expect(reason).toContain("불일치로 바뀝니다");
+    });
+
+    it("시계 오차 정도는 즉시로 본다", () => {
+      // 화면이 보낸 "지금"이 서버보다 몇 초 뒤일 수 있다
       expect(
-        selfApprovalWarning({ proposedBy: "a@x", approvedBy: "b@x" }),
+        validateEffectiveFrom(new Date(now.getTime() - 5_000), now),
       ).toBeNull();
     });
 
-    it("아직 승인되지 않았으면 경고할 것이 없다", () => {
+    it("너무 먼 예약은 거부한다 — 그때가 되면 아무도 이유를 모른다", () => {
+      const far = new Date(
+        now.getTime() + (EFFECTIVE_FROM_MAX_DAYS + 1) * 86_400_000,
+      );
+      expect(validateEffectiveFrom(far, now)).toContain(
+        `최대 ${EFFECTIVE_FROM_MAX_DAYS}일`,
+      );
+    });
+
+    it("예약된 단가는 그 시각까지 계산에 쓰이지 않는다", () => {
+      const scheduled: AppliedPricing[] = [
+        {
+          target: "ocr",
+          key: "google-vision",
+          price: { perUnitUsd: 0.002 },
+          // 오늘 결정하고 9월 1일부터 발효
+          appliedAt: now,
+          effectiveFrom: at("2026-09-01T00:00:00.000Z"),
+        },
+      ];
       expect(
-        selfApprovalWarning({ proposedBy: "a@x", approvedBy: null }),
-      ).toBeNull();
+        resolvePricingAt(defaults, scheduled, now).ocr["google-vision"].perUnitUsd,
+      ).toBe(0.0015);
+      expect(
+        resolvePricingAt(defaults, scheduled, at("2026-09-01T00:00:00.000Z")).ocr[
+          "google-vision"
+        ].perUnitUsd,
+      ).toBe(0.002);
+    });
+
+    it("출처 문구는 발효 시각을 적는다 — 결정 시각이 아니다", () => {
+      const scheduled: AppliedPricing[] = [
+        {
+          target: "ocr",
+          key: "google-vision",
+          price: { perUnitUsd: 0.002 },
+          appliedAt: now,
+          effectiveFrom: at("2026-09-01T00:00:00.000Z"),
+        },
+      ];
+      expect(
+        resolvePricingAt(defaults, scheduled, at("2026-09-02T00:00:00.000Z")).ocr[
+          "google-vision"
+        ].note,
+      ).toContain("2026-09-01");
+    });
+
+    it("다음 변경 시각을 알려 준다 — 캐시가 그 시각을 넘기면 예약이 무시된다", () => {
+      const rows: AppliedPricing[] = [
+        {
+          target: "ocr",
+          key: "google-vision",
+          price: { perUnitUsd: 0.002 },
+          appliedAt: now,
+          effectiveFrom: at("2026-09-01T00:00:00.000Z"),
+        },
+        {
+          target: "llm",
+          key: "gpt-4o",
+          price: { inputPerMillion: 3, outputPerMillion: 12 },
+          appliedAt: now,
+          effectiveFrom: at("2026-08-15T00:00:00.000Z"),
+        },
+      ];
+      expect(nextPricingChangeAt(rows, now)?.toISOString()).toBe(
+        "2026-08-15T00:00:00.000Z",
+      );
+      // 예약이 모두 지나갔으면 없다
+      expect(nextPricingChangeAt(rows, at("2026-10-01T00:00:00.000Z"))).toBeNull();
+    });
+
+    it("문구가 예약인지 발효인지 가른다", () => {
+      expect(describeEffectiveFrom(at("2026-09-01T00:00:00.000Z"), now)).toContain(
+        "적용 예정",
+      );
+      expect(describeEffectiveFrom(at("2026-07-01T00:00:00.000Z"), now)).toContain(
+        "적용됨",
+      );
+    });
+
+    it("예약된 제안의 문구는 이미 쓰인다고 말하지 않는다", () => {
+      const text = describePricingProposal({
+        target: "ocr",
+        key: "google-vision",
+        stage: "APPLIED",
+        price: { perUnitUsd: 0.002 },
+        currentPrice: { perUnitUsd: 0.0015 },
+        effectiveFrom: at("2026-09-01T00:00:00.000Z"),
+        now,
+      });
+      expect(text).toContain("2026-09-01T00:00:00.000Z부터 이 단가가 쓰입니다");
+      expect(text).toContain("예약");
     });
   });
 
@@ -146,12 +343,14 @@ describe("가격표 거버넌스 (TASK-3101, CTO 정책 3101-①②)", () => {
         key: "gpt-4o",
         price: { inputPerMillion: 3, outputPerMillion: 12 },
         appliedAt: at("2026-07-10T00:00:00.000Z"),
+        effectiveFrom: at("2026-07-10T00:00:00.000Z"),
       },
       {
         target: "ocr",
         key: "google-vision",
         price: { perUnitUsd: 0.002 },
         appliedAt: at("2026-07-20T00:00:00.000Z"),
+        effectiveFrom: at("2026-07-20T00:00:00.000Z"),
       },
     ];
 
@@ -192,6 +391,7 @@ describe("가격표 거버넌스 (TASK-3101, CTO 정책 3101-①②)", () => {
           key: "gpt-4o",
           price: { inputPerMillion: 5, outputPerMillion: 20 },
           appliedAt: at("2026-07-25T00:00:00.000Z"),
+          effectiveFrom: at("2026-07-25T00:00:00.000Z"),
         },
       ];
       expect(resolvePricingAt(defaults, twice).llm["gpt-4o"].inputPerMillion).toBe(
@@ -211,6 +411,7 @@ describe("가격표 거버넌스 (TASK-3101, CTO 정책 3101-①②)", () => {
           key: "gpt-5-preview",
           price: { inputPerMillion: 1, outputPerMillion: 4 },
           appliedAt: at("2026-07-01T00:00:00.000Z"),
+          effectiveFrom: at("2026-07-01T00:00:00.000Z"),
         },
       ]);
       expect(added.llm["gpt-5-preview"]).toBeDefined();

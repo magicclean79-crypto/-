@@ -32,6 +32,8 @@ let stubRemoteVerified = false;
  */
 let stubProposals = [];
 let stubAppliedOcr = null;
+/** 예약된 발효 (TASK-3201) — 적용했지만 아직 쓰이지 않는 단가 */
+let stubScheduled = [];
 
 const stats = (totals, groups) => ({
   range: { from: null, to: null },
@@ -367,6 +369,7 @@ const server = http.createServer((req, res) => {
       stubRemoteVerified = false;
       stubProposals = [];
       stubAppliedOcr = null;
+      stubScheduled = [];
       resetPublishing();
       resetUsers();
       res.end(JSON.stringify({ mode }));
@@ -1816,6 +1819,8 @@ const server = http.createServer((req, res) => {
     res.setHeader("content-type", "application/json");
 
     const NEXT_STAGES = {
+      // 감지 → 승인 → 적용 (TASK-3201, CTO 정책 3201-①)
+      DETECTED: ["APPROVED", "REJECTED"],
       DRAFT: ["REVIEWED", "REJECTED"],
       REVIEWED: ["APPROVED", "REJECTED"],
       APPROVED: ["APPLIED", "REJECTED"],
@@ -1829,6 +1834,7 @@ const server = http.createServer((req, res) => {
           ? `입력 $${price.inputPerMillion}/1M · 출력 $${price.outputPerMillion}/1M`
           : `단위당 $${price.perUnitUsd}`;
     const WAITING = {
+      DETECTED: "승인을 기다립니다 (자동 감지 — 근거를 확인하세요)",
       DRAFT: "검토를 기다립니다",
       REVIEWED: "승인을 기다립니다",
       APPROVED: "적용을 기다립니다",
@@ -1836,6 +1842,7 @@ const server = http.createServer((req, res) => {
       REJECTED: "반려되었습니다",
     };
     const STAGE_LABEL = {
+      DETECTED: "감지됨",
       DRAFT: "작성됨",
       REVIEWED: "검토됨",
       APPROVED: "승인됨",
@@ -1845,10 +1852,15 @@ const server = http.createServer((req, res) => {
     const view = (proposal) => ({
       ...proposal,
       nextStages: NEXT_STAGES[proposal.stage],
+      scheduled:
+        proposal.effectiveFrom !== null &&
+        new Date(proposal.effectiveFrom).getTime() > Date.now(),
       selfApproval:
         proposal.approvedBy && proposal.approvedBy === proposal.proposedBy
-          ? `제안자와 승인자가 같습니다 (${proposal.approvedBy}) — 절차는 진행되지만 교차 확인은 이뤄지지 않았습니다.`
-          : null,
+          ? `제안자와 승인자가 같습니다 (${proposal.approvedBy}) — 개발 환경이라 진행하지만 교차 확인은 이뤄지지 않았습니다. 운영에서는 차단됩니다 (CTO 정책 3201-②).`
+          : proposal.origin === "detected" && proposal.approvedBy
+            ? `감지된 제안을 ${proposal.approvedBy}이(가) 승인했습니다 — 제안자가 시스템이므로 사람의 확인은 1회입니다.`
+            : null,
       detail:
         `${proposal.target}/${proposal.key}: ${priceText(proposal.target, proposal.currentPrice)} → ` +
         `${priceText(proposal.target, proposal.price)} · ${STAGE_LABEL[proposal.stage]} — ${WAITING[proposal.stage]}`,
@@ -1876,6 +1888,9 @@ const server = http.createServer((req, res) => {
               : null,
           reason: parsed.reason,
           stage: "DRAFT",
+          origin: "manual",
+          evidence: null,
+          effectiveFrom: null,
           proposedBy: "admin@acos.local",
           reviewedBy: null,
           reviewedAt: null,
@@ -1892,6 +1907,100 @@ const server = http.createServer((req, res) => {
         res.statusCode = 201;
         res.end(JSON.stringify(view(proposal)));
       });
+      return;
+    }
+
+    // 가격 변경 감지 (TASK-3201, CTO 정책 3201-①) — 제안까지만 만든다
+    if (req.method === "POST" && url.pathname === "/ops/pricing/detect") {
+      // data 모드에서는 기록이 새 단가를 가리키는 상황을 재현한다
+      const detectable = mode === "data" && stubAppliedOcr === null;
+      const changes = detectable
+        ? [
+            {
+              target: "ocr",
+              key: "google-vision",
+              impliedPrice: { perUnitUsd: 0.002 },
+              currentPrice: { perUnitUsd: 0.0015 },
+              samples: 5,
+              reason:
+                "최근 5건이 모두 단위당 $0.002를 가리킵니다 (가격표는 $0.0015 · 차이 33.3%). " +
+                "Provider 단가가 바뀌었거나 우리 가격표가 틀렸습니다 — 확인 후 승인해 주세요.",
+            },
+          ]
+        : [];
+      const already = stubProposals.some(
+        (row) =>
+          row.target === "ocr" &&
+          row.key === "google-vision" &&
+          !["APPLIED", "REJECTED"].includes(row.stage),
+      );
+      const created = [];
+      for (const change of changes) {
+        if (already) {
+          break;
+        }
+        const proposal = {
+          id: `pp-${stubProposals.length + 1}`,
+          target: change.target,
+          key: change.key,
+          price: change.impliedPrice,
+          currentPrice: change.currentPrice,
+          reason: change.reason,
+          stage: "DETECTED",
+          origin: "detected",
+          evidence: {
+            from: "2026-07-30T00:00:00.000Z",
+            to: "2026-07-30T04:00:00.000Z",
+            sampleIds: ["o-1", "o-2", "o-3", "o-4", "o-5"],
+            relativeDiff: 0.333,
+          },
+          effectiveFrom: null,
+          // **제안자가 사람이 아니다**
+          proposedBy: null,
+          reviewedBy: null,
+          reviewedAt: null,
+          approvedBy: null,
+          approvedAt: null,
+          appliedBy: null,
+          appliedAt: null,
+          rejectedBy: null,
+          rejectedAt: null,
+          rejectedReason: null,
+          createdAt: new Date().toISOString(),
+        };
+        stubProposals.push(proposal);
+        created.push(view(proposal));
+      }
+      res.end(
+        JSON.stringify({
+          changes,
+          unresolved:
+            mode === "data"
+              ? []
+              : [
+                  {
+                    target: "llm",
+                    key: "gpt-4o",
+                    provider: "openai",
+                    samples: 7,
+                    recordedTotal: 3,
+                    expectedTotal: 2.5,
+                    reason:
+                      "입력·출력 단가 중 어느 것이 바뀌었는지는 기록만으로 가를 수 없습니다 — " +
+                      "Provider 공지를 확인해 직접 제안을 내주세요.",
+                  },
+                ],
+          created,
+          skipped: already && changes.length > 0 ? ["ocr/google-vision"] : [],
+          checked: 12,
+          detail:
+            `표본 12건 검사 · 감지 ${changes.length}건 제안 ${created.length}건 등록` +
+            (changes.length > 0
+              ? " — 감지는 제안까지만 만듭니다. 적용은 승인 후 사람이 합니다 (CTO 정책 3201-①)."
+              : ""),
+          checkedAt: new Date().toISOString(),
+        }),
+      );
       return;
     }
 
@@ -1939,10 +2048,37 @@ const server = http.createServer((req, res) => {
           proposal.approvedBy = "admin@acos.local";
           proposal.approvedAt = now;
         } else if (to === "APPLIED") {
+          const body2 = JSON.parse(body || "{}");
+          const requested = body2.effectiveFrom
+            ? new Date(body2.effectiveFrom)
+            : null;
+          if (requested !== null && requested.getTime() < Date.now() - 60_000) {
+            res.statusCode = 400;
+            res.end(
+              JSON.stringify({
+                message:
+                  "과거 시점으로 적용할 수 없습니다 — 이미 기록된 비용을 소급해 다시 해석하게 되고, 그러면 맞았던 기록이 불일치로 바뀝니다 (CTO 정책 3101-②).",
+              }),
+            );
+            return;
+          }
           proposal.appliedBy = "admin@acos.local";
           proposal.appliedAt = now;
+          proposal.effectiveFrom = (requested ?? new Date()).toISOString();
+          const future =
+            new Date(proposal.effectiveFrom).getTime() > Date.now();
           if (proposal.target === "ocr" && proposal.key === "google-vision") {
-            stubAppliedOcr = proposal.price.perUnitUsd;
+            // **예약은 아직 쓰이지 않는다** (CTO 정책 3201-③)
+            if (future) {
+              stubScheduled.push({
+                target: proposal.target,
+                key: proposal.key,
+                price: proposal.price,
+                effectiveFrom: proposal.effectiveFrom,
+              });
+            } else {
+              stubAppliedOcr = proposal.price.perUnitUsd;
+            }
           }
         } else {
           proposal.rejectedBy = "admin@acos.local";
@@ -1985,13 +2121,18 @@ const server = http.createServer((req, res) => {
                   : `승인된 제안으로 적용됨 (${new Date().toISOString()})`,
             },
           ],
-          appliedCount: applied.length,
+          appliedCount: applied.filter((row) => !view(row).scheduled).length,
           lastAppliedAt: applied.length > 0 ? applied.at(-1).appliedAt : null,
+          scheduled: stubScheduled,
+          nextChangeAt:
+            stubScheduled.length > 0 ? stubScheduled[0].effectiveFrom : null,
         },
         stages: ["DRAFT", "REVIEWED", "APPROVED", "APPLIED", "REJECTED"],
         detail:
           `진행 중 ${stubProposals.filter((row) => !["APPLIED", "REJECTED"].includes(row.stage)).length}건 · ` +
-          `적용 이력 ${applied.length}건. 단가는 검토 → 승인 → 적용 절차를 거칩니다 (CTO 정책 3101-①). ` +
+          `발효된 적용 이력 ${applied.length}건. 단가는 검토 → 승인 → 적용 절차를 거치고, ` +
+          "감지된 변경은 감지 → 승인 → 적용입니다 (CTO 정책 3101-① · 3201-①). " +
+          "감지만으로는 단가가 바뀌지 않습니다. " +
           "적용된 단가는 이후 호출에만 쓰이고, 과거 비용 기록은 바뀌지 않습니다 (정책 3101-②).",
         checkedAt: new Date().toISOString(),
       }),

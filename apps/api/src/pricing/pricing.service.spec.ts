@@ -1,6 +1,7 @@
 import { Test } from "@nestjs/testing";
 import { estimateOcrCost } from "@acos/core";
 import { PrismaService } from "../prisma/prisma.service";
+import { PricingCacheBus } from "./pricing-cache.bus";
 import { PRICING_CACHE_TTL_MS, PricingService } from "./pricing.service";
 
 /**
@@ -18,6 +19,8 @@ interface ProposalRow {
   price: Record<string, number>;
   stage: string;
   appliedAt: Date | null;
+  /** 발효 시각 (TASK-3201) — 미래면 아직 계산에 쓰이지 않는다 */
+  effectiveFrom?: Date | null;
 }
 
 function createPrisma(rows: ProposalRow[] = []) {
@@ -33,21 +36,81 @@ function createPrisma(rows: ProposalRow[] = []) {
       return result.map((row) => ({ ...row }));
     },
   );
+  /** 단계 전이도 흉내 낸다 — 적용 경로(캐시 무효화)를 보려면 필요하다 */
+  const findUnique = jest.fn(async (args: { where: { id: string } }) => {
+    const found = rows.find((row) => row.id === args.where.id);
+    return found ? { ...found, proposedBy: "someone@acos.local" } : null;
+  });
+  const update = jest.fn(
+    async (args: {
+      where: { id: string; stage?: string };
+      data: Record<string, unknown>;
+    }) => {
+      const row = rows.find((candidate) => candidate.id === args.where.id);
+      if (row === undefined) {
+        throw new Error("없는 제안");
+      }
+      Object.assign(row, args.data);
+      return {
+        ...row,
+        origin: "manual",
+        evidence: null,
+        currentPrice: null,
+        reason: "테스트",
+        proposedBy: "someone@acos.local",
+        reviewedBy: null,
+        reviewedAt: null,
+        approvedBy: null,
+        approvedAt: null,
+        appliedBy: (args.data.appliedBy as string | null) ?? null,
+        rejectedBy: null,
+        rejectedAt: null,
+        rejectedReason: null,
+        createdAt: new Date("2026-07-01T00:00:00.000Z"),
+        updatedAt: new Date(),
+        effectiveFrom: (args.data.effectiveFrom as Date | null) ?? null,
+      };
+    },
+  );
   return {
     findMany,
-    stub: { pricingProposal: { findMany } } as unknown as PrismaService,
+    stub: {
+      pricingProposal: { findMany, findUnique, update },
+    } as unknown as PrismaService,
   };
 }
 
 async function createService(rows: ProposalRow[] = []) {
   const prisma = createPrisma(rows);
+  /** 무효화 버스 스텁 — 다른 인스턴스에 알렸는지 본다 (TASK-3201) */
+  const published: string[] = [];
+  const listeners: ((reason: string) => void)[] = [];
+  const bus = {
+    distributed: true,
+    onInvalidate: (listener: (reason: string) => void) => {
+      listeners.push(listener);
+    },
+    publish: async (reason: string) => {
+      published.push(reason);
+      return true;
+    },
+  };
   const moduleRef = await Test.createTestingModule({
     providers: [
       PricingService,
       { provide: PrismaService, useValue: prisma.stub },
+      { provide: PricingCacheBus, useValue: bus },
     ],
   }).compile();
-  return { service: moduleRef.get(PricingService), prisma };
+  // onModuleInit이 구독을 건다 — 실제 기동과 같은 상태로 만든다
+  await moduleRef.init();
+  return {
+    service: moduleRef.get(PricingService),
+    prisma,
+    published,
+    /** 다른 인스턴스가 보낸 신호를 흉내 낸다 */
+    receive: (reason: string) => listeners.forEach((listener) => listener(reason)),
+  };
 }
 
 const applied = (
@@ -59,6 +122,7 @@ const applied = (
   price: { perUnitUsd: 0.002 },
   stage: "APPLIED",
   appliedAt: new Date("2026-07-10T00:00:00.000Z"),
+  effectiveFrom: new Date("2026-07-10T00:00:00.000Z"),
   ...overrides,
 });
 
@@ -166,5 +230,53 @@ describe("PricingService (TASK-3101)", () => {
     expect(dto.ocr.map((row) => row.provider)).toEqual([
       ...dto.ocr.map((row) => row.provider),
     ].sort());
+  });
+  describe("예약과 캐시 (TASK-3201, CTO 정책 3201-③⑤)", () => {
+    it("미래 발효는 지금 계산에 쓰이지 않는다", async () => {
+      const future = new Date(Date.now() + 86_400_000);
+      const { service } = await createService([
+        applied({ effectiveFrom: future }),
+      ]);
+      const table = await service.effective();
+      expect(table.ocr["google-vision"].perUnitUsd).toBe(0.0015);
+    });
+
+    it("캐시는 다음 발효 시각을 넘기지 않는다", async () => {
+      // 예약을 지나쳐 캐시하면 발효 순간이 조용히 늦어지고, 그 사이에 기록된
+      // 비용은 아무도 설명할 수 없다
+      const soon = new Date(Date.now() + 1_000);
+      const { service, prisma } = await createService([
+        applied({ effectiveFrom: soon }),
+      ]);
+      await service.effective();
+      const calls = prisma.findMany.mock.calls.length;
+
+      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      const table = await service.effective();
+      // 다시 읽었고, 이제는 새 단가가 쓰인다
+      expect(prisma.findMany.mock.calls.length).toBeGreaterThan(calls);
+      expect(table.ocr["google-vision"].perUnitUsd).toBe(0.002);
+    });
+
+    it("적용 즉시 다른 인스턴스에도 알린다", async () => {
+      const { service, published } = await createService([
+        applied({ id: "pp-x", stage: "APPROVED", appliedAt: null, effectiveFrom: null }),
+      ]);
+
+      await service.advance("pp-x", "APPLIED", "admin@acos.local");
+      expect(published).toHaveLength(1);
+      expect(published[0]).toContain("applied ocr/google-vision");
+    });
+
+    it("다른 인스턴스의 신호를 받으면 캐시를 버린다", async () => {
+      const { service, prisma, receive } = await createService([applied()]);
+      await service.effective();
+      const calls = prisma.findMany.mock.calls.length;
+
+      receive("applied ocr/google-vision by someone-else");
+      await service.effective();
+      // 캐시를 버렸으므로 다시 읽는다 — 버리지 않으면 옛 단가로 계산한다
+      expect(prisma.findMany.mock.calls.length).toBeGreaterThan(calls);
+    });
   });
 });

@@ -86,18 +86,34 @@ describe("Scheduled Checks (TASK-1302)", () => {
       expect(byJob["cost-verification"].enabled).toBe(true);
     });
 
-    it("선언된 점검 9종을 빠짐없이 돌려준다", () => {
+    it("선언된 점검 11종을 빠짐없이 돌려준다", () => {
       expect(resolveSchedules({}).map((entry) => entry.job).sort()).toEqual([
         "alert-archive",
         "backup",
+        // 월말 예측 경보 (TASK-3201, CTO 정책 3201-④)
+        "cost-forecast",
         "cost-verification",
         "governance-scan",
         "health-check",
+        // 가격 변경 감지 (TASK-3201, CTO 정책 3201-①)
+        "pricing-detect",
         "provider-smoke",
         "provider-validation",
         "remote-verify",
         "restore-verify",
       ]);
+    });
+
+    it("가격 감지는 기본으로 켜져 있고 6시간마다 돈다 (TASK-3201)", () => {
+      // DB만 읽으므로 과금이 없다 — 꺼 둘 이유가 없고, 꺼져 있으면
+      // 단가가 낡아도 아무도 모른다
+      const byJob = Object.fromEntries(
+        resolveSchedules({}).map((entry) => [entry.job, entry]),
+      );
+      expect(byJob["pricing-detect"].enabled).toBe(true);
+      expect(byJob["pricing-detect"].intervalMs).toBe(6 * 60 * 60 * 1000);
+      // 예측은 하루가 집계된 뒤 본다 — 시각 기반이다
+      expect(byJob["cost-forecast"].dailyAtMinutes).toBe(6 * 60);
     });
 
     it("위반 스캔은 보관 정리보다 앞선 시각에 돈다 (TASK-2701)", () => {

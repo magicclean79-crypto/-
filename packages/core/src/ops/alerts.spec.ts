@@ -2,7 +2,9 @@ import {
   DEFAULT_ALERT_COOLDOWN_MS,
   detectBudgetAlerts,
   detectConfigurationAlerts,
+  detectForecastAlerts,
   detectLockOutageAlert,
+  detectPricingDriftAlerts,
   detectSchedulerAlerts,
   detectProviderAlerts,
   detectUnpricedAlerts,
@@ -114,6 +116,107 @@ describe("Production Alerting (TASK-1302)", () => {
       expect(alerts[0].key).toBe("unpriced-model:openai:gpt-5-preview");
       expect(alerts[0].message).toContain("예산 상한");
       expect(alerts[0].message).toContain("차단하지 않습니다");
+    });
+  });
+
+  describe("Pricing Drift Alert (TASK-3201, CTO 정책 3201-①)", () => {
+    const change = {
+      target: "ocr",
+      key: "google-vision",
+      impliedPrice: { perUnitUsd: 0.002 },
+      currentPrice: { perUnitUsd: 0.0015 },
+      samples: 5,
+    };
+
+    it("감지된 변경을 알리고, 승인이 필요하다고 말한다", () => {
+      // 감지만 하고 알리지 않으면 제안이 쌓인 채 아무도 모른다 —
+      // 자동화가 "돌지만 아무 일도 하지 않는" 상태가 된다
+      const alerts = detectPricingDriftAlerts({ changes: [change], unresolved: [] });
+      expect(alerts).toHaveLength(1);
+      expect(alerts[0].key).toBe("pricing-drift:ocr:google-vision");
+      expect(alerts[0].message).toContain("승인 후 적용해 주세요");
+      // 감지는 적용이 아니고, 차단도 아니다
+      expect(alerts[0].message).toContain("감지만으로 단가가 바뀌지는 않으며");
+      expect(alerts[0].message).toContain("차단하지도 않습니다");
+    });
+
+    it("단가를 가를 수 없는 어긋남은 직접 제안을 내라고 말한다", () => {
+      const alerts = detectPricingDriftAlerts({
+        changes: [],
+        unresolved: [
+          { target: "llm", key: "gpt-4o", provider: "openai", samples: 7 },
+        ],
+      });
+      expect(alerts[0].key).toBe("pricing-drift:llm:gpt-4o");
+      expect(alerts[0].message).toContain("제안을 만들지 않았습니다");
+      expect(alerts[0].message).toContain("직접 제안을 내주세요");
+    });
+
+    it("아무것도 없으면 조용하다", () => {
+      expect(detectPricingDriftAlerts({ changes: [], unresolved: [] })).toEqual([]);
+    });
+
+    it("경보 수준은 warning이다 — 돈이 새는 것이 아니라 기준이 낡은 것이다", () => {
+      expect(
+        detectPricingDriftAlerts({ changes: [change], unresolved: [] })[0].level,
+      ).toBe("warning");
+    });
+  });
+
+  describe("Cost Forecast Alert (TASK-3201, CTO 정책 3201-④)", () => {
+    const projected = {
+      verdict: "projected",
+      projectedMonthEnd: 300,
+      projectedRatio: 3,
+      projectedExceeds: true,
+      budget: 100,
+      observedDays: 5,
+    };
+
+    it("이 추세면 넘는다고 알리되, 차단하지 않는다고 못 박는다", () => {
+      const alerts = detectForecastAlerts(projected);
+      expect(alerts).toHaveLength(1);
+      expect(alerts[0].key).toBe("cost-forecast:monthly");
+      expect(alerts[0].message).toContain("차단하지 않습니다");
+      expect(alerts[0].message).toContain("CTO 정책 3201-④");
+      // 무엇을 하면 되는지도 말한다
+      expect(alerts[0].message).toContain("예산 상향 또는 사용량 조정");
+    });
+
+    it("예산 안에 들어오면 경보하지 않는다", () => {
+      expect(
+        detectForecastAlerts({ ...projected, projectedExceeds: false }),
+      ).toEqual([]);
+    });
+
+    it("표본이 부족하면 경보하지 않는다 — 짐작으로 사람을 부르지 않는다", () => {
+      expect(
+        detectForecastAlerts({
+          ...projected,
+          verdict: "insufficient",
+          projectedMonthEnd: null,
+          projectedRatio: null,
+          projectedExceeds: false,
+        }),
+      ).toEqual([]);
+    });
+
+    it("예산이 없으면 넘을 것도 없다", () => {
+      expect(
+        detectForecastAlerts({ ...projected, budget: null, projectedRatio: null }),
+      ).toEqual([]);
+    });
+
+    it("키가 하나다 — 같은 사안이 여러 경보로 흩어지지 않는다", () => {
+      const twice = [
+        ...detectForecastAlerts(projected),
+        ...detectForecastAlerts(projected),
+      ];
+      expect(new Set(twice.map((entry) => entry.key)).size).toBe(1);
+    });
+
+    it("마크다운 강조가 새지 않는다", () => {
+      expect(detectForecastAlerts(projected)[0].message).not.toContain("**");
     });
   });
 
@@ -460,6 +563,9 @@ describe("Production Alerting (TASK-1302)", () => {
       expect(resolved.budget).toBe(60_000);
       expect(resolved["unpriced-model"]).toBe(86_400_000);
       expect(resolved["provider-failure"]).toBe(600_000);
+      // 새 종류도 같은 규칙을 따른다 (TASK-3201)
+      expect(resolved["pricing-drift"]).toBe(600_000);
+      expect(resolved["cost-forecast"]).toBe(600_000);
     });
 
     it("해석할 수 없는 값은 기본값으로 — 경보 폭주보다 안전하다", () => {
