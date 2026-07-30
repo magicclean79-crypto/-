@@ -1990,6 +1990,18 @@ const server = http.createServer((req, res) => {
               needsHumanCheck: false,
               unparsed: [],
               detail: "가격 공지 1건을 읽었습니다.",
+              // Provider별 공지 (TASK-3401 — CTO 결정 3301-⑤)
+              sources: [
+                {
+                  id: "google",
+                  url: "https://google.example/pricing.json",
+                  format: "acos",
+                  status: "ok",
+                  unparsedCount: 0,
+                  detail: "가격 공지 1건을 읽었습니다.",
+                },
+              ],
+              rejected: [],
             },
             published: [{ target: "ocr", key: "google-vision" }],
             notDue: [],
@@ -2088,15 +2100,62 @@ const server = http.createServer((req, res) => {
                   needsHumanCheck: false,
                   unparsed: [],
                   detail: "가격 공지 2건을 읽었습니다.",
+                  sources: [
+                    {
+                      id: "openai",
+                      url: "https://openai.example/pricing.json",
+                      format: "flat",
+                      status: "ok",
+                      unparsedCount: 0,
+                      detail: "가격 공지 1건을 읽었습니다.",
+                    },
+                    {
+                      id: "google",
+                      url: "https://google.example/pricing.json",
+                      format: "acos",
+                      status: "ok",
+                      unparsedCount: 0,
+                      detail: "가격 공지 1건을 읽었습니다.",
+                    },
+                  ],
+                  rejected: [],
                 }
               : {
-                  status: "partial",
+                  // 한 곳이 죽고 한 곳은 읽힌 상태 — 전체는 **가장 나쁜 것**을
+                  // 따른다 (TASK-3401, CTO 결정 3301-⑤)
+                  status: "unreachable",
                   needsHumanCheck: true,
                   unparsed: [
                     { index: 1, reason: "clova: perUnitUsd가 없습니다." },
                   ],
                   detail:
-                    "가격 공지 1건을 읽었고 1건은 해석하지 못했습니다. 못 읽은 항목은 단가가 그대로라는 뜻이 아닙니다 — 직접 확인해 주세요 (CTO 정책 3301-①).",
+                    "가격 공지 2곳 중 1곳을 읽었습니다. 읽지 못한 곳: openai(unreachable). 가격 공지를 가져오지 못했습니다: HTTP 503. 공지를 읽지 못한 것은 단가가 그대로라는 뜻이 아닙니다 — 사람이 직접 확인해 주세요 (CTO 정책 3301-①).",
+                  sources: [
+                    {
+                      id: "openai",
+                      url: "https://openai.example/pricing.json",
+                      format: "flat",
+                      status: "unreachable",
+                      unparsedCount: 0,
+                      detail: "가격 공지를 가져오지 못했습니다: HTTP 503.",
+                    },
+                    {
+                      id: "google",
+                      url: "https://google.example/pricing.json",
+                      format: "acos",
+                      status: "partial",
+                      unparsedCount: 1,
+                      detail:
+                        "가격 공지 1건을 읽었고 1건은 해석하지 못했습니다.",
+                    },
+                  ],
+                  rejected: [
+                    {
+                      name: "PRICE_SOURCE_URL_PROJECT_ACME",
+                      reason:
+                        "프로젝트별 가격 공지는 지원하지 않습니다 (CTO 정책 3301-④와 같은 이유) — 단가는 Provider와의 계약이지 프로젝트의 속성이 아닙니다.",
+                    },
+                  ],
                 },
           published: [],
           notDue: [],
@@ -2466,6 +2525,89 @@ const server = http.createServer((req, res) => {
             "비용이 빠진 호출 1건이 있어 합계는 실제보다 작습니다. " +
             disclaimer
           : `호출 0건 · 합계 $0.000000 (LLM $0.000000 · OCR $0.000000). ${disclaimer}`,
+        checkedAt: new Date().toISOString(),
+      }),
+    );
+    return;
+  }
+
+  /**
+   * 운영 전환 검증 (TASK-3401, CTO 지시 4·5·6) — ADMIN 전용.
+   *
+   * 기본(data 모드 포함)은 **스텁을 상대로 돌고 있는 상태**를 재현한다.
+   * 이 프로젝트의 라이브 검증이 실제로 그 상태이고, 화면이 그것을 "연결됨"이
+   * 아니라 "운영의 그것이 아님"으로 말해야 한다.
+   */
+  if (url.pathname === "/ops/cutover") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    const verified = mode === "cutover-done";
+    res.end(
+      JSON.stringify({
+        dependencies: [
+          {
+            id: "llm",
+            title: "LLM (실 Provider 호출)",
+            status: verified ? "verified" : "not-production",
+            detail: verified
+              ? "openai 공식 주소로 최근 성공한 실 호출이 12건 있습니다."
+              : "OPENAI_BASE_URL로 주소가 바뀌어 있습니다 — 우리 컴퓨터를 가리킵니다 (localhost) — 스텁입니다. 성공 기록 12건은 이 주소를 상대로 만들어졌으므로 운영 연결의 증거가 아닙니다.",
+            env: ["LLM_PROVIDER", "OPENAI_API_KEY", "OPENAI_BASE_URL"],
+            evidence: verified ? "openai 실 호출 성공 12건" : null,
+            next: verified
+              ? "추가 조치가 없습니다."
+              : "OPENAI_BASE_URL을 비워 공식 주소로 되돌린 뒤 다시 확인하세요.",
+          },
+          {
+            id: "vision",
+            title: "Google Cloud Vision (OCR)",
+            status: verified ? "verified" : "not-production",
+            detail: verified
+              ? "공식 주소(vision.googleapis.com)로 최근 성공한 OCR이 4건 있습니다."
+              : "GOOGLE_VISION_ENDPOINT가 공식 주소가 아닙니다 — 우리 컴퓨터를 가리킵니다 (127.0.0.1) — 스텁입니다.",
+            env: ["OCR_PROVIDER", "GOOGLE_VISION_API_KEY", "GOOGLE_VISION_ENDPOINT"],
+            evidence: verified ? "google-vision OCR 성공 4건" : null,
+            next: verified
+              ? "추가 조치가 없습니다."
+              : "GOOGLE_VISION_ENDPOINT를 비워 공식 주소로 되돌린 뒤 OCR을 1회 돌리세요.",
+          },
+          {
+            id: "storage",
+            title: "Amazon S3 (운영 저장소)",
+            status: verified ? "verified" : "not-production",
+            detail: verified
+              ? "Amazon S3(s3.ap-northeast-2.amazonaws.com)에 접근했고 버킷이 있습니다."
+              : "운영 저장소가 Amazon S3가 아닙니다 (localhost) — MinIO·s3rver는 개발 전용이며 버전 관리·복제 조회를 지원하지 않아 보호 상태를 확인할 수 없습니다 (CTO 결정 1901-③).",
+            env: ["S3_ENDPOINT", "S3_BUCKET", "BACKUP_BUCKET"],
+            evidence: verified ? "버킷 acos-prod 확인" : null,
+            next: verified
+              ? "추가 조치가 없습니다."
+              : "S3_ENDPOINT를 https://s3.<region>.amazonaws.com으로 바꾸세요.",
+          },
+          {
+            id: "ci",
+            title: "GitHub Actions (품질 게이트)",
+            status: verified ? "verified" : "invalid",
+            detail: verified
+              ? "가장 최근 실행(8b6814eb)이 통과했습니다. 필수 게이트 5개가 순서대로 돌았습니다."
+              : "가장 최근 실행(8b6814eb)이 failure로 끝났습니다 — 최근 13회 연속 실패입니다. 로컬에서만 통과하는 게이트는 게이트가 아닙니다. 게이트가 파일에 적혀 있는 것과 초록으로 끝나는 것은 다릅니다.",
+            env: [],
+            evidence: verified ? "run 30571812575 (8b6814eb)" : null,
+            next: verified
+              ? "추가 조치가 없습니다."
+              : "실패한 작업의 로그를 보고 원인을 고치세요.",
+          },
+        ],
+        summary: { verified: verified ? 4 : 0, total: 4 },
+        ready: verified,
+        detail: verified
+          ? "운영 전환 4/4항목이 실제 연결로 확인됐습니다."
+          : "운영 전환 0/4항목 확인 — 남은 항목: LLM (실 Provider 호출)(not-production), Google Cloud Vision (OCR)(not-production), Amazon S3 (운영 저장소)(not-production), GitHub Actions (품질 게이트)(invalid). 확인되지 않은 항목을 전환 완료로 세지 않습니다.",
+        evidenceWindowDays: 30,
         checkedAt: new Date().toISOString(),
       }),
     );

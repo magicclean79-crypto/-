@@ -12,6 +12,8 @@ import { AuthService } from "../auth/auth.service";
 import { WriteProtectionGuard } from "../auth/write-protection.guard";
 import { LlmBudgetService } from "../llm/llm-budget.service";
 import { PriceSourceService } from "../pricing/price-source.service";
+import { CiStatusService } from "./ci-status.service";
+import { ProductionCutoverService } from "./production-cutover.service";
 import { PricingService } from "../pricing/pricing.service";
 import { ProviderProductionService } from "../llm/provider-production.service";
 import { PrismaService } from "../prisma/prisma.service";
@@ -196,7 +198,11 @@ function createPrismaStub() {
       createdAt: Date;
     }[],
     args: {
-      where?: { createdAt?: { gte?: Date; lte?: Date }; status?: string };
+      where?: {
+        createdAt?: { gte?: Date; lte?: Date };
+        status?: string;
+        provider?: { not?: string };
+      };
     },
     withModel: boolean,
   ) => {
@@ -217,6 +223,12 @@ function createPrismaStub() {
       const lte = args.where?.createdAt?.lte;
       if (gte && row.createdAt.getTime() < gte.getTime()) continue;
       if (lte && row.createdAt.getTime() > lte.getTime()) continue;
+      // `provider: { not: "mock" }`를 **실제로 적용한다** — 무시하면 가짜
+      // 호출이 실 연결의 근거로 세어져 운영 전환 판정이 거짓이 된다
+      if (args.where?.provider?.not !== undefined &&
+          row.provider === args.where.provider.not) {
+        continue;
+      }
       const key = withModel ? `${row.provider}/${row.model ?? ""}` : row.provider;
       const bucket = buckets.get(key) ?? {
         provider: row.provider,
@@ -556,15 +568,26 @@ function createPrismaStub() {
        */
       priceDetectionRun: {
         findMany: async (args?: {
-          where?: { provider?: { in: string[] }; skipped?: null };
+          where?: {
+            provider?: { in: string[] } | string;
+            skipped?: null;
+            source?: string;
+          };
           take?: number;
         }) => {
           let rows = [...priceDetectionRuns];
-          const providers = args?.where?.provider?.in;
-          if (providers !== undefined) {
+          const provider = args?.where?.provider;
+          if (typeof provider === "string") {
+            // 소스별 실패 이력 조회 (TASK-3401) — 이 조건을 무시하면
+            // 다른 공지의 실패가 이 공지의 승격 근거가 된다
+            rows = rows.filter((row) => row.provider === provider);
+          } else if (provider !== undefined) {
             rows = rows.filter((row) =>
-              providers.includes(row.provider as string),
+              provider.in.includes(row.provider as string),
             );
+          }
+          if (args?.where?.source !== undefined) {
+            rows = rows.filter((row) => row.source === args.where!.source);
           }
           if (args?.where !== undefined && "skipped" in args.where) {
             rows = rows.filter((row) => row.skipped === null);
@@ -904,15 +927,24 @@ interface Overrides {
  * 판정은 core(`judgePriceSource`)가 하므로 여기서는 **판정 결과**를 그대로
  * 넘긴다 — 어댑터가 실패를 어떻게 다루는지는 price-source 스펙이 본다.
  */
+type PriceSourceVerdictStub = {
+  status: string;
+  prices: unknown[];
+  unparsed: { index: number; reason: string }[];
+  needsHumanCheck: boolean;
+  detail: string;
+};
+
 const priceSource: {
   url: string | null;
-  verdict: {
-    status: string;
-    prices: unknown[];
-    unparsed: { index: number; reason: string }[];
-    needsHumanCheck: boolean;
-    detail: string;
-  };
+  verdict: PriceSourceVerdictStub;
+  /**
+   * Provider별 공지 (TASK-3401 — CTO 결정 3301-⑤).
+   * null이면 `url`·`verdict` 하나짜리 소스로 본다.
+   */
+  multi: { id: string; url: string; verdict: PriceSourceVerdictStub }[] | null;
+  /** 받아들이지 않은 설정 — 조용히 버리지 않는다 */
+  rejected: { name: string; reason: string }[];
 } = {
   url: null,
   verdict: {
@@ -922,6 +954,8 @@ const priceSource: {
     needsHumanCheck: true,
     detail: "가격 공지 주소가 설정되지 않았습니다 — 미구성이며 실패가 아닙니다.",
   },
+  multi: null,
+  rejected: [],
 };
 
 /** 저장소 스텁 상태 (TASK-1701) — 테스트마다 바꿔 쓴다 */
@@ -953,6 +987,8 @@ async function build(overrides: Overrides = {}) {
     needsHumanCheck: true,
     detail: "가격 공지 주소가 설정되지 않았습니다 — 미구성이며 실패가 아닙니다.",
   };
+  priceSource.multi = null;
+  priceSource.rejected = [];
   storageProtection.versioning = "unknown";
   storageProtection.remoteMissing = false;
   storageProtection.replication = "unknown";
@@ -1082,6 +1118,11 @@ async function build(overrides: Overrides = {}) {
       // 복구 판정의 단일 원천 (TASK-2401, 결정 2301-①) — 컨트롤러가 이것을 쓴다
       RecoveryEvaluationService,
       MigrationGovernanceService,
+      // 운영 전환 검증 (TASK-3401, CTO 지시 4·5·6) — 실제 서비스를 쓴다.
+      // 스텁을 끼우면 "스텁을 진짜로 세지 않는가"라는 이 기능의 본질이
+      // 검증되지 않는다.
+      ProductionCutoverService,
+      CiStatusService,
       // 가격표 거버넌스·비용 인텔리전스 (TASK-3101) — 실제 서비스를 쓴다.
       // 스텁을 끼우면 절차(검토 → 승인 → 적용)가 검증되지 않는다.
       PricingService,
@@ -1092,9 +1133,30 @@ async function build(overrides: Overrides = {}) {
         provide: PriceSourceService,
         useValue: {
           get url() {
-            return priceSource.url;
+            return priceSource.multi?.[0]?.url ?? priceSource.url;
           },
-          fetch: async () => priceSource.verdict,
+          get rejected() {
+            return priceSource.rejected;
+          },
+          // 소스별로 따로 읽는다 (TASK-3401) — 하나가 죽어도 나머지는 읽힌다
+          fetchAll: async () =>
+            priceSource.multi !== null
+              ? priceSource.multi.map((row) => ({
+                  id: row.id,
+                  url: row.url,
+                  format: "acos",
+                  verdict: row.verdict,
+                }))
+              : priceSource.url === null
+                ? []
+                : [
+                    {
+                      id: "default",
+                      url: priceSource.url,
+                      format: "acos",
+                      verdict: priceSource.verdict,
+                    },
+                  ],
         },
       },
       // 발행 판정 기록 보관이 예약 정리 작업에 편입됐다 (TASK-2601)
@@ -1112,6 +1174,8 @@ async function build(overrides: Overrides = {}) {
         provide: StorageService,
         useValue: {
           check: async () => "버킷 접근 정상",
+          // 운영 전환 검증(TASK-3401)이 실제로 저장소에 닿아 본다
+          bucketExists: async () => true,
           // 목업 저장소는 보호 상태를 알려 주지 않는다 — unknown이 정직한 답이다
           bucket: "acos",
           backupBucket: "acos-backups",
@@ -4966,11 +5030,14 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
         };
 
         const result = await built.checks.run("pricing-detect", "manual");
+        // 경보 키는 **소스별**이다 (TASK-3401 — 결정 3301-⑤)
         expect(result.notified.map((entry) => entry.key)).toContain(
-          "price-source:pricing-feed",
+          "price-source:default",
         );
-        const alert = built.prisma.alerts.get("price-source:pricing-feed");
+        const alert = built.prisma.alerts.get("price-source:default");
         expect(alert?.message).toContain("사람이 공지를 직접 확인해 주세요");
+        // 방금 시작된 실패는 승격하지 않는다 — 짧은 실패는 흔하다
+        expect(alert?.level).toBe("WARNING");
       });
 
       it("두 근거가 함께 잡히면 공지가 남는다 — 강한 근거가 밀리면 안 된다", async () => {
@@ -5295,6 +5362,410 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
               row.changes === 0 && row.skipped === null,
           ),
         ).toBe(true);
+      });
+    });
+  });
+
+  /**
+   * Enterprise Production Readiness Platform (TASK-3401).
+   *
+   * 공지를 Provider별로 나누고(결정 3301-⑤), 실패가 길어지면 등급을 올리며
+   * (결정 3301-⑥), **스텁을 진짜로 세지 않는** 운영 전환 판정을 붙인다
+   * (CTO 지시 4·5·6).
+   */
+  describe("Enterprise Production Readiness Platform (TASK-3401)", () => {
+    const detect = (server: unknown) =>
+      request(server as never)
+        .post("/ops/pricing/detect")
+        .set("Authorization", "Bearer tok-admin");
+
+    const ok = (detail = "가격 공지 1건을 읽었습니다.") => ({
+      status: "ok",
+      prices: [],
+      unparsed: [],
+      needsHumanCheck: false,
+      detail,
+    });
+    const dead = (status = "unreachable") => ({
+      status,
+      prices: [],
+      unparsed: [],
+      needsHumanCheck: true,
+      detail: `가격 공지를 가져오지 못했습니다 (${status}).`,
+    });
+
+    describe("Provider별 공지 (CTO 결정 3301-⑤)", () => {
+      it("한 곳이 죽어도 나머지 공지는 읽는다", async () => {
+        const built = await build();
+        app = built.app;
+        priceSource.multi = [
+          {
+            id: "openai",
+            url: "https://openai.example/p.json",
+            verdict: dead(),
+          },
+          {
+            id: "google",
+            url: "https://google.example/p.json",
+            verdict: {
+              ...ok(),
+              prices: [
+                {
+                  target: "ocr",
+                  key: "google-vision",
+                  price: { perUnitUsd: 0.003 },
+                  effectiveFrom: null,
+                  sourceId: "google",
+                },
+              ],
+            },
+          },
+        ];
+
+        const response = await detect(built.app.getHttpServer()).expect(200);
+        // 죽은 공지가 있어도 살아 있는 공지의 대조는 이뤄진다
+        expect(response.body.published).toHaveLength(1);
+        expect(response.body.created).toHaveLength(1);
+        expect(response.body.created[0].evidence.sourceId).toBe("google");
+        expect(response.body.created[0].evidence.url).toBe(
+          "https://google.example/p.json",
+        );
+      });
+
+      it("전체 상태는 가장 나쁜 것을 따른다 — 둘 중 하나를 읽었다고 정상이 아니다", async () => {
+        const built = await build();
+        app = built.app;
+        priceSource.multi = [
+          { id: "openai", url: "https://openai.example/p.json", verdict: dead() },
+          { id: "google", url: "https://google.example/p.json", verdict: ok() },
+        ];
+
+        const response = await detect(built.app.getHttpServer()).expect(200);
+        expect(response.body.source.status).toBe("unreachable");
+        expect(response.body.source.needsHumanCheck).toBe(true);
+        expect(response.body.source.sources).toHaveLength(2);
+        expect(response.body.source.detail).toContain("openai(unreachable)");
+      });
+
+      it("소스마다 경보가 따로 난다 — 한 곳이 나아도 다른 곳이 뒤에 숨지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        priceSource.multi = [
+          { id: "openai", url: "https://openai.example/p.json", verdict: dead() },
+          {
+            id: "google",
+            url: "https://google.example/p.json",
+            verdict: dead("unparsable"),
+          },
+        ];
+
+        const result = await built.checks.run("pricing-detect", "manual");
+        const keys = result.notified.map((entry) => entry.key);
+        expect(keys).toContain("price-source:openai");
+        expect(keys).toContain("price-source:google");
+      });
+
+      it("거부한 공지 설정을 화면까지 올린다 — 조용히 버리지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        priceSource.rejected = [
+          {
+            name: "PRICE_SOURCE_URL_PROJECT_ACME",
+            reason: "프로젝트별 가격 공지는 지원하지 않습니다.",
+          },
+        ];
+
+        const response = await detect(built.app.getHttpServer()).expect(200);
+        expect(response.body.source.rejected).toHaveLength(1);
+        expect(response.body.source.rejected[0].name).toBe(
+          "PRICE_SOURCE_URL_PROJECT_ACME",
+        );
+      });
+
+      it("소스별로 실행 이력을 남긴다 — 어느 공지가 죽었는지 남아야 한다", async () => {
+        const built = await build();
+        app = built.app;
+        priceSource.multi = [
+          { id: "openai", url: "https://openai.example/p.json", verdict: dead() },
+          { id: "google", url: "https://google.example/p.json", verdict: ok() },
+        ];
+
+        await built.checks.run("pricing-detect", "manual");
+        const published = built.prisma.priceDetectionRuns.filter(
+          (row) => row.source === "published",
+        );
+        expect(published.map((row) => row.provider).sort()).toEqual([
+          "google",
+          "openai",
+        ]);
+        expect(
+          published.find((row) => row.provider === "openai")?.skipped,
+        ).toContain("읽지 못했습니다");
+        expect(published.find((row) => row.provider === "google")?.skipped).toBeNull();
+      });
+    });
+
+    describe("공지 실패 장기화 (CTO 결정 3301-⑥)", () => {
+      it("방금 시작된 실패는 경고에 머문다", async () => {
+        const built = await build();
+        app = built.app;
+        priceSource.url = "https://provider.example/pricing.json";
+        priceSource.verdict = dead();
+
+        await built.checks.run("pricing-detect", "manual");
+        expect(built.prisma.alerts.get("price-source:default")?.level).toBe(
+          "WARNING",
+        );
+      });
+
+      it("같은 공지를 하루 넘게 못 읽으면 등급을 올린다", async () => {
+        const built = await build();
+        app = built.app;
+        priceSource.url = "https://provider.example/pricing.json";
+        priceSource.verdict = dead();
+
+        // 이틀 전부터 이어진 실패 이력 — 승격의 근거는 실행 이력이다
+        built.prisma.priceDetectionRuns.push({
+          id: "pdr-old",
+          target: "llm",
+          provider: "default",
+          source: "published",
+          ranAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
+          samples: 0,
+          changes: 0,
+          skipped: "공지를 읽지 못했습니다 (unreachable)",
+          detail: "이틀 전에도 못 읽었습니다.",
+          createdAt: new Date(),
+        });
+
+        await built.checks.run("pricing-detect", "manual");
+        const alert = built.prisma.alerts.get("price-source:default");
+        expect(alert?.level).toBe("CRITICAL");
+        expect(alert?.message).toContain("시간째");
+      });
+
+      it("중간에 한 번 읽혔으면 그 뒤로만 센다 — 지난 사건이 오늘을 승격시키지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        priceSource.url = "https://provider.example/pricing.json";
+        priceSource.verdict = dead();
+
+        const day = 24 * 60 * 60 * 1000;
+        built.prisma.priceDetectionRuns.push(
+          {
+            id: "pdr-old",
+            target: "llm",
+            provider: "default",
+            source: "published",
+            ranAt: new Date(Date.now() - 10 * day),
+            samples: 0,
+            changes: 0,
+            skipped: "공지를 읽지 못했습니다 (unreachable)",
+            detail: "열흘 전 실패",
+            createdAt: new Date(),
+          },
+          {
+            id: "pdr-ok",
+            target: "llm",
+            provider: "default",
+            source: "published",
+            ranAt: new Date(Date.now() - 9 * day),
+            samples: 0,
+            changes: 0,
+            skipped: null,
+            detail: "아흐레 전에는 읽혔다",
+            createdAt: new Date(),
+          },
+        );
+
+        await built.checks.run("pricing-detect", "manual");
+        expect(built.prisma.alerts.get("price-source:default")?.level).toBe(
+          "WARNING",
+        );
+      });
+
+      it("미구성은 아무리 오래돼도 승격하지 않는다 — 미구성과 실패는 다르다", async () => {
+        const built = await build();
+        app = built.app;
+        // priceSource.url = null (기본) — 소스가 하나도 없다
+
+        await built.checks.run("pricing-detect", "manual");
+        const alert = built.prisma.alerts.get("price-source:pricing-feed");
+        expect(alert?.level).toBe("WARNING");
+        expect(alert?.title).toContain("설정되지 않았습니다");
+      });
+    });
+
+    /**
+     * 운영 전환 검증 (CTO 지시 4·5·6).
+     *
+     * 이 묶음이 지키는 한 줄: **계약 스텁을 상대로 만든 성공 기록을 연결의
+     * 증거로 세지 않는다.**
+     */
+    describe("운영 전환 검증 (GET /ops/cutover)", () => {
+      const ENV_KEYS = [
+        "LLM_PROVIDER",
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OCR_PROVIDER",
+        "GOOGLE_VISION_API_KEY",
+        "GOOGLE_VISION_ENDPOINT",
+        "S3_ENDPOINT",
+        "S3_ACCESS_KEY",
+        "S3_SECRET_KEY",
+        "S3_BUCKET",
+        "BACKUP_BUCKET",
+        "GITHUB_REPOSITORY",
+        "CI_WORKFLOW_PATH",
+      ];
+      const saved: Record<string, string | undefined> = {};
+
+      beforeEach(() => {
+        for (const key of ENV_KEYS) {
+          saved[key] = process.env[key];
+          delete process.env[key];
+        }
+      });
+      afterEach(() => {
+        for (const key of ENV_KEYS) {
+          if (saved[key] === undefined) {
+            delete process.env[key];
+          } else {
+            process.env[key] = saved[key];
+          }
+        }
+      });
+
+      const cutover = (built: Awaited<ReturnType<typeof build>>) =>
+        request(built.app.getHttpServer() as never)
+          .get("/ops/cutover")
+          .set("Authorization", "Bearer tok-admin");
+
+      const view = (
+        body: {
+          dependencies: {
+            id: string;
+            status: string;
+            detail: string;
+            evidence: string | null;
+          }[];
+        },
+        id: string,
+      ) => body.dependencies.find((row) => row.id === id)!;
+
+      it("ADMIN만 볼 수 있다", async () => {
+        const built = await build();
+        app = built.app;
+        await request(built.app.getHttpServer()).get("/ops/cutover").expect(401);
+      });
+
+      it("아무것도 안 붙은 상태를 전환 완료로 세지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+
+        const response = await cutover(built).expect(200);
+        expect(response.body.ready).toBe(false);
+        expect(response.body.detail).toContain("전환 완료로 세지 않습니다");
+        expect(view(response.body, "llm").status).toBe("not-production");
+        expect(view(response.body, "vision").status).toBe("not-production");
+      });
+
+      it("주소가 우리 스텁을 가리키면 성공 기록이 있어도 전환이 아니다", async () => {
+        const built = await build();
+        app = built.app;
+        process.env.LLM_PROVIDER = "openai";
+        process.env.OPENAI_API_KEY = "sk-live";
+        process.env.OPENAI_BASE_URL = "http://localhost:9300/v1";
+        // 성공한 실 호출 기록이 있는 상태를 만든다
+        built.prisma.executions.push({
+          provider: "openai",
+          model: "gpt-4o",
+          status: "SUCCESS",
+          cost: 0.01,
+          createdAt: new Date(),
+        });
+
+        const response = await cutover(built).expect(200);
+        const llm = view(response.body, "llm");
+        expect(llm.status).toBe("not-production");
+        expect(llm.evidence).toBeNull();
+      });
+
+      it("가짜(mock) 기록은 근거로 세지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        process.env.LLM_PROVIDER = "openai";
+        process.env.OPENAI_API_KEY = "sk-live";
+        built.prisma.executions.push({
+          provider: "mock",
+          model: "mock",
+          status: "SUCCESS",
+          cost: 0,
+          createdAt: new Date(),
+        });
+
+        const response = await cutover(built).expect(200);
+        expect(view(response.body, "llm").status).toBe("unverified");
+      });
+
+      it("공식 주소로 성공한 기록이 있으면 근거와 함께 통과다", async () => {
+        const built = await build();
+        app = built.app;
+        process.env.LLM_PROVIDER = "openai";
+        process.env.OPENAI_API_KEY = "sk-live";
+        built.prisma.executions.push({
+          provider: "openai",
+          model: "gpt-4o",
+          status: "SUCCESS",
+          cost: 0.01,
+          createdAt: new Date(),
+        });
+
+        const response = await cutover(built).expect(200);
+        const llm = view(response.body, "llm");
+        expect(llm.status).toBe("verified");
+        expect(llm.evidence).toContain("openai");
+      });
+
+      it("s3rver를 Amazon S3로 세지 않는다 (CTO 지시 5)", async () => {
+        const built = await build();
+        app = built.app;
+        process.env.S3_ENDPOINT = "http://localhost:9000";
+
+        const response = await cutover(built).expect(200);
+        const storage = view(response.body, "storage");
+        expect(storage.status).toBe("not-production");
+      });
+
+      it("S3 주소인데 자격 증명이 개발 기본값이면 막는다", async () => {
+        const built = await build();
+        app = built.app;
+        process.env.S3_ENDPOINT = "https://s3.ap-northeast-2.amazonaws.com";
+        process.env.S3_ACCESS_KEY = "minioadmin";
+        process.env.S3_SECRET_KEY = "minioadmin";
+
+        const response = await cutover(built).expect(200);
+        expect(view(response.body, "storage").status).toBe("invalid");
+      });
+
+      it("CI 워크플로 파일을 못 읽으면 통과로 세지 않는다 (CTO 지시 6)", async () => {
+        const built = await build();
+        app = built.app;
+        process.env.CI_WORKFLOW_PATH = "/nonexistent/ci.yml";
+
+        const response = await cutover(built).expect(200);
+        expect(view(response.body, "ci").status).toBe("unverified");
+      });
+
+      it("실행 이력이 없으면 CI를 초록으로 세지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        // GITHUB_REPOSITORY 미설정 — 이력을 읽을 수 없다
+
+        const response = await cutover(built).expect(200);
+        const ci = view(response.body, "ci");
+        expect(ci.status).toBe("unverified");
+        expect(ci.detail).toContain("한 번도 돌지 않은 것은");
       });
     });
   });

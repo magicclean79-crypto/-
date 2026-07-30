@@ -364,3 +364,62 @@ test.describe("OCR 비용·관측 편입 (TASK-3001, CTO 결정 2901-④)", () =
     await expect(page.getByTestId("cost-by-source")).toContainText("OCR $0.003000");
   });
 });
+
+/**
+ * 운영 전환 검증 (TASK-3401 — CTO 지시 4·5·6).
+ *
+ * 이 화면이 지키는 한 줄: **계약 스텁을 상대로 만든 성공 기록을 "연결됨"으로
+ * 보여 주지 않는다.** 우리 라이브 검증이 실제로 스텁을 상대로 돌기 때문에,
+ * 이것을 가려내지 못하면 화면은 붙지 않은 시스템을 붙었다고 보고한다.
+ */
+test.describe("운영 전환 검증 (TASK-3401)", () => {
+  test("스텁을 상대로 성공한 기록을 연결됨으로 보여 주지 않는다", async ({
+    page,
+  }) => {
+    await setMode("data");
+    await openPage(page);
+
+    const section = page.getByTestId("production-cutover");
+    await expect(section).toContainText("운영 전환 검증");
+    await expect(page.getByTestId("cutover-summary")).toContainText("0/4 확인됨");
+    await expect(page.getByTestId("cutover-status-llm")).toHaveText(
+      "운영의 그것이 아님",
+    );
+    // 왜 아닌지를 말한다 — 상태만 보여 주면 사람은 무엇을 고칠지 모른다
+    await expect(page.getByTestId("cutover-llm")).toContainText(
+      "운영 연결의 증거가 아닙니다",
+    );
+    await expect(page.getByTestId("cutover-llm")).toContainText("다음 할 일");
+  });
+
+  test("s3rver를 Amazon S3로 세지 않는다 (CTO 지시 5)", async ({ page }) => {
+    await setMode("data");
+    await openPage(page);
+
+    await expect(page.getByTestId("cutover-storage")).toContainText(
+      "Amazon S3가 아닙니다",
+    );
+  });
+
+  test("CI가 계속 빨간 사실을 화면이 말한다 (CTO 지시 6)", async ({ page }) => {
+    await setMode("data");
+    await openPage(page);
+
+    const ci = page.getByTestId("cutover-ci");
+    await expect(page.getByTestId("cutover-status-ci")).toHaveText("설정 오류");
+    await expect(ci).toContainText("연속 실패");
+    await expect(ci).toContainText("로컬에서만 통과하는 게이트는 게이트가 아닙니다");
+  });
+
+  test("모두 실 연결이면 전환 완료로 보여준다", async ({ page }) => {
+    await setMode("cutover-done");
+    await openPage(page);
+
+    await expect(page.getByTestId("cutover-summary")).toContainText("4/4 확인됨");
+    await expect(page.getByTestId("cutover-status-llm")).toHaveText("실 연결 확인");
+    // 근거 없이 통과시키지 않는다
+    await expect(page.getByTestId("cutover-llm")).toContainText(
+      "근거: openai 실 호출 성공 12건",
+    );
+  });
+});

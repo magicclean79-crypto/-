@@ -298,30 +298,111 @@ export function detectPriceSourceAlerts(input: {
   needsHumanCheck: boolean;
   unparsedCount: number;
   detail: string;
+  /** 어느 공지인가 (TASK-3401) — 없으면 기본 소스 하나로 본다 */
+  sourceId?: string;
+  /**
+   * 이 소스의 실패가 **언제부터** 이어졌는가 (epoch ms).
+   *
+   * 없으면 승격을 판정하지 않는다 — 모르는 것을 "오래됐다"고도
+   * "방금이다"라고도 말하지 않는다.
+   */
+  failingSince?: number | null;
+  now?: number;
+  escalateAfterMs?: number;
 }): DetectedAlert[] {
   if (!input.needsHumanCheck) {
     return [];
   }
   // 미구성은 "아직 안 붙임"이다 — 실패와 같은 무게로 부르면 진짜 실패가 묻힌다
   const unconfigured = input.status === "unconfigured";
+  const sourceId = input.sourceId ?? "pricing-feed";
+  const escalation = judgePriceSourceEscalation({
+    status: input.status,
+    failingSince: input.failingSince ?? null,
+    now: input.now ?? null,
+    escalateAfterMs: input.escalateAfterMs,
+  });
+  const scope = sourceId === "pricing-feed" ? "" : ` — ${sourceId}`;
   return [
     {
       kind: "price-source",
       // 상태별로 키를 나누지 않는다 — 같은 사안(공지를 못 본다)이 여러 경보로
-      // 흩어지면 "지금 무엇이 문제인가"를 한눈에 볼 수 없다
-      key: "price-source:pricing-feed",
-      level: "warning",
-      title: unconfigured
-        ? "가격 공지가 설정되지 않았습니다"
-        : `가격 공지를 읽지 못했습니다 (${input.status})`,
+      // 흩어지면 "지금 무엇이 문제인가"를 한눈에 볼 수 없다.
+      // 다만 **소스별로는 나눈다**(TASK-3401): 소스마다 원인도 조치도 다르고,
+      // 한 키로 묶으면 한 곳이 나아도 다른 곳의 실패가 그 뒤에 숨는다.
+      key: `price-source:${sourceId}`,
+      level: escalation.level,
+      title:
+        (unconfigured
+          ? "가격 공지가 설정되지 않았습니다"
+          : `가격 공지를 읽지 못했습니다 (${input.status})`) + scope,
       message:
         input.detail +
         (input.unparsedCount > 0
           ? ` 해석하지 못한 항목 ${input.unparsedCount}건은 목록에 남아 있습니다.`
           : "") +
-        " 사람이 공지를 직접 확인해 주세요 (CTO 정책 3301-①).",
+        // 판정 문구가 이미 사람 확인을 요구하고 있으면 되풀이하지 않는다 —
+        // 같은 문장이 두 번 붙으면 경보가 기계가 쓴 글처럼 읽히고, 그때부터
+        // 사람은 문장을 읽지 않고 제목만 본다 (라이브 검증에서 발견)
+        (input.detail.includes("직접 확인")
+          ? ""
+          : " 사람이 공지를 직접 확인해 주세요 (CTO 정책 3301-①).") +
+        (escalation.note === null ? "" : ` ${escalation.note}`),
     },
   ];
+}
+
+/**
+ * 공지 실패가 **길어지면 등급을 올린다** (TASK-3401 — CTO 결정 3301-⑥).
+ *
+ * 하루 넘게 못 읽고 있는데도 계속 같은 warning이 반복되면, 사람은 그것을
+ * "원래 그런 경보"로 읽습니다. 그 순간 경보는 있는데 아무도 보지 않는 상태가
+ * 되고, 단가는 낡은 채로 돈이 나갑니다.
+ *
+ * 두 가지를 지킵니다:
+ *
+ * 1. **미구성은 승격하지 않습니다.** 아직 안 붙인 것은 시간이 지나도 실패가
+ *    되지 않습니다 — 미구성과 실패는 다릅니다. 승격하면 "붙이지 않기로 한"
+ *    선택이 며칠 뒤 장애로 둔갑합니다.
+ * 2. **시작 시각을 모르면 승격하지 않습니다.** 모르는 것을 "오래됐다"고
+ *    말하지 않습니다.
+ */
+export const DEFAULT_PRICE_SOURCE_ESCALATE_MS = 24 * 60 * 60 * 1000;
+export const PRICE_SOURCE_ESCALATE_ENV = "PRICE_SOURCE_ESCALATE_AFTER_MS";
+
+export function judgePriceSourceEscalation(input: {
+  status: string;
+  failingSince: number | null;
+  now: number | null;
+  escalateAfterMs?: number;
+}): { level: AlertLevel; elapsedMs: number | null; note: string | null } {
+  if (input.status === "unconfigured") {
+    return { level: "warning", elapsedMs: null, note: null };
+  }
+  if (input.failingSince === null || input.now === null) {
+    return { level: "warning", elapsedMs: null, note: null };
+  }
+  const elapsed = input.now - input.failingSince;
+  const threshold = input.escalateAfterMs ?? DEFAULT_PRICE_SOURCE_ESCALATE_MS;
+  if (elapsed < threshold) {
+    return { level: "warning", elapsedMs: elapsed, note: null };
+  }
+  const hours = Math.max(1, Math.floor(elapsed / (60 * 60 * 1000)));
+  return {
+    level: "critical",
+    elapsedMs: elapsed,
+    note:
+      `이 공지를 ${hours}시간째 읽지 못하고 있습니다 — 그동안 단가 변경을 확인할 방법이 ` +
+      // 마크다운 강조는 쓰지 않는다 — Slack·메일에서 별표가 그대로 보인다
+      "없었습니다. 호출을 차단하지는 않지만, 공지를 직접 확인해 주세요 (CTO 결정 3301-⑥).",
+  };
+}
+
+/** 승격 기준 시간을 환경변수에서 읽는다 — 잘못 적은 값은 기본값으로 돈다 */
+export function resolvePriceSourceEscalateMs(
+  env: Record<string, string | undefined>,
+): number {
+  return positiveMs(env[PRICE_SOURCE_ESCALATE_ENV], DEFAULT_PRICE_SOURCE_ESCALATE_MS);
 }
 
 /**

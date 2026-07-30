@@ -5,6 +5,9 @@ import {
   detectForecastAlerts,
   detectLockOutageAlert,
   detectPriceSourceAlerts,
+  DEFAULT_PRICE_SOURCE_ESCALATE_MS,
+  judgePriceSourceEscalation,
+  resolvePriceSourceEscalateMs,
   detectPricingDriftAlerts,
   detectSchedulerAlerts,
   detectProviderAlerts,
@@ -659,5 +662,134 @@ describe("Production Alerting (TASK-1302)", () => {
       });
       expect(decision.action).toBe("suppress");
     });
+  });
+});
+
+/**
+ * 공지 실패 장기화 시 등급 승격 (TASK-3401 — CTO 결정 3301-⑥).
+ *
+ * 하루 넘게 못 읽는데 같은 warning이 반복되면 사람은 그것을 "원래 그런 경보"로
+ * 읽는다. 그 순간 경보는 있는데 아무도 보지 않는 상태가 된다.
+ */
+describe("가격 공지 실패 장기화 (TASK-3401, CTO 결정 3301-⑥)", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const now = Date.parse("2026-07-30T00:00:00Z");
+
+  it("기본 승격 기준은 24시간이다", () => {
+    expect(DEFAULT_PRICE_SOURCE_ESCALATE_MS).toBe(DAY);
+  });
+
+  it("기준 전에는 warning이다 — 짧은 실패는 흔하고 대개 스스로 낫는다", () => {
+    const judged = judgePriceSourceEscalation({
+      status: "unreachable",
+      failingSince: now - 3 * 60 * 60 * 1000,
+      now,
+    });
+    expect(judged.level).toBe("warning");
+    expect(judged.note).toBeNull();
+  });
+
+  it("기준을 넘기면 critical로 올린다", () => {
+    const judged = judgePriceSourceEscalation({
+      status: "unreachable",
+      failingSince: now - 2 * DAY,
+      now,
+    });
+    expect(judged.level).toBe("critical");
+    expect(judged.note).toContain("48시간째");
+  });
+
+  it("미구성은 시간이 지나도 승격하지 않는다 — 미구성과 실패는 다르다", () => {
+    const judged = judgePriceSourceEscalation({
+      status: "unconfigured",
+      failingSince: now - 30 * DAY,
+      now,
+    });
+    expect(judged.level).toBe("warning");
+  });
+
+  it("언제부터인지 모르면 승격하지 않는다 — 모르는 것을 오래됐다고 말하지 않는다", () => {
+    expect(
+      judgePriceSourceEscalation({ status: "unreachable", failingSince: null, now })
+        .level,
+    ).toBe("warning");
+  });
+
+  it("경보에 승격 사유가 함께 실린다", () => {
+    const alerts = detectPriceSourceAlerts({
+      status: "unreachable",
+      needsHumanCheck: true,
+      unparsedCount: 0,
+      detail: "가격 공지를 가져오지 못했습니다: HTTP 503.",
+      sourceId: "openai",
+      failingSince: now - 2 * DAY,
+      now,
+    });
+    expect(alerts[0].level).toBe("critical");
+    expect(alerts[0].message).toContain("48시간째");
+    // 마크다운 강조는 쓰지 않는다 — Slack·메일에서 별표가 그대로 보인다
+    expect(alerts[0].message).not.toContain("**");
+  });
+
+  it("같은 요청을 두 번 적지 않는다 — 라이브에서 문장이 겹쳐 보였다", () => {
+    const alerts = detectPriceSourceAlerts({
+      status: "unreachable",
+      needsHumanCheck: true,
+      unparsedCount: 0,
+      // 판정 문구가 이미 "직접 확인"을 말하고 있다
+      detail:
+        "가격 공지를 가져오지 못했습니다: HTTP 503. 공지를 읽지 못한 것은 " +
+        "단가가 그대로라는 뜻이 아닙니다 — 사람이 직접 확인해 주세요 (CTO 정책 3301-①).",
+    });
+    const occurrences = alerts[0].message.split("직접 확인").length - 1;
+    expect(occurrences).toBe(1);
+  });
+
+  it("판정 문구가 확인을 말하지 않으면 그 요청을 붙인다", () => {
+    const alerts = detectPriceSourceAlerts({
+      status: "unconfigured",
+      needsHumanCheck: true,
+      unparsedCount: 0,
+      detail: "가격 공지 주소가 설정되지 않았습니다 — 미구성이며 실패가 아닙니다.",
+    });
+    expect(alerts[0].message).toContain("사람이 공지를 직접 확인해 주세요");
+  });
+
+  it("소스마다 경보 키가 다르다 — 한 곳이 나아도 다른 곳이 뒤에 숨지 않는다", () => {
+    const openai = detectPriceSourceAlerts({
+      status: "unreachable",
+      needsHumanCheck: true,
+      unparsedCount: 0,
+      detail: "x",
+      sourceId: "openai",
+    });
+    const google = detectPriceSourceAlerts({
+      status: "unparsable",
+      needsHumanCheck: true,
+      unparsedCount: 1,
+      detail: "y",
+      sourceId: "google",
+    });
+    expect(openai[0].key).toBe("price-source:openai");
+    expect(google[0].key).toBe("price-source:google");
+    expect(openai[0].title).toContain("openai");
+  });
+
+  it("소스를 안 밝히면 예전 키를 그대로 쓴다 — 기존 경보가 끊기지 않는다", () => {
+    const alerts = detectPriceSourceAlerts({
+      status: "unreachable",
+      needsHumanCheck: true,
+      unparsedCount: 0,
+      detail: "x",
+    });
+    expect(alerts[0].key).toBe("price-source:pricing-feed");
+  });
+
+  it("승격 기준은 환경변수로 바꿀 수 있고, 잘못 적으면 기본값으로 돈다", () => {
+    expect(resolvePriceSourceEscalateMs({ PRICE_SOURCE_ESCALATE_AFTER_MS: "3600000" })).toBe(
+      3_600_000,
+    );
+    expect(resolvePriceSourceEscalateMs({ PRICE_SOURCE_ESCALATE_AFTER_MS: "곧" })).toBe(DAY);
+    expect(resolvePriceSourceEscalateMs({})).toBe(DAY);
   });
 });

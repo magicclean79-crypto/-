@@ -146,6 +146,23 @@ curl -X POST "http://localhost:4000/ops/checks/run?job=remote-verify" -b cookies
 curl http://localhost:4000/ops/readiness -b cookies.txt
 ```
 
+## 5.1 기계 판정 (TASK-3401, CTO 지시 5)
+
+`GET /ops/cutover`의 `storage` 항목이 **전환의 어중간한 상태**를 따로 잡습니다.
+
+| 상태 | 뜻 |
+| --- | --- |
+| `not-configured` | `S3_ENDPOINT` 미설정 — 아직 전환하지 않았습니다(실패가 아닙니다) |
+| `not-production` | s3rver·MinIO — 개발 전용입니다 |
+| `invalid` | 주소는 Amazon인데 자격 증명이 비었거나 `minioadmin`입니다 |
+| `invalid` | 이미지 버킷과 백업 버킷이 **같습니다** (결정 1701-②) |
+| `invalid` | 버킷에 닿지 못합니다 — IAM `s3:ListBucket`을 확인하세요 |
+| `unverified` | 설정은 Amazon인데 접근 점검 결과가 없습니다 |
+| `verified` | 접근했고 버킷이 있습니다 |
+
+자격 증명 기본값(`minioadmin`)을 그대로 두고 주소만 바꾸는 것이 가장 흔한
+어중간한 전환입니다 — 그 상태의 인증 실패는 **"S3 장애"처럼 보입니다.**
+
 ## 6. 되돌리기
 
 전환이 실패하면 **환경변수만 되돌리면 됩니다** — 코드는 엔드포인트를 읽을 뿐

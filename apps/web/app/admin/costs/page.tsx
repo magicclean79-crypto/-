@@ -408,6 +408,69 @@ export default function CostIntelligencePage() {
             </div>
           ) : null}
 
+          {/*
+            공지 소스별 상태 (TASK-3401 — CTO 결정 3301-⑤).
+            한 곳이 죽어도 나머지는 읽힌다. 어느 공지가 죽었는지 보이지
+            않으면 사람은 무엇을 고쳐야 할지 알 수 없다.
+          */}
+          {source !== null && source.sources.length > 0 ? (
+            <div className="mt-3" data-testid="price-source-list">
+              <h3 className="text-sm font-semibold">가격 공지 소스</h3>
+              <div className="mt-1 overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="text-left text-xs uppercase text-zinc-500">
+                    <tr>
+                      <th className="py-1 pr-4">공지</th>
+                      <th className="py-1 pr-4">형식</th>
+                      <th className="py-1 pr-4">상태</th>
+                      <th className="py-1">설명</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {source.sources.map((row) => (
+                      <tr
+                        key={row.id}
+                        data-testid={`price-source-${row.id}`}
+                        className="border-t border-zinc-100 dark:border-zinc-900"
+                      >
+                        <td className="py-1 pr-4 font-medium">{row.id}</td>
+                        <td className="py-1 pr-4 text-zinc-500">{row.format}</td>
+                        <td className="py-1 pr-4">
+                          <span
+                            className={
+                              row.status === "ok"
+                                ? "text-emerald-700 dark:text-emerald-400"
+                                : "text-amber-700 dark:text-amber-400"
+                            }
+                          >
+                            {row.status === "ok" ? "읽음" : `못 읽음 (${row.status})`}
+                          </span>
+                        </td>
+                        <td className="py-1 text-xs text-zinc-500">
+                          {row.url ?? "-"} · {row.detail}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
+
+          {source !== null && source.rejected.length > 0 ? (
+            <ul
+              data-testid="price-source-rejected"
+              className="mt-2 list-inside list-disc text-xs text-amber-700 dark:text-amber-400"
+            >
+              {/* 거부한 설정을 조용히 버리지 않는다 — 설정한 사람은 적용된 줄 안다 */}
+              {source.rejected.map((entry) => (
+                <li key={entry.name}>
+                  {entry.name}: {entry.reason}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+
           <h3 className="mt-4 text-sm font-semibold">실효 가격표</h3>
           <p className="text-xs text-zinc-500">
             지금 계산에 쓰는 단가입니다. 적용 이력 {board.effective.appliedCount}건

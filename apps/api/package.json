@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "prisma generate && nest start --watch --preserveWatchOutput",
     "build": "prisma generate && nest build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "start": "node dist/main.js",
     "test": "jest",
     "clean": "rm -rf dist",

@@ -1,9 +1,23 @@
-# CI. (TASK-2101, Sprint 21)
+# CI. (TASK-2101, Sprint 21 — TASK-3401에서 운영 검증)
 #
-# 품질 게이트(Build / Lint / Test)와 **Major Migration 교차 검증**
-# (CTO 결정 2001-③)을 돌린다. 교차 검증은 build 뒤에 둔다 — 검증 로직이
-# `@acos/core`에 있고, 순수 로직은 한 곳에만 둔다는 규칙을 스크립트에서도
-# 지키기 때문이다.
+# 품질 게이트(Build / TypeScript / ESLint / Test·Playwright)와
+# **Major Migration 교차 검증**(CTO 결정 2001-③)을 돌린다. 교차 검증은 build
+# 뒤에 둔다 — 검증 로직이 `@acos/core`에 있고, 순수 로직은 한 곳에만 둔다는
+# 규칙을 스크립트에서도 지키기 때문이다.
+#
+# TASK-3401 (CTO 지시 6 "GitHub Actions 운영 검증")에서 고친 것:
+#
+# 1. **Playwright 브라우저를 설치한다.** `pnpm test`에는 web e2e가 들어 있고,
+#    러너에는 브라우저가 없다. 그래서 이 워크플로는 지금까지 **13회 실행이
+#    전부 실패**했다 — 게이트가 파일에 적혀 있었지만 한 번도 초록인 적이 없었다.
+#    로컬에서만 통과하는 게이트는 게이트가 아니다.
+# 2. **TypeScript 게이트를 추가한다.** CTO가 매 TASK 요구하는 게이트인데
+#    워크플로에는 없었다 — 사람이 로컬에서 돌리는 것에만 의존하고 있었다.
+# 3. **Node 22.** 러너가 Node 20을 폐기 예정으로 경고하고 있었다.
+#
+# 여기서 돌리지 **않는** 것: Live Verification. 실 PostgreSQL·Redis·S3와 실
+# Provider 자격 증명이 필요하고, 그것을 CI에 넣으면 남의 서비스에 돈이 나가는
+# 테스트가 매 푸시마다 돈다. Live Verification은 사람이 돌리고 보고서에 남긴다.
 name: CI
 
 on:
@@ -23,10 +37,15 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+
+      # 브라우저가 없으면 web e2e가 통째로 죽고, 그 실패는 "코드가 잘못됐다"로
+      # 읽힌다 — 실제로는 환경이 준비되지 않은 것이다.
+      - name: Playwright 브라우저 설치
+        run: pnpm --filter web exec playwright install --with-deps chromium
 
       - name: Build
         run: pnpm build
@@ -35,6 +54,9 @@ jobs:
       # 지정이 조용히 사라지면 대규모 변경 후에도 리허설이 요구되지 않는다.
       - name: Major Migration 교차 검증
         run: pnpm check:major-migrations
+
+      - name: TypeScript
+        run: pnpm typecheck
 
       - name: Lint
         run: pnpm lint

@@ -522,6 +522,37 @@ TASK-1302가 남긴 두 부채를 갚습니다: **예약 점검의 인스턴스�
 | `POST` | `/ops/backup/verify-restore` | **지금 복원 검증 (ADMIN)** |
 | `POST` | `/ops/notifications/verify-smtp` | **메일 경로 확인 (ADMIN)** |
 
+## Enterprise Production Readiness (TASK-3401, Sprint 34)
+
+CTO 지시 1~7 반영 — 주제는 **스텁을 진짜로 세지 않는다**입니다.
+
+- **Provider별 공지 어댑터**(결정 3301-⑤): 공지 주소·형식·토큰을 Provider마다
+  따로 둡니다(`PRICE_SOURCE_URL_<PROVIDER>` · `PRICE_SOURCE_FORMAT_<PROVIDER>`
+  = `acos` | `flat`). 한 곳이 죽어도 나머지는 읽히고, **전체 상태는 가장 나쁜
+  것을 따릅니다** — 셋 중 둘을 읽었다고 "정상"이라 하면 못 읽은 하나가
+  사라집니다. **모르는 형식은 짐작해서 읽지 않고** 사유를 남깁니다
+- **공지 실패가 길어지면 등급을 올립니다**(결정 3301-⑥): 기본 24시간
+  (`PRICE_SOURCE_ESCALATE_AFTER_MS`)을 넘기면 `warning` → `critical`이 되고
+  문구에 몇 시간째인지가 붙습니다. **미구성은 승격하지 않고**(미구성과 실패는
+  다릅니다), 시작 시각은 경보가 아니라 **실행 이력**에서 셉니다
+- **운영 전환 검증** `GET /ops/cutover`(지시 4·5·6): LLM · Vision · S3 · CI 넷을
+  `verified / not-production / unverified / not-configured / invalid`로
+  판정합니다. **계약 스텁을 상대로 만든 성공 기록을 연결의 증거로 세지
+  않습니다** — 라이브에서 이 판정이 "OCR 성공 22건"이 전부 우리 스텁을 상대로
+  만들어진 것임을 잡아냈습니다. 연결 순서 판정(`/ops/providers`)도 같은 기준을
+  따릅니다
+- **GitHub Actions 운영 검증**(지시 6): 워크플로 **파일**과 최근 **실행 결과**를
+  따로 봅니다 — 적혀 있는 것과 초록으로 끝나는 것은 다릅니다. 실제로 이
+  저장소의 CI는 **13회 연속 실패**하고 있었고(러너에 Playwright 브라우저가 없어
+  `pnpm test`가 통째로 죽었습니다), 워크플로에 TypeScript 게이트도 없었습니다.
+  둘 다 고쳤습니다
+- **문서**: [production-cutover.md](docs/operations/production-cutover.md) 신설,
+  배포 체크리스트에 CI 게이트·전환 검증 절차 추가
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `GET` | `/ops/cutover` | **운영 전환 검증 (ADMIN)** — 붙은 상대가 진짜인가 |
+
 ## Enterprise Provider Intelligence (TASK-3301, Sprint 33)
 
 CTO 정책 3301-①~④ 반영 — 주제는 **못 읽은 것을 괜찮다고 말하지 않는다**입니다.

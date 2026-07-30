@@ -2187,6 +2187,8 @@ export interface PricingProposalDto {
     /** 공지 기반 (origin: published) */
     url?: string | null;
     source?: string;
+    /** 어느 공지가 알렸는가 (TASK-3401) — 소스를 나눴으므로 근거도 나뉜다 */
+    sourceId?: string;
     publishedEffectiveFrom?: string | null;
   } | null;
   /** LLM은 모델 이름, OCR은 엔진 이름 */
@@ -2263,6 +2265,40 @@ export interface EffectivePricingDto {
   }[];
   /** 다음으로 가격표가 바뀌는 시각 (없으면 null) */
   nextChangeAt: string | null;
+}
+
+/**
+ * 운영 전환 검증 (TASK-3401 — CTO 지시 4·5·6).
+ *
+ * **`not-production`을 `verified`로 세지 않는다.** 계약 스텁을 상대로 만든
+ * 성공 기록은 연결의 증거가 아니다.
+ */
+export type CutoverStatusDto =
+  | "verified"
+  | "not-production"
+  | "unverified"
+  | "not-configured"
+  | "invalid";
+
+export interface ProductionCutoverDto {
+  dependencies: {
+    id: "llm" | "vision" | "storage" | "ci";
+    title: string;
+    status: CutoverStatusDto;
+    detail: string;
+    env: string[];
+    /** 판정 근거 — 없으면 null (근거 없이 통과시키지 않는다) */
+    evidence: string | null;
+    /** 사람이 다음에 할 일 */
+    next: string;
+  }[];
+  summary: { verified: number; total: number };
+  /** 전부 verified인가 — 운영 전환에 부분 점수는 없다 */
+  ready: boolean;
+  detail: string;
+  /** 성공 기록을 근거로 인정하는 기한 (일) */
+  evidenceWindowDays: number;
+  checkedAt: string;
 }
 
 /** Provider별 감지 현황 (TASK-3301, CTO 정책 3301-④) */
@@ -2351,17 +2387,36 @@ export interface PricingDetectionDto {
    * **읽지 못한 것은 "변경 없음"이 아니다** — `needsHumanCheck`가 true면
    * 사람이 공지를 직접 확인해야 한다.
    */
-  source: {
-    status: "ok" | "partial" | "unparsable" | "unreachable" | "unconfigured";
-    needsHumanCheck: boolean;
-    /** 해석하지 못한 항목 — 버리지 않고 남긴다 */
-    unparsed: { index: number; reason: string }[];
-    detail: string;
-  };
+  source: PriceSourceStatusDto;
   /** 주기가 지나지 않아 보지 않은 Provider (TASK-3301, 정책 3301-④) */
   notDue: { provider: string; nextAt: string }[];
   detail: string;
   checkedAt: string;
+}
+
+/**
+ * 외부 가격 공지 상태 (TASK-3301 정책 3301-① · TASK-3401 결정 3301-⑤).
+ *
+ * 전체 상태는 **가장 나쁜 소스**를 따른다 — 셋 중 둘을 읽었다고 "정상"이라
+ * 말하면 못 읽은 하나가 조용히 사라진다.
+ */
+export interface PriceSourceStatusDto {
+  status: "ok" | "partial" | "unparsable" | "unreachable" | "unconfigured";
+  needsHumanCheck: boolean;
+  /** 해석하지 못한 항목 — 버리지 않고 남긴다 */
+  unparsed: { index: number; reason: string }[];
+  detail: string;
+  /** 소스별 판정 (TASK-3401) — 하나가 죽어도 나머지는 읽힌다 */
+  sources: {
+    id: string;
+    url: string | null;
+    format: string;
+    status: string;
+    unparsedCount: number;
+    detail: string;
+  }[];
+  /** 받아들이지 않은 공지 설정 — 조용히 버리지 않는다 */
+  rejected: { name: string; reason: string }[];
 }
 
 /** 감지 실행 이력 1건 — "조용한 것"과 "안 본 것"은 다르다 (TASK-3301) */

@@ -300,7 +300,7 @@ export const ENV_SPECS: EnvSpec[] = [
     name: "GOOGLE_VISION_ENDPOINT",
     category: "llm",
     description:
-      "Google Cloud Vision 엔드포인트 (스테이징 프록시·계약 검증용 — 평소에는 지정하지 않는다)",
+      "Google Cloud Vision 엔드포인트 (스테이징 프록시·계약 검증용 — 평소에는 지정하지 않는다). 공식 주소가 아니면 그 성공 기록을 운영 연결의 증거로 세지 않는다 (TASK-3401)",
     validate: urlLike,
     fallback: "https://vision.googleapis.com/v1/images:annotate",
     // 키는 쿼리에 실려 나간다 — 엔드포인트를 바꿔 두면 키가 그곳으로 간다
@@ -472,12 +472,75 @@ export const ENV_SPECS: EnvSpec[] = [
     fallback: "5000",
   },
   {
+    // Provider별 공지 (TASK-3401, CTO 결정 3301-⑤)
+    name: "PRICE_SOURCE_URL_<PROVIDER>",
+    category: "ops",
+    description:
+      "Provider별 가격 공지 주소 (예: PRICE_SOURCE_URL_OPENAI). 소스마다 따로 읽고 따로 판정한다 — 한 곳이 죽어도 나머지는 읽힌다. 프로젝트별 설정은 거부한다",
+  },
+  {
+    name: "PRICE_SOURCE_FORMAT_<PROVIDER>",
+    category: "ops",
+    description:
+      "공지 본문 형식 (acos | flat). 모르는 값이면 그 소스를 읽지 않고 사유를 남긴다 — 짐작으로 읽은 단가는 못 읽은 단가보다 위험하다",
+    fallback: "acos",
+  },
+  {
+    name: "PRICE_SOURCE_TOKEN_<PROVIDER>",
+    category: "ops",
+    description:
+      "Provider별 공지 인증 토큰 — 그 소스에만 보내며 기록에 남기지 않는다",
+    secret: true,
+  },
+  {
+    // 실패 장기화 승격 (TASK-3401, CTO 결정 3301-⑥)
+    name: "PRICE_SOURCE_ESCALATE_AFTER_MS",
+    category: "ops",
+    description:
+      "같은 공지를 이 시간 넘게 못 읽으면 경보를 critical로 올린다. 미구성은 승격하지 않는다 — 미구성과 실패는 다르다",
+    validate: positiveNumber("PRICE_SOURCE_ESCALATE_AFTER_MS"),
+    fallback: "24시간",
+  },
+  {
     // 감지 주기 (TASK-3301, CTO 정책 3301-④)
     name: "PRICE_DETECT_INTERVAL_<PROVIDER>",
     category: "ops",
     description:
       "Provider별 가격 감지 주기 (예: PRICE_DETECT_INTERVAL_GOOGLE_VISION=12h). 프로젝트별 설정은 지원하지 않는다 — 단가는 Provider와의 계약이다",
     fallback: "6h",
+  },
+  {
+    // 운영 전환 검증 (TASK-3401, CTO 지시 4·6)
+    name: "GITHUB_REPOSITORY",
+    category: "ops",
+    description:
+      "GitHub Actions 실행 이력을 읽을 저장소 (owner/repo) — 미설정이면 CI 상태를 '모름'으로 둔다(통과로 세지 않는다)",
+  },
+  {
+    name: "GITHUB_TOKEN",
+    category: "ops",
+    description:
+      "GitHub API 토큰 — 비공개 저장소의 실행 이력 조회에만 쓰며 기록에 남기지 않는다",
+    secret: true,
+  },
+  {
+    name: "CI_WORKFLOW_PATH",
+    category: "ops",
+    description:
+      "CI 워크플로 파일 경로 — 못 읽으면 게이트가 있다고 가정하지 않는다",
+    fallback: ".github/workflows/ci.yml",
+  },
+  {
+    name: "OPENAI_BASE_URL",
+    category: "llm",
+    description:
+      "OpenAI SDK가 읽는 주소 재정의 — 우리 코드는 읽지 않지만 SDK는 읽는다. 공식이 아니면 운영 전환으로 세지 않는다 (TASK-3401)",
+  },
+  {
+    name: "ANTHROPIC_BASE_URL",
+    category: "llm",
+    description:
+      "Anthropic SDK가 읽는 주소 재정의 — 공식이 아니면 운영 전환으로 세지 않는다 (TASK-3401)",
   },
   {
     name: "ALERT_COOLDOWN_PRICE_SOURCE_MS",

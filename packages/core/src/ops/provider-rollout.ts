@@ -28,9 +28,24 @@
  * 한 번 성공했다는 기록으로 "지금도 붙어 있다"고 말할 수는 없습니다 — 키는
  * 회수되고 할당량은 끊깁니다. 창을 두면 판정이 **스스로 낡습니다**: 호출이
  * 멈추면 얼마 뒤 `unverified`로 돌아가고, 그것이 정직한 답입니다.
+ *
+ * ## 근거에는 **상대**도 있습니다 (TASK-3401, CTO 지시 4)
+ *
+ * 성공 기록이 있다는 것만으로는 부족합니다 — **누구를 상대로 성공했는가**가
+ * 남아야 합니다. 우리는 라이브 검증에서 Vision 계약 스텁을 쓰고, 그 실행도
+ * 성공으로 기록됩니다. 주소가 스텁을 가리키는 동안 그 기록을 `connected`로
+ * 세면 **붙지 않은 시스템이 붙은 것으로 보고**됩니다.
+ *
+ * 그래서 주소가 공식이 아니면 `unverified`로 둡니다. 실패로 부르지는
+ * 않습니다 — 스텁을 쓰는 것은 잘못이 아니고, 다만 **연결의 증거가 아닐**
+ * 뿐입니다.
  */
 
 import { validateApiKeyFormat } from "../llm/api-key";
+import {
+  GOOGLE_VISION_OFFICIAL_HOST,
+  judgeEndpointOrigin,
+} from "./production-cutover";
 
 /** CTO가 확정한 연결 순서 (결정 2801-⑤) — 값으로 고정한다 */
 export const PROVIDER_ROLLOUT_ORDER = [
@@ -105,6 +120,19 @@ const LLM_STAGE_ENV: Record<string, string> = {
   gemini: "GEMINI_API_KEY",
 };
 
+/** 공식 SDK가 읽는 주소 재정의 창구 (TASK-3401) — Gemini는 없다 */
+const LLM_BASE_URL_ENV: Record<string, string | undefined> = {
+  openai: "OPENAI_BASE_URL",
+  anthropic: "ANTHROPIC_BASE_URL",
+  gemini: undefined,
+};
+
+const LLM_OFFICIAL_HOSTS: Record<string, string[]> = {
+  openai: ["api.openai.com"],
+  anthropic: ["api.anthropic.com"],
+  gemini: ["generativelanguage.googleapis.com"],
+};
+
 /** 운영 표준 OCR 엔진 이름 (그 외는 개발용이거나 미구현) */
 export const PRODUCTION_OCR_PROVIDER = "google-vision";
 
@@ -166,6 +194,27 @@ function judgeLlmStage(
       detail: `${keyEnv} ${format.message} (앞자리 ${format.hint ?? "-"} · ${format.length ?? 0}자)`,
       done: false,
       env: [keyEnv],
+      evidence: null,
+    };
+  }
+  // 공식 SDK가 읽는 주소 재정의 창구 — 우리 코드가 안 읽어도 SDK는 읽는다
+  const baseUrlEnv = LLM_BASE_URL_ENV[stage];
+  const endpoint =
+    baseUrlEnv === undefined
+      ? null
+      : judgeEndpointOrigin(input.env[baseUrlEnv], LLM_OFFICIAL_HOSTS[stage]);
+  if (endpoint !== null && (endpoint.origin === "local" || endpoint.origin === "third-party")) {
+    return {
+      stage,
+      status: "unverified",
+      detail:
+        `${baseUrlEnv}로 주소가 바뀌어 있습니다 — ${endpoint.detail} ` +
+        (successes > 0
+          ? `성공 기록 ${successes}건은 이 주소를 상대로 만들어졌으므로 연결의 근거로 세지 않습니다. `
+          : "") +
+        "운영 전환 현황은 /ops/cutover에서 함께 보세요.",
+      done: false,
+      env: [keyEnv, baseUrlEnv as string],
       evidence: null,
     };
   }
@@ -306,6 +355,26 @@ function judgeOcrStage(
       detail: `${GOOGLE_VISION_KEY_ENV} ${format.message} (앞자리 ${format.hint ?? "-"} · ${format.length ?? 0}자)`,
       done: false,
       env,
+      evidence: null,
+    };
+  }
+  // 성공 기록의 **상대**를 본다 (TASK-3401) — 스텁을 상대로 성공한 기록은
+  // 연결의 증거가 아니다
+  const endpoint = judgeEndpointOrigin(input.env.GOOGLE_VISION_ENDPOINT, [
+    GOOGLE_VISION_OFFICIAL_HOST,
+  ]);
+  if (endpoint.origin === "local" || endpoint.origin === "third-party") {
+    return {
+      stage: "ocr",
+      status: "unverified",
+      detail:
+        `GOOGLE_VISION_ENDPOINT가 공식 주소가 아닙니다 — ${endpoint.detail} ` +
+        (successes > 0
+          ? `최근 ${ROLLOUT_EVIDENCE_WINDOW_DAYS}일 OCR 성공 ${successes}건은 이 주소를 상대로 만들어졌으므로 연결의 근거로 세지 않습니다. `
+          : "") +
+        "운영 전환 현황은 /ops/cutover에서 함께 보세요.",
+      done: false,
+      env: [...env, "GOOGLE_VISION_ENDPOINT"],
       evidence: null,
     };
   }

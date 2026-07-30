@@ -38,6 +38,7 @@ import type {
   NotificationQueueStatusDto,
   DrillRequirementDto,
   OperationsReadinessDto,
+  ProductionCutoverDto,
   ProviderRolloutDto,
   RecoveryDrillDto,
   RemoteVerifyResultDto,
@@ -51,6 +52,7 @@ import { StorageService } from "../storage/storage.service";
 import { AlertService } from "./alert.service";
 import { BackupService } from "./backup.service";
 import { CostIntelligenceService } from "./cost-intelligence.service";
+import { ProductionCutoverService } from "./production-cutover.service";
 import { DistributedLockService } from "./distributed-lock.service";
 import { NotificationQueueService } from "./notification-queue.service";
 import { NotificationService } from "./notification.service";
@@ -102,6 +104,8 @@ export class OpsController {
     // 가격표 거버넌스·비용 인텔리전스 (TASK-3101, CTO 정책 3101-①③④)
     private readonly pricing: PricingService,
     private readonly costs: CostIntelligenceService,
+    // 운영 전환 검증 (TASK-3401, CTO 지시 4·5·6)
+    private readonly cutover: ProductionCutoverService,
   ) {}
 
   /**
@@ -117,6 +121,21 @@ export class OpsController {
   @Get("providers")
   async providerRollout(): Promise<ProviderRolloutDto> {
     return this.providers.rollout();
+  }
+
+  /**
+   * 운영 전환 검증 (TASK-3401, CTO 지시 4·5·6).
+   *
+   * `/ops/providers`와 목적이 다르다 — 그쪽은 "어디까지 붙였는가", 이쪽은
+   * **"붙은 상대가 진짜인가"** 다. 계약 스텁을 상대로 만든 성공 기록은
+   * 연결의 증거가 아니고, 그것을 가려내지 못하면 화면은 붙지 않은 시스템을
+   * 붙었다고 보고한다.
+   */
+  @Get("cutover")
+  async productionCutover(
+    @Query("branch") branch?: string,
+  ): Promise<ProductionCutoverDto> {
+    return this.cutover.report(branch?.trim() || undefined);
   }
 
   /**

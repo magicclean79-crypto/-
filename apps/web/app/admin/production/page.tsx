@@ -9,6 +9,7 @@ import type {
   ApiKeyFormatStatusDto,
   CostVerificationDto,
   MonitorStatusDto,
+  ProductionCutoverDto,
   ProductionMonitorDto,
   ProviderRolloutDto,
   ProviderValidationReportDto,
@@ -39,6 +40,32 @@ const FORMAT_STYLE: Record<ApiKeyFormatStatusDto, string> = {
  * 오타가 없다는 뜻일 뿐이고, 그것을 연결 완료로 보여 주면 **붙지 않은
  * 시스템이 붙은 것처럼** 읽힌다.
  */
+/**
+ * 운영 전환 판정 (TASK-3401, CTO 지시 4·5·6).
+ *
+ * `not-production`을 "연결됨"처럼 보이게 하지 않는다 — 돌고는 있지만
+ * 상대가 운영의 그것이 아니라는 뜻이고, 그 차이가 이 화면의 전부다.
+ */
+const CUTOVER_LABEL: Record<ProductionCutoverDto["dependencies"][number]["status"], string> = {
+  verified: "실 연결 확인",
+  "not-production": "운영의 그것이 아님",
+  unverified: "확인 안 됨",
+  "not-configured": "미구성",
+  invalid: "설정 오류",
+};
+
+const CUTOVER_STYLE: Record<ProductionCutoverDto["dependencies"][number]["status"], string> = {
+  verified:
+    "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
+  "not-production":
+    "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
+  unverified:
+    "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
+  "not-configured":
+    "bg-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
+  invalid: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300",
+};
+
 const ROLLOUT_LABEL: Record<ProviderRolloutDto["stages"][number]["status"], string> = {
   connected: "연결됨",
   unverified: "확인 안 됨",
@@ -119,6 +146,8 @@ export default function ProductionOpsPage() {
   const [board, setBoard] = useState<AlertBoardDto | null>(null);
   const [queue, setQueue] = useState<NotificationQueueStatusDto | null>(null);
   const [rollout, setRollout] = useState<ProviderRolloutDto | null>(null);
+  // 운영 전환 검증 (TASK-3401, CTO 지시 4·5·6) — 붙은 상대가 진짜인가
+  const [cutover, setCutover] = useState<ProductionCutoverDto | null>(null);
   // OCR 관측 (TASK-3001, CTO 결정 2901-④) — LLM과 같은 기준, 다른 표
   const [ocrMonitor, setOcrMonitor] = useState<ProductionMonitorDto | null>(
     null,
@@ -157,6 +186,7 @@ export default function ProductionOpsPage() {
         nextQueue,
         nextRollout,
         nextOcrMonitor,
+        nextCutover,
       ] = await Promise.all([
         get<ProviderValidationReportDto>(
           `/llm/providers/validate${live ? "?live=1" : ""}`,
@@ -169,7 +199,12 @@ export default function ProductionOpsPage() {
         get<ProviderRolloutDto>("/ops/providers"),
         // OCR 관측 (TASK-3001)
         get<ProductionMonitorDto>("/llm/monitoring/ocr?minutes=60"),
+        // 운영 전환 검증 (TASK-3401)
+        get<ProductionCutoverDto>("/ops/cutover"),
       ]);
+      if (nextCutover) {
+        setCutover(nextCutover);
+      }
       if (nextRollout) {
         setRollout(nextRollout);
       }
@@ -570,6 +605,69 @@ export default function ProductionOpsPage() {
               ))}
             </ul>
           ) : null}
+        </section>
+      ) : null}
+
+      {/*
+        운영 전환 검증 (TASK-3401 — CTO 지시 4·5·6).
+
+        연결 순서(아래)와 목적이 다르다: 그쪽은 "어디까지 붙였는가",
+        이쪽은 **"붙은 상대가 진짜인가"** 다. 계약 스텁을 상대로 만든 성공
+        기록은 연결의 증거가 아니고, 그것을 가려내지 못하면 화면은 붙지
+        않은 시스템을 붙었다고 보고한다.
+      */}
+      {cutover ? (
+        <section
+          data-testid="production-cutover"
+          className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-lg font-semibold">운영 전환 검증</h2>
+            <span
+              data-testid="cutover-summary"
+              className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                cutover.ready
+                  ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
+                  : "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+              }`}
+            >
+              {cutover.summary.verified}/{cutover.summary.total} 확인됨
+            </span>
+          </div>
+          <p className="mt-1 text-sm text-zinc-500">{cutover.detail}</p>
+          <p className="mt-1 text-xs text-zinc-500">
+            성공 기록은 최근 {cutover.evidenceWindowDays}일까지만 근거로
+            인정합니다 — 오래전 한 번의 성공으로 지금도 붙어 있다고 말할 수
+            없습니다.
+          </p>
+
+          <ul data-testid="cutover-items" className="mt-3 space-y-2 text-sm">
+            {cutover.dependencies.map((row) => (
+              <li
+                key={row.id}
+                data-testid={`cutover-${row.id}`}
+                className="rounded-lg border border-zinc-100 p-3 dark:border-zinc-900"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium">{row.title}</span>
+                  <span
+                    data-testid={`cutover-status-${row.id}`}
+                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${CUTOVER_STYLE[row.status]}`}
+                  >
+                    {CUTOVER_LABEL[row.status]}
+                  </span>
+                </div>
+                <p className="mt-1 text-zinc-600 dark:text-zinc-400">
+                  {row.detail}
+                </p>
+                <p className="mt-1 text-xs text-zinc-500">
+                  다음 할 일: {row.next}
+                  {row.evidence ? ` · 근거: ${row.evidence}` : ""}
+                  {row.env.length > 0 ? ` · ${row.env.join(" · ")}` : ""}
+                </p>
+              </li>
+            ))}
+          </ul>
         </section>
       ) : null}
 

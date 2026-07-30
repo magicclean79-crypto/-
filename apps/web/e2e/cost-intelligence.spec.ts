@@ -379,3 +379,51 @@ test.describe("Provider Intelligence (TASK-3301)", () => {
     );
   });
 });
+
+/**
+ * Provider별 공지 (TASK-3401 — CTO 결정 3301-⑤).
+ *
+ * 한 주소가 모든 단가를 담으면 그 주소 하나가 죽을 때 아무 단가도 대조하지
+ * 못한다. 소스를 나눴으므로 **어느 공지가 죽었는지**가 화면에 보여야 한다.
+ */
+test.describe("Provider별 가격 공지 (TASK-3401)", () => {
+  test("어느 공지가 죽었는지 소스별로 보여준다", async ({ page }) => {
+    await setMode("empty");
+    await openPage(page);
+    await page.getByTestId("pricing-detect").click();
+
+    const list = page.getByTestId("price-source-list");
+    await expect(list).toBeVisible();
+    await expect(page.getByTestId("price-source-openai")).toContainText(
+      "못 읽음 (unreachable)",
+    );
+    // 한 곳이 죽어도 나머지는 읽힌다
+    await expect(page.getByTestId("price-source-google")).toContainText("google");
+  });
+
+  test("둘 중 하나만 읽어도 전체를 정상이라 말하지 않는다", async ({ page }) => {
+    await setMode("empty");
+    await openPage(page);
+    await page.getByTestId("pricing-detect").click();
+
+    await expect(page.getByTestId("price-source-warning")).toContainText(
+      "가격 공지를 읽지 못했습니다 (unreachable)",
+    );
+    await expect(page.getByTestId("price-source-warning")).toContainText(
+      "2곳 중 1곳을 읽었습니다",
+    );
+  });
+
+  test("거부한 공지 설정과 사유가 보인다", async ({ page }) => {
+    await setMode("empty");
+    await openPage(page);
+    await page.getByTestId("pricing-detect").click();
+
+    await expect(page.getByTestId("price-source-rejected")).toContainText(
+      "PRICE_SOURCE_URL_PROJECT_ACME",
+    );
+    await expect(page.getByTestId("price-source-rejected")).toContainText(
+      "Provider와의 계약",
+    );
+  });
+});

@@ -75,3 +75,20 @@ API_BASE=https://<api-host> SMOKE_EMAIL=... SMOKE_PASSWORD=... \
 - Product Analysis: response_format json_object + 실 모델 JSON 엄격 파싱
 - Vision Analysis: image_url(data URL) 첨부 + JSON 파싱
 - 잘림 방어: finish_reason=length + JSON → 명확한 오류 + Execution FAILED
+
+## 스모크가 성공해도 "연결됨"이 아닐 수 있습니다 (TASK-3401, CTO 지시 4)
+
+스모크는 **호출 경로**를 확인합니다. 그 호출의 **상대가 누구였는지**는 확인하지
+않습니다 — `GOOGLE_VISION_ENDPOINT`나 `OPENAI_BASE_URL`이 우리 스텁을 가리키고
+있으면, 스모크는 통과하고 성공 기록도 남지만 Provider와는 한 번도 통신하지
+않은 것입니다.
+
+그래서 실 Provider 검증은 **두 개를 함께** 봅니다.
+
+```bash
+node scripts/real-provider-smoke.mjs          # 경로가 도는가 (과금됩니다)
+curl http://localhost:4000/ops/cutover -b cookies.txt   # 상대가 진짜인가
+```
+
+`/ops/cutover`가 `not-production`이면 스모크가 통과했더라도 **운영 전환은 끝난
+것이 아닙니다.** 자세한 것은 [production-cutover.md](production-cutover.md).

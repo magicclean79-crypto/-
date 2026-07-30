@@ -27,6 +27,7 @@ import {
   resolvePricingAt,
   shouldDetectProvider,
   startStage,
+  summarizePriceSources,
   validateEffectiveFrom,
   validateProposedPrice,
 } from "@acos/core";
@@ -34,7 +35,8 @@ import type {
   AppliedPricing,
   DetectedPriceChange,
   EffectivePricing,
-  PriceSourceVerdict,
+  PriceSourceResult,
+  PriceSourceSummary,
   PricingOrigin,
   PricingStage,
   PricingTarget,
@@ -565,10 +567,21 @@ export class PricingService implements OnModuleInit {
     unresolved: UnresolvedPriceSignal[];
     published: PublishedPriceChange[];
     source: {
-      status: PriceSourceVerdict["status"];
+      status: PriceSourceSummary["status"];
       needsHumanCheck: boolean;
-      unparsed: PriceSourceVerdict["unparsed"];
+      unparsed: PriceSourceSummary["unparsed"];
       detail: string;
+      /** 소스별 판정 (TASK-3401) — 하나가 죽어도 나머지는 읽힌다 */
+      sources: {
+        id: string;
+        url: string | null;
+        format: string;
+        status: string;
+        unparsedCount: number;
+        detail: string;
+      }[];
+      /** 받아들이지 않은 공지 설정 */
+      rejected: { name: string; reason: string }[];
     };
     /** 주기가 지나지 않아 보지 않은 Provider (정책 3301-④) */
     notDue: { provider: string; nextAt: string }[];
@@ -683,16 +696,12 @@ export class PricingService implements OnModuleInit {
 
     // ── 외부 가격 공지 (CTO 정책 3301-①) ──
     // **파싱 실패는 "변경 없음"이 아니다** — 판정을 그대로 담아 올린다.
-    const verdict: PriceSourceVerdict = this.source
-      ? await this.source.fetch()
-      : {
-          status: "unconfigured",
-          prices: [],
-          unparsed: [],
-          needsHumanCheck: true,
-          detail:
-            "가격 공지 어댑터가 없습니다 — 공지 대조 없이는 Provider의 단가 변경을 우리 기록만으로 알 수 없습니다.",
-        };
+    // Provider별로 따로 읽고 따로 판정한다 (TASK-3401 — CTO 결정 3301-⑤):
+    // 한 곳이 죽어도 나머지는 읽히고, 전체 상태는 **가장 나쁜 것**을 따른다.
+    const results: PriceSourceResult[] = this.source
+      ? await this.source.fetchAll()
+      : [];
+    const verdict = summarizePriceSources(results);
     const published = comparePublishedPrices({
       published: verdict.prices,
       effective: { llm: pricing.llm, ocr: pricing.ocr },
@@ -718,7 +727,12 @@ export class PricingService implements OnModuleInit {
         origin: "published",
         evidence: {
           source: "published",
-          url: this.source?.url ?? null,
+          // 어느 공지가 알렸는지 남긴다 — 소스를 나눴으므로 근거도 나뉜다
+          sourceId: change.sourceId,
+          url:
+            results.find((row) => row.id === change.sourceId)?.url ??
+            this.source?.url ??
+            null,
           // 공지가 밝힌 발효 시각 — 적용할 때 사람이 그대로 쓸 수 있다
           publishedEffectiveFrom: change.effectiveFrom,
         },
@@ -761,6 +775,11 @@ export class PricingService implements OnModuleInit {
       llmSamples: llmRows.length,
       sourceDetail: verdict.detail,
       sourceStatus: verdict.status,
+      sources: results.map((row) => ({
+        id: row.id,
+        status: row.verdict.status,
+        detail: row.verdict.detail,
+      })),
     });
 
     return {
@@ -772,6 +791,15 @@ export class PricingService implements OnModuleInit {
         needsHumanCheck: verdict.needsHumanCheck,
         unparsed: verdict.unparsed,
         detail: verdict.detail,
+        sources: results.map((row) => ({
+          id: row.id,
+          url: row.url,
+          format: row.format,
+          status: row.verdict.status,
+          unparsedCount: row.verdict.unparsed.length,
+          detail: row.verdict.detail,
+        })),
+        rejected: this.source?.rejected ?? [],
       },
       notDue,
       created,
@@ -860,6 +888,34 @@ export class PricingService implements OnModuleInit {
     return last;
   }
 
+  /**
+   * 이 공지를 **언제부터** 못 읽고 있는가 (TASK-3401 — CTO 결정 3301-⑥).
+   *
+   * 등급 승격의 근거입니다. 경보 테이블의 `firstRaisedAt`을 쓰지 않는 이유는
+   * 그것이 "처음 본 때"(해소된 사건까지 포함)를 뜻하기 때문입니다 — 지난달에
+   * 한 번 실패하고 나았던 공지가 오늘 다시 실패하면 곧바로 critical이 되어
+   * 버립니다. **이번 실패가 언제 시작됐는지**는 실행 이력이 답합니다.
+   *
+   * 성공한 실행을 만나면 거기서 끊습니다. 이력이 없으면 null(모름)이고,
+   * 모르는 것은 승격하지 않습니다.
+   */
+  async priceSourceFailingSince(sourceId: string): Promise<Date | null> {
+    const rows = await this.prisma.priceDetectionRun.findMany({
+      where: { source: "published", provider: sourceId },
+      orderBy: { ranAt: "desc" },
+      take: 200,
+      select: { ranAt: true, skipped: true },
+    });
+    let since: Date | null = null;
+    for (const row of rows) {
+      if (row.skipped === null) {
+        break; // 여기서 한 번 읽혔다 — 그 뒤로만 이어진 실패다
+      }
+      since = row.ranAt;
+    }
+    return since;
+  }
+
   /** 감지 실행을 남긴다 — 0건도, 건너뛴 것도 기록이다 (정책 3301-④) */
   private async recordDetectionRuns(input: {
     now: Date;
@@ -869,6 +925,8 @@ export class PricingService implements OnModuleInit {
     publishedChanges: PublishedPriceChange[];
     ocrSamples: number;
     llmSamples: number;
+    /** 소스별 판정 (TASK-3401) — 하나로 뭉치면 어느 공지가 죽었는지 사라진다 */
+    sources: { id: string; status: string; detail: string }[];
     sourceStatus: string;
     sourceDetail: string;
   }): Promise<void> {
@@ -903,19 +961,38 @@ export class PricingService implements OnModuleInit {
         detail: "이번 회차는 건너뛰었습니다 (CTO 정책 3301-④).",
       });
     }
-    // 공지 대조는 Provider별이 아니라 한 번이다 — 목록 하나를 읽는다
-    rows.push({
-      target: "llm",
-      provider: "pricing-feed",
-      source: "published",
-      ranAt: input.now,
-      samples: input.publishedChanges.length,
-      changes: input.publishedChanges.length,
-      ...(input.sourceStatus === "ok" || input.sourceStatus === "partial"
-        ? {}
-        : { skipped: `공지를 읽지 못했습니다 (${input.sourceStatus})` }),
-      detail: input.sourceDetail,
-    });
+    // 공지 대조는 **소스별로** 남긴다 (TASK-3401 — CTO 결정 3301-⑤·⑥).
+    // 하나로 뭉치면 ⓐ 어느 공지가 죽었는지 알 수 없고 ⓑ "이 공지를 언제부터
+    // 못 읽고 있는가"에 답할 수 없다 — 등급 승격이 그 답을 근거로 삼는다.
+    if (input.sources.length === 0) {
+      rows.push({
+        target: "llm",
+        provider: "pricing-feed",
+        source: "published",
+        ranAt: input.now,
+        samples: 0,
+        changes: 0,
+        skipped: `공지를 읽지 못했습니다 (${input.sourceStatus})`,
+        detail: input.sourceDetail,
+      });
+    }
+    for (const source of input.sources) {
+      const changes = input.publishedChanges.filter(
+        (change) => change.sourceId === source.id,
+      ).length;
+      rows.push({
+        target: "llm",
+        provider: source.id,
+        source: "published",
+        ranAt: input.now,
+        samples: changes,
+        changes,
+        ...(source.status === "ok" || source.status === "partial"
+          ? {}
+          : { skipped: `공지를 읽지 못했습니다 (${source.status})` }),
+        detail: source.detail,
+      });
+    }
 
     await this.prisma.priceDetectionRun
       .createMany({ data: rows })

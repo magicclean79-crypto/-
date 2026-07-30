@@ -7,6 +7,8 @@ import { StorageModule } from "../storage/storage.module";
 import { AlertService } from "./alert.service";
 import { BackupService } from "./backup.service";
 import { CostIntelligenceService } from "./cost-intelligence.service";
+import { CiStatusService } from "./ci-status.service";
+import { ProductionCutoverService } from "./production-cutover.service";
 import { MigrationGovernanceService } from "./migration-governance.service";
 import { RecoveryDrillService } from "./recovery-drill.service";
 import { RecoveryEvaluationService } from "./recovery-evaluation.service";
@@ -44,6 +46,8 @@ import { ScheduledChecksService } from "./scheduled-checks.service";
     RecoveryEvaluationService,
     MigrationGovernanceService,
     CostIntelligenceService,
+    CiStatusService,
+    ProductionCutoverService,
   ],
   exports: [
     AlertService,
@@ -56,6 +60,8 @@ import { ScheduledChecksService } from "./scheduled-checks.service";
     RecoveryEvaluationService,
     MigrationGovernanceService,
     CostIntelligenceService,
+    CiStatusService,
+    ProductionCutoverService,
   ],
 })
 export class OpsModule {}

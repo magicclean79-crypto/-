@@ -158,6 +158,42 @@ API_BASE=https://<api-host> GATE_EMAIL=... GATE_PASSWORD=... \
 운영에서는 `GATE_STRICT`(직접 확인 항목도 차단)와 `GATE_ALERTS`(활성 심각 경보
 차단)가 **기본으로 켜집니다** (CTO 결정 1302-③).
 
+### CI 게이트 (TASK-3401, CTO 지시 6)
+
+**게이트는 GitHub Actions에서 초록으로 끝나야 게이트입니다.** 로컬에서만
+통과하는 게이트는 게이트가 아닙니다 — 실제로 이 저장소의 CI는 필수 게이트가
+워크플로에 다 적힌 상태로 **13회 연속 실패**했습니다(러너에 Playwright
+브라우저가 없어 `pnpm test`가 통째로 죽고 있었습니다).
+
+`.github/workflows/ci.yml`이 돌리는 순서 — 이 순서는 테스트로 고정돼 있습니다
+(`ci-workflow.spec.ts`).
+
+| 순서 | 게이트 | 왜 이 자리인가 |
+| --- | --- | --- |
+| 0 | Playwright 브라우저 설치 | `pnpm test`에 web e2e가 들어 있습니다 |
+| 1 | `pnpm build` | 아래 교차 검증이 빌드 산출물을 씁니다 |
+| 2 | `pnpm check:major-migrations` | 지정이 어긋난 채로 통과시키지 않습니다 (결정 2101-③) |
+| 3 | `pnpm typecheck` | |
+| 4 | `pnpm lint` | |
+| 5 | `pnpm test` | core · api · web e2e |
+
+**Live Verification은 CI에서 돌리지 않습니다** — 실 자격 증명이 필요하고, 그것을
+CI에 넣으면 남의 서비스에 돈이 나가는 테스트가 매 푸시마다 돕니다. 사람이
+돌리고 보고서에 남깁니다.
+
+- [ ] 배포 대상 커밋의 CI가 **초록**인지 확인합니다
+      (`GET /ops/cutover`의 `ci` 항목이 같은 사실을 판정합니다)
+
+### 운영 전환 검증 (TASK-3401, CTO 지시 4·5·6)
+
+- [ ] `GET /ops/cutover` — 네 항목(LLM · Vision · S3 · CI)이 모두 `verified`인지
+      확인합니다. 하나라도 아니면 `ready`는 false이고, **운영 전환에 부분
+      점수는 없습니다.**
+
+`not-production`은 "돌고는 있지만 운영의 그것이 아니다"입니다 — 계약 스텁을
+상대로 만든 성공 기록은 연결의 증거가 아닙니다. 자세한 것은
+[production-cutover.md](production-cutover.md).
+
 ---
 
 ## 3. 배포 직후 (사람이 하는 것)
@@ -210,6 +246,7 @@ curl -X POST https://<api-host>/ops/drills/require -b cookies.txt \
 | 문서 | 내용 |
 | --- | --- |
 | [production-runbook.md](production-runbook.md) | 배포 실행 절차 |
+| [production-cutover.md](production-cutover.md) | 운영 전환 검증 (LLM · Vision · S3 · CI) |
 | [s3-migration.md](s3-migration.md) | Amazon S3 전환 · 프로비저닝 경계 |
 | [disaster-recovery.md](disaster-recovery.md) | 백업·복원·재해 복구 판정 |
 | [recovery-guide.md](recovery-guide.md) | 장애 대응 순서 |

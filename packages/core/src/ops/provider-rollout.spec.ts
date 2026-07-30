@@ -304,3 +304,60 @@ describe("Provider 연결 순서 (TASK-2901, CTO 결정 2801-⑤)", () => {
     }
   });
 });
+
+/**
+ * 성공 기록의 **상대** (TASK-3401 — CTO 지시 4).
+ *
+ * 우리는 라이브 검증에서 계약 스텁을 쓰고, 그 실행도 성공으로 기록된다.
+ * 주소가 스텁을 가리키는 동안 그 기록을 `connected`로 세면 붙지 않은
+ * 시스템이 붙은 것으로 보고된다.
+ */
+describe("스텁을 상대로 만든 성공 기록 (TASK-3401)", () => {
+  const base = {
+    env: {
+      OPENAI_API_KEY: "sk-live-000000000000000000000000000000000000000000000000",
+      OCR_PROVIDER: "google-vision",
+      GOOGLE_VISION_API_KEY: "AIzaSyTESTKEY0000000000000000000000000000",
+    } as Record<string, string | undefined>,
+    llmSuccesses: { openai: 12 },
+    visionSuccesses: 0,
+    ocrSuccesses: { "google-vision": 22 },
+  };
+  const stageOf = (input: typeof base, stage: string) =>
+    judgeProviderRollout(input).stages.find((row) => row.stage === stage)!;
+
+  it("Vision 스텁 주소면 OCR 성공 22건이 있어도 연결됨이 아니다", () => {
+    const view = stageOf(
+      {
+        ...base,
+        env: {
+          ...base.env,
+          GOOGLE_VISION_ENDPOINT: "http://127.0.0.1:9100/v1/images:annotate",
+        },
+      },
+      "ocr",
+    );
+    expect(view.status).toBe("unverified");
+    expect(view.done).toBe(false);
+    expect(view.evidence).toBeNull();
+    expect(view.detail).toContain("연결의 근거로 세지 않습니다");
+  });
+
+  it("공식 주소면 종전대로 연결됨이다", () => {
+    const view = stageOf(base, "ocr");
+    expect(view.status).toBe("connected");
+  });
+
+  it("OPENAI_BASE_URL이 우리 컴퓨터를 가리키면 LLM도 연결됨이 아니다", () => {
+    const view = stageOf(
+      { ...base, env: { ...base.env, OPENAI_BASE_URL: "http://localhost:9300/v1" } },
+      "openai",
+    );
+    expect(view.status).toBe("unverified");
+    expect(view.detail).toContain("OPENAI_BASE_URL");
+  });
+
+  it("주소를 바꾸지 않았으면 판정이 달라지지 않는다 — 미설정은 공식이다", () => {
+    expect(stageOf(base, "openai").status).toBe("connected");
+  });
+});

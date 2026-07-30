@@ -18,12 +18,13 @@ import {
   detectUnpricedAlerts,
   isSchedulerStopped,
   resolveGraceFactor,
+  resolvePriceSourceEscalateMs,
   resolveSchedules,
   shouldRun,
   validateEnvironment,
 } from "@acos/core";
 import { DEFAULT_LOCK_OUTAGE_THRESHOLD_MS } from "@acos/core";
-import type { AlertKind, JobSchedule, ScheduledJob } from "@acos/core";
+import type { AlertKind, DetectedAlert, JobSchedule, ScheduledJob } from "@acos/core";
 import type {
   CheckRunDto,
   CheckRunResultDto,
@@ -137,6 +138,7 @@ function describeInterval(schedule: JobSchedule): string {
  */
 @Injectable()
 export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
+
   private readonly logger = new Logger(ScheduledChecksService.name);
   private ticker: NodeJS.Timeout | null = null;
   private readonly running = new Set<ScheduledJob>();
@@ -635,13 +637,9 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
           unresolved: result.unresolved,
         }),
         // **공지를 못 읽은 것은 "변경 없음"이 아니다** (CTO 정책 3301-①) —
-        // 사람의 확인을 요구하는 경보를 낸다
-        ...detectPriceSourceAlerts({
-          status: result.source.status,
-          needsHumanCheck: result.source.needsHumanCheck,
-          unparsedCount: result.source.unparsed.length,
-          detail: result.source.detail,
-        }),
+        // 사람의 확인을 요구하는 경보를 낸다. 소스별로 따로 부르고
+        // (결정 3301-⑤), 실패가 길어지면 등급을 올린다 (결정 3301-⑥).
+        ...(await this.priceSourceAlerts(result.source)),
       ];
       const notified = await this.alerts.sync(JOB_ALERT_KINDS[job], detected);
       return {
@@ -751,5 +749,55 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
       });
     }
     return results;
+  }
+
+  /**
+   * 공지 소스별 경보 (TASK-3401 — CTO 결정 3301-⑤·⑥).
+   *
+   * 소스마다 키가 다르므로 한 곳이 나아도 다른 곳의 실패가 뒤에 숨지 않고,
+   * **같은 소스의 실패가 길어지면 등급이 올라갑니다.** 하루 넘게 못 읽는데
+   * 같은 warning이 반복되면 사람은 그것을 "원래 그런 경보"로 읽습니다.
+   */
+  private async priceSourceAlerts(source: {
+    status: string;
+    needsHumanCheck: boolean;
+    unparsed: { index: number; reason: string }[];
+    detail: string;
+    sources: { id: string; status: string; unparsedCount: number; detail: string }[];
+  }): Promise<DetectedAlert[]> {
+    const now = Date.now();
+    const escalateAfterMs = resolvePriceSourceEscalateMs(process.env);
+
+    if (source.sources.length === 0) {
+      // 소스가 하나도 없다 — 미구성이며 실패가 아니다(승격도 없다)
+      return detectPriceSourceAlerts({
+        status: source.status,
+        needsHumanCheck: source.needsHumanCheck,
+        unparsedCount: source.unparsed.length,
+        detail: source.detail,
+      });
+    }
+
+    const perSource = await Promise.all(
+      source.sources.map(async (row) => {
+        const failingSince =
+          row.status === "ok"
+            ? null
+            : await this.pricing.priceSourceFailingSince(row.id);
+        return detectPriceSourceAlerts({
+          status: row.status,
+          // 소스 하나의 판정은 그 소스만 본다 — 다른 소스가 정상이라고
+          // 이 소스의 실패가 확인 불필요가 되지는 않는다
+          needsHumanCheck: row.status !== "ok",
+          unparsedCount: row.unparsedCount,
+          detail: row.detail,
+          sourceId: row.id,
+          failingSince: failingSince?.getTime() ?? null,
+          now,
+          escalateAfterMs,
+        });
+      }),
+    );
+    return perSource.flat();
   }
 }

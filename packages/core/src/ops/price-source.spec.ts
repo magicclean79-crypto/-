@@ -1,6 +1,11 @@
 import { DEFAULT_LLM_PRICING } from "../execution/execution";
 import { DEFAULT_OCR_PRICING } from "../ocr/ocr-pricing";
-import { comparePublishedPrices, judgePriceSource } from "./price-source";
+import {
+  comparePublishedPrices,
+  judgePriceSource,
+  resolvePriceSources,
+  summarizePriceSources,
+} from "./price-source";
 
 const URL = "https://provider.example/pricing.json";
 
@@ -223,6 +228,156 @@ describe("외부 가격 공지 (TASK-3301, CTO 정책 3301-①)", () => {
         effective,
       });
       expect(changes[0].reason).not.toContain("**");
+    });
+  });
+});
+
+/**
+ * Provider별 공지 (TASK-3401 — CTO 결정 3301-⑤).
+ *
+ * 한 주소가 모든 단가를 담으면 그 주소 하나가 죽을 때 **아무 단가도 대조하지
+ * 못한다.** 소스를 나누면 하나가 죽어도 나머지는 읽히고, 실패한 것은 실패로
+ * 남는다.
+ */
+describe("Provider별 공지 (TASK-3401, CTO 결정 3301-⑤)", () => {
+  describe("설정 해석", () => {
+    it("기존 PRICE_SOURCE_URL은 기본 소스로 그대로 돈다", () => {
+      const { sources } = resolvePriceSources({ PRICE_SOURCE_URL: URL });
+      expect(sources).toHaveLength(1);
+      expect(sources[0].id).toBe("default");
+      expect(sources[0].format).toBe("acos");
+    });
+
+    it("Provider별 주소를 각각 소스로 만든다", () => {
+      const { sources } = resolvePriceSources({
+        PRICE_SOURCE_URL_OPENAI: "https://openai.example/p.json",
+        PRICE_SOURCE_URL_GOOGLE_VISION: "https://g.example/p.json",
+      });
+      expect(sources.map((row) => row.id)).toEqual(["google-vision", "openai"]);
+    });
+
+    it("Provider별 형식을 따로 둘 수 있다", () => {
+      const { sources } = resolvePriceSources({
+        PRICE_SOURCE_URL_OPENAI: "https://openai.example/p.json",
+        PRICE_SOURCE_FORMAT_OPENAI: "flat",
+      });
+      expect(sources[0].format).toBe("flat");
+    });
+
+    it("모르는 형식은 짐작해서 읽지 않고 거부한다", () => {
+      const { sources, rejected } = resolvePriceSources({
+        PRICE_SOURCE_URL_OPENAI: "https://openai.example/p.json",
+        PRICE_SOURCE_FORMAT_OPENAI: "csv",
+      });
+      expect(sources).toHaveLength(0);
+      expect(rejected[0].reason).toContain("잘못 읽은 단가는");
+    });
+
+    it("프로젝트별 공지는 거부하고 사유를 남긴다", () => {
+      const { sources, rejected } = resolvePriceSources({
+        PRICE_SOURCE_URL_PROJECT_ACME: "https://acme.example/p.json",
+      });
+      expect(sources).toHaveLength(0);
+      expect(rejected[0].name).toBe("PRICE_SOURCE_URL_PROJECT_ACME");
+      expect(rejected[0].reason).toContain("Provider와의 계약");
+    });
+
+    it("토큰은 Provider별 값이 있으면 그것을 쓴다 — 값은 담지 않는다", () => {
+      const { sources } = resolvePriceSources({
+        PRICE_SOURCE_URL_OPENAI: "https://openai.example/p.json",
+        PRICE_SOURCE_TOKEN_OPENAI: "secret",
+      });
+      expect(sources[0].tokenEnv).toBe("PRICE_SOURCE_TOKEN_OPENAI");
+      expect(JSON.stringify(sources)).not.toContain("secret");
+    });
+  });
+
+  describe("flat 형식 어댑터", () => {
+    it("사전형 공지를 우리 계약과 같은 결과로 읽는다", () => {
+      const verdict = judgePriceSource({
+        url: URL,
+        format: "flat",
+        body: {
+          models: { "gpt-4o": { input: 2.5, output: 10 } },
+          engines: { "google-vision": { perUnit: 0.0015 } },
+        },
+        error: null,
+      });
+      expect(verdict.status).toBe("ok");
+      expect(verdict.prices).toHaveLength(2);
+    });
+
+    it("형식이 다르면 해석할 수 없다고 말한다 — 빈 목록으로 바꾸지 않는다", () => {
+      const verdict = judgePriceSource({
+        url: URL,
+        format: "flat",
+        body: [{ target: "ocr", key: "google-vision", perUnitUsd: 0.001 }],
+        error: null,
+      });
+      expect(verdict.status).toBe("unparsable");
+      expect(verdict.detail).toContain("models·engines");
+    });
+
+    it("값이 빠진 항목은 flat에서도 못 읽은 것으로 남는다", () => {
+      const verdict = judgePriceSource({
+        url: URL,
+        format: "flat",
+        body: { engines: { clova: {}, "google-vision": { perUnit: 0.0015 } } },
+        error: null,
+      });
+      expect(verdict.status).toBe("partial");
+      expect(verdict.unparsed[0].reason).toContain("clova");
+    });
+  });
+
+  describe("여러 소스 합치기", () => {
+    const okVerdict = judgePriceSource(
+      feed([{ target: "ocr", key: "google-vision", perUnitUsd: 0.002 }]),
+    );
+    const deadVerdict = judgePriceSource({
+      url: "https://dead.example/p.json",
+      body: null,
+      error: "HTTP 503",
+    });
+
+    it("하나도 없으면 미구성이다 — 실패가 아니다", () => {
+      const summary = summarizePriceSources([]);
+      expect(summary.status).toBe("unconfigured");
+      expect(summary.detail).toContain("실패가 아닙니다");
+    });
+
+    it("한 곳이 죽어도 나머지에서 읽은 단가는 그대로 쓴다", () => {
+      const summary = summarizePriceSources([
+        { id: "google", url: URL, format: "acos", verdict: okVerdict },
+        { id: "openai", url: "x", format: "acos", verdict: deadVerdict },
+      ]);
+      expect(summary.prices).toHaveLength(1);
+      expect(summary.read).toBe(1);
+      expect(summary.total).toBe(2);
+    });
+
+    it("전체 상태는 가장 나쁜 것을 따른다 — 둘을 읽었다고 정상이라 하지 않는다", () => {
+      const summary = summarizePriceSources([
+        { id: "google", url: URL, format: "acos", verdict: okVerdict },
+        { id: "openai", url: "x", format: "acos", verdict: deadVerdict },
+      ]);
+      expect(summary.status).toBe("unreachable");
+      expect(summary.needsHumanCheck).toBe(true);
+      expect(summary.failed).toEqual(["openai"]);
+      expect(summary.detail).toContain("openai(unreachable)");
+    });
+
+    it("어느 공지에서 온 단가인지 잃지 않는다", () => {
+      const summary = summarizePriceSources([
+        { id: "google", url: URL, format: "acos", verdict: okVerdict },
+      ]);
+      expect(summary.prices[0].sourceId).toBe("google");
+
+      const changes = comparePublishedPrices({
+        published: summary.prices,
+        effective: { llm: DEFAULT_LLM_PRICING, ocr: DEFAULT_OCR_PRICING },
+      });
+      expect(changes[0].sourceId).toBe("google");
     });
   });
 });
