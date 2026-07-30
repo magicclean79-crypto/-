@@ -1,7 +1,11 @@
 import { DEFAULT_LLM_PRICING } from "../execution/execution";
 import { DEFAULT_OCR_PRICING } from "../ocr/ocr-pricing";
 import {
+  DEFAULT_DETECTION_INTERVAL_MS,
   PRICE_DETECTION_MIN_SAMPLES,
+  detectionIntervalEnvName,
+  resolveDetectionIntervals,
+  shouldDetectProvider,
   detectLlmPriceSignals,
   detectOcrPriceChanges,
   detectPriceChanges,
@@ -301,5 +305,87 @@ describe("가격 변경 감지 (TASK-3201, CTO 정책 3201-①)", () => {
       expect(result.detail).not.toContain("**");
       expect(result.changes[0].reason).not.toContain("**");
     });
+  });
+});
+describe("감지 주기 (TASK-3301, CTO 정책 3301-④)", () => {
+  it("기본은 6시간이다", () => {
+    expect(DEFAULT_DETECTION_INTERVAL_MS).toBe(6 * 60 * 60 * 1000);
+    const resolved = resolveDetectionIntervals({}, ["google-vision"]);
+    expect(resolved.intervals[0]).toEqual({
+      provider: "google-vision",
+      intervalMs: DEFAULT_DETECTION_INTERVAL_MS,
+      source: "default",
+      env: "PRICE_DETECT_INTERVAL_GOOGLE_VISION",
+    });
+  });
+
+  it("Provider별로 설정할 수 있다", () => {
+    expect(detectionIntervalEnvName("google-vision")).toBe(
+      "PRICE_DETECT_INTERVAL_GOOGLE_VISION",
+    );
+    const resolved = resolveDetectionIntervals(
+      { PRICE_DETECT_INTERVAL_GOOGLE_VISION: "12h" },
+      ["google-vision", "tesseract"],
+    );
+    expect(resolved.intervals[0].intervalMs).toBe(12 * 60 * 60 * 1000);
+    expect(resolved.intervals[0].source).toBe("env");
+    // 설정하지 않은 Provider는 기본값이다
+    expect(resolved.intervals[1].intervalMs).toBe(DEFAULT_DETECTION_INTERVAL_MS);
+    expect(resolved.rejected).toEqual([]);
+  });
+
+  it("프로젝트별 설정은 거부하고 이유를 남긴다", () => {
+    // 단가는 Provider와의 계약이지 프로젝트의 속성이 아니다.
+    // 조용히 무시하면 설정한 사람은 적용된 줄 안다.
+    const resolved = resolveDetectionIntervals(
+      { PRICE_DETECT_INTERVAL_PROJECT_ACME: "1h" },
+      ["google-vision"],
+    );
+    expect(resolved.rejected).toHaveLength(1);
+    expect(resolved.rejected[0].name).toBe("PRICE_DETECT_INTERVAL_PROJECT_ACME");
+    expect(resolved.rejected[0].reason).toContain(
+      "프로젝트별 감지 주기는 지원하지 않습니다",
+    );
+    // 거부했으므로 주기는 기본값 그대로다
+    expect(resolved.intervals[0].intervalMs).toBe(DEFAULT_DETECTION_INTERVAL_MS);
+  });
+
+  it("해석할 수 없는 값도 조용히 버리지 않는다", () => {
+    const resolved = resolveDetectionIntervals(
+      { PRICE_DETECT_INTERVAL_GOOGLE_VISION: "가끔" },
+      ["google-vision"],
+    );
+    expect(resolved.rejected[0].reason).toContain("주기를 해석할 수 없습니다");
+    // 감지가 멈추는 것보다 기본 주기로 도는 편이 안전하다
+    expect(resolved.intervals[0].intervalMs).toBe(DEFAULT_DETECTION_INTERVAL_MS);
+  });
+
+  it("한 번도 보지 않았으면 본다", () => {
+    // "아직 안 봤다"를 미루면 첫 감지가 영영 오지 않는다
+    expect(
+      shouldDetectProvider({
+        lastRunAt: null,
+        intervalMs: DEFAULT_DETECTION_INTERVAL_MS,
+        now: new Date("2026-08-01T00:00:00.000Z"),
+      }),
+    ).toBe(true);
+  });
+
+  it("주기가 지나지 않았으면 건너뛴다", () => {
+    const now = new Date("2026-08-01T06:00:00.000Z");
+    expect(
+      shouldDetectProvider({
+        lastRunAt: new Date("2026-08-01T03:00:00.000Z"),
+        intervalMs: DEFAULT_DETECTION_INTERVAL_MS,
+        now,
+      }),
+    ).toBe(false);
+    expect(
+      shouldDetectProvider({
+        lastRunAt: new Date("2026-08-01T00:00:00.000Z"),
+        intervalMs: DEFAULT_DETECTION_INTERVAL_MS,
+        now,
+      }),
+    ).toBe(true);
   });
 });

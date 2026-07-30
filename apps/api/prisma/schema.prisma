@@ -262,11 +262,19 @@ model PricingProposal {
   reviewedAt     DateTime?
   approvedBy     String?
   approvedAt     DateTime?
+  // 2차 승인 (TASK-3301, CTO 정책 3301-②) — 시스템이 만든 제안은 운영에서
+  // 다른 ADMIN의 최종 승인을 한 번 더 거친다
+  confirmedBy    String?
+  confirmedAt    DateTime?
   appliedBy      String?
   appliedAt      DateTime?
   // 발효 시각 (TASK-3201, CTO 정책 3201-③) — 적용은 결정이고 발효는 시각이다.
   // 미래로 예약되면 그 시각까지 어떤 계산에도 쓰이지 않는다.
   effectiveFrom  DateTime?
+  // 예약 취소 (TASK-3301, CTO 정책 3301-③) — 삭제하지 않고 남긴다
+  cancelledBy    String?
+  cancelledAt    DateTime?
+  cancelledReason String?
   rejectedBy     String?
   rejectedAt     DateTime?
   rejectedReason String?
@@ -278,6 +286,28 @@ model PricingProposal {
   @@index([target, key, appliedAt])
   @@index([stage, createdAt])
   @@map("pricing_proposals")
+}
+
+// 가격 감지 실행 이력 (TASK-3301, CTO 정책 3301-④)
+//
+// Provider별 주기를 지키려면 "언제 마지막으로 봤는가"가 있어야 하고, 이 기록이
+// 없으면 **"감지 0건"과 "감지를 안 돌렸다"를 구분할 수 없다** — 조용한 것과
+// 안 본 것은 다르다.
+model PriceDetectionRun {
+  id        String   @id @default(cuid())
+  target    String // llm | ocr
+  provider  String // 프로젝트별 구분은 두지 않는다 (정책 3301-④)
+  source    String // records | published
+  ranAt     DateTime @default(now())
+  samples   Int      @default(0)
+  changes   Int      @default(0)
+  skipped   String? // 건너뛴 이유 — 돌지 않은 것도 기록이다
+  detail    String
+  createdAt DateTime @default(now())
+
+  @@index([provider, ranAt])
+  @@index([ranAt])
+  @@map("price_detection_runs")
 }
 
 // 발행 파이프라인 감사 이력 (TASK-0704) — 상태 전이 1건당 1레코드

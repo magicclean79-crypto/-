@@ -68,8 +68,12 @@ import { ScheduledChecksService } from "./scheduled-checks.service";
 const PRICING_ACTIONS: Record<string, PricingStage> = {
   review: "REVIEWED",
   approve: "APPROVED",
+  // 2차 승인 (TASK-3301, CTO 정책 3301-②) — 다른 ADMIN의 최종 승인
+  confirm: "CONFIRMED",
   apply: "APPLIED",
   reject: "REJECTED",
+  // 예약 취소 (TASK-3301, CTO 정책 3301-③) — 삭제가 아니라 상태다
+  cancel: "CANCELLED",
 };
 
 /**
@@ -583,6 +587,10 @@ export class OpsController {
   /**
    * 단계 진행 — 검토 → 승인 → 적용 순서를 건너뛸 수 없다 (정책 3101-①).
    *
+   * 시스템이 만든 제안은 운영에서 **최종 승인**(`confirm`)을 한 번 더 거치고
+   * (정책 3301-②), 발효 전 예약은 **취소**(`cancel`)할 수 있습니다 —
+   * 취소는 삭제가 아니라 `CANCELLED` 상태입니다 (정책 3301-③).
+   *
    * **적용만 실효 가격표를 바꾼다.** 승인은 "적용해도 된다"는 뜻이고, 실제로
    * 계산에 쓰이기 시작한 시점은 적용 시각이다 — 그 시각이 있어야 "언제부터
    * 이 단가로 계산됐나"에 답할 수 있다.
@@ -617,7 +625,10 @@ export class OpsController {
   @Post("pricing/detect")
   @HttpCode(200)
   async detectPricing(): Promise<PricingDetectionDto> {
-    const result = await this.pricing.detect();
+    // **수동 실행은 주기를 무시한다** (TASK-3301, CTO 정책 3301-④) — 사람이
+    // "지금 보라"고 누른 것이므로 주기 미도래로 아무것도 하지 않으면 버튼이
+    // 거짓말이 된다. 예약 점검은 Provider별 주기를 지킨다.
+    const result = await this.pricing.detect({ force: true });
     return { ...result, checkedAt: new Date().toISOString() };
   }
 

@@ -99,25 +99,50 @@ describe("비용 경계 — 하지 않기로 한 것 (TASK-3101 · 3201)", () =>
   });
 
   describe("감지는 적용이 아니다 (CTO 정책 3201-①)", () => {
-    it("감지가 만드는 것은 DETECTED 제안뿐이다", () => {
+    it("감지가 만드는 것은 시작 단계의 제안뿐이다", () => {
       const service = read("pricing/pricing.service.ts");
-      const detect = service.slice(
-        service.indexOf("async detect("),
-        service.indexOf("async resolvers("),
+      // 감지가 **쓰는** 곳은 한 곳뿐이다 (createDetected) — 저장 payload를 본다.
+      // 읽기는 발효 창 계산에 필요하므로 본문 전체를 보지 않는다.
+      const payload = service.slice(
+        service.indexOf("private async createDetected("),
+        service.indexOf("private async lastDetectionRuns("),
       );
       // 자동 적용을 허용하면 Provider 쪽 이상이나 우리 계산 오류가 곧바로
-      // 돈의 기준을 바꾼다. 감지가 **쓰는** 것은 제안 한 건뿐이므로,
-      // 저장 payload 자체를 본다 (읽기는 발효 창 계산에 필요하다).
-      const payload = detect.slice(
-        detect.indexOf("pricingProposal.create({"),
-        detect.indexOf("created.push("),
-      );
-      expect(payload).toContain('startStage("detected")');
+      // 돈의 기준을 바꾼다
+      expect(payload).toContain("startStage(input.origin)");
+      expect(payload).toContain("proposedBy: null");
       expect(payload).not.toContain("APPLIED");
       expect(payload).not.toContain("appliedBy");
       expect(payload).not.toContain("appliedAt");
       // 발효 시각은 적용할 때 정해진다 — 감지가 정하면 자동 적용이 된다
-      expect(payload).not.toContain("effectiveFrom");
+      expect(payload).not.toContain("effectiveFrom:");
+      // 승인 필드도 감지가 채우지 않는다 (CTO 정책 3301-②)
+      expect(payload).not.toContain("approvedBy");
+      expect(payload).not.toContain("confirmedBy");
+    });
+
+    it("공지 대조도 제안까지만 만든다 (TASK-3301, CTO 정책 3301-①)", () => {
+      const service = read("pricing/pricing.service.ts");
+      const detect = service.slice(
+        service.indexOf("async detect("),
+        service.indexOf("private async createDetected("),
+      );
+      // 공지에 발효 시각이 있어도 **자동으로 적용하지 않는다** — 근거로만 남긴다
+      expect(detect).toContain("publishedEffectiveFrom");
+      expect(detect).not.toContain('to: "APPLIED"');
+      expect(detect).not.toContain("this.advance(");
+    });
+
+    it("취소된 예약은 실효 가격표 계산에서 빠진다 (CTO 정책 3301-③)", () => {
+      const service = read("pricing/pricing.service.ts");
+      const applied = service.slice(
+        service.indexOf("async appliedRows("),
+        service.indexOf("async effective("),
+      );
+      // CANCELLED는 기록으로 남지만 계산에는 쓰이지 않는다 — 조회 조건이
+      // APPLIED 하나이므로 취소된 것은 애초에 들어오지 않는다
+      expect(applied).toContain('where: { stage: "APPLIED"');
+      expect(applied).not.toContain('in: ["APPLIED", "CANCELLED"]');
     });
 
     it("감지된 제안도 사람의 승인을 거친다", () => {

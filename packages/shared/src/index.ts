@@ -2143,11 +2143,21 @@ export type PricingStageDto =
   | "DRAFT"
   | "REVIEWED"
   | "APPROVED"
+  /** 2차 승인 완료 (TASK-3301, CTO 정책 3301-②) — 다른 ADMIN의 최종 승인 */
+  | "CONFIRMED"
   | "APPLIED"
-  | "REJECTED";
+  | "REJECTED"
+  /** 예약 취소 (TASK-3301, CTO 정책 3301-③) — 삭제하지 않고 남긴다 */
+  | "CANCELLED";
 
-/** 제안의 출처 — `detected`는 자동화가 찾아낸 것이다 (TASK-3201) */
-export type PricingOriginDto = "manual" | "detected";
+/**
+ * 제안의 출처.
+ *
+ * - `manual` 사람이 낸 제안
+ * - `detected` 우리 기록과 가격표의 불일치 (TASK-3201)
+ * - `published` **외부 가격 공지** (TASK-3301) — 근거가 다르므로 따로 둔다
+ */
+export type PricingOriginDto = "manual" | "detected" | "published";
 
 /** 단가 제안 1건 (GET /ops/pricing) */
 export interface PricingProposalDto {
@@ -2158,12 +2168,26 @@ export interface PricingProposalDto {
    * 가르지 않으면 자동화가 만든 제안을 사람이 낸 것으로 읽는다.
    */
   origin: PricingOriginDto;
-  /** 감지 근거 (자동 감지만) — 근거 없는 제안은 승인할 수 없다 */
+  /**
+   * 감지 근거 (자동 감지만) — 근거 없는 제안은 승인할 수 없다.
+   *
+   * **출처에 따라 모양이 다르다** (TASK-3301):
+   * - `detected`: 표본 기반 — `sampleIds`·`from`·`to`·`relativeDiff`
+   * - `published`: 공지 기반 — `url`·`publishedEffectiveFrom`
+   *
+   * 하나의 모양으로 적으면 화면이 없는 필드를 읽다 깨진다 (라이브에서 실제로
+   * 그렇게 깨졌다) — 그래서 **선택 필드의 합집합**으로 둔다.
+   */
   evidence: {
-    from: string;
-    to: string;
-    sampleIds: string[];
-    relativeDiff: number;
+    /** 표본 기반 (origin: detected) */
+    sampleIds?: string[];
+    from?: string;
+    to?: string;
+    relativeDiff?: number;
+    /** 공지 기반 (origin: published) */
+    url?: string | null;
+    source?: string;
+    publishedEffectiveFrom?: string | null;
   } | null;
   /** LLM은 모델 이름, OCR은 엔진 이름 */
   key: string;
@@ -2180,6 +2204,11 @@ export interface PricingProposalDto {
   reviewedAt: string | null;
   approvedBy: string | null;
   approvedAt: string | null;
+  /** 2차 승인 (TASK-3301, CTO 정책 3301-②) — 1차 승인자와 달라야 한다 */
+  confirmedBy: string | null;
+  confirmedAt: string | null;
+  /** 운영의 시스템 제안이라 최종 승인이 남았는가 */
+  needsSecondApproval: boolean;
   appliedBy: string | null;
   appliedAt: string | null;
   /**
@@ -2187,6 +2216,10 @@ export interface PricingProposalDto {
    * 미래면 그 시각까지 어떤 계산에도 쓰이지 않는다.
    */
   effectiveFrom: string | null;
+  /** 예약 취소 (TASK-3301, CTO 정책 3301-③) — 기록은 남는다 */
+  cancelledBy: string | null;
+  cancelledAt: string | null;
+  cancelledReason: string | null;
   /** 발효가 아직 오지 않았는가 (표시용) */
   scheduled: boolean;
   rejectedBy: string | null;
@@ -2232,12 +2265,33 @@ export interface EffectivePricingDto {
   nextChangeAt: string | null;
 }
 
+/** Provider별 감지 현황 (TASK-3301, CTO 정책 3301-④) */
+export interface PricingDetectionStatusDto {
+  /** Provider별 주기 — **프로젝트별 설정은 없다** */
+  providers: {
+    provider: string;
+    intervalMs: number;
+    source: "env" | "default";
+    env: string;
+    /** 마지막으로 본 시각 — 한 번도 안 봤으면 null */
+    lastRunAt: string | null;
+    /** 다음에 볼 시각 */
+    nextAt: string | null;
+  }[];
+  /** 받아들이지 않은 설정 (프로젝트별 등) — 조용히 버리지 않는다 */
+  rejected: { name: string; reason: string }[];
+  /** 최근 실행 이력 */
+  recent: PriceDetectionRunDto[];
+}
+
 export interface PricingBoardDto {
   /** 진행 중인 제안 (DRAFT·REVIEWED·APPROVED) — 최신순 */
   open: PricingProposalDto[];
   /** 끝난 제안 (APPLIED·REJECTED) — 최신순 */
   closed: PricingProposalDto[];
   effective: EffectivePricingDto;
+  /** 감지 현황 (TASK-3301) — 언제 마지막으로 봤는가 */
+  detection: PricingDetectionStatusDto;
   /** 단계 순서 안내 (검토 → 승인 → 적용) */
   stages: PricingStageDto[];
   detail: string;
@@ -2291,8 +2345,38 @@ export interface PricingDetectionDto {
   /** 이미 진행 중인 제안이 있어 건너뛴 항목 */
   skipped: string[];
   checked: number;
+  /**
+   * 외부 가격 공지 상태 (TASK-3301, CTO 정책 3301-①).
+   *
+   * **읽지 못한 것은 "변경 없음"이 아니다** — `needsHumanCheck`가 true면
+   * 사람이 공지를 직접 확인해야 한다.
+   */
+  source: {
+    status: "ok" | "partial" | "unparsable" | "unreachable" | "unconfigured";
+    needsHumanCheck: boolean;
+    /** 해석하지 못한 항목 — 버리지 않고 남긴다 */
+    unparsed: { index: number; reason: string }[];
+    detail: string;
+  };
+  /** 주기가 지나지 않아 보지 않은 Provider (TASK-3301, 정책 3301-④) */
+  notDue: { provider: string; nextAt: string }[];
   detail: string;
   checkedAt: string;
+}
+
+/** 감지 실행 이력 1건 — "조용한 것"과 "안 본 것"은 다르다 (TASK-3301) */
+export interface PriceDetectionRunDto {
+  id: string;
+  target: PricingTargetDto;
+  provider: string;
+  /** `records`(우리 기록 대조) · `published`(외부 공지 대조) */
+  source: string;
+  ranAt: string;
+  samples: number;
+  changes: number;
+  /** 건너뛴 이유 (주기 미도래 등) — 돌지 않은 것도 기록이다 */
+  skipped: string | null;
+  detail: string;
 }
 
 /** 월말 비용 예측 (GET /ops/cost-forecast) — 참고자료다 */

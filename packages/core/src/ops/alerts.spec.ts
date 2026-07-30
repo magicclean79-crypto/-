@@ -4,6 +4,7 @@ import {
   detectConfigurationAlerts,
   detectForecastAlerts,
   detectLockOutageAlert,
+  detectPriceSourceAlerts,
   detectPricingDriftAlerts,
   detectSchedulerAlerts,
   detectProviderAlerts,
@@ -160,6 +161,69 @@ describe("Production Alerting (TASK-1302)", () => {
       expect(
         detectPricingDriftAlerts({ changes: [change], unresolved: [] })[0].level,
       ).toBe("warning");
+    });
+  });
+
+  describe("Price Source Alert (TASK-3301, CTO 정책 3301-①)", () => {
+    it("읽지 못하면 사람 확인을 요구한다 — 변경 없음이 아니다", () => {
+      const alerts = detectPriceSourceAlerts({
+        status: "unparsable",
+        needsHumanCheck: true,
+        unparsedCount: 3,
+        detail: "가격 공지를 해석할 수 없습니다 — 목록이 아닙니다.",
+      });
+      expect(alerts).toHaveLength(1);
+      expect(alerts[0].key).toBe("price-source:pricing-feed");
+      expect(alerts[0].title).toContain("읽지 못했습니다");
+      expect(alerts[0].message).toContain("해석하지 못한 항목 3건");
+      expect(alerts[0].message).toContain("사람이 공지를 직접 확인해 주세요");
+    });
+
+    it("미구성은 실패와 다른 제목으로 말한다", () => {
+      // 실패와 같은 무게로 부르면 진짜 실패가 묻힌다
+      const alerts = detectPriceSourceAlerts({
+        status: "unconfigured",
+        needsHumanCheck: true,
+        unparsedCount: 0,
+        detail: "가격 공지 주소가 설정되지 않았습니다.",
+      });
+      expect(alerts[0].title).toContain("설정되지 않았습니다");
+      expect(alerts[0].title).not.toContain("읽지 못했습니다");
+    });
+
+    it("전부 읽었으면 조용하다", () => {
+      expect(
+        detectPriceSourceAlerts({
+          status: "ok",
+          needsHumanCheck: false,
+          unparsedCount: 0,
+          detail: "가격 공지 3건을 읽었습니다.",
+        }),
+      ).toEqual([]);
+    });
+
+    it("일부만 읽어도 부른다 — 못 읽은 것이 사라지면 안 된다", () => {
+      expect(
+        detectPriceSourceAlerts({
+          status: "partial",
+          needsHumanCheck: true,
+          unparsedCount: 1,
+          detail: "2건을 읽었고 1건은 해석하지 못했습니다.",
+        }),
+      ).toHaveLength(1);
+    });
+
+    it("키가 하나다 — 같은 사안이 상태별로 흩어지지 않는다", () => {
+      const keys = ["unreachable", "unparsable", "partial"].map(
+        (status) =>
+          detectPriceSourceAlerts({
+            status,
+            needsHumanCheck: true,
+            unparsedCount: 0,
+            detail: "d",
+          })[0].key,
+      );
+      expect(new Set(keys).size).toBe(1);
     });
   });
 
@@ -566,6 +630,7 @@ describe("Production Alerting (TASK-1302)", () => {
       // 새 종류도 같은 규칙을 따른다 (TASK-3201)
       expect(resolved["pricing-drift"]).toBe(600_000);
       expect(resolved["cost-forecast"]).toBe(600_000);
+      expect(resolved["price-source"]).toBe(600_000);
     });
 
     it("해석할 수 없는 값은 기본값으로 — 경보 폭주보다 안전하다", () => {

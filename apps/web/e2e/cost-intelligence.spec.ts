@@ -264,3 +264,118 @@ test.describe("가격 자동화 (TASK-3201)", () => {
     );
   });
 });
+
+test.describe("Provider Intelligence (TASK-3301)", () => {
+  test("공지를 못 읽으면 '변경 없음'이 아니라고 화면이 말한다 (CTO 정책 3301-①)", async ({
+    page,
+  }) => {
+    await setMode("empty");
+    await openPage(page);
+
+    await page.getByTestId("pricing-detect").click();
+    const warning = page.getByTestId("price-source-warning");
+    await expect(warning).toContainText("변경이 없다는 뜻이 아닙니다");
+    // 못 읽은 항목을 버리지 않는다 — 아홉을 읽었다고 성공이 아니다
+    await expect(warning).toContainText("clova");
+    await expect(page.getByTestId("costs-note")).toContainText(
+      "사람이 직접 확인해 주세요",
+    );
+  });
+
+  test("공지 기반 제안의 근거는 표본이 아니라 공지다", async ({ page }) => {
+    // 출처마다 근거의 모양이 다르다 — 한 모양으로 읽으면 없는 필드에서
+    // 화면이 깨진다 (라이브에서 실제로 그렇게 깨졌다)
+    await setMode("published");
+    await openPage(page);
+
+    await page.getByTestId("pricing-detect").click();
+    await expect(page.getByTestId("origin-published")).toBeVisible();
+    await expect(page.getByTestId("proposal-evidence")).toContainText(
+      "가격 공지",
+    );
+    await expect(page.getByTestId("proposal-evidence")).toContainText(
+      "공지 발효",
+    );
+    // 출처가 늘어도 제안자는 "알 수 없음"이 아니다
+    await expect(page.getByTestId("open-proposals")).toContainText(
+      "제안 시스템 (가격 공지)",
+    );
+  });
+
+  test("공지를 다 읽으면 경고가 없다", async ({ page }) => {
+    await setMode("data");
+    await openPage(page);
+
+    await page.getByTestId("pricing-detect").click();
+    await expect(page.getByTestId("price-source-warning")).toHaveCount(0);
+  });
+
+  test("시스템 제안은 최종 승인을 거친다 (CTO 정책 3301-②)", async ({ page }) => {
+    await setMode("data");
+    await openPage(page);
+
+    await page.getByTestId("pricing-detect").click();
+    await page.getByRole("button", { name: "승인" }).click();
+
+    // 승인 뒤에 바로 적용 버튼이 뜨지 않는다 — 최종 승인이 남았다
+    await expect(page.getByTestId("second-approval-note")).toContainText(
+      "다른 ADMIN의 최종 승인이 필요합니다",
+    );
+    const open = page.getByTestId("open-proposals");
+    await expect(open.getByRole("button", { name: "최종 승인" })).toBeVisible();
+    await expect(open.getByRole("button", { name: "적용" })).toHaveCount(0);
+
+    await page.getByRole("button", { name: "최종 승인" }).click();
+    await expect(open).toContainText("최종 승인됨");
+    await expect(open.getByRole("button", { name: "적용" })).toBeVisible();
+  });
+
+  test("예약 취소는 삭제가 아니다 (CTO 정책 3301-③)", async ({ page }) => {
+    await setMode("data");
+    await openPage(page);
+
+    await propose(page, "9월 인상 공지");
+    await page.getByRole("button", { name: "검토 완료" }).click();
+    await page.getByRole("button", { name: "승인" }).click();
+    const later = new Date(Date.now() + 5 * 86_400_000);
+    const local = new Date(later.getTime() - later.getTimezoneOffset() * 60_000)
+      .toISOString()
+      .slice(0, 16);
+    await page.getByTestId("pricing-effective-from").fill(local);
+    await page.getByRole("button", { name: "적용" }).click();
+    await expect(page.getByTestId("scheduled-pricing")).toBeVisible();
+
+    await page.getByTestId("cancel-schedule").click();
+    await expect(page.getByTestId("costs-note")).toContainText(
+      "기록은 남습니다",
+    );
+    // 예약은 사라지고 기록은 남는다
+    await expect(page.getByTestId("scheduled-pricing")).toHaveCount(0);
+    await expect(page.getByTestId("closed-proposals")).toContainText(
+      "예약 취소됨",
+    );
+  });
+
+  test("감지 주기는 Provider별로만 설정한다 (CTO 정책 3301-④)", async ({ page }) => {
+    await setMode("data");
+    await openPage(page);
+
+    const status = page.getByTestId("detection-status");
+    await expect(status).toContainText("google-vision");
+    await expect(status).toContainText("6시간");
+    // 안 본 것과 보고 조용한 것은 다르다
+    await expect(status).toContainText("아직 보지 않음");
+    await expect(page.getByTestId("pricing-board")).toContainText(
+      "프로젝트별 설정은 지원하지 않습니다",
+    );
+  });
+
+  test("프로젝트별 설정 시도는 거부 사유가 보인다", async ({ page }) => {
+    await setMode("empty");
+    await openPage(page);
+
+    await expect(page.getByTestId("detection-rejected")).toContainText(
+      "프로젝트별 감지 주기는 지원하지 않습니다",
+    );
+  });
+});

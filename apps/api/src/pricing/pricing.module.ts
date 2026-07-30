@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { PriceSourceService } from "./price-source.service";
 import { PricingCacheBus } from "./pricing-cache.bus";
 import { PricingService } from "./pricing.service";
 
@@ -16,7 +17,8 @@ import { PricingService } from "./pricing.service";
 @Module({
   // 적용 즉시 캐시를 무효화한다 (TASK-3201, CTO 정책 3201-⑤) — 버스는
   // Redis가 있을 때만 실제로 전파하고, 없으면 단일 인스턴스 모드다
-  providers: [PricingService, PricingCacheBus],
-  exports: [PricingService, PricingCacheBus],
+  // 외부 가격 공지 (TASK-3301, CTO 정책 3301-①) — 못 읽으면 사람을 부른다
+  providers: [PricingService, PricingCacheBus, PriceSourceService],
+  exports: [PricingService, PricingCacheBus, PriceSourceService],
 })
 export class PricingModule {}

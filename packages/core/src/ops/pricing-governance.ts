@@ -1,5 +1,5 @@
 /**
- * 가격표 변경 거버넌스. (TASK-3101 · 3201 — CTO 정책 3101-①② · 3201-①②③)
+ * 가격표 변경 거버넌스. (TASK-3101 · 3201 · 3301)
  *
  * 단가는 **검토 → 승인 → 적용** 절차를 거칩니다. 시스템이 찾아낸 변화는
  * **감지 → 승인 → 적용**입니다(정책 3201-①) — 감지가 검토를 대신하고,
@@ -7,6 +7,10 @@
  *
  * 운영에서는 **제안자와 승인자가 같을 수 없습니다**(정책 3201-②). 적용 시각과
  * **발효 시각**은 다른 값입니다(정책 3201-③) — 적용은 결정이고 발효는 시각입니다.
+ *
+ * 시스템이 만든 제안(감지·공지)은 운영에서 **2단계 승인**을 거칩니다
+ * (정책 3301-②): 시스템 생성 → ADMIN 승인 → **다른 ADMIN** 최종 승인 → 적용.
+ * 예약을 취소하면 **삭제하지 않고 `CANCELLED`로 남깁니다**(정책 3301-③).
  *
  * 왜 절차가 필요한가: 단가는 **돈의 기준**입니다. 코드 한 줄을 고쳐 바로
  * 반영하면 ⓐ 누가 왜 바꿨는지 남지 않고 ⓑ 예산·리포트의 숫자가 어느 시점부터
@@ -49,9 +53,22 @@ export type PricingTarget = (typeof PRICING_TARGETS)[number];
  * **감지는 적용이 아닙니다.** 자동화는 제안까지만 만듭니다 — Provider 쪽
  * 일시적 이상이나 우리 계산 오류가 곧바로 **돈의 기준**을 바꿔서는 안 됩니다.
  */
-export const PRICING_ORIGINS = ["manual", "detected"] as const;
+export const PRICING_ORIGINS = ["manual", "detected", "published"] as const;
 
 export type PricingOrigin = (typeof PRICING_ORIGINS)[number];
+
+/**
+ * 시스템이 만든 제안의 출처. (TASK-3301, CTO 정책 3301-②)
+ *
+ * `detected`(우리 기록의 불일치)와 `published`(외부 공지)는 근거가 다르지만
+ * **둘 다 사람이 내지 않은 제안**입니다 — 운영에서 2단계 승인을 요구하는
+ * 기준이 바로 이것입니다.
+ */
+export const AUTO_ORIGINS: PricingOrigin[] = ["detected", "published"];
+
+export function isAutoOrigin(origin: PricingOrigin): boolean {
+  return AUTO_ORIGINS.includes(origin);
+}
 
 /**
  * 제안의 단계.
@@ -65,15 +82,31 @@ export const PRICING_STAGES = [
   "DRAFT",
   "REVIEWED",
   "APPROVED",
+  /**
+   * 2차 승인 완료 (TASK-3301, CTO 정책 3301-②).
+   *
+   * 시스템이 만든 제안은 운영에서 **다른 ADMIN의 최종 승인**을 한 번 더
+   * 거칩니다 — 사람이 낸 제안은 제안자와 승인자가 이미 둘이지만, 시스템이
+   * 만든 제안은 승인자 한 명이 곧 전부이기 때문입니다.
+   */
+  "CONFIRMED",
   "APPLIED",
   "REJECTED",
+  /**
+   * 예약 취소 (TASK-3301, CTO 정책 3301-③).
+   *
+   * **삭제하지 않습니다.** 적용은 실제로 있었던 일이고, 그 결정을 지우면
+   * "왜 그때 그 단가가 예약됐다가 사라졌는가"에 아무도 답할 수 없습니다.
+   * 취소된 예약은 어떤 계산에도 쓰이지 않되 이력으로 남습니다.
+   */
+  "CANCELLED",
 ] as const;
 
 export type PricingStage = (typeof PRICING_STAGES)[number];
 
 /** 출처별 시작 단계 — 자동화는 `DETECTED`에서, 사람은 `DRAFT`에서 시작한다 */
 export function startStage(origin: PricingOrigin): PricingStage {
-  return origin === "detected" ? "DETECTED" : "DRAFT";
+  return isAutoOrigin(origin) ? "DETECTED" : "DRAFT";
 }
 
 /** 단계를 건너뛸 수 없다 — 검토 없이 승인하거나 승인 없이 적용할 수 없다 */
@@ -84,10 +117,16 @@ export const PRICING_TRANSITIONS: Record<PricingStage, PricingStage[]> = {
   DRAFT: ["REVIEWED", "REJECTED"],
   // 검토했는데도 반려할 수 있다 — 검토가 통과를 뜻하지는 않는다
   REVIEWED: ["APPROVED", "REJECTED"],
-  // 승인 뒤에도 적용 전이라면 되돌릴 수 있다
-  APPROVED: ["APPLIED", "REJECTED"],
-  APPLIED: [],
+  // 승인 뒤에도 적용 전이라면 되돌릴 수 있다.
+  // 2차 승인(CONFIRMED)은 시스템 제안이 운영에서 **반드시** 거치는 단계이고,
+  // 그 외에는 선택입니다 — 더 보수적으로 가는 길을 막을 이유는 없습니다.
+  APPROVED: ["CONFIRMED", "APPLIED", "REJECTED"],
+  CONFIRMED: ["APPLIED", "REJECTED"],
+  // 적용 뒤에는 **아직 발효되지 않은 예약만** 취소할 수 있다 (정책 3301-③).
+  // 이미 발효된 단가는 되돌리지 않는다 — 새 제안을 낸다.
+  APPLIED: ["CANCELLED"],
   REJECTED: [],
+  CANCELLED: [],
 };
 
 export function nextPricingStages(from: PricingStage): PricingStage[] {
@@ -107,10 +146,50 @@ export function canAdvancePricing(
  * 거절 사유가 없으면 사람은 다음에 무엇을 해야 할지 모른 채 같은 요청을
  * 반복합니다.
  */
+export interface PricingTransitionContext {
+  /** 제안의 출처 — 시스템이 만든 것이면 운영에서 2단계 승인이 필요하다 */
+  origin?: PricingOrigin;
+  /** `production`이면 2단계 승인을 강제한다 */
+  environment?: string | undefined;
+}
+
+/**
+ * 운영에서 2단계 승인이 필요한가. (TASK-3301, CTO 정책 3301-②)
+ *
+ * 사람이 낸 제안은 **제안자와 승인자가 이미 둘**입니다(정책 3201-②가 같은
+ * 사람을 막습니다). 시스템이 만든 제안은 제안자가 사람이 아니므로 승인자
+ * **한 명이 곧 전부**입니다 — 그래서 최종 승인을 한 번 더 요구합니다.
+ */
+export function requiresSecondApproval(
+  origin: PricingOrigin,
+  environment: string | undefined,
+): boolean {
+  return (
+    isAutoOrigin(origin) &&
+    (environment ?? "").trim().toLowerCase() === "production"
+  );
+}
+
 export function judgePricingTransition(
   from: PricingStage,
   to: PricingStage,
+  context: PricingTransitionContext = {},
 ): { ok: boolean; reason: string } {
+  // 운영의 시스템 제안은 **2차 승인을 건너뛸 수 없다** (정책 3301-②)
+  if (
+    from === "APPROVED" &&
+    to === "APPLIED" &&
+    context.origin !== undefined &&
+    requiresSecondApproval(context.origin, context.environment)
+  ) {
+    return {
+      ok: false,
+      reason:
+        "시스템이 만든 제안은 운영에서 다른 ADMIN의 최종 승인을 거쳐야 합니다 " +
+        "(시스템 생성 → ADMIN 승인 → 다른 ADMIN 최종 승인 → 적용, CTO 정책 3301-②). " +
+        "먼저 최종 승인(confirm)을 받아 주세요.",
+    };
+  }
   if (canAdvancePricing(from, to)) {
     return { ok: true, reason: `${from} → ${to} 진행 가능` };
   }
@@ -118,7 +197,15 @@ export function judgePricingTransition(
     return {
       ok: false,
       reason:
-        "이미 적용된 제안입니다 — 적용 기록은 바꾸지 않습니다. 단가를 되돌리려면 새 제안을 내세요.",
+        "이미 적용된 제안입니다 — 적용 기록은 바꾸지 않습니다. 단가를 되돌리려면 " +
+        "새 제안을 내세요 (아직 발효되지 않은 예약이라면 취소할 수 있습니다).",
+    };
+  }
+  if (from === "CANCELLED") {
+    return {
+      ok: false,
+      reason:
+        "취소된 예약입니다 — 취소 기록은 남기고 되살리지 않습니다. 다시 적용하려면 새 제안을 내세요.",
     };
   }
   if (from === "REJECTED") {
@@ -261,6 +348,94 @@ export function describeSelfApproval(proposal: {
     return `감지된 제안을 ${proposal.approvedBy}이(가) 승인했습니다 — 제안자가 시스템이므로 사람의 확인은 1회입니다.`;
   }
   return null;
+}
+
+/**
+ * 2차 승인 판정. (TASK-3301, CTO 정책 3301-②)
+ *
+ * **최종 승인자는 1차 승인자와 달라야 합니다.** 같은 사람이 두 번 누르는
+ * 절차는 단계만 늘릴 뿐 확인을 늘리지 않습니다 — 오히려 "두 사람이 봤다"는
+ * 잘못된 안심을 만듭니다.
+ *
+ * 자기 승인 판정(정책 3201-②)과 마찬가지로 **운영에서만 차단**하고 개발에서는
+ * 허용하되 사실을 남깁니다. 개발에서 막으면 사람은 코드를 고쳐 우회합니다.
+ */
+export function judgeSecondApproval(input: {
+  approvedBy: string | null;
+  confirmedBy: string | null;
+  environment: string | undefined;
+}): SelfApprovalJudgment {
+  const same =
+    input.approvedBy !== null &&
+    input.confirmedBy !== null &&
+    input.approvedBy === input.confirmedBy;
+  if (!same) {
+    return { allowed: true, level: null, message: null };
+  }
+  const production =
+    (input.environment ?? "").trim().toLowerCase() === "production";
+  if (production) {
+    return {
+      allowed: false,
+      level: "blocked",
+      message:
+        `1차 승인자와 최종 승인자가 같습니다 (${input.confirmedBy}) — 운영에서는 ` +
+        "시스템이 만든 제안에 다른 ADMIN의 최종 승인이 필요합니다 (CTO 정책 3301-②).",
+    };
+  }
+  return {
+    allowed: true,
+    level: "warning",
+    message:
+      `1차 승인자와 최종 승인자가 같습니다 (${input.confirmedBy}) — 개발 환경이라 ` +
+      "진행하지만 확인은 한 번뿐입니다. 운영에서는 차단됩니다 (CTO 정책 3301-②).",
+  };
+}
+
+// ── 예약 취소 (CTO 정책 3301-③) ─────────────────────────────
+
+/**
+ * 예약을 취소할 수 있는가.
+ *
+ * **아직 발효되지 않은 예약만** 취소할 수 있습니다. 이미 발효된 단가를
+ * "취소"하면 그 시각 이후에 기록된 비용이 어떤 단가로 계산됐는지 설명할 수
+ * 없게 됩니다 — 되돌리려면 **새 제안**을 냅니다(정책 3101-②와 같은 이유).
+ *
+ * 취소는 **삭제가 아닙니다**(정책 3301-③). 레코드는 `CANCELLED`로 남고,
+ * 실효 가격표 계산에서만 빠집니다.
+ */
+export function judgeScheduleCancel(input: {
+  stage: PricingStage;
+  effectiveFrom: Date | null;
+  now: Date;
+}): { ok: boolean; reason: string } {
+  if (input.stage !== "APPLIED") {
+    return {
+      ok: false,
+      reason:
+        `취소는 적용된 예약에만 할 수 있습니다 (지금 ${PRICING_STAGE_LABEL[input.stage]}). ` +
+        "아직 적용 전이라면 반려하세요.",
+    };
+  }
+  if (input.effectiveFrom === null) {
+    return {
+      ok: false,
+      reason: "발효 시각이 없는 적용입니다 — 취소할 예약이 없습니다.",
+    };
+  }
+  if (input.effectiveFrom.getTime() <= input.now.getTime()) {
+    return {
+      ok: false,
+      reason:
+        `이미 발효된 단가입니다 (${input.effectiveFrom.toISOString()}) — 취소하면 ` +
+        "그 뒤에 기록된 비용이 어떤 단가로 계산됐는지 설명할 수 없게 됩니다. " +
+        "되돌리려면 새 제안을 내세요.",
+    };
+  }
+  return {
+    ok: true,
+    reason: `${input.effectiveFrom.toISOString()} 발효 예약을 취소합니다 — 기록은 남습니다.`,
+  };
 }
 
 // ── 미래 시점 적용 (Effective From) ─────────────────────────
@@ -432,14 +607,17 @@ export const PRICING_STAGE_LABEL: Record<PricingStage, string> = {
   DRAFT: "작성됨",
   REVIEWED: "검토됨",
   APPROVED: "승인됨",
+  CONFIRMED: "최종 승인됨",
   APPLIED: "적용됨",
   REJECTED: "반려됨",
+  CANCELLED: "예약 취소됨",
 };
 
 /** 사람이 읽는 출처 이름 */
 export const PRICING_ORIGIN_LABEL: Record<PricingOrigin, string> = {
   manual: "직접 제안",
   detected: "자동 감지",
+  published: "가격 공지",
 };
 
 /** 제안 한 건을 한 줄로 — 지금 무엇을 기다리는지 밝힌다 */
@@ -451,6 +629,8 @@ export function describePricingProposal(proposal: {
   currentPrice: ProposedPrice | null;
   /** 미래 발효로 예약된 경우 그 시각 (TASK-3201) */
   effectiveFrom?: Date | null;
+  /** 운영의 시스템 제안이라 2차 승인이 남았는가 (TASK-3301) */
+  needsSecondApproval?: boolean;
   now?: Date;
 }): string {
   const to =
@@ -474,7 +654,11 @@ export function describePricingProposal(proposal: {
     DETECTED: "승인을 기다립니다 (자동 감지 — 근거를 확인하세요)",
     DRAFT: "검토를 기다립니다",
     REVIEWED: "승인을 기다립니다",
-    APPROVED: "적용을 기다립니다",
+    APPROVED: proposal.needsSecondApproval
+      ? "다른 ADMIN의 최종 승인을 기다립니다 (CTO 정책 3301-②)"
+      : "적용을 기다립니다",
+    CONFIRMED: "적용을 기다립니다 (최종 승인 완료)",
+    CANCELLED: "예약이 취소되었습니다 — 기록은 남습니다",
     APPLIED: scheduled
       ? // 적용은 결정이고 발효는 시각이다 — "적용됨"만 적으면 이미 그 단가로
         // 계산되는 줄 알고 기록을 잘못 읽는다 (정책 3201-③)

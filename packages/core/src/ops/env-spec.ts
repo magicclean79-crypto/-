@@ -447,6 +447,47 @@ export const ENV_SPECS: EnvSpec[] = [
     fallback: "06:00 로컬",
   },
   {
+    // 외부 가격 공지 (TASK-3301, CTO 정책 3301-①)
+    name: "PRICE_SOURCE_URL",
+    category: "ops",
+    description:
+      "가격 공지 주소 (JSON) — 미설정은 실패가 아니지만, 공지 대조 없이는 Provider 단가 변경을 우리 기록만으로 알 수 없다",
+    validate: (value) =>
+      /^https?:\/\//.test(value)
+        ? null
+        : "http(s) 주소여야 합니다 (예: https://provider.example/pricing.json)",
+  },
+  {
+    name: "PRICE_SOURCE_TOKEN",
+    category: "ops",
+    description: "가격 공지 인증 토큰 — 헤더로만 보내며 기록에 남기지 않는다",
+    secret: true,
+  },
+  {
+    name: "PRICE_SOURCE_TIMEOUT_MS",
+    category: "ops",
+    description:
+      "가격 공지 조회 제한 시간 — 지나면 '못 읽음'으로 판정한다 (변경 없음이 아니다)",
+    validate: positiveNumber("PRICE_SOURCE_TIMEOUT_MS"),
+    fallback: "5000",
+  },
+  {
+    // 감지 주기 (TASK-3301, CTO 정책 3301-④)
+    name: "PRICE_DETECT_INTERVAL_<PROVIDER>",
+    category: "ops",
+    description:
+      "Provider별 가격 감지 주기 (예: PRICE_DETECT_INTERVAL_GOOGLE_VISION=12h). 프로젝트별 설정은 지원하지 않는다 — 단가는 Provider와의 계약이다",
+    fallback: "6h",
+  },
+  {
+    name: "ALERT_COOLDOWN_PRICE_SOURCE_MS",
+    category: "ops",
+    description:
+      "가격 공지 실패 재알림 간격 — 사람이 고칠 때까지 이어지는 상태다",
+    validate: positiveNumber("ALERT_COOLDOWN_PRICE_SOURCE_MS"),
+    fallback: "ALERT_COOLDOWN_MS 또는 30분",
+  },
+  {
     name: "ALERT_COOLDOWN_PRICING_DRIFT_MS",
     category: "ops",
     description:

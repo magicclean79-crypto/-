@@ -34,6 +34,8 @@ let stubProposals = [];
 let stubAppliedOcr = null;
 /** 예약된 발효 (TASK-3201) — 적용했지만 아직 쓰이지 않는 단가 */
 let stubScheduled = [];
+/** 감지 실행 이력 (TASK-3301, CTO 정책 3301-④) */
+let stubDetectionRuns = [];
 
 const stats = (totals, groups) => ({
   range: { from: null, to: null },
@@ -370,6 +372,7 @@ const server = http.createServer((req, res) => {
       stubProposals = [];
       stubAppliedOcr = null;
       stubScheduled = [];
+      stubDetectionRuns = [];
       resetPublishing();
       resetUsers();
       res.end(JSON.stringify({ mode }));
@@ -1823,9 +1826,12 @@ const server = http.createServer((req, res) => {
       DETECTED: ["APPROVED", "REJECTED"],
       DRAFT: ["REVIEWED", "REJECTED"],
       REVIEWED: ["APPROVED", "REJECTED"],
-      APPROVED: ["APPLIED", "REJECTED"],
-      APPLIED: [],
+      // 2차 승인·예약 취소 (TASK-3301, CTO 정책 3301-②③)
+      APPROVED: ["CONFIRMED", "APPLIED", "REJECTED"],
+      CONFIRMED: ["APPLIED", "REJECTED"],
+      APPLIED: ["CANCELLED"],
       REJECTED: [],
+      CANCELLED: [],
     };
     const priceText = (target, price) =>
       price === null
@@ -1838,6 +1844,8 @@ const server = http.createServer((req, res) => {
       DRAFT: "검토를 기다립니다",
       REVIEWED: "승인을 기다립니다",
       APPROVED: "적용을 기다립니다",
+      CONFIRMED: "적용을 기다립니다 (최종 승인 완료)",
+      CANCELLED: "예약이 취소되었습니다 — 기록은 남습니다",
       APPLIED: "적용되었습니다 — 이후 호출에 이 단가가 쓰입니다",
       REJECTED: "반려되었습니다",
     };
@@ -1846,8 +1854,10 @@ const server = http.createServer((req, res) => {
       DRAFT: "작성됨",
       REVIEWED: "검토됨",
       APPROVED: "승인됨",
+      CONFIRMED: "최종 승인됨",
       APPLIED: "적용됨",
       REJECTED: "반려됨",
+      CANCELLED: "예약 취소됨",
     };
     const view = (proposal) => ({
       ...proposal,
@@ -1855,6 +1865,15 @@ const server = http.createServer((req, res) => {
       scheduled:
         proposal.effectiveFrom !== null &&
         new Date(proposal.effectiveFrom).getTime() > Date.now(),
+      // 운영의 시스템 제안은 최종 승인이 남는다 (TASK-3301, CTO 정책 3301-②).
+      // 스텁은 "운영"을 흉내 내기 위해 감지된 제안에 항상 2단계를 요구한다.
+      needsSecondApproval:
+        proposal.stage === "APPROVED" && proposal.origin !== "manual",
+      confirmedBy: proposal.confirmedBy ?? null,
+      confirmedAt: proposal.confirmedAt ?? null,
+      cancelledBy: proposal.cancelledBy ?? null,
+      cancelledAt: proposal.cancelledAt ?? null,
+      cancelledReason: proposal.cancelledReason ?? null,
       selfApproval:
         proposal.approvedBy && proposal.approvedBy === proposal.proposedBy
           ? `제안자와 승인자가 같습니다 (${proposal.approvedBy}) — 개발 환경이라 진행하지만 교차 확인은 이뤄지지 않았습니다. 운영에서는 차단됩니다 (CTO 정책 3201-②).`
@@ -1891,6 +1910,11 @@ const server = http.createServer((req, res) => {
           origin: "manual",
           evidence: null,
           effectiveFrom: null,
+          confirmedBy: null,
+          confirmedAt: null,
+          cancelledBy: null,
+          cancelledAt: null,
+          cancelledReason: null,
           proposedBy: "admin@acos.local",
           reviewedBy: null,
           reviewedAt: null,
@@ -1913,6 +1937,73 @@ const server = http.createServer((req, res) => {
     // 가격 변경 감지 (TASK-3201, CTO 정책 3201-①) — 제안까지만 만든다
     if (req.method === "POST" && url.pathname === "/ops/pricing/detect") {
       // data 모드에서는 기록이 새 단가를 가리키는 상황을 재현한다
+      // published 모드: 공지 기반 제안 (근거 모양이 다르다 — TASK-3301)
+      if (mode === "published") {
+        const already = stubProposals.some(
+          (row) =>
+            row.target === "ocr" &&
+            row.key === "google-vision" &&
+            !["APPLIED", "REJECTED", "CANCELLED"].includes(row.stage),
+        );
+        const created = [];
+        if (!already) {
+          const proposal = {
+            id: `pp-${stubProposals.length + 1}`,
+            target: "ocr",
+            key: "google-vision",
+            price: { perUnitUsd: 0.0018 },
+            currentPrice: { perUnitUsd: 0.0015 },
+            reason:
+              "가격 공지가 google-vision 단가를 단위당 $0.0018로 알립니다 (우리 가격표는 $0.0015). 공지 발효 시각: 2026-09-01T00:00:00.000Z",
+            stage: "DETECTED",
+            origin: "published",
+            evidence: {
+              source: "published",
+              url: "https://provider.example/pricing.json",
+              publishedEffectiveFrom: "2026-09-01T00:00:00.000Z",
+            },
+            effectiveFrom: null,
+            confirmedBy: null,
+            confirmedAt: null,
+            cancelledBy: null,
+            cancelledAt: null,
+            cancelledReason: null,
+            proposedBy: null,
+            reviewedBy: null,
+            reviewedAt: null,
+            approvedBy: null,
+            approvedAt: null,
+            appliedBy: null,
+            appliedAt: null,
+            rejectedBy: null,
+            rejectedAt: null,
+            rejectedReason: null,
+            createdAt: new Date().toISOString(),
+          };
+          stubProposals.push(proposal);
+          created.push(view(proposal));
+        }
+        res.end(
+          JSON.stringify({
+            source: {
+              status: "ok",
+              needsHumanCheck: false,
+              unparsed: [],
+              detail: "가격 공지 1건을 읽었습니다.",
+            },
+            published: [{ target: "ocr", key: "google-vision" }],
+            notDue: [],
+            changes: [],
+            unresolved: [],
+            created,
+            skipped: [],
+            checked: 12,
+            detail: "공지 대조 1건 · 제안 1건 등록",
+            checkedAt: new Date().toISOString(),
+          }),
+        );
+        return;
+      }
       const detectable = mode === "data" && stubAppliedOcr === null;
       const changes = detectable
         ? [
@@ -1971,8 +2062,44 @@ const server = http.createServer((req, res) => {
         stubProposals.push(proposal);
         created.push(view(proposal));
       }
+      stubDetectionRuns.push({
+        id: `pdr-${stubDetectionRuns.length + 1}`,
+        target: "ocr",
+        provider: "google-vision",
+        source: "records",
+        ranAt: new Date().toISOString(),
+        samples: 12,
+        changes: changes.length,
+        skipped: null,
+        detail:
+          changes.length > 0
+            ? "기록 대조에서 단가 불일치 1건을 찾았습니다."
+            : "기록과 가격표가 일치합니다.",
+      });
       res.end(
         JSON.stringify({
+          // 외부 가격 공지 (TASK-3301, CTO 정책 3301-①).
+          // empty 모드에서는 **읽지 못한 상태**를 재현한다 — 그것은
+          // "변경 없음"이 아니다.
+          source:
+            mode === "data"
+              ? {
+                  status: "ok",
+                  needsHumanCheck: false,
+                  unparsed: [],
+                  detail: "가격 공지 2건을 읽었습니다.",
+                }
+              : {
+                  status: "partial",
+                  needsHumanCheck: true,
+                  unparsed: [
+                    { index: 1, reason: "clova: perUnitUsd가 없습니다." },
+                  ],
+                  detail:
+                    "가격 공지 1건을 읽었고 1건은 해석하지 못했습니다. 못 읽은 항목은 단가가 그대로라는 뜻이 아닙니다 — 직접 확인해 주세요 (CTO 정책 3301-①).",
+                },
+          published: [],
+          notDue: [],
           changes,
           unresolved:
             mode === "data"
@@ -2014,8 +2141,11 @@ const server = http.createServer((req, res) => {
         const to = {
           review: "REVIEWED",
           approve: "APPROVED",
+          // 2차 승인·예약 취소 (TASK-3301, CTO 정책 3301-②③)
+          confirm: "CONFIRMED",
           apply: "APPLIED",
           reject: "REJECTED",
+          cancel: "CANCELLED",
         }[action];
         const proposal = stubProposals.find((row) => row.id === id);
         if (to === undefined || proposal === undefined) {
@@ -2039,6 +2169,44 @@ const server = http.createServer((req, res) => {
           res.end(JSON.stringify({ message: "반려 사유가 필요합니다." }));
           return;
         }
+        if (to === "CANCELLED") {
+          const cancelReason = JSON.parse(body || "{}").reason;
+          if (!cancelReason) {
+            res.statusCode = 400;
+            res.end(
+              JSON.stringify({ message: "예약 취소 사유가 필요합니다." }),
+            );
+            return;
+          }
+          if (
+            proposal.effectiveFrom === null ||
+            new Date(proposal.effectiveFrom).getTime() <= Date.now()
+          ) {
+            res.statusCode = 400;
+            res.end(
+              JSON.stringify({
+                message:
+                  "이미 발효된 단가입니다 — 되돌리려면 새 제안을 내세요 (CTO 정책 3301-③).",
+              }),
+            );
+            return;
+          }
+          proposal.stage = "CANCELLED";
+          proposal.cancelledBy = "admin@acos.local";
+          proposal.cancelledAt = new Date().toISOString();
+          proposal.cancelledReason = cancelReason;
+          // 예약만 사라진다 — 기록은 남는다
+          stubScheduled = stubScheduled.filter(
+            (row) =>
+              !(
+                row.target === proposal.target &&
+                row.key === proposal.key &&
+                row.effectiveFrom === proposal.effectiveFrom
+              ),
+          );
+          res.end(JSON.stringify(view(proposal)));
+          return;
+        }
         proposal.stage = to;
         const now = new Date().toISOString();
         if (to === "REVIEWED") {
@@ -2047,6 +2215,9 @@ const server = http.createServer((req, res) => {
         } else if (to === "APPROVED") {
           proposal.approvedBy = "admin@acos.local";
           proposal.approvedAt = now;
+        } else if (to === "CONFIRMED") {
+          proposal.confirmedBy = "reviewer@acos.local";
+          proposal.confirmedAt = now;
         } else if (to === "APPLIED") {
           const body2 = JSON.parse(body || "{}");
           const requested = body2.effectiveFrom
@@ -2095,11 +2266,16 @@ const server = http.createServer((req, res) => {
     res.end(
       JSON.stringify({
         open: stubProposals
-          .filter((row) => !["APPLIED", "REJECTED"].includes(row.stage))
+          .filter(
+            (row) => !["APPLIED", "REJECTED", "CANCELLED"].includes(row.stage),
+          )
           .map(view)
           .reverse(),
         closed: stubProposals
-          .filter((row) => ["APPLIED", "REJECTED"].includes(row.stage))
+          // 취소된 예약도 남는다 — 삭제하지 않는다 (CTO 정책 3301-③)
+          .filter((row) =>
+            ["APPLIED", "REJECTED", "CANCELLED"].includes(row.stage),
+          )
           .map(view)
           .reverse(),
         effective: {
@@ -2127,9 +2303,45 @@ const server = http.createServer((req, res) => {
           nextChangeAt:
             stubScheduled.length > 0 ? stubScheduled[0].effectiveFrom : null,
         },
-        stages: ["DRAFT", "REVIEWED", "APPROVED", "APPLIED", "REJECTED"],
+        detection: {
+          providers: [
+            {
+              provider: "google-vision",
+              intervalMs: 6 * 60 * 60 * 1000,
+              source: "default",
+              env: "PRICE_DETECT_INTERVAL_GOOGLE_VISION",
+              lastRunAt:
+                stubDetectionRuns.length > 0
+                  ? stubDetectionRuns.at(-1).ranAt
+                  : null,
+              nextAt: null,
+            },
+          ],
+          // 프로젝트별 설정 시도는 거부 사유로 남는다 (CTO 정책 3301-④)
+          rejected:
+            mode === "data"
+              ? []
+              : [
+                  {
+                    name: "PRICE_DETECT_INTERVAL_PROJECT_ACME",
+                    reason:
+                      "프로젝트별 감지 주기는 지원하지 않습니다 (CTO 정책 3301-④) — 단가는 Provider와의 계약이지 프로젝트의 속성이 아닙니다.",
+                  },
+                ],
+          recent: stubDetectionRuns.slice(-20).reverse(),
+        },
+        stages: [
+          "DETECTED",
+          "DRAFT",
+          "REVIEWED",
+          "APPROVED",
+          "CONFIRMED",
+          "APPLIED",
+          "REJECTED",
+          "CANCELLED",
+        ],
         detail:
-          `진행 중 ${stubProposals.filter((row) => !["APPLIED", "REJECTED"].includes(row.stage)).length}건 · ` +
+          `진행 중 ${stubProposals.filter((row) => !["APPLIED", "REJECTED", "CANCELLED"].includes(row.stage)).length}건 · ` +
           `발효된 적용 이력 ${applied.length}건. 단가는 검토 → 승인 → 적용 절차를 거치고, ` +
           "감지된 변경은 감지 → 승인 → 적용입니다 (CTO 정책 3101-① · 3201-①). " +
           "감지만으로는 단가가 바뀌지 않습니다. " +

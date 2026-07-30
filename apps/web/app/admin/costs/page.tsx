@@ -21,8 +21,10 @@ const STAGE_LABEL: Record<PricingStageDto, string> = {
   DRAFT: "작성됨",
   REVIEWED: "검토됨",
   APPROVED: "승인됨",
+  CONFIRMED: "최종 승인됨",
   APPLIED: "적용됨",
   REJECTED: "반려됨",
+  CANCELLED: "예약 취소됨",
 };
 
 const STAGE_STYLE: Record<PricingStageDto, string> = {
@@ -33,15 +35,21 @@ const STAGE_STYLE: Record<PricingStageDto, string> = {
   REVIEWED: "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300",
   APPROVED:
     "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
+  CONFIRMED:
+    "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300",
   APPLIED:
     "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
   REJECTED: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300",
+  // 취소는 실패가 아니다 — 사람이 내린 결정이고 기록으로 남는다
+  CANCELLED: "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
 };
 
 /** 사람이 낸 제안과 자동 감지를 화면에서 가른다 (TASK-3201) */
 const ORIGIN_LABEL: Record<PricingOriginDto, string> = {
   manual: "직접 제안",
   detected: "자동 감지",
+  // 근거가 다르면 사람이 확인할 것도 다르다 (TASK-3301)
+  published: "가격 공지",
 };
 
 /** 단계별로 지금 누를 수 있는 버튼 (경로 이름 = 행동) */
@@ -50,16 +58,29 @@ const STAGE_ACTION: Record<PricingStageDto, string> = {
   DETECTED: "approve",
   DRAFT: "review",
   REVIEWED: "approve",
+  // 운영의 시스템 제안은 최종 승인이 남는다 — 아래에서 갈라 쓴다 (정책 3301-②)
   APPROVED: "apply",
+  CONFIRMED: "apply",
   APPLIED: "",
   REJECTED: "",
+  CANCELLED: "",
 };
 
 const ACTION_LABEL: Record<string, string> = {
   review: "검토 완료",
   approve: "승인",
+  confirm: "최종 승인",
   apply: "적용",
 };
+
+/** 이 제안에서 지금 누를 수 있는 버튼 (2단계 승인을 반영) */
+function actionFor(proposal: PricingProposalDto): string {
+  // 운영의 시스템 제안은 승인 뒤 **다른 ADMIN의 최종 승인**이 필요하다
+  if (proposal.stage === "APPROVED" && proposal.needsSecondApproval) {
+    return "confirm";
+  }
+  return STAGE_ACTION[proposal.stage];
+}
 
 function money(value: number | null): string {
   return value === null ? "미산정" : `$${value.toFixed(6)}`;
@@ -102,6 +123,10 @@ export default function CostIntelligencePage() {
   const [board, setBoard] = useState<PricingBoardDto | null>(null);
   const [forecast, setForecast] = useState<CostForecastDto | null>(null);
   const [billing, setBilling] = useState<BillingReportDto | null>(null);
+  /** 마지막 감지의 공지 상태 (TASK-3301, CTO 정책 3301-①) */
+  const [source, setSource] = useState<PricingDetectionDto["source"] | null>(
+    null,
+  );
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -216,14 +241,32 @@ export default function CostIntelligencePage() {
       }
       const result = (await response.json()) as PricingDetectionDto;
       setError(null);
+      // **못 읽은 것은 "변경 없음"이 아니다** — 상태를 화면에 남긴다
+      setSource(result.source);
       // 감지는 적용이 아니다 — 무엇이 만들어졌고 무엇을 해야 하는지 말한다
-      setNote(
-        result.created.length > 0
-          ? `${result.created.length}건을 감지해 제안을 등록했습니다 — 근거를 확인하고 승인해 주세요. 감지만으로 단가는 바뀌지 않습니다.`
-          : result.unresolved.length > 0
-            ? `${result.unresolved.length}건이 가격표와 어긋나지만 단가를 가를 수 없어 제안을 만들지 않았습니다 — 직접 제안을 내주세요.`
-            : "가격표와 어긋나는 기록이 없습니다.",
-      );
+      // 여러 사실을 한 줄로 뭉치지 않는다 — 공지 실패를 감지 결과 뒤에
+      // 숨기면 "변경 없음"으로 읽힌다 (CTO 정책 3301-①)
+      const notes: string[] = [];
+      if (result.created.length > 0) {
+        notes.push(
+          `${result.created.length}건을 감지해 제안을 등록했습니다 — 근거를 확인하고 승인해 주세요. 감지만으로 단가는 바뀌지 않습니다.`,
+        );
+      } else if (result.unresolved.length > 0) {
+        notes.push(
+          `${result.unresolved.length}건이 가격표와 어긋나지만 단가를 가를 수 없어 제안을 만들지 않았습니다 — 직접 제안을 내주세요.`,
+        );
+      } else {
+        notes.push("가격표와 어긋나는 기록이 없습니다.");
+      }
+      if (
+        result.source.needsHumanCheck &&
+        result.source.status !== "unconfigured"
+      ) {
+        notes.push(
+          `가격 공지를 읽지 못했습니다 (${result.source.status}) — 변경이 없다는 뜻이 아닙니다. 사람이 직접 확인해 주세요.`,
+        );
+      }
+      setNote(notes.join(" "));
       await load();
     } catch {
       setError("API 서버에 연결할 수 없습니다.");
@@ -275,7 +318,9 @@ export default function CostIntelligencePage() {
           ? effectiveFrom === ""
             ? "적용했습니다 — 이후 호출에 이 단가가 쓰입니다. 과거 비용 기록은 바뀌지 않습니다."
             : `적용했습니다 — ${new Date(effectiveFrom).toLocaleString("ko-KR")}부터 이 단가가 쓰입니다 (예약). 그때까지는 이전 단가로 계산합니다.`
-          : `${ACTION_LABEL[action] ?? "반려"} 처리했습니다.`,
+          : action === "cancel"
+            ? "예약을 취소했습니다 — 기록은 남습니다 (삭제하지 않습니다)."
+            : `${ACTION_LABEL[action] ?? "반려"} 처리했습니다.`,
       );
       if (action === "apply") {
         setEffectiveFrom("");
@@ -332,6 +377,36 @@ export default function CostIntelligencePage() {
         >
           <h2 className="text-lg font-semibold">가격표</h2>
           <p className="mt-1 text-sm text-zinc-500">{board.detail}</p>
+
+          {source !== null && source.needsHumanCheck ? (
+            <div
+              data-testid="price-source-warning"
+              className={`mt-3 rounded-lg border p-3 text-sm ${
+                source.status === "unconfigured"
+                  ? "border-zinc-200 dark:border-zinc-800"
+                  : "border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950"
+              }`}
+            >
+              <p className="font-medium">
+                {source.status === "unconfigured"
+                  ? "가격 공지가 설정되지 않았습니다 (미구성 — 실패가 아닙니다)"
+                  : `가격 공지를 읽지 못했습니다 (${source.status}) — 변경이 없다는 뜻이 아닙니다`}
+              </p>
+              <p className="mt-1 text-zinc-600 dark:text-zinc-400">
+                {source.detail}
+              </p>
+              {source.unparsed.length > 0 ? (
+                <ul className="mt-1 list-inside list-disc text-xs text-zinc-600 dark:text-zinc-400">
+                  {/* 못 읽은 것을 버리지 않는다 — 아홉을 읽었다고 성공이 아니다 */}
+                  {source.unparsed.map((entry) => (
+                    <li key={entry.index}>
+                      {entry.index + 1}번째: {entry.reason}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
 
           <h3 className="mt-4 text-sm font-semibold">실효 가격표</h3>
           <p className="text-xs text-zinc-500">
@@ -390,14 +465,49 @@ export default function CostIntelligencePage() {
                 쓰이지 않습니다
               </p>
               <ul className="mt-1 space-y-1 text-zinc-600 dark:text-zinc-400">
-                {board.effective.scheduled.map((row) => (
-                  <li key={`${row.target}-${row.key}-${row.effectiveFrom}`}>
-                    {row.target}/{row.key}:{" "}
-                    {priceText(row.target, row.price)} —{" "}
-                    {new Date(row.effectiveFrom).toLocaleString("ko-KR")}부터
-                  </li>
-                ))}
+                {board.effective.scheduled.map((row) => {
+                  // 예약을 취소하려면 그 제안을 찾아야 한다 — 목록에서 고른다
+                  const proposal = board.closed.find(
+                    (entry) =>
+                      entry.stage === "APPLIED" &&
+                      entry.target === row.target &&
+                      entry.key === row.key &&
+                      entry.effectiveFrom === row.effectiveFrom,
+                  );
+                  return (
+                    <li
+                      key={`${row.target}-${row.key}-${row.effectiveFrom}`}
+                      className="flex flex-wrap items-center gap-2"
+                    >
+                      <span>
+                        {row.target}/{row.key}:{" "}
+                        {priceText(row.target, row.price)} —{" "}
+                        {new Date(row.effectiveFrom).toLocaleString("ko-KR")}부터
+                      </span>
+                      {proposal ? (
+                        <button
+                          type="button"
+                          data-testid="cancel-schedule"
+                          disabled={busy}
+                          onClick={() =>
+                            void advance(
+                              proposal,
+                              "cancel",
+                              "화면에서 예약을 취소했습니다.",
+                            )
+                          }
+                          className="rounded-lg border border-zinc-300 px-2 py-0.5 text-xs font-medium hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                        >
+                          예약 취소
+                        </button>
+                      ) : null}
+                    </li>
+                  );
+                })}
               </ul>
+              <p className="mt-1 text-xs text-zinc-500">
+                취소해도 기록은 남습니다 — 삭제하지 않습니다 (CTO 정책 3301-③).
+              </p>
             </div>
           ) : null}
 
@@ -439,25 +549,38 @@ export default function CostIntelligencePage() {
                   <p className="mt-1 text-zinc-500">사유: {proposal.reason}</p>
                   {proposal.evidence !== null ? (
                     // 근거 없는 제안은 승인할 수 없다 — 무엇을 보고 판단했는지
-                    // 화면에 있어야 승인이 확인이 된다
+                    // 화면에 있어야 승인이 확인이 된다.
+                    // **출처마다 근거의 모양이 다르다** (TASK-3301): 표본 기반과
+                    // 공지 기반을 한 모양으로 읽으면 없는 필드에서 깨진다.
                     <p
                       className="mt-1 text-xs text-zinc-500"
                       data-testid="proposal-evidence"
                     >
-                      근거: 표본 {proposal.evidence.sampleIds.length}건 ·{" "}
-                      {new Date(proposal.evidence.from).toLocaleString("ko-KR")} ~{" "}
-                      {new Date(proposal.evidence.to).toLocaleString("ko-KR")} · 차이{" "}
-                      {(proposal.evidence.relativeDiff * 100).toFixed(1)}%
+                      근거:{" "}
+                      {proposal.evidence.sampleIds !== undefined
+                        ? `표본 ${proposal.evidence.sampleIds.length}건` +
+                          (proposal.evidence.from !== undefined
+                            ? ` · ${new Date(proposal.evidence.from).toLocaleString("ko-KR")} ~ ${new Date(proposal.evidence.to ?? proposal.evidence.from).toLocaleString("ko-KR")}`
+                            : "") +
+                          (proposal.evidence.relativeDiff !== undefined
+                            ? ` · 차이 ${(proposal.evidence.relativeDiff * 100).toFixed(1)}%`
+                            : "")
+                        : `가격 공지 ${proposal.evidence.url ?? ""}` +
+                          (proposal.evidence.publishedEffectiveFrom
+                            ? ` · 공지 발효 ${new Date(proposal.evidence.publishedEffectiveFrom).toLocaleString("ko-KR")}`
+                            : " · 공지에 발효 시각 없음")}
                     </p>
                   ) : null}
                   <p className="mt-1 text-xs text-zinc-500">
-                    {/* 감지된 제안의 제안자는 "알 수 없음"이 아니라 시스템이다 —
-                        모르는 것과 사람이 아닌 것은 다르다 */}
+                    {/* 시스템이 만든 제안의 제안자는 "알 수 없음"이 아니다 —
+                        모르는 것과 사람이 아닌 것은 다르다. 출처가 늘어도
+                        같은 규칙이 적용돼야 한다 (TASK-3301에서 공지 제안이
+                        다시 "알 수 없음"으로 보였다) */}
                     제안{" "}
                     {proposal.proposedBy ??
-                      (proposal.origin === "detected"
-                        ? "시스템 (자동 감지)"
-                        : "알 수 없음")}
+                      (proposal.origin === "manual"
+                        ? "알 수 없음"
+                        : `시스템 (${ORIGIN_LABEL[proposal.origin]})`)}
                     {proposal.reviewedBy
                       ? ` · 검토 ${proposal.reviewedBy}`
                       : ""}
@@ -465,6 +588,15 @@ export default function CostIntelligencePage() {
                       ? ` · 승인 ${proposal.approvedBy}`
                       : ""}
                   </p>
+                  {proposal.needsSecondApproval ? (
+                    <p
+                      className="mt-1 text-xs text-sky-700 dark:text-sky-400"
+                      data-testid="second-approval-note"
+                    >
+                      시스템이 만든 제안입니다 — 운영에서는 다른 ADMIN의 최종
+                      승인이 필요합니다 (CTO 정책 3301-②).
+                    </p>
+                  ) : null}
                   {proposal.selfApproval ? (
                     <p
                       className="mt-1 text-xs text-amber-700 dark:text-amber-400"
@@ -473,7 +605,7 @@ export default function CostIntelligencePage() {
                       {proposal.selfApproval}
                     </p>
                   ) : null}
-                  {STAGE_ACTION[proposal.stage] === "apply" ? (
+                  {actionFor(proposal) === "apply" ? (
                     <label className="mt-2 block text-xs text-zinc-500">
                       발효 시각 (비우면 즉시) — 적용은 결정이고 발효는 시각입니다
                       <input
@@ -486,16 +618,14 @@ export default function CostIntelligencePage() {
                     </label>
                   ) : null}
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {STAGE_ACTION[proposal.stage] ? (
+                    {actionFor(proposal) ? (
                       <button
                         type="button"
                         disabled={busy}
-                        onClick={() =>
-                          void advance(proposal, STAGE_ACTION[proposal.stage])
-                        }
+                        onClick={() => void advance(proposal, actionFor(proposal))}
                         className="rounded-lg border border-zinc-300 px-3 py-1 text-xs font-medium hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
                       >
-                        {ACTION_LABEL[STAGE_ACTION[proposal.stage]]}
+                        {ACTION_LABEL[actionFor(proposal)]}
                       </button>
                     ) : null}
                     <button
@@ -517,6 +647,58 @@ export default function CostIntelligencePage() {
               ))}
             </ul>
           )}
+
+          <h3 className="mt-6 text-sm font-semibold">감지 현황</h3>
+          <p className="text-xs text-zinc-500">
+            주기는 <strong>Provider별로만</strong> 설정합니다 — 프로젝트별
+            설정은 지원하지 않습니다 (CTO 정책 3301-④).
+          </p>
+          <div className="mt-2 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="text-left text-xs uppercase text-zinc-500">
+                <tr>
+                  <th className="py-1">Provider</th>
+                  <th className="py-1">주기</th>
+                  <th className="py-1">마지막으로 본 시각</th>
+                </tr>
+              </thead>
+              <tbody data-testid="detection-status">
+                {board.detection.providers.map((row) => (
+                  <tr
+                    key={row.provider}
+                    className="border-t border-zinc-100 dark:border-zinc-800"
+                  >
+                    <td className="py-1">{row.provider}</td>
+                    <td className="py-1">
+                      {Math.round(row.intervalMs / 3_600_000)}시간
+                      <span className="ml-1 text-xs text-zinc-500">
+                        ({row.source === "env" ? row.env : "기본값"})
+                      </span>
+                    </td>
+                    {/* 안 본 것과 보고 조용한 것은 다르다 */}
+                    <td className="py-1">
+                      {row.lastRunAt === null
+                        ? "아직 보지 않음"
+                        : new Date(row.lastRunAt).toLocaleString("ko-KR")}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {board.detection.rejected.length > 0 ? (
+            <ul
+              data-testid="detection-rejected"
+              className="mt-2 list-inside list-disc text-xs text-amber-700 dark:text-amber-400"
+            >
+              {/* 조용히 무시하면 설정한 사람은 적용된 줄 안다 */}
+              {board.detection.rejected.map((entry) => (
+                <li key={entry.name}>
+                  {entry.name}: {entry.reason}
+                </li>
+              ))}
+            </ul>
+          ) : null}
 
           <h3 className="mt-6 text-sm font-semibold">단가 변경 제안</h3>
           <div className="mt-2 grid gap-2 sm:grid-cols-2">

@@ -3,6 +3,10 @@ import { DEFAULT_OCR_PRICING } from "../ocr/ocr-pricing";
 import {
   EFFECTIVE_FROM_MAX_DAYS,
   PRICING_ORIGINS,
+  isAutoOrigin,
+  judgeScheduleCancel,
+  judgeSecondApproval,
+  requiresSecondApproval,
   PRICING_STAGES,
   PRICING_TARGETS,
   canAdvancePricing,
@@ -31,8 +35,11 @@ describe("가격표 거버넌스 (TASK-3101, CTO 정책 3101-①②)", () => {
       "DRAFT",
       "REVIEWED",
       "APPROVED",
+      // 2차 승인·예약 취소 (TASK-3301, CTO 정책 3301-②③)
+      "CONFIRMED",
       "APPLIED",
       "REJECTED",
+      "CANCELLED",
     ]);
   });
 
@@ -53,7 +60,12 @@ describe("가격표 거버넌스 (TASK-3101, CTO 정책 3101-①②)", () => {
     it("정해진 순서는 그대로 통과한다", () => {
       expect(nextPricingStages("DRAFT")).toEqual(["REVIEWED", "REJECTED"]);
       expect(nextPricingStages("REVIEWED")).toEqual(["APPROVED", "REJECTED"]);
-      expect(nextPricingStages("APPROVED")).toEqual(["APPLIED", "REJECTED"]);
+      // 2차 승인이 선택지로 늘었다 (TASK-3301, CTO 정책 3301-②)
+      expect(nextPricingStages("APPROVED")).toEqual([
+        "CONFIRMED",
+        "APPLIED",
+        "REJECTED",
+      ]);
     });
 
     it("적용 전 어느 단계에서도 반려할 수 있다 — 검토가 통과를 뜻하지 않는다", () => {
@@ -63,7 +75,8 @@ describe("가격표 거버넌스 (TASK-3101, CTO 정책 3101-①②)", () => {
     });
 
     it("적용된 제안은 되돌릴 수 없다 — 새 제안을 내야 한다", () => {
-      expect(nextPricingStages("APPLIED")).toEqual([]);
+      // 갈 수 있는 곳은 예약 취소뿐이다 (TASK-3301, CTO 정책 3301-③)
+      expect(nextPricingStages("APPLIED")).toEqual(["CANCELLED"]);
       const judged = judgePricingTransition("APPLIED", "REJECTED");
       expect(judged.ok).toBe(false);
       expect(judged.reason).toContain("적용 기록은 바꾸지 않습니다");
@@ -78,7 +91,7 @@ describe("가격표 거버넌스 (TASK-3101, CTO 정책 3101-①②)", () => {
     it("거꾸로 가는 전이도 막고 이유를 말한다", () => {
       const judged = judgePricingTransition("APPROVED", "DRAFT");
       expect(judged.ok).toBe(false);
-      expect(judged.reason).toContain("가능: APPLIED, REJECTED");
+      expect(judged.reason).toContain("가능: CONFIRMED, APPLIED, REJECTED");
     });
   });
 
@@ -194,7 +207,8 @@ describe("가격표 거버넌스 (TASK-3101, CTO 정책 3101-①②)", () => {
 
   describe("감지 → 승인 → 적용 (TASK-3201, CTO 정책 3201-①)", () => {
     it("출처를 값으로 고정한다", () => {
-      expect([...PRICING_ORIGINS]).toEqual(["manual", "detected"]);
+      // 외부 공지 출처가 늘었다 (TASK-3301, CTO 정책 3301-①)
+      expect([...PRICING_ORIGINS]).toEqual(["manual", "detected", "published"]);
       expect(startStage("detected")).toBe("DETECTED");
       expect(startStage("manual")).toBe("DRAFT");
     });
@@ -480,6 +494,139 @@ describe("가격표 거버넌스 (TASK-3101, CTO 정책 3101-①②)", () => {
           }),
         ).not.toContain("**");
       }
+    });
+  });
+  describe("2단계 승인 (TASK-3301, CTO 정책 3301-②)", () => {
+    it("시스템이 만든 제안은 운영에서 최종 승인이 필요하다", () => {
+      // 사람이 낸 제안은 제안자·승인자가 이미 둘이지만, 시스템 제안은
+      // 승인자 한 명이 곧 전부다
+      for (const origin of ["detected", "published"] as const) {
+        expect(isAutoOrigin(origin)).toBe(true);
+        expect(requiresSecondApproval(origin, "production")).toBe(true);
+        expect(requiresSecondApproval(origin, "development")).toBe(false);
+      }
+      expect(requiresSecondApproval("manual", "production")).toBe(false);
+    });
+
+    it("운영에서 시스템 제안은 승인 뒤 바로 적용할 수 없다", () => {
+      const judged = judgePricingTransition("APPROVED", "APPLIED", {
+        origin: "detected",
+        environment: "production",
+      });
+      expect(judged.ok).toBe(false);
+      expect(judged.reason).toContain("다른 ADMIN의 최종 승인");
+      // 무엇을 하면 되는지 말한다
+      expect(judged.reason).toContain("최종 승인(confirm)");
+    });
+
+    it("최종 승인을 거치면 적용할 수 있다", () => {
+      expect(
+        judgePricingTransition("CONFIRMED", "APPLIED", {
+          origin: "detected",
+          environment: "production",
+        }).ok,
+      ).toBe(true);
+    });
+
+    it("사람이 낸 제안과 개발 환경은 그대로 적용한다", () => {
+      expect(
+        judgePricingTransition("APPROVED", "APPLIED", {
+          origin: "manual",
+          environment: "production",
+        }).ok,
+      ).toBe(true);
+      expect(
+        judgePricingTransition("APPROVED", "APPLIED", {
+          origin: "detected",
+          environment: "development",
+        }).ok,
+      ).toBe(true);
+    });
+
+    it("더 보수적으로 가는 길은 막지 않는다", () => {
+      // 개발에서도, 사람이 낸 제안도 최종 승인을 한 번 더 받을 수 있다
+      expect(canAdvancePricing("APPROVED", "CONFIRMED")).toBe(true);
+    });
+
+    it("최종 승인자는 1차 승인자와 달라야 한다 (운영)", () => {
+      const judged = judgeSecondApproval({
+        approvedBy: "a@acos.local",
+        confirmedBy: "a@acos.local",
+        environment: "production",
+      });
+      expect(judged.allowed).toBe(false);
+      expect(judged.message).toContain("다른 ADMIN의 최종 승인이 필요합니다");
+    });
+
+    it("개발에서는 같아도 진행하되 사실을 남긴다", () => {
+      const judged = judgeSecondApproval({
+        approvedBy: "a@acos.local",
+        confirmedBy: "a@acos.local",
+        environment: "development",
+      });
+      expect(judged.allowed).toBe(true);
+      expect(judged.message).toContain("확인은 한 번뿐입니다");
+    });
+
+    it("다르면 통과한다", () => {
+      expect(
+        judgeSecondApproval({
+          approvedBy: "a@acos.local",
+          confirmedBy: "b@acos.local",
+          environment: "production",
+        }).message,
+      ).toBeNull();
+    });
+
+    it("최종 승인 뒤에도 반려할 수 있다", () => {
+      expect(canAdvancePricing("CONFIRMED", "REJECTED")).toBe(true);
+    });
+  });
+
+  describe("예약 취소 (TASK-3301, CTO 정책 3301-③)", () => {
+    const now = at("2026-08-01T00:00:00.000Z");
+
+    it("아직 발효되지 않은 예약은 취소할 수 있다", () => {
+      const judged = judgeScheduleCancel({
+        stage: "APPLIED",
+        effectiveFrom: at("2026-09-01T00:00:00.000Z"),
+        now,
+      });
+      expect(judged.ok).toBe(true);
+      // 삭제가 아니라 기록으로 남는다
+      expect(judged.reason).toContain("기록은 남습니다");
+    });
+
+    it("이미 발효된 단가는 취소할 수 없다", () => {
+      // 취소하면 그 뒤에 기록된 비용이 어떤 단가로 계산됐는지 설명할 수 없다
+      const judged = judgeScheduleCancel({
+        stage: "APPLIED",
+        effectiveFrom: at("2026-07-01T00:00:00.000Z"),
+        now,
+      });
+      expect(judged.ok).toBe(false);
+      expect(judged.reason).toContain("이미 발효된 단가입니다");
+      expect(judged.reason).toContain("새 제안을 내세요");
+    });
+
+    it("적용 전 제안은 취소가 아니라 반려다", () => {
+      const judged = judgeScheduleCancel({
+        stage: "APPROVED",
+        effectiveFrom: null,
+        now,
+      });
+      expect(judged.ok).toBe(false);
+      expect(judged.reason).toContain("반려하세요");
+    });
+
+    it("취소된 예약은 되살리지 않는다", () => {
+      const judged = judgePricingTransition("CANCELLED", "APPLIED");
+      expect(judged.ok).toBe(false);
+      expect(judged.reason).toContain("취소 기록은 남기고 되살리지 않습니다");
+    });
+
+    it("적용에서 갈 수 있는 곳은 취소뿐이다", () => {
+      expect(nextPricingStages("APPLIED")).toEqual(["CANCELLED"]);
     });
   });
 });

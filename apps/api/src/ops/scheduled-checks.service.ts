@@ -4,6 +4,7 @@ import {
   detectBudgetAlerts,
   detectConfigurationAlerts,
   detectForecastAlerts,
+  detectPriceSourceAlerts,
   detectPricingDriftAlerts,
   detectProviderAlerts,
   detectBackupChainAlert,
@@ -82,8 +83,9 @@ const JOB_ALERT_KINDS: Record<ScheduledJob, AlertKind[]> = {
   "remote-verify": [],
   // 위반 스캔은 자기 종류만 책임진다 (TASK-2701, CTO 결정 2601-③)
   "governance-scan": ["governance-scan"],
-  // 가격 감지·예측도 자기 종류만 책임진다 (TASK-3201, 정책 3201-①④)
-  "pricing-detect": ["pricing-drift"],
+  // 가격 감지·예측도 자기 종류만 책임진다 (TASK-3201, 정책 3201-①④).
+  // 공지 실패도 같은 점검이 책임진다 (TASK-3301, 정책 3301-①)
+  "pricing-detect": ["pricing-drift", "price-source"],
   "cost-forecast": ["cost-forecast"],
 };
 
@@ -627,10 +629,20 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
       // 승인·적용은 사람이 한다. 자동 적용을 허용하면 Provider 쪽 이상이나
       // 우리 계산 오류가 곧바로 돈의 기준을 바꾼다.
       const result = await this.pricing.detect();
-      const detected = detectPricingDriftAlerts({
-        changes: result.changes,
-        unresolved: result.unresolved,
-      });
+      const detected = [
+        ...detectPricingDriftAlerts({
+          changes: result.changes,
+          unresolved: result.unresolved,
+        }),
+        // **공지를 못 읽은 것은 "변경 없음"이 아니다** (CTO 정책 3301-①) —
+        // 사람의 확인을 요구하는 경보를 낸다
+        ...detectPriceSourceAlerts({
+          status: result.source.status,
+          needsHumanCheck: result.source.needsHumanCheck,
+          unparsedCount: result.source.unparsed.length,
+          detail: result.source.detail,
+        }),
+      ];
       const notified = await this.alerts.sync(JOB_ALERT_KINDS[job], detected);
       return {
         // 단가가 어긋난 것은 시스템 장애가 아니다 — 점검 자체는 성공이다

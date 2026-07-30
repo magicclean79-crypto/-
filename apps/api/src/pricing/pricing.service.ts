@@ -12,14 +12,20 @@ import {
   PRICING_ORIGINS,
   PRICING_STAGES,
   PRICING_TARGETS,
+  comparePublishedPrices,
   detectPriceChanges,
   describePricingProposal,
   describeSelfApproval,
   judgePricingTransition,
+  judgeScheduleCancel,
+  judgeSecondApproval,
   judgeSelfApproval,
   nextPricingChangeAt,
   nextPricingStages,
+  requiresSecondApproval,
+  resolveDetectionIntervals,
   resolvePricingAt,
+  shouldDetectProvider,
   startStage,
   validateEffectiveFrom,
   validateProposedPrice,
@@ -28,20 +34,24 @@ import type {
   AppliedPricing,
   DetectedPriceChange,
   EffectivePricing,
+  PriceSourceVerdict,
   PricingOrigin,
   PricingStage,
   PricingTarget,
   ProposedPrice,
+  PublishedPriceChange,
   UnresolvedPriceSignal,
 } from "@acos/core";
 import type {
   EffectivePricingDto,
   PricingBoardDto,
+  PricingDetectionStatusDto,
   PricingProposalDto,
 } from "@acos/shared";
 import { Prisma, type PricingProposal } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { PricingCacheBus } from "./pricing-cache.bus";
+import { PriceSourceService } from "./price-source.service";
 
 /**
  * 실효 가격표 캐시 수명.
@@ -92,8 +102,14 @@ const OPEN_STAGES: PricingStage[] = [
   "APPROVED",
 ];
 
-/** 끝난 제안 — 다시 진행하지 않는다 */
-const CLOSED_STAGES: PricingStage[] = ["APPLIED", "REJECTED"];
+/**
+ * 끝난 제안 — 다시 진행하지 않는다.
+ *
+ * 취소된 예약(`CANCELLED`)도 여기 들어옵니다 — **삭제하지 않으므로**
+ * 목록에서 사라지면 안 되고(정책 3301-③), 진행 중으로 두면 감지가 "이미
+ * 진행 중인 제안이 있다"며 새 감지를 막습니다.
+ */
+const CLOSED_STAGES: PricingStage[] = ["APPLIED", "REJECTED", "CANCELLED"];
 
 /**
  * 가격표 거버넌스 서비스. (TASK-3101, Sprint 31 — CTO 정책 3101-①②)
@@ -127,6 +143,8 @@ export class PricingService implements OnModuleInit {
     private readonly prisma: PrismaService,
     // 적용 즉시 다른 인스턴스의 캐시도 버린다 (정책 3201-⑤)
     @Optional() private readonly bus?: PricingCacheBus,
+    // 외부 가격 공지 (정책 3301-①) — 미주입이면 공지 대조를 하지 않는다
+    @Optional() private readonly source?: PriceSourceService,
   ) {}
 
   onModuleInit(): void {
@@ -220,7 +238,12 @@ export class PricingService implements OnModuleInit {
       throw new NotFoundException("단가 제안을 찾을 수 없습니다.");
     }
     const from = this.stageOf(record);
-    const judged = judgePricingTransition(from, to);
+    const origin = isOrigin(record.origin) ? record.origin : "manual";
+    // 운영의 시스템 제안은 2차 승인을 건너뛸 수 없다 (CTO 정책 3301-②)
+    const judged = judgePricingTransition(from, to, {
+      origin,
+      environment: this.environment,
+    });
     if (!judged.ok) {
       throw new BadRequestException(judged.reason);
     }
@@ -247,6 +270,46 @@ export class PricingService implements OnModuleInit {
       }
       data.approvedBy = actor;
       data.approvedAt = now;
+    } else if (to === "CONFIRMED") {
+      // **최종 승인자는 1차 승인자와 달라야 한다** (CTO 정책 3301-②) —
+      // 같은 사람이 두 번 누르면 단계만 늘 뿐 확인은 늘지 않고, 오히려
+      // "두 사람이 봤다"는 잘못된 안심을 만든다
+      const judgedSecond = judgeSecondApproval({
+        approvedBy: record.approvedBy,
+        confirmedBy: actor,
+        environment: this.environment,
+      });
+      if (!judgedSecond.allowed) {
+        throw new BadRequestException(
+          judgedSecond.message ?? "최종 승인은 다른 ADMIN이 해야 합니다.",
+        );
+      }
+      if (judgedSecond.level === "warning") {
+        this.logger.warn(`단가 최종 승인 확인 1회: ${judgedSecond.message}`);
+      }
+      data.confirmedBy = actor;
+      data.confirmedAt = now;
+    } else if (to === "CANCELLED") {
+      // **예약 취소는 삭제가 아니다** (CTO 정책 3301-③) — 적용은 실제로
+      // 있었던 일이고, 그 결정을 지우면 "왜 그때 그 단가가 예약됐다가
+      // 사라졌는가"에 아무도 답할 수 없다
+      const judgedCancel = judgeScheduleCancel({
+        stage: from,
+        effectiveFrom: record.effectiveFrom ?? null,
+        now,
+      });
+      if (!judgedCancel.ok) {
+        throw new BadRequestException(judgedCancel.reason);
+      }
+      const reason =
+        typeof options.reason === "string" ? options.reason.trim() : "";
+      if (reason === "") {
+        // 취소도 사람의 판단이다 — 사유가 없으면 왜 없앴는지 남지 않는다
+        throw new BadRequestException("예약 취소 사유가 필요합니다.");
+      }
+      data.cancelledBy = actor;
+      data.cancelledAt = now;
+      data.cancelledReason = reason;
     } else if (to === "APPLIED") {
       // **적용은 결정이고 발효는 시각이다** (CTO 정책 3201-③).
       // 미지정이면 즉시 발효한다 — 예약은 명시적으로만 한다.
@@ -293,6 +356,17 @@ export class PricingService implements OnModuleInit {
         throw error;
       });
 
+    if (to === "CANCELLED") {
+      // 예약이 사라졌으므로 **다음 발효 경계가 바뀐다** — 캐시를 그대로 두면
+      // 취소된 단가를 그 시각에 반영하려 든다 (정책 3201-⑤와 같은 이유)
+      await this.invalidate(
+        `cancelled ${updated.target}/${updated.key} by ${actor ?? "unknown"}`,
+      );
+      this.logger.warn(
+        `단가 예약 취소: ${updated.target}/${updated.key} by ${actor ?? "unknown"} — ` +
+          "기록은 남습니다 (CTO 정책 3301-③).",
+      );
+    }
     if (to === "APPLIED") {
       // **적용 즉시 캐시를 버린다** (CTO 정책 3201-⑤) — 이 프로세스는 곧바로,
       // 다른 인스턴스는 버스 신호로. 발행이 실패하면 로그가 그 사실을 말한다.
@@ -356,13 +430,17 @@ export class PricingService implements OnModuleInit {
     const open = proposals.filter(
       (proposal) => !CLOSED_STAGES.includes(proposal.stage),
     );
-    const effective = await this.effectiveDto();
+    const [effective, detection] = await Promise.all([
+      this.effectiveDto(),
+      this.detectionStatus(),
+    ]);
     return {
       open,
       closed: proposals.filter((proposal) =>
         CLOSED_STAGES.includes(proposal.stage),
       ),
       effective,
+      detection,
       stages: [...PRICING_STAGES],
       detail:
         `진행 중 ${open.length}건 · 발효된 적용 이력 ${effective.appliedCount}건` +
@@ -385,6 +463,8 @@ export class PricingService implements OnModuleInit {
    */
   async appliedRows(): Promise<AppliedPricing[]> {
     const records = await this.prisma.pricingProposal.findMany({
+      // **취소된 예약(CANCELLED)은 여기 들어오지 않는다** (정책 3301-③) —
+      // 기록은 남지만 계산에는 쓰이지 않는다
       where: { stage: "APPLIED", appliedAt: { not: null } },
       orderBy: { appliedAt: "asc" },
       select: {
@@ -479,19 +559,27 @@ export class PricingService implements OnModuleInit {
    * 같은 제안이 쌓이면 목록이 소음이 되고, 승인해야 할 것이 무엇인지 흐려집니다.
    */
   async detect(
-    options: { windowHours?: number; actor?: string | null } = {},
+    options: { windowHours?: number; actor?: string | null; force?: boolean } = {},
   ): Promise<{
     changes: DetectedPriceChange[];
     unresolved: UnresolvedPriceSignal[];
-    /** 이번에 만든 제안 */
+    published: PublishedPriceChange[];
+    source: {
+      status: PriceSourceVerdict["status"];
+      needsHumanCheck: boolean;
+      unparsed: PriceSourceVerdict["unparsed"];
+      detail: string;
+    };
+    /** 주기가 지나지 않아 보지 않은 Provider (정책 3301-④) */
+    notDue: { provider: string; nextAt: string }[];
     created: PricingProposalDto[];
-    /** 이미 진행 중인 제안이 있어 만들지 않은 항목 */
     skipped: string[];
     checked: number;
     detail: string;
   }> {
+    const now = new Date();
     const windowHours = options.windowHours ?? PRICE_DETECTION_WINDOW_HOURS;
-    const since = new Date(Date.now() - windowHours * 60 * 60 * 1000);
+    const since = new Date(now.getTime() - windowHours * 60 * 60 * 1000);
     const [ocrRows, llmRows, pricing, applied] = await Promise.all([
       this.prisma.ocrResult.findMany({
         where: { status: "SUCCESS", createdAt: { gte: since } },
@@ -529,7 +617,7 @@ export class PricingService implements OnModuleInit {
     const inForceFrom: { llm: Record<string, string>; ocr: Record<string, string> } =
       { llm: {}, ocr: {} };
     for (const row of applied) {
-      if (row.effectiveFrom.getTime() > Date.now()) {
+      if (row.effectiveFrom.getTime() > now.getTime()) {
         continue; // 아직 발효되지 않은 예약분
       }
       const iso = row.effectiveFrom.toISOString();
@@ -540,14 +628,46 @@ export class PricingService implements OnModuleInit {
       }
     }
 
+    // ── Provider별 주기 (CTO 정책 3301-④) ──
+    // 프로젝트별 설정은 거부한다 — 단가는 Provider와의 계약이다.
+    const providers = [
+      ...new Set([
+        ...ocrRows.map((row) => row.provider),
+        ...Object.keys(pricing.ocr),
+      ]),
+    ].sort();
+    const { intervals } = resolveDetectionIntervals(process.env, providers);
+    const lastRuns = await this.lastDetectionRuns(providers);
+    const notDue: { provider: string; nextAt: string }[] = [];
+    const dueProviders = new Set<string>();
+    for (const interval of intervals) {
+      const lastRunAt = lastRuns.get(interval.provider) ?? null;
+      if (
+        options.force === true ||
+        shouldDetectProvider({ lastRunAt, intervalMs: interval.intervalMs, now })
+      ) {
+        dueProviders.add(interval.provider);
+        continue;
+      }
+      // 돌지 않은 것도 사실이다 — 조용한 것과 안 본 것은 다르다
+      notDue.push({
+        provider: interval.provider,
+        nextAt: new Date(
+          lastRunAt!.getTime() + interval.intervalMs,
+        ).toISOString(),
+      });
+    }
+
     const result = detectPriceChanges({
-      ocr: ocrRows.map((row) => ({
-        id: row.id,
-        provider: row.provider,
-        units: row.units,
-        cost: row.cost === null ? null : Number(row.cost),
-        createdAt: row.createdAt.toISOString(),
-      })),
+      ocr: ocrRows
+        .filter((row) => dueProviders.has(row.provider))
+        .map((row) => ({
+          id: row.id,
+          provider: row.provider,
+          units: row.units,
+          cost: row.cost === null ? null : Number(row.cost),
+          createdAt: row.createdAt.toISOString(),
+        })),
       llm: llmRows.map((row) => ({
         id: row.id,
         provider: row.provider,
@@ -561,53 +681,290 @@ export class PricingService implements OnModuleInit {
       inForceFrom,
     });
 
+    // ── 외부 가격 공지 (CTO 정책 3301-①) ──
+    // **파싱 실패는 "변경 없음"이 아니다** — 판정을 그대로 담아 올린다.
+    const verdict: PriceSourceVerdict = this.source
+      ? await this.source.fetch()
+      : {
+          status: "unconfigured",
+          prices: [],
+          unparsed: [],
+          needsHumanCheck: true,
+          detail:
+            "가격 공지 어댑터가 없습니다 — 공지 대조 없이는 Provider의 단가 변경을 우리 기록만으로 알 수 없습니다.",
+        };
+    const published = comparePublishedPrices({
+      published: verdict.prices,
+      effective: { llm: pricing.llm, ocr: pricing.ocr },
+    });
+
     const created: PricingProposalDto[] = [];
     const skipped: string[] = [];
-    for (const change of result.changes) {
-      const open = await this.prisma.pricingProposal.findFirst({
-        where: {
-          target: change.target,
-          key: change.key,
-          stage: { in: OPEN_STAGES },
+
+    // **공지 대조를 먼저 처리한다** (TASK-3301) — 같은 항목에 두 근거가 함께
+    // 잡히면 하나만 남는데(중복 방지), 남겨야 할 것은 **공지**다: 공지는
+    // Provider가 밝힌 단가와 발효 시각을 들고 있고, 기록 불일치는 그 결과일
+    // 뿐이다. 순서를 반대로 두면 강한 근거가 약한 근거에 밀린다.
+    for (const change of published) {
+      const proposal = await this.createDetected({
+        target: change.target,
+        key: change.key,
+        price: change.published as unknown as Record<string, number>,
+        currentPrice:
+          change.current === null
+            ? null
+            : (change.current as unknown as Record<string, number>),
+        reason: change.reason,
+        origin: "published",
+        evidence: {
+          source: "published",
+          url: this.source?.url ?? null,
+          // 공지가 밝힌 발효 시각 — 적용할 때 사람이 그대로 쓸 수 있다
+          publishedEffectiveFrom: change.effectiveFrom,
         },
       });
-      if (open !== null) {
-        // 이미 사람이 봐야 할 제안이 있다 — 같은 것을 또 만들지 않는다
+      if (proposal === null) {
         skipped.push(`${change.target}/${change.key}`);
         continue;
       }
-      const record = await this.prisma.pricingProposal.create({
-        data: {
-          target: change.target,
-          key: change.key,
-          price: change.impliedPrice as Prisma.InputJsonValue,
-          currentPrice: change.currentPrice as Prisma.InputJsonValue,
-          reason: change.reason,
-          origin: "detected",
-          stage: startStage("detected"),
-          // **제안자는 사람이 아니다** — null로 남긴다. 사람 이름을 적으면
-          // 자동화가 만든 제안을 그 사람이 낸 것으로 읽는다
-          proposedBy: null,
-          evidence: change.evidence as unknown as Prisma.InputJsonValue,
-        },
-      });
-      created.push(this.toDto(record));
-      this.logger.warn(
-        `단가 변경 감지: ${change.target}/${change.key} ` +
-          `$${change.currentPrice.perUnitUsd} → $${change.impliedPrice.perUnitUsd} ` +
-          `(표본 ${change.samples}건) — 제안을 등록했습니다. 승인 후 적용됩니다 (정책 3201-①).`,
-      );
+      created.push(proposal);
     }
 
+    // 기록 대조로 감지된 변경 → 제안 (같은 항목에 공지 제안이 있으면 건너뛴다)
+    for (const change of result.changes) {
+      const proposal = await this.createDetected({
+        target: change.target,
+        key: change.key,
+        price: change.impliedPrice as unknown as Record<string, number>,
+        currentPrice: change.currentPrice as unknown as Record<string, number>,
+        reason: change.reason,
+        origin: "detected",
+        evidence: change.evidence as unknown as Record<string, unknown>,
+      });
+      if (proposal === null) {
+        skipped.push(`${change.target}/${change.key}`);
+        continue;
+      }
+      created.push(proposal);
+    }
+
+    // ── 실행 이력 (CTO 정책 3301-④) ──
+    // 0건도 사실이다. 이 기록이 없으면 "감지 0건"과 "감지를 안 돌렸다"를
+    // 구분할 수 없다.
+    await this.recordDetectionRuns({
+      now,
+      dueProviders: [...dueProviders],
+      notDue,
+      changes: result.changes,
+      publishedChanges: published,
+      ocrSamples: ocrRows.length,
+      llmSamples: llmRows.length,
+      sourceDetail: verdict.detail,
+      sourceStatus: verdict.status,
+    });
+
     return {
-      ...result,
+      changes: result.changes,
+      unresolved: result.unresolved,
+      published,
+      source: {
+        status: verdict.status,
+        needsHumanCheck: verdict.needsHumanCheck,
+        unparsed: verdict.unparsed,
+        detail: verdict.detail,
+      },
+      notDue,
       created,
       skipped,
+      checked: result.checked,
       detail:
-        `${result.detail} 제안 ${created.length}건 등록` +
+        `${result.detail} 공지 ${verdict.status}` +
+        (published.length > 0 ? ` · 공지 대조 ${published.length}건` : "") +
+        ` · 제안 ${created.length}건 등록` +
         (skipped.length > 0
           ? ` · 이미 진행 중인 제안이 있어 건너뜀 ${skipped.length}건 (${skipped.join(", ")})`
+          : "") +
+        (notDue.length > 0
+          ? ` · 주기 미도래 ${notDue.length}건 (${notDue.map((entry) => entry.provider).join(", ")})`
+          : "") +
+        (verdict.needsHumanCheck
+          ? " — 가격 공지는 사람 확인이 필요합니다 (CTO 정책 3301-①)."
           : ""),
+    };
+  }
+
+  /**
+   * 감지된 변경을 제안으로 만든다 — 이미 진행 중이면 만들지 않고 null.
+   *
+   * **제안자는 `null`**입니다: 사람 이름을 적으면 자동화가 만든 제안을 그
+   * 사람이 낸 것으로 읽습니다.
+   */
+  private async createDetected(input: {
+    target: PricingTarget;
+    key: string;
+    price: Record<string, number>;
+    currentPrice: Record<string, number> | null;
+    reason: string;
+    origin: PricingOrigin;
+    evidence: Record<string, unknown>;
+  }): Promise<PricingProposalDto | null> {
+    const open = await this.prisma.pricingProposal.findFirst({
+      where: {
+        target: input.target,
+        key: input.key,
+        stage: { in: OPEN_STAGES },
+      },
+    });
+    if (open !== null) {
+      // 이미 사람이 봐야 할 제안이 있다 — 같은 것을 또 만들지 않는다
+      return null;
+    }
+    const record = await this.prisma.pricingProposal.create({
+      data: {
+        target: input.target,
+        key: input.key,
+        price: input.price as Prisma.InputJsonValue,
+        ...(input.currentPrice === null
+          ? {}
+          : { currentPrice: input.currentPrice as Prisma.InputJsonValue }),
+        reason: input.reason,
+        origin: input.origin,
+        stage: startStage(input.origin),
+        proposedBy: null,
+        evidence: input.evidence as Prisma.InputJsonValue,
+      },
+    });
+    this.logger.warn(
+      `단가 변경 감지(${input.origin}): ${input.target}/${input.key} — ` +
+        "제안을 등록했습니다. 승인 후 적용됩니다 (CTO 정책 3201-① · 3301-②).",
+    );
+    return this.toDto(record);
+  }
+
+  /** Provider별 마지막 감지 시각 (정책 3301-④) */
+  private async lastDetectionRuns(
+    providers: string[],
+  ): Promise<Map<string, Date>> {
+    const rows = await this.prisma.priceDetectionRun.findMany({
+      where: { provider: { in: providers }, skipped: null },
+      orderBy: { ranAt: "desc" },
+      take: 200,
+      select: { provider: true, ranAt: true },
+    });
+    const last = new Map<string, Date>();
+    for (const row of rows) {
+      if (!last.has(row.provider)) {
+        last.set(row.provider, row.ranAt);
+      }
+    }
+    return last;
+  }
+
+  /** 감지 실행을 남긴다 — 0건도, 건너뛴 것도 기록이다 (정책 3301-④) */
+  private async recordDetectionRuns(input: {
+    now: Date;
+    dueProviders: string[];
+    notDue: { provider: string; nextAt: string }[];
+    changes: DetectedPriceChange[];
+    publishedChanges: PublishedPriceChange[];
+    ocrSamples: number;
+    llmSamples: number;
+    sourceStatus: string;
+    sourceDetail: string;
+  }): Promise<void> {
+    const rows: Prisma.PriceDetectionRunCreateManyInput[] = [];
+    for (const provider of input.dueProviders) {
+      const changes = input.changes.filter(
+        (change) => change.key === provider,
+      ).length;
+      rows.push({
+        target: "ocr",
+        provider,
+        source: "records",
+        ranAt: input.now,
+        samples: input.ocrSamples,
+        changes,
+        detail:
+          changes > 0
+            ? `기록 대조에서 단가 불일치 ${changes}건을 찾았습니다.`
+            : "기록과 가격표가 일치합니다.",
+      });
+    }
+    for (const entry of input.notDue) {
+      rows.push({
+        target: "ocr",
+        provider: entry.provider,
+        source: "records",
+        ranAt: input.now,
+        samples: 0,
+        changes: 0,
+        // 돌지 않은 것도 기록이다 — 이것이 없으면 "조용했다"로 읽힌다
+        skipped: `주기가 지나지 않았습니다 (다음: ${entry.nextAt})`,
+        detail: "이번 회차는 건너뛰었습니다 (CTO 정책 3301-④).",
+      });
+    }
+    // 공지 대조는 Provider별이 아니라 한 번이다 — 목록 하나를 읽는다
+    rows.push({
+      target: "llm",
+      provider: "pricing-feed",
+      source: "published",
+      ranAt: input.now,
+      samples: input.publishedChanges.length,
+      changes: input.publishedChanges.length,
+      ...(input.sourceStatus === "ok" || input.sourceStatus === "partial"
+        ? {}
+        : { skipped: `공지를 읽지 못했습니다 (${input.sourceStatus})` }),
+      detail: input.sourceDetail,
+    });
+
+    await this.prisma.priceDetectionRun
+      .createMany({ data: rows })
+      .catch((error: unknown) => {
+        // 이력 기록 실패가 감지를 실패시키지는 않는다 — 다만 조용하지 않다
+        this.logger.warn(`감지 실행 이력 기록 실패: ${String(error)}`);
+      });
+  }
+
+  /** 감지 현황 (Provider별 주기·마지막 실행) — 정책 3301-④ */
+  async detectionStatus(): Promise<PricingDetectionStatusDto> {
+    const pricing = await this.effective();
+    const providers = Object.keys(pricing.ocr).sort();
+    const { intervals, rejected } = resolveDetectionIntervals(
+      process.env,
+      providers,
+    );
+    const lastRuns = await this.lastDetectionRuns(providers);
+    const recent = await this.prisma.priceDetectionRun.findMany({
+      orderBy: { ranAt: "desc" },
+      take: 20,
+    });
+    return {
+      providers: intervals.map((interval) => {
+        const lastRunAt = lastRuns.get(interval.provider) ?? null;
+        return {
+          provider: interval.provider,
+          intervalMs: interval.intervalMs,
+          source: interval.source,
+          env: interval.env,
+          lastRunAt: lastRunAt?.toISOString() ?? null,
+          nextAt:
+            lastRunAt === null
+              ? null
+              : new Date(lastRunAt.getTime() + interval.intervalMs).toISOString(),
+        };
+      }),
+      rejected,
+      recent: recent.map((row) => ({
+        id: row.id,
+        target: row.target === "llm" ? "llm" : "ocr",
+        provider: row.provider,
+        source: row.source,
+        ranAt: row.ranAt.toISOString(),
+        samples: row.samples,
+        changes: row.changes,
+        skipped: row.skipped,
+        detail: row.detail,
+      })),
     };
   }
 
@@ -767,10 +1124,19 @@ export class PricingService implements OnModuleInit {
       reviewedAt: record.reviewedAt?.toISOString() ?? null,
       approvedBy: record.approvedBy,
       approvedAt: record.approvedAt?.toISOString() ?? null,
+      confirmedBy: record.confirmedBy,
+      confirmedAt: record.confirmedAt?.toISOString() ?? null,
+      // 운영의 시스템 제안은 최종 승인이 남았다 (CTO 정책 3301-②)
+      needsSecondApproval:
+        stage === "APPROVED" &&
+        requiresSecondApproval(origin, this.environment),
       appliedBy: record.appliedBy,
       appliedAt: record.appliedAt?.toISOString() ?? null,
       effectiveFrom: effectiveFrom?.toISOString() ?? null,
       scheduled,
+      cancelledBy: record.cancelledBy,
+      cancelledAt: record.cancelledAt?.toISOString() ?? null,
+      cancelledReason: record.cancelledReason,
       rejectedBy: record.rejectedBy,
       rejectedAt: record.rejectedAt?.toISOString() ?? null,
       rejectedReason: record.rejectedReason,
@@ -789,6 +1155,9 @@ export class PricingService implements OnModuleInit {
         price: price as unknown as ProposedPrice,
         currentPrice: currentPrice as unknown as ProposedPrice | null,
         effectiveFrom,
+        needsSecondApproval:
+          stage === "APPROVED" &&
+          requiresSecondApproval(origin, this.environment),
         now,
       }),
       createdAt: record.createdAt.toISOString(),

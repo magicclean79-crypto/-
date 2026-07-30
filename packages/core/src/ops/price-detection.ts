@@ -64,6 +64,144 @@ export const PRICE_DETECTION_MIN_SAMPLES = 5;
  */
 export const PRICE_DETECTION_MIN_RELATIVE_DIFF = 0.01;
 
+/**
+ * 감지 주기 기본값. (TASK-3301, CTO 정책 3301-④)
+ *
+ * **6시간**입니다. Provider 단가는 자주 바뀌지 않고, 더 자주 보면 같은 제안을
+ * 두고 경보만 반복됩니다.
+ */
+export const DEFAULT_DETECTION_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * Provider별 주기 환경변수 이름.
+ *
+ * `google-vision` → `PRICE_DETECT_INTERVAL_GOOGLE_VISION`
+ */
+export function detectionIntervalEnvName(provider: string): string {
+  return `PRICE_DETECT_INTERVAL_${provider
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")}`;
+}
+
+/**
+ * **프로젝트별 설정은 금지합니다** (CTO 정책 3301-④).
+ *
+ * 단가는 Provider와의 계약이지 프로젝트의 속성이 아닙니다. 프로젝트마다 주기를
+ * 다르게 두면 ⓐ 같은 Provider를 어떤 프로젝트는 6시간, 어떤 프로젝트는 하루마다
+ * 보게 되어 **"언제 마지막으로 봤는가"에 답이 여러 개**가 되고 ⓑ 프로젝트가
+ * 늘 때마다 감지 부하가 곱해집니다.
+ *
+ * 그런 이름의 설정이 있으면 **조용히 무시하지 않고 거부 사유를 남깁니다** —
+ * 무시하면 설정한 사람은 적용된 줄 압니다.
+ */
+export const PROJECT_SCOPED_PATTERN = /PROJECT/i;
+
+export interface DetectionInterval {
+  provider: string;
+  intervalMs: number;
+  /** 값의 출처 (표시용) */
+  source: "env" | "default";
+  env: string;
+}
+
+export interface DetectionIntervalResolution {
+  intervals: DetectionInterval[];
+  /** 받아들이지 않은 설정 — 조용히 버리지 않는다 */
+  rejected: { name: string; reason: string }[];
+}
+
+/** `6h`·`30m`·밀리초 숫자를 밀리초로 (schedule.ts와 같은 규칙) */
+function parseInterval(value: string | undefined): number | null {
+  if (value === undefined || value.trim() === "") {
+    return null;
+  }
+  const match = /^(\d+(?:\.\d+)?)(ms|s|m|h|d)?$/.exec(value.trim().toLowerCase());
+  if (!match) {
+    return null;
+  }
+  const unit = match[2] ?? "ms";
+  const factor =
+    unit === "d"
+      ? 86_400_000
+      : unit === "h"
+        ? 3_600_000
+        : unit === "m"
+          ? 60_000
+          : unit === "s"
+            ? 1000
+            : 1;
+  const result = Number(match[1]) * factor;
+  return Number.isFinite(result) && result > 0 ? Math.round(result) : null;
+}
+
+/**
+ * Provider별 감지 주기를 해석한다. (CTO 정책 3301-④)
+ *
+ * **Provider별 설정만 허용하고 프로젝트별 설정은 거부합니다.** 해석할 수 없는
+ * 값도 거부 사유를 남기고 기본값으로 돕니다 — 잘못 적은 값 때문에 감지가
+ * 멈추는 것보다 기본 주기로 도는 편이 안전합니다.
+ */
+export function resolveDetectionIntervals(
+  env: Record<string, string | undefined>,
+  providers: string[],
+): DetectionIntervalResolution {
+  const rejected: { name: string; reason: string }[] = [];
+  const PREFIX = "PRICE_DETECT_INTERVAL_";
+
+  // 프로젝트별 설정 시도를 먼저 잡는다 — 무시하면 설정한 사람은 적용된 줄 안다
+  for (const name of Object.keys(env)) {
+    if (
+      name.startsWith(PREFIX) &&
+      PROJECT_SCOPED_PATTERN.test(name.slice(PREFIX.length))
+    ) {
+      rejected.push({
+        name,
+        reason:
+          "프로젝트별 감지 주기는 지원하지 않습니다 (CTO 정책 3301-④) — 단가는 " +
+          "Provider와의 계약이지 프로젝트의 속성이 아닙니다. Provider별로 설정하세요.",
+      });
+    }
+  }
+
+  const intervals = providers.map((provider) => {
+    const name = detectionIntervalEnvName(provider);
+    const raw = env[name];
+    const parsed = parseInterval(raw);
+    if (raw !== undefined && raw.trim() !== "" && parsed === null) {
+      rejected.push({
+        name,
+        reason: `주기를 해석할 수 없습니다: ${raw} (예: 6h · 30m · 21600000) — 기본값으로 돕니다.`,
+      });
+    }
+    return {
+      provider,
+      intervalMs: parsed ?? DEFAULT_DETECTION_INTERVAL_MS,
+      source: parsed === null ? ("default" as const) : ("env" as const),
+      env: name,
+    };
+  });
+
+  return { intervals, rejected };
+}
+
+/**
+ * 지금 이 Provider를 볼 차례인가.
+ *
+ * 한 번도 보지 않았으면 **본다** — "아직 안 봤다"와 "봤는데 조용했다"는 다르고,
+ * 전자를 미루면 첫 감지가 영영 오지 않습니다.
+ */
+export function shouldDetectProvider(input: {
+  lastRunAt: Date | null;
+  intervalMs: number;
+  now: Date;
+}): boolean {
+  if (input.lastRunAt === null) {
+    return true;
+  }
+  return input.now.getTime() - input.lastRunAt.getTime() >= input.intervalMs;
+}
+
 /** OCR 실행 1건 (감지 입력) */
 export interface OcrPriceSample {
   id: string;

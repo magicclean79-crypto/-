@@ -35,6 +35,8 @@ export const ALERT_KINDS = [
   "pricing-drift",
   // 월말 비용 예측 (TASK-3201, CTO 정책 3201-④) — **경보만** 낸다, 차단은 없다
   "cost-forecast",
+  // 외부 가격 공지 (TASK-3301, CTO 정책 3301-①) — 못 읽은 것은 "변경 없음"이 아니다
+  "price-source",
 ] as const;
 
 export type AlertKind = (typeof ALERT_KINDS)[number];
@@ -279,6 +281,47 @@ export function detectPricingDriftAlerts(input: {
     });
   }
   return alerts;
+}
+
+/**
+ * Price Source Alert — 외부 가격 공지를 읽지 못했다. (TASK-3301, CTO 정책 3301-①)
+ *
+ * **파싱 실패를 "변경 없음"으로 처리하지 않습니다.** 못 읽은 것과 바뀐 것이
+ * 없는 것은 완전히 다른 사실입니다 — 조용히 지나가면 화면은 "변경 없음"으로
+ * 보이고, 사람은 확인했다고 믿고, 단가는 낡은 채로 돈이 나갑니다.
+ *
+ * 그래서 **사람의 확인을 요구하는 경보**를 냅니다. 다만 **미구성은 실패가
+ * 아니므로**(아직 안 붙인 것) 경보 문구가 그 차이를 밝힙니다.
+ */
+export function detectPriceSourceAlerts(input: {
+  status: string;
+  needsHumanCheck: boolean;
+  unparsedCount: number;
+  detail: string;
+}): DetectedAlert[] {
+  if (!input.needsHumanCheck) {
+    return [];
+  }
+  // 미구성은 "아직 안 붙임"이다 — 실패와 같은 무게로 부르면 진짜 실패가 묻힌다
+  const unconfigured = input.status === "unconfigured";
+  return [
+    {
+      kind: "price-source",
+      // 상태별로 키를 나누지 않는다 — 같은 사안(공지를 못 본다)이 여러 경보로
+      // 흩어지면 "지금 무엇이 문제인가"를 한눈에 볼 수 없다
+      key: "price-source:pricing-feed",
+      level: "warning",
+      title: unconfigured
+        ? "가격 공지가 설정되지 않았습니다"
+        : `가격 공지를 읽지 못했습니다 (${input.status})`,
+      message:
+        input.detail +
+        (input.unparsedCount > 0
+          ? ` 해석하지 못한 항목 ${input.unparsedCount}건은 목록에 남아 있습니다.`
+          : "") +
+        " 사람이 공지를 직접 확인해 주세요 (CTO 정책 3301-①).",
+    },
+  ];
 }
 
 /**
@@ -580,6 +623,8 @@ export const ALERT_COOLDOWN_ENV: Record<AlertKind, string> = {
   "pricing-drift": "ALERT_COOLDOWN_PRICING_DRIFT_MS",
   // 예측은 하루 단위 사안이다 (권장: ALERT_COOLDOWN_FORECAST_MS=86400000)
   "cost-forecast": "ALERT_COOLDOWN_FORECAST_MS",
+  // 공지를 못 읽는 상태는 사람이 고칠 때까지 이어진다
+  "price-source": "ALERT_COOLDOWN_PRICE_SOURCE_MS",
 };
 
 /** 전체 기본값 환경변수 (종류별 값이 없을 때) */
