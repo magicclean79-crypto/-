@@ -1,6 +1,8 @@
 import { Injectable, Logger } from "@nestjs/common";
 import {
   LLM_PROVIDER_REGISTRY,
+  ROLLOUT_EVIDENCE_WINDOW_DAYS,
+  judgeProviderRollout,
   monitorProduction,
   pricedModels,
   providerKeyRequired,
@@ -13,6 +15,7 @@ import type {
   CostVerificationDto,
   LlmHealthDto,
   ProductionMonitorDto,
+  ProviderRolloutDto,
   ProviderValidationDto,
   ProviderValidationReportDto,
 } from "@acos/shared";
@@ -237,4 +240,75 @@ export class ProviderProductionService {
       checkedAt: new Date().toISOString(),
     };
   }
+  /**
+   * Provider 연결 순서 현황 (TASK-2901, CTO 결정 2801-⑤).
+   *
+   * **연결됨의 근거는 선언이 아니라 사실입니다** — 그 Provider로 성공한
+   * 실행 기록이 있어야 `connected`입니다. 키 형식만 맞는 상태는
+   * `unverified`(모르는 것)로 남습니다: 형식 검사는 오타를 잡을 뿐이고,
+   * 그것을 연결 완료로 세면 **붙지 않은 시스템이 붙은 것처럼 보고**됩니다.
+   *
+   * 진단 호출(Live Check)의 성공도 근거로 셉니다 — 실제로 키가 통했다는
+   * 증거이기 때문입니다(비용 통계에서 분리하는 것과는 다른 판단입니다).
+   */
+  async rollout(): Promise<ProviderRolloutDto> {
+    // 근거에는 기한이 있다 — 2년 전 성공으로 "지금도 붙어 있다"고 말할 수 없다
+    const since = new Date(
+      Date.now() - ROLLOUT_EVIDENCE_WINDOW_DAYS * 24 * 60 * 60 * 1000,
+    );
+    const [llmGroups, visionSuccesses, ocrGroups] = await Promise.all([
+      this.prisma.execution.groupBy({
+        by: ["provider"],
+        where: {
+          status: "SUCCESS",
+          provider: { not: "mock" },
+          createdAt: { gte: since },
+        },
+        _count: { _all: true },
+      }),
+      this.prisma.execution.count({
+        where: {
+          status: "SUCCESS",
+          feature: "vision-analysis",
+          provider: { not: "mock" },
+          createdAt: { gte: since },
+        },
+      }),
+      this.prisma.ocrResult.groupBy({
+        by: ["provider"],
+        where: {
+          status: "SUCCESS",
+          provider: { not: "mock" },
+          createdAt: { gte: since },
+        },
+        _count: { _all: true },
+      }),
+    ]);
+
+    const judged = judgeProviderRollout({
+      env: process.env as Record<string, string | undefined>,
+      llmSuccesses: countByProvider(llmGroups),
+      visionSuccesses,
+      ocrSuccesses: countByProvider(ocrGroups),
+    });
+
+    return {
+      order: judged.order,
+      stages: judged.stages,
+      next: judged.next,
+      outOfOrder: judged.outOfOrder,
+      summary: judged.summary,
+      detail: judged.detail,
+      checkedAt: new Date().toISOString(),
+    };
+  }
+}
+
+/** groupBy 결과를 { provider: 성공 수 }로 — 없는 Provider는 키가 없다 */
+function countByProvider(
+  groups: { provider: string; _count: { _all: number } }[],
+): Record<string, number> {
+  return Object.fromEntries(
+    groups.map((group) => [group.provider, group._count._all]),
+  );
 }

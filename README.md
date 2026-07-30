@@ -522,6 +522,33 @@ TASK-1302가 남긴 두 부채를 갚습니다: **예약 점검의 인스턴스�
 | `POST` | `/ops/backup/verify-restore` | **지금 복원 검증 (ADMIN)** |
 | `POST` | `/ops/notifications/verify-smtp` | **메일 경로 확인 (ADMIN)** |
 
+## Enterprise AI Provider 운영 연결 (TASK-2901, Sprint 29)
+
+CTO 결정 2801-①~⑤ 반영 — 주제는 **실 Provider를 순서대로 붙이고, 붙었는지를
+사실로 확인하는 것**입니다. 확정된 순서는 **OpenAI → Anthropic → Gemini →
+Vision → OCR**입니다(결정 2801-⑤).
+
+- **연결 순서를 값으로 둡니다**: `/ops/providers`(ADMIN)가 단계별 상태와
+  **다음에 붙일 단계**를 알려줍니다. 순서가 문서에만 있으면 "지금 어디까지
+  붙었는가"에 아무도 답할 수 없습니다
+- **`unverified`를 `connected`로 세지 않습니다**: 키 형식이 맞다는 것은 오타가
+  없다는 뜻일 뿐입니다. `connected`의 근거는 **성공한 실행 기록**이고, 그
+  근거에는 기한(최근 30일)이 있습니다 — 2년 전 성공으로 "지금도 붙어 있다"고
+  말할 수 없습니다
+- **OCR 운영 표준 엔진을 붙였습니다**: `OCR_PROVIDER=google-vision`
+  (Google Cloud Vision `images:annotate`). 신뢰도를 **지어내지 않고**(주지
+  않으면 `null`), 오류를 **한 덩어리로 뭉치지 않습니다**(키·할당량·장애·이미지
+  문제는 사람이 할 일이 전혀 다릅니다)
+- **조용히 mock으로 대체하지 않습니다**: 그전에는 `OCR_PROVIDER=google`(오타)이
+  경고 한 줄만 남기고 **가짜 OCR로 운영을 돌렸습니다.** 이제 운영에서는 기동이
+  중단됩니다 — 이미지에서 읽지도 않은 텍스트로 조립된 상품이 검수를 통과하는
+  것이 가장 위험한 조용한 실패입니다
+- **Vision은 별도 키가 없습니다**: LLM Gateway를 그대로 타므로 앞 세 단계 중
+  하나가 붙어 있어야 합니다. `VISION_PROVIDER`는 더 이상 읽지 않고, 값이 남아
+  있으면 환경 검증이 그 사실을 경고합니다
+
+절차: [provider-rollout.md](docs/operations/provider-rollout.md)
+
 ## Enterprise 거버넌스 지능화 (TASK-2801, Sprint 28)
 
 CTO 결정 2701-①~⑤ 반영 — 주제는 **경보가 어디를 봐야 할지 말해 주는 것**입니다.

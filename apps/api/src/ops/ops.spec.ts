@@ -565,6 +565,8 @@ interface Overrides {
   budget?: Record<string, unknown>;
   validation?: Record<string, unknown>;
   monitor?: Record<string, unknown>;
+  /** Provider 연결 순서 (TASK-2901) */
+  rollout?: Record<string, unknown>;
 }
 
 /** 저장소 스텁 상태 (TASK-1701) — 테스트마다 바꿔 쓴다 */
@@ -615,6 +617,29 @@ async function build(overrides: Overrides = {}) {
       blockers: [],
       checkedAt: new Date().toISOString(),
       ...overrides.validation,
+    }),
+    // Provider 연결 순서 (TASK-2901) — 실제 판정은 core·llm 스펙에서 본다.
+    // 여기서는 컨트롤러가 이 값을 그대로 내보내는지만 확인한다.
+    rollout: async () => ({
+      order: ["openai", "anthropic", "gemini", "vision", "ocr"],
+      stages: [
+        {
+          stage: "openai",
+          order: 1,
+          title: "OpenAI",
+          status: "not-configured",
+          detail: "OPENAI_API_KEY가 없습니다 — 아직 붙이지 않은 상태입니다(실패가 아닙니다).",
+          done: false,
+          env: ["OPENAI_API_KEY"],
+          evidence: null,
+        },
+      ],
+      next: "openai",
+      outOfOrder: [],
+      summary: { connected: 0, total: 5 },
+      detail: "연결 완료 0/5단계 — 다음 단계는 OpenAI입니다.",
+      checkedAt: new Date().toISOString(),
+      ...overrides.rollout,
     }),
     monitor: async () => ({
       status: "healthy",
@@ -3464,6 +3489,43 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
         expect(alert.title).toContain("proj-a");
         expect(alert.title).not.toContain("**");
       });
+    });
+  });
+
+  describe("Enterprise AI Provider Production Platform (TASK-2901)", () => {
+    it("GET /ops/providers — 연결 순서와 다음 단계를 돌려준다", async () => {
+      const built = await build();
+      app = built.app;
+
+      const response = await request(built.app.getHttpServer())
+        .get("/ops/providers")
+        .set("Authorization", "Bearer tok-admin")
+        .expect(200);
+
+      // 확정된 순서가 응답에 그대로 담긴다 (CTO 결정 2801-⑤)
+      expect(response.body.order).toEqual([
+        "openai",
+        "anthropic",
+        "gemini",
+        "vision",
+        "ocr",
+      ]);
+      expect(response.body.next).toBe("openai");
+      expect(response.body.summary).toEqual({ connected: 0, total: 5 });
+      // 미구성을 실패로 말하지 않는다
+      expect(response.body.stages[0].detail).toContain("실패가 아닙니다");
+    });
+
+    it("ADMIN 전용이다 — 키 상태가 드러나는 화면이다", async () => {
+      const built = await build();
+      app = built.app;
+      const server = built.app.getHttpServer();
+
+      await request(server).get("/ops/providers").expect(401);
+      await request(server)
+        .get("/ops/providers")
+        .set("Authorization", "Bearer tok-editor")
+        .expect(403);
     });
   });
 });

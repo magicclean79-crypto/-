@@ -31,6 +31,10 @@ const PRODUCTION_ENV: Record<string, string> = {
   BACKUP_RESTORE_DB_URL: "postgresql://user:pw@db:5432/acos_restore_check",
   // 백업 원격 복제 (TASK-1701) — 없으면 호스트와 함께 백업도 사라진다
   BACKUP_OFFSITE: "on",
+  // OCR 엔진 (TASK-2901, CTO 결정 2801-⑤) — 운영 기준선에 들어왔다.
+  // 그전에는 최소 구성이 곧 "가짜 OCR로 도는 구성"이었고 아무 경고도 없었다.
+  OCR_PROVIDER: "google-vision",
+  GOOGLE_VISION_API_KEY: "AIzaSyA-abcdefghijklmnopqrstuvwxyz012",
 };
 
 describe("Environment Validation (TASK-1202)", () => {
@@ -94,6 +98,45 @@ describe("Environment Validation (TASK-1202)", () => {
         result.warnings.find((issue) => issue.name === "AUTH_COOKIE_SECURE")
           ?.message,
       ).toContain("평문");
+    });
+
+    it("운영에서 OCR이 mock이면 경고한다 (TASK-2901, CTO 결정 2801-⑤)", () => {
+      // 가짜 OCR로 조립된 상품이 검수를 통과하는 것이 가장 위험한 조용한
+      // 실패다 — 배포를 막지는 않지만(경보와 차단은 다르다) 말은 한다
+      const { OCR_PROVIDER, GOOGLE_VISION_API_KEY, ...rest } = PRODUCTION_ENV;
+      void OCR_PROVIDER;
+      void GOOGLE_VISION_API_KEY;
+
+      const result = validateEnvironment(rest);
+      expect(result.ok).toBe(true);
+      expect(result.warnings.map((issue) => issue.name)).toContain(
+        "OCR_PROVIDER",
+      );
+      expect(
+        result.warnings.find((issue) => issue.name === "OCR_PROVIDER")!.message,
+      ).toContain("사실이 아닙니다");
+    });
+
+    it("개발용 OCR 엔진은 운영 표준이 아니라고 알린다 (CTO 결정 2401-⑤)", () => {
+      const result = validateEnvironment({
+        ...PRODUCTION_ENV,
+        OCR_PROVIDER: "tesseract",
+      });
+      expect(
+        result.warnings.find((issue) => issue.name === "OCR_PROVIDER")!.message,
+      ).toContain("개발용 선택 엔진");
+    });
+
+    it("더 이상 읽지 않는 VISION_PROVIDER는 조용히 무시하지 않는다", () => {
+      // 값이 남아 있으면 운영자는 그 엔진이 쓰인다고 믿는다
+      const result = validateEnvironment({
+        ...PRODUCTION_ENV,
+        VISION_PROVIDER: "mock",
+      });
+      expect(
+        result.warnings.find((issue) => issue.name === "VISION_PROVIDER")!
+          .message,
+      ).toContain("더 이상 읽지 않습니다");
     });
 
     it("예산·Failover 미설정은 운영에서만 경고한다", () => {

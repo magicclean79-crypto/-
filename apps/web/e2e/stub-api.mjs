@@ -1795,6 +1795,82 @@ const server = http.createServer((req, res) => {
     );
     return;
   }
+  // ── Provider 연결 순서 (TASK-2901, CTO 결정 2801-⑤) ── ADMIN 전용
+  if (url.pathname === "/ops/providers") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    // OpenAI만 연결된 상태 — 다음 단계는 Anthropic이고, OCR은 가짜가 돈다
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify({
+        order: ["openai", "anthropic", "gemini", "vision", "ocr"],
+        stages: [
+          {
+            stage: "openai",
+            order: 1,
+            title: "OpenAI",
+            status: "connected",
+            detail: "실 호출 성공 기록이 12건 있습니다 — 연결이 사실로 확인됐습니다.",
+            done: true,
+            env: ["OPENAI_API_KEY"],
+            evidence: "실 호출 성공 12건",
+          },
+          {
+            stage: "anthropic",
+            order: 2,
+            title: "Anthropic",
+            status: "unverified",
+            detail:
+              "ANTHROPIC_API_KEY 형식은 확인했지만 성공한 실 호출 기록이 없습니다 — 실제로 붙는지는 아직 모릅니다.",
+            done: false,
+            env: ["ANTHROPIC_API_KEY"],
+            evidence: null,
+          },
+          {
+            stage: "gemini",
+            order: 3,
+            title: "Google Gemini",
+            status: "not-configured",
+            detail: "GEMINI_API_KEY가 없습니다 — 아직 붙이지 않은 상태입니다(실패가 아닙니다).",
+            done: false,
+            env: ["GEMINI_API_KEY"],
+            evidence: null,
+          },
+          {
+            stage: "vision",
+            order: 4,
+            title: "Vision (멀티모달 이미지 분석)",
+            status: "connected",
+            detail: "openai로 vision-analysis 성공 기록이 3건 있습니다.",
+            done: true,
+            env: ["LLM_PROVIDER", "LLM_MODEL_VISION"],
+            evidence: "vision-analysis 성공 3건",
+          },
+          {
+            stage: "ocr",
+            order: 5,
+            title: "OCR (이미지 텍스트 추출)",
+            status: "mock",
+            detail:
+              "OCR_PROVIDER가 mock입니다 — 이미지에서 실제로 글자를 읽지 않고 가짜 텍스트를 만듭니다.",
+            done: false,
+            env: ["OCR_PROVIDER", "GOOGLE_VISION_API_KEY"],
+            evidence: null,
+          },
+        ],
+        next: "anthropic",
+        outOfOrder: ["vision"],
+        summary: { connected: 2, total: 5 },
+        detail:
+          "연결 완료 2/5단계 — 다음 단계는 Anthropic입니다. 확정 순서보다 먼저 붙은 단계가 있습니다: Vision (멀티모달 이미지 분석) — 막지는 않습니다.",
+        checkedAt: new Date().toISOString(),
+      }),
+    );
+    return;
+  }
   // ── 운영 자동화·경보 (TASK-1302) ── ADMIN 전용
   if (
     url.pathname === "/ops/alerts" ||

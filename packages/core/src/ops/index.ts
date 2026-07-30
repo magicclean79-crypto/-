@@ -13,3 +13,4 @@ export * from "./backup-integrity";
 export * from "./major-migrations";
 export * from "./storage-provisioning";
 export * from "./migration-governance";
+export * from "./provider-rollout";

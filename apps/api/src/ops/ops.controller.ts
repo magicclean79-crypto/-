@@ -29,11 +29,13 @@ import type {
   NotificationQueueStatusDto,
   DrillRequirementDto,
   OperationsReadinessDto,
+  ProviderRolloutDto,
   RecoveryDrillDto,
   RemoteVerifyResultDto,
   SmtpValidationDto,
 } from "@acos/shared";
 import { AuthGuard, RequireRole } from "../auth/auth.guard";
+import { ProviderProductionService } from "../llm/provider-production.service";
 import { StorageService } from "../storage/storage.service";
 import { AlertService } from "./alert.service";
 import { BackupService } from "./backup.service";
@@ -65,7 +67,24 @@ export class OpsController {
     private readonly locks: DistributedLockService,
     private readonly storage: StorageService,
     private readonly recovery: RecoveryEvaluationService,
+    // Provider 연결 순서 (TASK-2901, CTO 결정 2801-⑤)
+    private readonly providers: ProviderProductionService,
   ) {}
+
+  /**
+   * Provider 연결 순서 현황 (TASK-2901, CTO 결정 2801-⑤).
+   *
+   * 확정된 순서(OpenAI → Anthropic → Gemini → Vision → OCR)의 단계별 상태와
+   * **다음에 붙일 단계**를 돌려준다.
+   *
+   * 판정에서 가장 중요한 것은 `unverified`를 `connected`로 세지 않는 것이다 —
+   * 키 형식이 맞다는 것은 오타가 없다는 뜻일 뿐이고, 그것을 연결 완료로 세면
+   * 붙지 않은 시스템이 붙은 것처럼 보고된다.
+   */
+  @Get("providers")
+  async providerRollout(): Promise<ProviderRolloutDto> {
+    return this.providers.rollout();
+  }
 
   /**
    * Operations Dashboard · Disaster Recovery Checklist (TASK-1601).

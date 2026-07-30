@@ -2027,6 +2027,48 @@ export interface DrillAutoRegistrationDto {
   detail: string;
 }
 
+/**
+ * Provider 연결 순서 현황 (GET /ops/providers · TASK-2901, CTO 결정 2801-⑤).
+ *
+ * 확정된 순서는 OpenAI → Anthropic → Gemini → Vision → OCR입니다.
+ */
+export interface ProviderRolloutStageDto {
+  stage: string;
+  /** 1부터 시작하는 순서 */
+  order: number;
+  title: string;
+  /**
+   * `connected`(성공 기록 있음) · `unverified`(**모르는 것**) ·
+   * `invalid` · `not-configured`(아직 안 붙임 — 실패가 아니다) ·
+   * `mock`(가짜가 돌고 있다) · `dev-only`(개발용 엔진)
+   */
+  status:
+    | "connected"
+    | "unverified"
+    | "invalid"
+    | "not-configured"
+    | "mock"
+    | "dev-only";
+  detail: string;
+  /** `connected`만 true */
+  done: boolean;
+  env: string[];
+  /** `connected` 판정의 근거 (없으면 null) */
+  evidence: string | null;
+}
+
+export interface ProviderRolloutDto {
+  order: string[];
+  stages: ProviderRolloutStageDto[];
+  /** 지금 붙일 단계 — 전부 끝났으면 null */
+  next: string | null;
+  /** 앞 단계보다 먼저 붙은 단계 — 차단하지 않는다 */
+  outOfOrder: string[];
+  summary: { connected: number; total: number };
+  detail: string;
+  checkedAt: string;
+}
+
 /** 운영 대시보드 (GET /ops/readiness) */
 export interface OperationsReadinessDto {
   /** critical 항목이 전부 통과하면 true */

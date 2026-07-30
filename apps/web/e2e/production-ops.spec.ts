@@ -273,3 +273,55 @@ test.describe("Provider 운영 점검 (TASK-1301)", () => {
     );
   });
 });
+
+test.describe("Provider 연결 순서 (TASK-2901, CTO 결정 2801-⑤)", () => {
+  test("단계별 상태와 다음 단계를 한 화면에 보여준다", async ({ page }) => {
+    await setMode("data");
+    await openPage(page);
+
+    const section = page.getByTestId("provider-rollout");
+    await expect(section).toBeVisible();
+    // 확정된 순서가 화면 순서다
+    await expect(page.getByTestId("rollout-stage")).toHaveCount(5);
+    await expect(page.getByTestId("rollout-progress")).toContainText(
+      "2/5 연결됨",
+    );
+
+    // 다음에 붙일 단계를 **글자로** 밝힌다 — 색만으로 구분하지 않는다
+    await expect(page.getByTestId("rollout-next")).toHaveText("다음 단계");
+    await expect(
+      page.getByTestId("rollout-stage").nth(1),
+    ).toContainText("Anthropic");
+  });
+
+  test("모르는 것을 연결됨으로 보여주지 않는다", async ({ page }) => {
+    await setMode("data");
+    await openPage(page);
+
+    const stages = page.getByTestId("rollout-stage");
+    // 형식만 맞는 단계는 "확인 안 됨" — 초록(연결됨)이 아니다
+    await expect(stages.nth(1)).toContainText("확인 안 됨");
+    await expect(stages.nth(1)).toContainText("아직 모릅니다");
+    // 미구성은 실패가 아니라고 말한다
+    await expect(stages.nth(2)).toContainText("미구성");
+    await expect(stages.nth(2)).toContainText("실패가 아닙니다");
+    // 가짜가 돌고 있으면 그 사실을 말한다
+    await expect(stages.nth(4)).toContainText("가짜(mock)");
+    await expect(stages.nth(4)).toContainText("가짜 텍스트");
+  });
+
+  test("연결됨에는 근거가 붙고, 순서 이탈은 막지 않는다고 말한다", async ({
+    page,
+  }) => {
+    await setMode("data");
+    await openPage(page);
+
+    // 연결됨의 근거는 선언이 아니라 성공 기록이다
+    await expect(page.getByTestId("rollout-stage").first()).toContainText(
+      "근거: 실 호출 성공 12건",
+    );
+    await expect(page.getByTestId("rollout-out-of-order")).toContainText(
+      "막지는 않습니다",
+    );
+  });
+});

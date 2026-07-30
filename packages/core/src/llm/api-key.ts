@@ -63,6 +63,12 @@ const KEY_RULES: Record<string, KeyRule> = {
   },
   // Gemini 키는 고정 접두사가 없다 — 길이만 본다
   gemini: { minLength: 20, shape: "20자 이상" },
+  // Google Cloud Vision(OCR, TASK-2901) — Google API 키 관례: `AIza` + 35자
+  "google-vision": {
+    prefix: "AIza",
+    minLength: 30,
+    shape: "`AIza`로 시작하는 30자 이상",
+  },
 };
 
 /** 키 앞부분만 보여 준다 (값 노출 금지) */

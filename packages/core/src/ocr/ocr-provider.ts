@@ -22,8 +22,15 @@ export interface OcrProvider {
 export interface OcrRecognition {
   /** 추출된 전체 텍스트 */
   text: string;
-  /** 신뢰도 0.0 ~ 1.0 */
-  confidence: number;
+  /**
+   * 신뢰도 0.0 ~ 1.0 — **Provider가 주지 않으면 `null`** (TASK-2901).
+   *
+   * 엔진마다 신뢰도를 주는지가 다릅니다(Google Cloud Vision의 텍스트 감지는
+   * 응답에 따라 없을 수 있습니다). 그때 **1.0으로 채우면 "확신한다"는 거짓**이
+   * 되고, **0으로 채우면 실패처럼 읽힙니다** — 둘 다 뒤쪽 READY 검수의 판단을
+   * 왜곡합니다. 모르면 `null`로 둡니다(평균 신뢰도 계산이 이미 null을 제외합니다).
+   */
+  confidence: number | null;
   /** Provider 원본 응답 (JSON 직렬화 가능해야 함) */
   raw: unknown;
 }

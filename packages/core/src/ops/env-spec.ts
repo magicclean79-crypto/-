@@ -261,6 +261,72 @@ export const ENV_SPECS: EnvSpec[] = [
         : `API 키 형식 문제 — ${result.message}`;
     },
   },
+  // ── OCR·Vision 엔진 (TASK-2901, CTO 결정 2801-⑤) ─────────
+  // 그전에는 OCR 엔진 선택이 **어느 화면에도 없었다** — 운영에서 가짜 OCR이
+  // 돌고 있어도 아무도 알 수 없었다.
+  {
+    name: "OCR_PROVIDER",
+    category: "llm",
+    description:
+      "OCR 엔진 (mock · tesseract(개발용) · google-vision(운영 표준))",
+    validate: oneOf(["mock", "tesseract", "google-vision"]),
+    fallback: "mock (이미지에서 글자를 읽지 않고 가짜 텍스트를 만든다)",
+    productionAdvice: (value) => {
+      const name = (value ?? "mock").trim().toLowerCase();
+      if (name === "mock") {
+        return "운영 환경인데 OCR_PROVIDER가 mock입니다 — 가짜 텍스트로 조립된 상품은 사실이 아닙니다. google-vision을 붙이세요.";
+      }
+      if (name === "tesseract") {
+        return "tesseract는 개발용 선택 엔진입니다 (CTO 결정 2401-⑤) — 운영 표준은 google-vision입니다.";
+      }
+      return null;
+    },
+  },
+  {
+    name: "GOOGLE_VISION_API_KEY",
+    category: "llm",
+    description: "Google Cloud Vision API 키 (OCR_PROVIDER=google-vision이면 필수)",
+    secret: true,
+    requiredWhen: (env) =>
+      (env.OCR_PROVIDER ?? "").trim().toLowerCase() === "google-vision",
+    validate: (value) => {
+      const result = validateApiKeyFormat("google-vision", value);
+      return result.status === "ok" || result.status === "missing"
+        ? null
+        : `API 키 형식 문제 — ${result.message}`;
+    },
+  },
+  {
+    name: "GOOGLE_VISION_ENDPOINT",
+    category: "llm",
+    description:
+      "Google Cloud Vision 엔드포인트 (스테이징 프록시·계약 검증용 — 평소에는 지정하지 않는다)",
+    validate: urlLike,
+    fallback: "https://vision.googleapis.com/v1/images:annotate",
+    // 키는 쿼리에 실려 나간다 — 엔드포인트를 바꿔 두면 키가 그곳으로 간다
+    productionAdvice: (value) =>
+      value && !value.startsWith("https://vision.googleapis.com/")
+        ? "운영에서 GOOGLE_VISION_ENDPOINT가 공식 주소가 아닙니다 — API 키가 그 주소로 전송됩니다. 의도한 프록시인지 확인하세요."
+        : null,
+  },
+  {
+    name: "OCR_LANGUAGE_HINTS",
+    category: "llm",
+    description: "google-vision 언어 힌트 (쉼표 구분, 예: ko,en)",
+    fallback: "ko,en",
+  },
+  {
+    name: "VISION_PROVIDER",
+    category: "llm",
+    description:
+      "[사용 안 함] Vision은 별도 엔진이 아니라 LLM Gateway를 탑니다 — LLM_PROVIDER를 쓰세요",
+    fallback: "무시됨",
+    // 값이 남아 있으면 운영자는 그 엔진이 쓰인다고 믿는다 — 조용히 무시하면 안 된다
+    productionAdvice: (value) =>
+      value
+        ? "VISION_PROVIDER는 더 이상 읽지 않습니다 — Vision은 LLM_PROVIDER와 LLM_MODEL_VISION을 따릅니다 (TASK-0505)."
+        : null,
+  },
   {
     name: "LLM_DAILY_BUDGET_USD",
     category: "llm",

@@ -24,7 +24,13 @@ interface ExecutionRow {
 }
 
 interface FindManyArgs {
-  where?: { createdAt?: { gte?: Date }; status?: string; diagnostic?: boolean };
+  where?: {
+    createdAt?: { gte?: Date };
+    status?: string;
+    diagnostic?: boolean;
+    feature?: string;
+    provider?: { not?: string };
+  };
 }
 
 const ORIGINAL_ENV = { ...process.env };
@@ -34,19 +40,47 @@ async function build(options: {
   available?: string[];
   diagnosticCount?: number;
   health?: (provider: string) => Promise<unknown>;
+  /** Provider별 성공 실행 수 (TASK-2901 연결 순서 판정 근거) */
+  llmSuccesses?: Record<string, number>;
+  visionSuccesses?: number;
+  ocrSuccesses?: Record<string, number>;
 }) {
   const calls: FindManyArgs[] = [];
   const countCalls: FindManyArgs[] = [];
+  const groupByCalls: FindManyArgs[] = [];
+  /**
+   * groupBy는 **조건을 실제로 본다** (TASK-2901): mock 제외·SUCCESS 조건을
+   * 무시하면 "실패한 호출도 연결 근거로 세는" 결함이 검증되지 않는다.
+   */
+  const groupOf = (source: Record<string, number>, args: FindManyArgs) =>
+    Object.entries(source)
+      .filter(([provider]) => provider !== args.where?.provider?.not)
+      .map(([provider, count]) => ({ provider, _count: { _all: count } }));
+
   const prisma = {
     execution: {
       findMany: async (args: FindManyArgs) => {
         calls.push(args);
         return options.rows ?? [];
       },
-      // 진단 호출 수 (TASK-1302, CTO 결정 1301-③)
+      // 진단 호출 수 (TASK-1302, CTO 결정 1301-③) /
+      // vision-analysis 성공 수 (TASK-2901) — 조건으로 가른다
       count: async (args: FindManyArgs) => {
         countCalls.push(args);
+        if (args.where?.feature === "vision-analysis") {
+          return options.visionSuccesses ?? 0;
+        }
         return options.diagnosticCount ?? 0;
+      },
+      groupBy: async (args: FindManyArgs) => {
+        groupByCalls.push(args);
+        return groupOf(options.llmSuccesses ?? {}, args);
+      },
+    },
+    ocrResult: {
+      groupBy: async (args: FindManyArgs) => {
+        groupByCalls.push(args);
+        return groupOf(options.ocrSuccesses ?? {}, args);
       },
     },
   };
@@ -78,6 +112,7 @@ async function build(options: {
     service: moduleRef.get(ProviderProductionService),
     calls,
     countCalls,
+    groupByCalls,
   };
 }
 
@@ -297,6 +332,84 @@ describe("Provider Production API (TASK-1301)", () => {
       expect(result.status).toBe("unknown");
       expect(result.totals.calls).toBe(0);
       expect(result.windowMinutes).toBe(60);
+    });
+  });
+
+  describe("Provider 연결 순서 (TASK-2901, CTO 결정 2801-⑤)", () => {
+    const OPENAI_KEY = `sk-${"a".repeat(30)}`;
+    const GOOGLE_KEY = `AIza${"c".repeat(31)}`;
+
+    it("성공 기록이 없으면 연결됨으로 세지 않는다", async () => {
+      process.env.OPENAI_API_KEY = OPENAI_KEY;
+      const { service } = await build({});
+
+      const rollout = await service.rollout();
+      const openai = rollout.stages.find((stage) => stage.stage === "openai")!;
+      expect(openai.status).toBe("unverified");
+      expect(rollout.summary).toEqual({ connected: 0, total: 5 });
+      expect(rollout.next).toBe("openai");
+    });
+
+    it("성공 기록이 있으면 연결됨이고 근거가 붙는다", async () => {
+      process.env.OPENAI_API_KEY = OPENAI_KEY;
+      const { service } = await build({ llmSuccesses: { openai: 4 } });
+
+      const rollout = await service.rollout();
+      const openai = rollout.stages.find((stage) => stage.stage === "openai")!;
+      expect(openai.status).toBe("connected");
+      expect(openai.evidence).toBe("최근 30일 실 호출 성공 4건");
+      expect(rollout.next).toBe("anthropic");
+    });
+
+    it("근거를 셀 때 실패 호출과 mock을 제외한다", async () => {
+      // 실패한 호출이나 mock 호출을 근거로 세면 붙지 않은 것이 붙은 것으로 보인다
+      const { groupByCalls, service } = await build({});
+      await service.rollout();
+
+      for (const call of groupByCalls) {
+        expect(call.where?.status).toBe("SUCCESS");
+        expect(call.where?.provider).toEqual({ not: "mock" });
+        // 근거에는 기한이 있다 (최근 30일)
+        expect(call.where?.createdAt?.gte).toBeInstanceOf(Date);
+      }
+    });
+
+    it("Vision 근거는 vision-analysis 성공 수로 센다", async () => {
+      process.env.LLM_PROVIDER = "openai";
+      process.env.OPENAI_API_KEY = OPENAI_KEY;
+      const { service, countCalls } = await build({ visionSuccesses: 2 });
+
+      const rollout = await service.rollout();
+      const vision = rollout.stages.find((stage) => stage.stage === "vision")!;
+      expect(vision.status).toBe("connected");
+      expect(
+        countCalls.some((call) => call.where?.feature === "vision-analysis"),
+      ).toBe(true);
+    });
+
+    it("OCR 근거는 OCR 실행 이력에서 센다", async () => {
+      process.env.OCR_PROVIDER = "google-vision";
+      process.env.GOOGLE_VISION_API_KEY = GOOGLE_KEY;
+      const { service } = await build({
+        ocrSuccesses: { "google-vision": 1 },
+      });
+
+      const ocr = (await service.rollout()).stages.find(
+        (stage) => stage.stage === "ocr",
+      )!;
+      expect(ocr.status).toBe("connected");
+      expect(ocr.evidence).toBe("최근 30일 OCR 실행 성공 1건");
+    });
+
+    it("어떤 상태에서도 키 값이 새지 않는다", async () => {
+      process.env.OPENAI_API_KEY = OPENAI_KEY;
+      process.env.OCR_PROVIDER = "google-vision";
+      process.env.GOOGLE_VISION_API_KEY = GOOGLE_KEY;
+      const { service } = await build({});
+
+      const payload = JSON.stringify(await service.rollout());
+      expect(payload).not.toContain(OPENAI_KEY);
+      expect(payload).not.toContain(GOOGLE_KEY);
     });
   });
 });

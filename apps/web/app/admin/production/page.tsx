@@ -10,6 +10,7 @@ import type {
   CostVerificationDto,
   MonitorStatusDto,
   ProductionMonitorDto,
+  ProviderRolloutDto,
   ProviderValidationReportDto,
 } from "@acos/shared";
 import { authFetchInit } from "../../../lib/auth-client";
@@ -29,6 +30,34 @@ const FORMAT_STYLE: Record<ApiKeyFormatStatusDto, string> = {
   invalid: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300",
   placeholder:
     "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300",
+};
+
+/**
+ * Provider 연결 순서 (TASK-2901, CTO 결정 2801-⑤).
+ *
+ * `unverified`를 "연결됨"으로 보여 주지 않는다 — 키 형식이 맞다는 것은
+ * 오타가 없다는 뜻일 뿐이고, 그것을 연결 완료로 보여 주면 **붙지 않은
+ * 시스템이 붙은 것처럼** 읽힌다.
+ */
+const ROLLOUT_LABEL: Record<ProviderRolloutDto["stages"][number]["status"], string> = {
+  connected: "연결됨",
+  unverified: "확인 안 됨",
+  invalid: "형식 오류",
+  "not-configured": "미구성",
+  mock: "가짜(mock)",
+  "dev-only": "개발용 엔진",
+};
+
+const ROLLOUT_STYLE: Record<ProviderRolloutDto["stages"][number]["status"], string> = {
+  connected:
+    "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
+  // 모르는 것은 정상(초록)도 실패(빨강)도 아니다
+  unverified: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
+  invalid: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300",
+  // 미구성은 실패가 아니다 — 회색으로 둔다
+  "not-configured": "bg-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
+  mock: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300",
+  "dev-only": "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
 };
 
 const MONITOR_LABEL: Record<MonitorStatusDto, string> = {
@@ -89,6 +118,7 @@ export default function ProductionOpsPage() {
   const [monitor, setMonitor] = useState<ProductionMonitorDto | null>(null);
   const [board, setBoard] = useState<AlertBoardDto | null>(null);
   const [queue, setQueue] = useState<NotificationQueueStatusDto | null>(null);
+  const [rollout, setRollout] = useState<ProviderRolloutDto | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [liveRunning, setLiveRunning] = useState(false);
@@ -115,16 +145,27 @@ export default function ProductionOpsPage() {
       setLoading(true);
     }
     try {
-      const [nextValidation, nextCost, nextMonitor, nextBoard, nextQueue] =
-        await Promise.all([
-          get<ProviderValidationReportDto>(
-            `/llm/providers/validate${live ? "?live=1" : ""}`,
-          ),
-          get<CostVerificationDto>("/llm/cost-verification?hours=24"),
-          get<ProductionMonitorDto>("/llm/monitoring?minutes=60"),
-          get<AlertBoardDto>("/ops/alerts"),
-          get<NotificationQueueStatusDto>("/ops/notifications/queue"),
-        ]);
+      const [
+        nextValidation,
+        nextCost,
+        nextMonitor,
+        nextBoard,
+        nextQueue,
+        nextRollout,
+      ] = await Promise.all([
+        get<ProviderValidationReportDto>(
+          `/llm/providers/validate${live ? "?live=1" : ""}`,
+        ),
+        get<CostVerificationDto>("/llm/cost-verification?hours=24"),
+        get<ProductionMonitorDto>("/llm/monitoring?minutes=60"),
+        get<AlertBoardDto>("/ops/alerts"),
+        get<NotificationQueueStatusDto>("/ops/notifications/queue"),
+        // Provider 연결 순서 (TASK-2901)
+        get<ProviderRolloutDto>("/ops/providers"),
+      ]);
+      if (nextRollout) {
+        setRollout(nextRollout);
+      }
       if (nextValidation) {
         setError(null);
         setValidation(nextValidation);
@@ -518,6 +559,85 @@ export default function ProductionOpsPage() {
                 </li>
               ))}
             </ul>
+          ) : null}
+        </section>
+      ) : null}
+
+      {rollout ? (
+        <section
+          data-testid="provider-rollout"
+          className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-lg font-semibold">Provider 연결 순서</h2>
+            <span
+              data-testid="rollout-progress"
+              className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                rollout.summary.connected === rollout.summary.total
+                  ? ROLLOUT_STYLE.connected
+                  : ROLLOUT_STYLE.unverified
+              }`}
+            >
+              {rollout.summary.connected}/{rollout.summary.total} 연결됨
+            </span>
+          </div>
+          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+            {rollout.detail}
+          </p>
+
+          <ol data-testid="rollout-stages" className="mt-3 space-y-2 text-sm">
+            {rollout.stages.map((stage) => (
+              <li
+                key={stage.stage}
+                data-testid="rollout-stage"
+                className={`rounded-lg border p-3 ${
+                  stage.stage === rollout.next
+                    ? "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40"
+                    : "border-zinc-200 dark:border-zinc-800"
+                }`}
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-mono text-xs text-zinc-400">
+                    {stage.order}
+                  </span>
+                  <span className="font-medium">{stage.title}</span>
+                  <span
+                    data-testid="rollout-status"
+                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${ROLLOUT_STYLE[stage.status]}`}
+                  >
+                    {ROLLOUT_LABEL[stage.status]}
+                  </span>
+                  {/* 다음에 붙일 단계를 글자로 밝힌다 — 색만으로 구분하지 않는다 */}
+                  {stage.stage === rollout.next ? (
+                    <span
+                      data-testid="rollout-next"
+                      className="text-xs font-medium text-amber-700 dark:text-amber-400"
+                    >
+                      다음 단계
+                    </span>
+                  ) : null}
+                </div>
+                <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+                  {stage.detail}
+                </p>
+                <p className="mt-1 text-xs text-zinc-400">
+                  설정: {stage.env.join(" · ")}
+                  {/* 연결됨의 근거는 선언이 아니라 사실이다 */}
+                  {stage.evidence ? ` · 근거: ${stage.evidence}` : ""}
+                </p>
+              </li>
+            ))}
+          </ol>
+
+          {/* 순서를 벗어난 진행은 사실만 말하고 막지 않는다 */}
+          {rollout.outOfOrder.length > 0 ? (
+            <p
+              data-testid="rollout-out-of-order"
+              className="mt-3 text-xs text-amber-700 dark:text-amber-400"
+            >
+              확정 순서보다 먼저 붙은 단계: {rollout.outOfOrder.join(", ")} —
+              막지는 않습니다.
+            </p>
           ) : null}
         </section>
       ) : null}
