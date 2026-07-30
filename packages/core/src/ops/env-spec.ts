@@ -482,8 +482,15 @@ export const ENV_SPECS: EnvSpec[] = [
     name: "PRICE_SOURCE_FORMAT_<PROVIDER>",
     category: "ops",
     description:
-      "공지 본문 형식 (acos | flat). 모르는 값이면 그 소스를 읽지 않고 사유를 남긴다 — 짐작으로 읽은 단가는 못 읽은 단가보다 위험하다",
+      "공지 본문 형식 (acos | flat | csv). 모르는 값이면 그 소스를 읽지 않고 사유를 남긴다 — 짐작으로 읽은 단가는 못 읽은 단가보다 위험하다",
     fallback: "acos",
+  },
+  {
+    // 소스가 책임지는 단가 (TASK-3501, CTO 지시 5)
+    name: "PRICE_SOURCE_KEYS_<PROVIDER>",
+    category: "ops",
+    description:
+      "이 공지가 책임지는 단가 키 (쉼표 구분, 예: gpt-4o,gpt-4o-mini). 선언하면 그 공지가 죽었을 때 어떤 단가를 확인하지 못했는지 말할 수 있다",
   },
   {
     name: "PRICE_SOURCE_TOKEN_<PROVIDER>",

@@ -8,6 +8,7 @@ import { AlertService } from "./alert.service";
 import { BackupService } from "./backup.service";
 import { CostIntelligenceService } from "./cost-intelligence.service";
 import { CiStatusService } from "./ci-status.service";
+import { EgressService } from "./egress.service";
 import { ProductionCutoverService } from "./production-cutover.service";
 import { MigrationGovernanceService } from "./migration-governance.service";
 import { RecoveryDrillService } from "./recovery-drill.service";
@@ -47,6 +48,7 @@ import { ScheduledChecksService } from "./scheduled-checks.service";
     MigrationGovernanceService,
     CostIntelligenceService,
     CiStatusService,
+    EgressService,
     ProductionCutoverService,
   ],
   exports: [
@@ -61,6 +63,7 @@ import { ScheduledChecksService } from "./scheduled-checks.service";
     MigrationGovernanceService,
     CostIntelligenceService,
     CiStatusService,
+    EgressService,
     ProductionCutoverService,
   ],
 })

@@ -52,6 +52,8 @@ const CUTOVER_LABEL: Record<ProductionCutoverDto["dependencies"][number]["status
   unverified: "확인 안 됨",
   "not-configured": "미구성",
   invalid: "설정 오류",
+  // 자격 증명 이전의 문제 (TASK-3501) — 키가 틀린 것과 길이 막힌 것은 다르다
+  unreachable: "닿지 못함",
 };
 
 const CUTOVER_STYLE: Record<ProductionCutoverDto["dependencies"][number]["status"], string> = {
@@ -64,6 +66,7 @@ const CUTOVER_STYLE: Record<ProductionCutoverDto["dependencies"][number]["status
   "not-configured":
     "bg-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
   invalid: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300",
+  unreachable: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300",
 };
 
 const ROLLOUT_LABEL: Record<ProviderRolloutDto["stages"][number]["status"], string> = {
@@ -640,6 +643,68 @@ export default function ProductionOpsPage() {
             인정합니다 — 오래전 한 번의 성공으로 지금도 붙어 있다고 말할 수
             없습니다.
           </p>
+
+          {/*
+            지금 해야 할 **한 가지** (TASK-3501 — CTO 지시 6).
+            항목 넷을 나란히 두면 사람은 "그래서 뭐부터?"에서 멈춘다.
+            남은 것 중 첫 번째를 골라 크게 보여 준다.
+          */}
+          {!cutover.ready ? (
+            <div
+              data-testid="cutover-next"
+              className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm dark:border-amber-900 dark:bg-amber-950"
+            >
+              <p className="font-medium">지금 할 일</p>
+              <p className="mt-1 text-zinc-700 dark:text-zinc-300">
+                {(() => {
+                  const next = cutover.dependencies.find(
+                    (row) => row.status !== "verified",
+                  );
+                  return next
+                    ? `${next.title} — ${next.next}`
+                    : "남은 항목이 없습니다.";
+                })()}
+              </p>
+            </div>
+          ) : null}
+
+          {/*
+            도달 점검 (TASK-3501 — CTO 지시 2·3).
+            키가 틀린 것과 길이 막힌 것은 다르다. 둘 다 "호출 실패"로 보이면
+            사람은 있지도 않은 키 문제를 몇 시간씩 찾는다.
+          */}
+          {cutover.egress.length > 0 ? (
+            <ul
+              data-testid="cutover-egress"
+              className="mt-3 space-y-1 text-xs text-zinc-600 dark:text-zinc-400"
+            >
+              {cutover.egress.map((probe) => (
+                <li key={probe.host}>
+                  {/*
+                    세 상태를 갈라 말한다 — 403은 "닿지 못함"이 아니라
+                    "누가 막았는지 모름"이다. 모르는 것을 막혔다고 말하면
+                    사람은 방화벽을 뒤지다 시간을 버린다.
+                  */}
+                  <span
+                    className={
+                      probe.status === "reachable"
+                        ? "text-emerald-700 dark:text-emerald-400"
+                        : probe.status === "ambiguous"
+                          ? "text-amber-700 dark:text-amber-400"
+                          : "text-red-700 dark:text-red-400"
+                    }
+                  >
+                    {probe.status === "reachable"
+                      ? "닿음"
+                      : probe.status === "ambiguous"
+                        ? "가릴 수 없음"
+                        : "닿지 못함"}
+                  </span>{" "}
+                  {probe.host} — {probe.detail}
+                </li>
+              ))}
+            </ul>
+          ) : null}
 
           <ul data-testid="cutover-items" className="mt-3 space-y-2 text-sm">
             {cutover.dependencies.map((row) => (

@@ -1,5 +1,6 @@
 /**
  * 운영 전환 검증. (TASK-3401, Sprint 34 — CTO 지시 4·5·6)
+ * 도달 점검 추가 (TASK-3501, Sprint 35 — CTO 지시 2·3)
  *
  * ## 이 파일이 막으려는 것: 스텁을 진짜로 세는 것
  *
@@ -21,9 +22,15 @@
  * | `unverified` | 설정은 됐는데 **성공 기록이 없다** — 붙는지 모른다 |
  * | `not-configured` | 아직 붙이지 않았다 — 실패가 아니다 |
  * | `invalid` | 설정이 잘못됐다 |
+ * | `unreachable` | 공식 주소에 **닿지 못한다** — 자격 증명 이전의 문제다 |
  *
  * **`not-production`을 `verified`로 세지 않습니다.** 이 한 줄이 이 파일의
  * 전부입니다.
+ *
+ * `unreachable`을 따로 둔 이유(TASK-3501): 키가 틀린 것과 길이 막힌 것은 완전히
+ * 다른 사실인데, 둘 다 "호출 실패"로 보이면 사람은 **있지도 않은 키 문제**를
+ * 몇 시간씩 찾습니다. 실제로 이 환경에서 `api.openai.com`이 프록시에 막혀
+ * 있었고, 그 사실은 키를 넣어 보기 전에는 드러나지 않았을 것입니다.
  */
 
 import type { CiRunJudgement, CiWorkflowJudgement } from "./ci-workflow";
@@ -114,7 +121,15 @@ export type CutoverStatus =
   | "not-production"
   | "unverified"
   | "not-configured"
-  | "invalid";
+  | "invalid"
+  /**
+   * 공식 주소에 **닿지 못한다** (TASK-3501 — CTO 지시 2).
+   *
+   * 설정 이전의 문제입니다. 키가 틀린 것과 길이 막힌 것은 완전히 다른
+   * 사실인데, 둘 다 "호출 실패"로 보이면 사람은 **있지도 않은 키 문제**를
+   * 몇 시간씩 찾습니다. 그래서 따로 둡니다.
+   */
+  | "unreachable";
 
 export type CutoverDependencyId = "llm" | "vision" | "storage" | "ci";
 
@@ -165,6 +180,41 @@ const LLM_PROVIDERS: Record<
 export const GOOGLE_VISION_OFFICIAL_HOST = "vision.googleapis.com";
 export const AWS_S3_OFFICIAL_HOST = "amazonaws.com";
 
+/**
+ * 공식 주소 도달 점검 결과 (TASK-3501 — CTO 지시 2).
+ *
+ * **자격 증명 이전의 조건입니다.** 키를 받아 넣어도 방화벽·프록시가 그 주소를
+ * 막고 있으면 전환은 되지 않고, 그때 나오는 오류는 키 문제처럼 보입니다.
+ */
+export type EgressStatus =
+  /** 그 호스트가 응답했다 — 인증 실패(401)도 닿은 것이다 */
+  | "reachable"
+  /** 연결 자체가 되지 않았다 (거부·타임아웃·터널 실패) */
+  | "blocked"
+  /**
+   * 403이 왔다 — **누가 막았는지 알 수 없다.**
+   *
+   * Provider가 거절한 것일 수도, 중간 프록시가 막은 것일 수도 있습니다.
+   * 실제로 이 프로젝트의 검증 환경에서 `api.openai.com`의 403은 **프록시가**
+   * 막은 것이었는데, 처음 판정은 그것을 "닿음"으로 셌습니다. 구분할 수 없는
+   * 것을 구분한 척하지 않고 모른다고 말합니다.
+   */
+  | "ambiguous";
+
+export interface EgressProbe {
+  host: string;
+  status: EgressStatus;
+  /**
+   * 닿았는가 — `reachable`일 때만 참입니다.
+   *
+   * `ambiguous`는 **참이 아닙니다**: 모르는 것을 닿는다고 말하지 않습니다.
+   * 다만 막혔다고도 말하지 않으므로 판정을 `unreachable`로 바꾸지도 않습니다.
+   */
+  reachable: boolean;
+  /** 응답 상태 또는 오류 설명 */
+  detail: string;
+}
+
 export interface CutoverInput {
   env: Record<string, string | undefined>;
   /** LLM Provider별 최근 성공한 실 호출 수 */
@@ -175,6 +225,21 @@ export interface CutoverInput {
   storage: { reachable: boolean; bucketExists: boolean; detail: string } | null;
   /** CI 파일·실행 판정 — 모르면 null */
   ci: { workflow: CiWorkflowJudgement; runs: CiRunJudgement } | null;
+  /**
+   * 공식 주소 도달 점검 (TASK-3501) — 안 했으면 빈 배열.
+   *
+   * **점검하지 않은 것을 "닿는다"로 보지 않습니다.** 빈 배열이면 이 판정을
+   * 쓰지 않을 뿐이고, 막혀 있다고 말하지도 않습니다.
+   */
+  egress?: EgressProbe[];
+}
+
+/** 이 호스트가 막혀 있는가 — 점검하지 않았으면 null(모름) */
+function egressOf(
+  input: CutoverInput,
+  host: string,
+): EgressProbe | null {
+  return input.egress?.find((probe) => probe.host === host) ?? null;
 }
 
 function judgeLlm(input: CutoverInput): CutoverDependency {
@@ -213,11 +278,17 @@ function judgeLlm(input: CutoverInput): CutoverDependency {
   const env = [...base.env, spec.keyEnv, ...(spec.baseUrlEnv ? [spec.baseUrlEnv] : [])];
   const key = input.env[spec.keyEnv];
   if (key === undefined || key.trim() === "") {
+    const blocked = egressOf(input, spec.official[0]);
+    const isBlocked = blocked !== null && blocked.status === "blocked";
     return {
       ...base,
       env,
       status: "not-configured",
-      detail: `${spec.keyEnv}가 없습니다 — 아직 붙이지 않은 상태입니다(실패가 아닙니다).`,
+      detail:
+        `${spec.keyEnv}가 없습니다 — 아직 붙이지 않은 상태입니다(실패가 아닙니다).` +
+        (isBlocked
+          ? ` 덧붙여 ${spec.official[0]}에 닿지도 못합니다 (${blocked!.detail}) — 키를 넣어도 이 길이 열리기 전까지는 붙지 않습니다.`
+          : ""),
       evidence: null,
       next: `${spec.keyEnv}를 설정하세요.`,
     };
@@ -241,6 +312,33 @@ function judgeLlm(input: CutoverInput): CutoverDependency {
           : ""),
       evidence: null,
       next: `${spec.baseUrlEnv}를 비워 공식 주소로 되돌린 뒤 다시 확인하세요.`,
+    };
+  }
+
+  // 길이 막혀 있으면 키 이야기를 하기 전에 그것부터 말한다 (TASK-3501)
+  const reach = egressOf(input, spec.official[0]);
+  if (reach !== null && reach.status === "ambiguous") {
+    return {
+      ...base,
+      env,
+      status: "unverified",
+      // 점검 문구가 이미 "가릴 수 없습니다"를 말한다 — 되풀이하지 않는다
+      // (TASK-3401에서 같은 겹침을 라이브에서 보고 고쳤다)
+      detail: `${spec.official[0]} 도달 점검: ${reach.detail}`,
+      evidence: null,
+      next: "실제 호출을 1회 돌려 응답 본문이 Provider의 것인지 확인하세요.",
+    };
+  }
+  if (reach !== null && reach.status === "blocked") {
+    return {
+      ...base,
+      env,
+      status: "unreachable",
+      detail:
+        `${spec.official[0]}에 닿지 못합니다 — ${reach.detail}. 키가 틀린 것이 아니라 ` +
+        "길이 막혀 있습니다. 이 상태에서 나오는 호출 실패는 키 문제처럼 보이지만 아닙니다.",
+      evidence: null,
+      next: `방화벽·프록시에서 ${spec.official[0]} 아웃바운드를 열어 주세요.`,
     };
   }
 
@@ -300,10 +398,16 @@ function judgeVision(input: CutoverInput): CutoverDependency {
 
   const key = input.env.GOOGLE_VISION_API_KEY;
   if (key === undefined || key.trim() === "") {
+    const blocked = egressOf(input, GOOGLE_VISION_OFFICIAL_HOST);
+    const isBlocked = blocked !== null && blocked.status === "blocked";
     return {
       ...base,
       status: "not-configured",
-      detail: "GOOGLE_VISION_API_KEY가 없습니다 — google-vision을 쓰려면 키가 필요합니다.",
+      detail:
+        "GOOGLE_VISION_API_KEY가 없습니다 — google-vision을 쓰려면 키가 필요합니다." +
+        (isBlocked
+          ? ` 덧붙여 ${GOOGLE_VISION_OFFICIAL_HOST}에 닿지도 못합니다 (${blocked!.detail}).`
+          : ""),
       evidence: null,
       next: "Google Cloud 콘솔에서 Vision API 키를 발급해 설정하세요.",
     };
@@ -325,6 +429,19 @@ function judgeVision(input: CutoverInput): CutoverDependency {
           : ""),
       evidence: null,
       next: "GOOGLE_VISION_ENDPOINT를 비워 공식 주소로 되돌린 뒤 OCR을 1회 돌리세요.",
+    };
+  }
+
+  const reach = egressOf(input, GOOGLE_VISION_OFFICIAL_HOST);
+  if (reach !== null && reach.status === "blocked") {
+    return {
+      ...base,
+      status: "unreachable",
+      detail:
+        `${GOOGLE_VISION_OFFICIAL_HOST}에 닿지 못합니다 — ${reach.detail}. 키가 틀린 것이 ` +
+        "아니라 길이 막혀 있습니다.",
+      evidence: null,
+      next: `방화벽·프록시에서 ${GOOGLE_VISION_OFFICIAL_HOST} 아웃바운드를 열어 주세요.`,
     };
   }
 
@@ -407,6 +524,17 @@ function judgeStorage(input: CutoverInput): CutoverDependency {
         "백업이 함께 사라집니다 (CTO 결정 1701-②).",
       evidence: null,
       next: "BACKUP_BUCKET을 별도 버킷으로 나누세요.",
+    };
+  }
+
+  const reach = endpoint.host === null ? null : egressOf(input, endpoint.host);
+  if (reach !== null && reach.status === "blocked") {
+    return {
+      ...base,
+      status: "unreachable",
+      detail: `${endpoint.host}에 닿지 못합니다 — ${reach.detail}. 자격 증명 이전의 문제입니다.`,
+      evidence: null,
+      next: `방화벽·프록시에서 ${endpoint.host} 아웃바운드를 열어 주세요.`,
     };
   }
 

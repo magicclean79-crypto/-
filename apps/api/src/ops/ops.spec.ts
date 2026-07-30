@@ -13,6 +13,7 @@ import { WriteProtectionGuard } from "../auth/write-protection.guard";
 import { LlmBudgetService } from "../llm/llm-budget.service";
 import { PriceSourceService } from "../pricing/price-source.service";
 import { CiStatusService } from "./ci-status.service";
+import { EgressService } from "./egress.service";
 import { ProductionCutoverService } from "./production-cutover.service";
 import { PricingService } from "../pricing/pricing.service";
 import { ProviderProductionService } from "../llm/provider-production.service";
@@ -942,7 +943,9 @@ const priceSource: {
    * Provider별 공지 (TASK-3401 — CTO 결정 3301-⑤).
    * null이면 `url`·`verdict` 하나짜리 소스로 본다.
    */
-  multi: { id: string; url: string; verdict: PriceSourceVerdictStub }[] | null;
+  multi:
+    | { id: string; url: string; keys?: string[]; verdict: PriceSourceVerdictStub }[]
+    | null;
   /** 받아들이지 않은 설정 — 조용히 버리지 않는다 */
   rejected: { name: string; reason: string }[];
 } = {
@@ -957,6 +960,17 @@ const priceSource: {
   multi: null,
   rejected: [],
 };
+
+/**
+ * 도달 점검 스텁 (TASK-3501) — 기본은 **점검하지 않음**이다.
+ * 빈 배열은 "닿는다"도 "막혔다"도 아니고, 판정이 이 정보를 쓰지 않는다는 뜻이다.
+ */
+let egressProbes: {
+  host: string;
+  status: "reachable" | "blocked" | "ambiguous";
+  reachable: boolean;
+  detail: string;
+}[] = [];
 
 /** 저장소 스텁 상태 (TASK-1701) — 테스트마다 바꿔 쓴다 */
 const storageProtection = {
@@ -989,6 +1003,7 @@ async function build(overrides: Overrides = {}) {
   };
   priceSource.multi = null;
   priceSource.rejected = [];
+  egressProbes = [];
   storageProtection.versioning = "unknown";
   storageProtection.remoteMissing = false;
   storageProtection.replication = "unknown";
@@ -1123,6 +1138,13 @@ async function build(overrides: Overrides = {}) {
       // 검증되지 않는다.
       ProductionCutoverService,
       CiStatusService,
+      {
+        // 도달 점검 (TASK-3501) — 테스트가 상태를 정한다. 실제 네트워크를
+        // 두드리면 테스트가 바깥 세상에 의존하게 되고, 그 순간 결정적이지
+        // 않아진다. 어댑터 자체는 egress.service.spec.ts가 본다.
+        provide: EgressService,
+        useValue: { probe: async () => egressProbes },
+      },
       // 가격표 거버넌스·비용 인텔리전스 (TASK-3101) — 실제 서비스를 쓴다.
       // 스텁을 끼우면 절차(검토 → 승인 → 적용)가 검증되지 않는다.
       PricingService,
@@ -1145,6 +1167,7 @@ async function build(overrides: Overrides = {}) {
                   id: row.id,
                   url: row.url,
                   format: "acos",
+                  keys: row.keys ?? [],
                   verdict: row.verdict,
                 }))
               : priceSource.url === null
@@ -1154,6 +1177,7 @@ async function build(overrides: Overrides = {}) {
                       id: "default",
                       url: priceSource.url,
                       format: "acos",
+                      keys: [],
                       verdict: priceSource.verdict,
                     },
                   ],
@@ -5505,6 +5529,45 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
       });
     });
 
+    describe("공지 소스가 책임지는 단가 (TASK-3501, CTO 지시 5)", () => {
+      it("죽은 공지가 책임지던 단가를 이름으로 말한다", async () => {
+        const built = await build();
+        app = built.app;
+        priceSource.multi = [
+          {
+            id: "openai",
+            url: "https://openai.example/p.json",
+            keys: ["gpt-4o", "gpt-4o-mini"],
+            verdict: dead(),
+          },
+          {
+            id: "google",
+            url: "https://google.example/p.json",
+            keys: ["google-vision"],
+            verdict: ok(),
+          },
+        ];
+
+        const response = await detect(built.app.getHttpServer()).expect(200);
+        expect(response.body.source.unverifiedKeys).toEqual([
+          "gpt-4o",
+          "gpt-4o-mini",
+        ]);
+        expect(response.body.source.detail).toContain("확인하지 못한 단가");
+      });
+
+      it("책임 키를 선언하지 않았으면 무엇을 못 봤는지도 말하지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        priceSource.multi = [
+          { id: "openai", url: "https://openai.example/p.json", verdict: dead() },
+        ];
+
+        const response = await detect(built.app.getHttpServer()).expect(200);
+        expect(response.body.source.unverifiedKeys).toEqual([]);
+      });
+    });
+
     describe("공지 실패 장기화 (CTO 결정 3301-⑥)", () => {
       it("방금 시작된 실패는 경고에 머문다", async () => {
         const built = await build();
@@ -5755,6 +5818,39 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
 
         const response = await cutover(built).expect(200);
         expect(view(response.body, "ci").status).toBe("unverified");
+      });
+
+      it("길이 막혀 있으면 키 이야기를 하기 전에 그것부터 말한다 (TASK-3501)", async () => {
+        const built = await build();
+        app = built.app;
+        process.env.LLM_PROVIDER = "openai";
+        process.env.OPENAI_API_KEY = "sk-live";
+        egressProbes = [
+          {
+            host: "api.openai.com",
+            status: "blocked",
+            reachable: false,
+            detail: "CONNECT tunnel failed, response 403",
+          },
+        ];
+
+        const response = await cutover(built).expect(200);
+        const llm = view(response.body, "llm");
+        expect(llm.status).toBe("unreachable");
+        expect(llm.detail).toContain("키가 틀린 것이 아니라");
+        // 점검 결과 자체도 화면까지 올라간다
+        expect(response.body.egress).toHaveLength(1);
+      });
+
+      it("점검하지 않았으면 막혔다고 말하지 않는다 (TASK-3501)", async () => {
+        const built = await build();
+        app = built.app;
+        process.env.LLM_PROVIDER = "openai";
+        process.env.OPENAI_API_KEY = "sk-live";
+
+        const response = await cutover(built).expect(200);
+        expect(view(response.body, "llm").status).not.toBe("unreachable");
+        expect(response.body.egress).toEqual([]);
       });
 
       it("실행 이력이 없으면 CI를 초록으로 세지 않는다", async () => {

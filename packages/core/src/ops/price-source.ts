@@ -83,12 +83,14 @@ export type PriceSourceStatus =
  *
  * - `acos` — 우리 계약: `[{target, key, ...}]` 또는 `{prices: [...]}`
  * - `flat` — Provider가 흔히 쓰는 사전형: `{models: {이름: {...}}, engines: {이름: {...}}}`
+ * - `csv` — 표로 공개하는 곳도 있다: 첫 줄이 머리글인 쉼표 구분 표
+ *   (`target,key,inputPerMillion,outputPerMillion,perUnitUsd,effectiveFrom`)
  *
  * **모르는 형식은 짐작하지 않습니다.** 새 Provider가 또 다른 모양으로 공지하면
  * 어댑터를 하나 더 만드는 것이 답이고, 그전까지는 "읽지 않았다"가 정직한
  * 답입니다 — 짐작으로 읽은 단가는 못 읽은 단가보다 위험합니다.
  */
-export const PRICE_SOURCE_FORMATS = ["acos", "flat"] as const;
+export const PRICE_SOURCE_FORMATS = ["acos", "flat", "csv"] as const;
 export type PriceSourceFormat = (typeof PRICE_SOURCE_FORMATS)[number];
 
 /** 공지 조회 결과 (어댑터가 채운다) */
@@ -122,6 +124,15 @@ export interface PriceSourceConfig {
   urlEnv: string;
   /** 이 소스의 토큰 환경변수 이름 — 값은 여기 담지 않는다 */
   tokenEnv: string;
+  /**
+   * 이 소스가 **책임지는 단가 키** (TASK-3501 — CTO 지시 5).
+   *
+   * `PRICE_SOURCE_KEYS_<PROVIDER>=gpt-4o,gpt-4o-mini`처럼 선언합니다.
+   * 선언하면 **그 소스가 죽었을 때 어떤 단가를 확인하지 못했는지** 말할 수
+   * 있습니다. 선언하지 않으면 빈 배열이고, 그때는 "무엇을 못 봤는지"까지는
+   * 알 수 없습니다 — 모르는 것을 아는 척하지 않습니다.
+   */
+  keys: string[];
 }
 
 export interface PriceSourceResolution {
@@ -188,6 +199,8 @@ export function resolvePriceSources(
     if (format === null) {
       return; // 형식을 모르면 읽지 않는다 — 이유는 rejected에 남았다
     }
+    const rawKeys =
+      suffix === null ? env.PRICE_SOURCE_KEYS : env[`PRICE_SOURCE_KEYS_${suffix}`];
     sources.push({
       id,
       url,
@@ -197,6 +210,13 @@ export function resolvePriceSources(
         suffix !== null && (env[`PRICE_SOURCE_TOKEN_${suffix}`] ?? "").trim() !== ""
           ? `PRICE_SOURCE_TOKEN_${suffix}`
           : "PRICE_SOURCE_TOKEN",
+      keys:
+        rawKeys === undefined
+          ? []
+          : rawKeys
+              .split(",")
+              .map((key) => key.trim())
+              .filter((key) => key !== ""),
     });
   };
 
@@ -381,6 +401,48 @@ function flattenFlatFormat(body: unknown): unknown[] | null {
 }
 
 /**
+ * `csv` 형식을 우리 계약 모양으로 편다 (TASK-3501 — CTO 지시 5).
+ *
+ * 첫 줄이 머리글입니다. 값이 빈 칸이면 **없는 것으로** 두고(0으로 읽지
+ * 않습니다 — 0은 "무료"라는 뜻이 되어 버립니다), 나머지 판정은 `parseEntry`가
+ * 똑같이 합니다.
+ */
+function flattenCsvFormat(body: unknown): unknown[] | null {
+  if (typeof body !== "string") {
+    return null;
+  }
+  const lines = body
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line !== "");
+  if (lines.length < 2) {
+    return null;
+  }
+  const header = lines[0].split(",").map((cell) => cell.trim());
+  if (!header.includes("target") || !header.includes("key")) {
+    return null;
+  }
+  const number = (raw: string | undefined): unknown =>
+    raw === undefined || raw === "" ? undefined : Number(raw);
+
+  return lines.slice(1).map((line) => {
+    const cells = line.split(",").map((cell) => cell.trim());
+    const cell = (name: string): string | undefined => {
+      const index = header.indexOf(name);
+      return index === -1 ? undefined : cells[index];
+    };
+    return {
+      target: cell("target"),
+      key: cell("key"),
+      inputPerMillion: number(cell("inputPerMillion")),
+      outputPerMillion: number(cell("outputPerMillion")),
+      perUnitUsd: number(cell("perUnitUsd")),
+      effectiveFrom: cell("effectiveFrom"),
+    };
+  });
+}
+
+/**
  * 조회 결과를 판정한다 (순수 함수).
  *
  * **실패를 "변경 없음"으로 바꾸지 않습니다** (정책 3301-①). 어떤 실패든
@@ -419,7 +481,9 @@ export function judgePriceSource(fetched: PriceSourceFetch): PriceSourceVerdict 
   const list =
     format === "flat"
       ? flattenFlatFormat(body)
-      : Array.isArray(body)
+      : format === "csv"
+        ? flattenCsvFormat(body)
+        : Array.isArray(body)
         ? body
         : typeof body === "object" &&
             body !== null &&
@@ -437,7 +501,9 @@ export function judgePriceSource(fetched: PriceSourceFetch): PriceSourceVerdict 
         "가격 공지를 해석할 수 없습니다 — " +
         (format === "flat"
           ? "models·engines 사전이 아닙니다"
-          : "목록(배열 또는 prices 필드)이 아닙니다") +
+          : format === "csv"
+            ? "target·key 머리글을 가진 표가 아닙니다"
+            : "목록(배열 또는 prices 필드)이 아닙니다") +
         `(형식: ${format}). 형식이 바뀌었는지 확인해 주세요. ${NOT_NO_CHANGE}`,
     };
   }
@@ -492,6 +558,8 @@ export interface PriceSourceResult {
   id: string;
   url: string | null;
   format: PriceSourceFormat;
+  /** 이 소스가 책임진다고 선언한 단가 키 (TASK-3501) */
+  keys?: string[];
   verdict: PriceSourceVerdict;
 }
 
@@ -508,6 +576,14 @@ export interface PriceSourceSummary {
   total: number;
   /** 읽지 못한 소스 이름 */
   failed: string[];
+  /**
+   * 읽지 못한 소스가 **책임지던 단가 키** (TASK-3501 — CTO 지시 5).
+   *
+   * 소스를 나눈 대가로 생긴 빈 곳입니다. 어느 공지가 죽었는지는 알아도
+   * **그래서 어떤 단가를 확인하지 못했는지**를 말하지 못하면, 사람은 "그래서
+   * 지금 무엇이 위험한가"에 답할 수 없습니다.
+   */
+  unverifiedKeys: string[];
   detail: string;
 }
 
@@ -541,6 +617,7 @@ export function summarizePriceSources(
       read: 0,
       total: 0,
       failed: [],
+      unverifiedKeys: [],
       detail:
         "가격 공지 주소가 하나도 설정되지 않았습니다 (PRICE_SOURCE_URL 또는 " +
         "PRICE_SOURCE_URL_<PROVIDER>) — 미구성이며 실패가 아닙니다. 공지 대조 없이는 " +
@@ -556,12 +633,23 @@ export function summarizePriceSources(
     .map((row) => `${row.id}(${row.verdict.status})`);
   const read = results.filter((row) => row.verdict.status === "ok").length;
 
+  const missingKeys = [
+    ...new Set(
+      results
+        .filter((row) => row.verdict.status !== "ok")
+        .flatMap((row) => row.keys ?? []),
+    ),
+  ].sort();
+  const keyNote =
+    missingKeys.length > 0
+      ? ` 그래서 확인하지 못한 단가: ${missingKeys.join(", ")}.`
+      : "";
   const head =
     results.length === 1
-      ? worst.verdict.detail
+      ? worst.verdict.detail + keyNote
       : `가격 공지 ${results.length}곳 중 ${read}곳을 읽었습니다.` +
         (failed.length > 0
-          ? ` 읽지 못한 곳: ${failed.join(", ")}. ${worst.verdict.detail}`
+          ? ` 읽지 못한 곳: ${failed.join(", ")}. ${worst.verdict.detail}${keyNote}`
           : "");
 
   return {
@@ -577,6 +665,14 @@ export function summarizePriceSources(
     failed: results
       .filter((row) => row.verdict.status !== "ok")
       .map((row) => row.id),
+    // 죽은 소스가 책임지던 키 — 선언하지 않은 소스는 여기에 아무것도 못 넣는다
+    unverifiedKeys: [
+      ...new Set(
+        results
+          .filter((row) => row.verdict.status !== "ok")
+          .flatMap((row) => row.keys ?? []),
+      ),
+    ].sort(),
     detail: head,
   };
 }

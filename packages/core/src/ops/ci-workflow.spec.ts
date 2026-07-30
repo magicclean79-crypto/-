@@ -49,6 +49,24 @@ describe("CI 워크플로 (TASK-2201, CTO 결정 2101-③)", () => {
   });
 
   /**
+   * TASK-3501 (CTO 지시 4) — **게이트가 게이트를 검증한다.**
+   *
+   * 워크플로에서 게이트 한 줄이 사라져도 CI는 여전히 초록으로 끝난다:
+   * 없어진 검사는 실패하지 않기 때문이다. TASK-3401에서 본 실패의 다른
+   * 얼굴이다(그때는 적혀 있는데 돌지 않았고, 이번에 막는 것은 적혀 있지도
+   * 않게 되는 것이다).
+   */
+  it("게이트 자체 검증 단계가 있다 (TASK-3501)", () => {
+    expect(workflow).toContain("run: pnpm check:ci-gates");
+  });
+
+  it("동시 실행을 접고 시간 상한과 최소 권한을 둔다 (TASK-3501)", () => {
+    expect(workflow).toContain("cancel-in-progress: true");
+    expect(workflow).toContain("timeout-minutes:");
+    expect(workflow).toContain("contents: read");
+  });
+
+  /**
    * TASK-3401에서 실제로 일어난 실패다. `pnpm test`는 web e2e(Playwright)를
    * 포함하는데 러너에 브라우저가 없어 **13회 실행이 전부 실패**했다. 게이트가
    * 파일에 적혀 있는 것과 초록으로 끝나는 것은 다르다.
@@ -67,6 +85,7 @@ describe("CI 워크플로 (TASK-2201, CTO 결정 2101-③)", () => {
 
   it("게이트가 빠지면 무엇이 빠졌는지 말한다", () => {
     const judged = judgeCiWorkflow("- run: pnpm build\n");
+    expect(judged.missing).toContain("ci-gates");
     expect(judged.missing).toContain("test");
     expect(judged.missing).toContain("lint");
     expect(judged.detail).toContain("빠진 게이트");
@@ -77,6 +96,7 @@ describe("CI 워크플로 (TASK-2201, CTO 결정 2101-③)", () => {
       [
         "- run: pnpm check:major-migrations",
         "- run: pnpm build",
+        "- run: pnpm check:ci-gates",
         "- run: pnpm typecheck",
         "- run: pnpm lint",
         "- run: pnpm test",

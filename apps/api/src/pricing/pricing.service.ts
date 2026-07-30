@@ -579,7 +579,11 @@ export class PricingService implements OnModuleInit {
         status: string;
         unparsedCount: number;
         detail: string;
+        /** 이 소스가 책임지는 단가 키 (TASK-3501) */
+        keys: string[];
       }[];
+      /** 죽은 소스가 책임지던 단가 키 (TASK-3501) */
+      unverifiedKeys: string[];
       /** 받아들이지 않은 공지 설정 */
       rejected: { name: string; reason: string }[];
     };
@@ -798,7 +802,9 @@ export class PricingService implements OnModuleInit {
           status: row.verdict.status,
           unparsedCount: row.verdict.unparsed.length,
           detail: row.verdict.detail,
+          keys: row.keys ?? [],
         })),
+        unverifiedKeys: verdict.unverifiedKeys,
         rejected: this.source?.rejected ?? [],
       },
       notDue,

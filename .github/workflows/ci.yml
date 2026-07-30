@@ -5,6 +5,9 @@
 # 뒤에 둔다 — 검증 로직이 `@acos/core`에 있고, 순수 로직은 한 곳에만 둔다는
 # 규칙을 스크립트에서도 지키기 때문이다.
 #
+# TASK-3501 (CTO 지시 4 "운영 안정화·품질 게이트 자동 검증")에서 더한 것:
+# 동시 실행 취소 · 작업 시간 상한 · 최소 권한 · **게이트 자체 검증 단계**.
+#
 # TASK-3401 (CTO 지시 6 "GitHub Actions 운영 검증")에서 고친 것:
 #
 # 1. **Playwright 브라우저를 설치한다.** `pnpm test`에는 web e2e가 들어 있고,
@@ -25,9 +28,22 @@ on:
     branches: ["**"]
   pull_request:
 
+# 같은 브랜치에 새 푸시가 오면 앞선 실행을 접는다 (TASK-3501, CTO 지시 4).
+# 접지 않으면 러너가 옛 커밋을 붙들고 있고, 그동안 최신 커밋의 결과를
+# 아무도 못 본다 — 게이트가 느려지면 사람은 게이트를 안 기다린다.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# 최소 권한 — 이 워크플로는 코드를 읽기만 한다
+permissions:
+  contents: read
+
 jobs:
   quality-gates:
     runs-on: ubuntu-latest
+    # 멈춘 실행이 러너를 몇 시간 붙들지 않도록 상한을 둔다
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -54,6 +70,12 @@ jobs:
       # 지정이 조용히 사라지면 대규모 변경 후에도 리허설이 요구되지 않는다.
       - name: Major Migration 교차 검증
         run: pnpm check:major-migrations
+
+      # 게이트가 게이트를 검증한다 (TASK-3501, CTO 지시 4).
+      # 워크플로에서 게이트 한 줄이 사라져도 CI는 여전히 초록으로 끝난다 —
+      # 없어진 검사는 실패하지 않기 때문이다.
+      - name: 품질 게이트 자체 검증
+        run: pnpm check:ci-gates
 
       - name: TypeScript
         run: pnpm typecheck

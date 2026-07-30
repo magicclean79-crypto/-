@@ -16,6 +16,7 @@ const OK_CI = {
     [
       "- run: pnpm build",
       "- run: pnpm check:major-migrations",
+      "- run: pnpm check:ci-gates",
       "- run: pnpm typecheck",
       "- run: pnpm lint",
       "- run: pnpm test",
@@ -52,6 +53,7 @@ const REAL: CutoverInput = {
   ocrSuccesses: { "google-vision": 4 },
   storage: { reachable: true, bucketExists: true, detail: "버킷 acos-prod 확인" },
   ci: OK_CI,
+  egress: [],
 };
 
 const dep = (input: CutoverInput, id: string) =>
@@ -89,6 +91,109 @@ describe("엔드포인트 출처 판정 (TASK-3401)", () => {
       "api.openai.com",
     ]);
     expect(judged.origin).toBe("third-party");
+  });
+});
+
+/**
+ * 도달 점검 (TASK-3501 — CTO 지시 2·3).
+ *
+ * **키가 틀린 것과 길이 막힌 것은 다릅니다.** 둘 다 "호출 실패"로 보이면
+ * 사람은 있지도 않은 키 문제를 몇 시간씩 찾습니다. 실제로 이 환경에서
+ * `api.openai.com`이 프록시에 막혀 있었습니다.
+ */
+describe("공식 주소 도달 점검 (TASK-3501)", () => {
+  const blocked = (host: string) => ({
+    host,
+    status: "blocked" as const,
+    reachable: false,
+    detail: "CONNECT tunnel failed, response 403",
+  });
+
+  const ambiguous = (host: string) => ({
+    host,
+    status: "ambiguous" as const,
+    reachable: false,
+    detail: "HTTP 403 — Provider가 거절한 것인지 프록시가 막은 것인지 가릴 수 없습니다.",
+  });
+
+  it("길이 막혀 있으면 키 이야기를 하기 전에 그것부터 말한다", () => {
+    const view = dep(
+      { ...REAL, egress: [blocked("api.openai.com")] },
+      "llm",
+    );
+    expect(view.status).toBe("unreachable");
+    expect(view.detail).toContain("키가 틀린 것이 아니라");
+    expect(view.next).toContain("아웃바운드를 열어");
+  });
+
+  it("Vision도 같다", () => {
+    const view = dep(
+      { ...REAL, egress: [blocked("vision.googleapis.com")] },
+      "vision",
+    );
+    expect(view.status).toBe("unreachable");
+  });
+
+  it("S3도 같다", () => {
+    const view = dep(
+      { ...REAL, egress: [blocked("s3.ap-northeast-2.amazonaws.com")] },
+      "storage",
+    );
+    expect(view.status).toBe("unreachable");
+  });
+
+  it("키가 없을 때도 길이 막힌 사실을 함께 말한다", () => {
+    const view = dep(
+      {
+        ...REAL,
+        env: { ...REAL.env, OPENAI_API_KEY: undefined },
+        egress: [blocked("api.openai.com")],
+      },
+      "llm",
+    );
+    // 아직 안 붙인 것이 먼저다 — 다만 키를 넣어도 안 된다는 사실을 덧붙인다
+    expect(view.status).toBe("not-configured");
+    expect(view.detail).toContain("키를 넣어도 이 길이 열리기 전까지는");
+  });
+
+  it("점검하지 않았으면 막혔다고도 닿는다고도 말하지 않는다", () => {
+    expect(dep({ ...REAL, egress: [] }, "llm").status).toBe("verified");
+    expect(dep({ ...REAL, egress: undefined }, "llm").status).toBe("verified");
+  });
+
+  /**
+   * 라이브에서 실제로 틀렸던 판정이다. `api.openai.com`의 403은 **프록시가**
+   * 막은 것이었는데 처음 판정은 그것을 "닿음"으로 세고 `verified`까지 갔다.
+   */
+  it("403은 닿았다고도 막혔다고도 말하지 않는다 — 누가 막았는지 모른다", () => {
+    const view = dep({ ...REAL, egress: [ambiguous("api.openai.com")] }, "llm");
+    expect(view.status).toBe("unverified");
+    expect(view.detail).toContain("가릴 수 없습니다");
+    expect(view.evidence).toBeNull();
+    // 같은 문장을 두 번 적지 않는다 (TASK-3401에서 고친 겹침의 재발 방지)
+    expect(view.detail.split("가릴 수 없습니다").length - 1).toBe(1);
+  });
+
+  it("403이어도 성공 기록만으로 통과시키지 않는다", () => {
+    // 성공 기록 12건이 있어도 verified가 아니다
+    const report = judgeProductionCutover({
+      ...REAL,
+      egress: [ambiguous("api.openai.com")],
+    });
+    expect(report.ready).toBe(false);
+  });
+
+  it("스텁을 가리키는 중이면 공식 주소가 막혀도 그 이야기를 먼저 하지 않는다", () => {
+    // 지금 문제는 상대가 스텁이라는 것이다 — 길 이야기는 그다음이다
+    const view = dep(
+      {
+        ...REAL,
+        env: { ...REAL.env, OPENAI_BASE_URL: "http://localhost:9300/v1" },
+        egress: [blocked("api.openai.com")],
+      },
+      "llm",
+    );
+    expect(view.status).toBe("not-production");
   });
 });
 

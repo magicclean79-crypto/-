@@ -85,6 +85,9 @@ export class PriceSourceService {
       id: source.id,
       url: source.url,
       format: source.format,
+      // 이 소스가 책임진다고 선언한 키 (TASK-3501) — 죽었을 때 무엇을
+      // 확인하지 못했는지 말하기 위해 필요하다
+      keys: source.keys,
       verdict,
     };
   }

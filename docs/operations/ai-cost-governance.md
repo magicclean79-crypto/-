@@ -166,6 +166,24 @@ PRICE_SOURCE_URL_PROJECT_ACME=...        # 거부됩니다 (정책 3301-④와 �
 | --- | --- |
 | `acos` | `[{target, key, ...}]` 또는 `{prices: [...]}` — 우리 계약 |
 | `flat` | `{models: {"gpt-4o": {input, output}}, engines: {"google-vision": {perUnit}}}` |
+| `csv` | 첫 줄이 머리글인 표 (`target,key,inputPerMillion,outputPerMillion,perUnitUsd,effectiveFrom`) |
+
+`csv`에서 **빈 칸은 없는 값**입니다 — 0으로 읽지 않습니다. 0은 "무료"라는
+뜻이 되어 버립니다.
+
+### 이 공지가 책임지는 단가 (TASK-3501 — CTO 지시 5)
+
+```bash
+PRICE_SOURCE_KEYS_OPENAI=gpt-4o,gpt-4o-mini
+```
+
+소스를 나눈 대가로 생기는 빈 곳이 있습니다: **공지 하나가 죽으면 그 공지가
+알려 주던 단가는 그냥 사라집니다.** 어느 공지가 죽었는지는 알아도 "그래서
+어떤 단가를 확인하지 못했는가"에 답할 수 없습니다.
+
+책임 키를 선언하면 그 답을 말할 수 있습니다 — 화면과 응답에
+`unverifiedKeys`로 남습니다. **선언하지 않으면 빈 목록입니다**: 모르는 것을
+아는 척하지 않습니다.
 
 **모르는 형식은 짐작해서 읽지 않습니다.** 형식 값이 목록에 없으면 그 소스를
 **읽지 않고 사유를 남깁니다** — 잘못 읽은 단가는 못 읽은 단가보다 위험합니다.

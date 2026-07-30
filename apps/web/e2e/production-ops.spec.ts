@@ -423,3 +423,42 @@ test.describe("운영 전환 검증 (TASK-3401)", () => {
     );
   });
 });
+
+/**
+ * 운영 전환 UX (TASK-3501 — CTO 지시 2·6).
+ *
+ * 판정이 맞아도 **무엇부터 해야 하는지** 보이지 않으면 사람은 네 항목 앞에서
+ * 멈춥니다. 그리고 **길이 막힌 것과 키가 틀린 것**은 화면에서도 갈라져야
+ * 합니다 — 둘 다 빨간색이면 사람은 있지도 않은 키 문제를 찾습니다.
+ */
+test.describe("운영 전환 UX (TASK-3501)", () => {
+  test("지금 할 일 하나를 크게 보여준다", async ({ page }) => {
+    await setMode("data");
+    await openPage(page);
+
+    const next = page.getByTestId("cutover-next");
+    await expect(next).toContainText("지금 할 일");
+    // 남은 것 중 첫 번째 — 넷을 나란히 두면 "그래서 뭐부터?"에서 멈춘다
+    await expect(next).toContainText("LLM (실 Provider 호출)");
+  });
+
+  test("길이 막힌 것과 키가 틀린 것을 갈라 보여준다", async ({ page }) => {
+    await setMode("data");
+    await openPage(page);
+
+    const egress = page.getByTestId("cutover-egress");
+    await expect(egress).toContainText("api.openai.com");
+    await expect(egress).toContainText("닿지 못함");
+    // 403은 "닿지 못함"이 아니라 "가릴 수 없음"이다 — 라이브에서 고쳤다
+    // 403은 "닿지 못함"이 아니라 "가릴 수 없음"이다 (라이브에서 고쳤다)
+    await expect(egress).toContainText("가릴 수 없음");
+  });
+
+  test("전환이 끝나면 할 일 안내가 사라진다", async ({ page }) => {
+    await setMode("cutover-done");
+    await openPage(page);
+
+    await expect(page.getByTestId("cutover-summary")).toContainText("4/4");
+    await expect(page.getByTestId("cutover-next")).toHaveCount(0);
+  });
+});

@@ -248,6 +248,19 @@ describe("Provider별 공지 (TASK-3401, CTO 결정 3301-⑤)", () => {
       expect(sources[0].format).toBe("acos");
     });
 
+    it("책임지는 단가 키를 선언할 수 있다 (TASK-3501)", () => {
+      const { sources } = resolvePriceSources({
+        PRICE_SOURCE_URL_OPENAI: "https://openai.example/p.json",
+        PRICE_SOURCE_KEYS_OPENAI: "gpt-4o, gpt-4o-mini ,",
+      });
+      expect(sources[0].keys).toEqual(["gpt-4o", "gpt-4o-mini"]);
+    });
+
+    it("선언하지 않으면 빈 배열이다 — 모르는 것을 아는 척하지 않는다", () => {
+      const { sources } = resolvePriceSources({ PRICE_SOURCE_URL: URL });
+      expect(sources[0].keys).toEqual([]);
+    });
+
     it("Provider별 주소를 각각 소스로 만든다", () => {
       const { sources } = resolvePriceSources({
         PRICE_SOURCE_URL_OPENAI: "https://openai.example/p.json",
@@ -267,7 +280,7 @@ describe("Provider별 공지 (TASK-3401, CTO 결정 3301-⑤)", () => {
     it("모르는 형식은 짐작해서 읽지 않고 거부한다", () => {
       const { sources, rejected } = resolvePriceSources({
         PRICE_SOURCE_URL_OPENAI: "https://openai.example/p.json",
-        PRICE_SOURCE_FORMAT_OPENAI: "csv",
+        PRICE_SOURCE_FORMAT_OPENAI: "yaml",
       });
       expect(sources).toHaveLength(0);
       expect(rejected[0].reason).toContain("잘못 읽은 단가는");
@@ -330,6 +343,48 @@ describe("Provider별 공지 (TASK-3401, CTO 결정 3301-⑤)", () => {
     });
   });
 
+  describe("csv 형식 어댑터 (TASK-3501)", () => {
+    const csv = [
+      "target,key,inputPerMillion,outputPerMillion,perUnitUsd,effectiveFrom",
+      "llm,gpt-4o,2.5,10,,2026-09-01T00:00:00.000Z",
+      "ocr,google-vision,,,0.0015,",
+    ].join("\n");
+
+    it("표로 공개된 공지도 같은 결과로 읽는다", () => {
+      const verdict = judgePriceSource({
+        url: URL,
+        format: "csv",
+        body: csv,
+        error: null,
+      });
+      expect(verdict.status).toBe("ok");
+      expect(verdict.prices).toHaveLength(2);
+      expect(verdict.prices[0].effectiveFrom).toBe("2026-09-01T00:00:00.000Z");
+    });
+
+    it("빈 칸을 0으로 읽지 않는다 — 0은 무료라는 뜻이 된다", () => {
+      const verdict = judgePriceSource({
+        url: URL,
+        format: "csv",
+        body: ["target,key,perUnitUsd", "ocr,clova,"].join("\n"),
+        error: null,
+      });
+      expect(verdict.status).toBe("unparsable");
+      expect(verdict.unparsed[0].reason).toContain("clova");
+    });
+
+    it("머리글이 없으면 해석할 수 없다고 말한다", () => {
+      const verdict = judgePriceSource({
+        url: URL,
+        format: "csv",
+        body: "이번 달 가격 안내\n감사합니다",
+        error: null,
+      });
+      expect(verdict.status).toBe("unparsable");
+      expect(verdict.detail).toContain("target·key 머리글");
+    });
+  });
+
   describe("여러 소스 합치기", () => {
     const okVerdict = judgePriceSource(
       feed([{ target: "ocr", key: "google-vision", perUnitUsd: 0.002 }]),
@@ -365,6 +420,35 @@ describe("Provider별 공지 (TASK-3401, CTO 결정 3301-⑤)", () => {
       expect(summary.needsHumanCheck).toBe(true);
       expect(summary.failed).toEqual(["openai"]);
       expect(summary.detail).toContain("openai(unreachable)");
+    });
+
+    it("죽은 소스가 책임지던 단가를 이름으로 말한다 (TASK-3501)", () => {
+      const summary = summarizePriceSources([
+        {
+          id: "openai",
+          url: "x",
+          format: "acos",
+          keys: ["gpt-4o", "gpt-4o-mini"],
+          verdict: deadVerdict,
+        },
+        {
+          id: "google",
+          url: URL,
+          format: "acos",
+          keys: ["google-vision"],
+          verdict: okVerdict,
+        },
+      ]);
+      expect(summary.unverifiedKeys).toEqual(["gpt-4o", "gpt-4o-mini"]);
+      expect(summary.detail).toContain("확인하지 못한 단가: gpt-4o, gpt-4o-mini");
+    });
+
+    it("책임 키를 선언하지 않았으면 무엇을 못 봤는지도 말하지 않는다", () => {
+      const summary = summarizePriceSources([
+        { id: "openai", url: "x", format: "acos", verdict: deadVerdict },
+      ]);
+      expect(summary.unverifiedKeys).toEqual([]);
+      expect(summary.detail).not.toContain("확인하지 못한 단가");
     });
 
     it("어느 공지에서 온 단가인지 잃지 않는다", () => {

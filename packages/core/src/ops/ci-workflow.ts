@@ -21,13 +21,24 @@
  * 통과한 CI는 완전히 다릅니다.
  */
 
-/** CI가 반드시 돌려야 하는 게이트 (CTO가 매 TASK 요구하는 6개 중 자동화 가능한 것) */
+/**
+ * CI가 반드시 돌려야 하는 게이트 (CTO가 매 TASK 요구하는 것 중 자동화 가능한 것).
+ *
+ * `ci-gates`(TASK-3501 — CTO 지시 4)는 **이 목록 자체를 검증**합니다. 게이트
+ * 한 줄이 워크플로에서 사라져도 CI는 초록으로 끝나기 때문입니다 — 없어진
+ * 검사는 실패하지 않습니다.
+ */
 export const REQUIRED_CI_GATES = [
   { id: "build", script: "pnpm build", title: "Build" },
   {
     id: "major-migrations",
     script: "pnpm check:major-migrations",
     title: "Major Migration 교차 검증",
+  },
+  {
+    id: "ci-gates",
+    script: "pnpm check:ci-gates",
+    title: "품질 게이트 자체 검증",
   },
   { id: "typecheck", script: "pnpm typecheck", title: "TypeScript" },
   { id: "lint", script: "pnpm lint", title: "ESLint" },
@@ -91,7 +102,7 @@ export function judgeCiWorkflow(yaml: string): CiWorkflowJudgement {
   if (build > -1 && cross > -1 && cross < build) {
     outOfOrder.push("major-migrations");
   }
-  for (const id of ["typecheck", "lint", "test"] as const) {
+  for (const id of ["ci-gates", "typecheck", "lint", "test"] as const) {
     const position = at(id);
     if (position > -1 && cross > -1 && position < cross) {
       outOfOrder.push(id);

@@ -4,6 +4,7 @@ import type { ProductionCutoverDto } from "@acos/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
 import { CiStatusService } from "./ci-status.service";
+import { EgressService } from "./egress.service";
 
 /**
  * 운영 전환 검증. (TASK-3401, Sprint 34 — CTO 지시 4·5·6)
@@ -27,6 +28,8 @@ export class ProductionCutoverService {
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly ci: CiStatusService,
+    // 자격 증명 이전의 조건 (TASK-3501, CTO 지시 2·3)
+    private readonly egress: EgressService,
   ) {}
 
   async report(branch?: string): Promise<ProductionCutoverDto> {
@@ -34,7 +37,7 @@ export class ProductionCutoverService {
       Date.now() - ROLLOUT_EVIDENCE_WINDOW_DAYS * 24 * 60 * 60 * 1000,
     );
 
-    const [llmGroups, ocrGroups, storage, workflow, runs] = await Promise.all([
+    const [llmGroups, ocrGroups, storage, workflow, runs, egress] = await Promise.all([
       this.prisma.execution.groupBy({
         by: ["provider"],
         where: {
@@ -56,6 +59,7 @@ export class ProductionCutoverService {
       this.probeStorage(),
       Promise.resolve(this.ci.workflow()),
       this.ci.runs(branch),
+      this.egress.probe(),
     ]);
 
     const report = judgeProductionCutover({
@@ -65,6 +69,7 @@ export class ProductionCutoverService {
       storage,
       // 워크플로 파일을 못 읽었으면 CI 판정 자체를 하지 않는다
       ci: workflow === null ? null : { workflow, runs },
+      egress,
     });
 
     return {
@@ -73,6 +78,7 @@ export class ProductionCutoverService {
       ready: report.ready,
       detail: report.detail,
       evidenceWindowDays: ROLLOUT_EVIDENCE_WINDOW_DAYS,
+      egress,
       checkedAt: new Date().toISOString(),
     };
   }

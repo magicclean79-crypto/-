@@ -173,9 +173,10 @@ API_BASE=https://<api-host> GATE_EMAIL=... GATE_PASSWORD=... \
 | 0 | Playwright 브라우저 설치 | `pnpm test`에 web e2e가 들어 있습니다 |
 | 1 | `pnpm build` | 아래 교차 검증이 빌드 산출물을 씁니다 |
 | 2 | `pnpm check:major-migrations` | 지정이 어긋난 채로 통과시키지 않습니다 (결정 2101-③) |
-| 3 | `pnpm typecheck` | |
-| 4 | `pnpm lint` | |
-| 5 | `pnpm test` | core · api · web e2e |
+| 3 | `pnpm check:ci-gates` | **게이트가 게이트를 검증합니다** — 게이트가 사라져도 CI는 초록으로 끝납니다 (TASK-3501) |
+| 4 | `pnpm typecheck` | |
+| 5 | `pnpm lint` | |
+| 6 | `pnpm test` | core · api · web e2e |
 
 **Live Verification은 CI에서 돌리지 않습니다** — 실 자격 증명이 필요하고, 그것을
 CI에 넣으면 남의 서비스에 돈이 나가는 테스트가 매 푸시마다 돕니다. 사람이
@@ -186,9 +187,12 @@ CI에 넣으면 남의 서비스에 돈이 나가는 테스트가 매 푸시마�
 
 ### 운영 전환 검증 (TASK-3401, CTO 지시 4·5·6)
 
-- [ ] `GET /ops/cutover` — 네 항목(LLM · Vision · S3 · CI)이 모두 `verified`인지
+- [ ] `pnpm cutover` — 네 항목(LLM · Vision · S3 · CI)이 모두 `verified`인지
       확인합니다. 하나라도 아니면 `ready`는 false이고, **운영 전환에 부분
-      점수는 없습니다.**
+      점수는 없습니다.** (종료 코드 0 전환 완료 / 1 미완 / **2 판정 불가**)
+
+`unreachable`은 **자격 증명 이전의 문제**입니다 — 방화벽·프록시가 공식 주소를
+막고 있다는 뜻이고, 키를 넣어도 열리지 않습니다.
 
 `not-production`은 "돌고는 있지만 운영의 그것이 아니다"입니다 — 계약 스텁을
 상대로 만든 성공 기록은 연결의 증거가 아닙니다. 자세한 것은

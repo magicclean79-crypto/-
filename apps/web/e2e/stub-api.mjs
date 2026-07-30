@@ -1999,8 +1999,10 @@ const server = http.createServer((req, res) => {
                   status: "ok",
                   unparsedCount: 0,
                   detail: "가격 공지 1건을 읽었습니다.",
+                  keys: ["google-vision"],
                 },
               ],
+              unverifiedKeys: [],
               rejected: [],
             },
             published: [{ target: "ocr", key: "google-vision" }],
@@ -2108,6 +2110,7 @@ const server = http.createServer((req, res) => {
                       status: "ok",
                       unparsedCount: 0,
                       detail: "가격 공지 1건을 읽었습니다.",
+                      keys: ["gpt-4o"],
                     },
                     {
                       id: "google",
@@ -2116,8 +2119,10 @@ const server = http.createServer((req, res) => {
                       status: "ok",
                       unparsedCount: 0,
                       detail: "가격 공지 1건을 읽었습니다.",
+                      keys: ["google-vision"],
                     },
                   ],
+                  unverifiedKeys: [],
                   rejected: [],
                 }
               : {
@@ -2138,6 +2143,7 @@ const server = http.createServer((req, res) => {
                       status: "unreachable",
                       unparsedCount: 0,
                       detail: "가격 공지를 가져오지 못했습니다: HTTP 503.",
+                      keys: ["gpt-4o", "gpt-4o-mini"],
                     },
                     {
                       id: "google",
@@ -2147,8 +2153,11 @@ const server = http.createServer((req, res) => {
                       unparsedCount: 1,
                       detail:
                         "가격 공지 1건을 읽었고 1건은 해석하지 못했습니다.",
+                      keys: ["google-vision"],
                     },
                   ],
+                  // 죽은 공지가 책임지던 단가 (TASK-3501)
+                  unverifiedKeys: ["gpt-4o", "gpt-4o-mini"],
                   rejected: [
                     {
                       name: "PRICE_SOURCE_URL_PROJECT_ACME",
@@ -2602,6 +2611,38 @@ const server = http.createServer((req, res) => {
               : "실패한 작업의 로그를 보고 원인을 고치세요.",
           },
         ],
+        // 도달 점검 (TASK-3501) — 기본은 openai가 프록시에 막힌 상태를
+        // 재현한다. 이 프로젝트의 검증 환경이 실제로 그랬다.
+        egress: verified
+          ? [
+              {
+                host: "api.openai.com",
+                status: "reachable",
+                reachable: true,
+                detail: "HTTP 401",
+              },
+              {
+                host: "vision.googleapis.com",
+                status: "reachable",
+                reachable: true,
+                detail: "HTTP 404",
+              },
+            ]
+          : [
+              {
+                host: "api.openai.com",
+                status: "blocked",
+                reachable: false,
+                detail: "CONNECT tunnel failed, response 403",
+              },
+              {
+                host: "vision.googleapis.com",
+                status: "ambiguous",
+                reachable: false,
+                detail:
+                  "HTTP 403 — Provider가 거절한 것인지 중간 프록시가 막은 것인지 가릴 수 없습니다.",
+              },
+            ],
         summary: { verified: verified ? 4 : 0, total: 4 },
         ready: verified,
         detail: verified

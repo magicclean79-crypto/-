@@ -427,3 +427,31 @@ test.describe("Provider별 가격 공지 (TASK-3401)", () => {
     );
   });
 });
+
+/**
+ * 공지 소스가 책임지는 단가 (TASK-3501 — CTO 지시 5).
+ *
+ * 어느 공지가 죽었는지는 알아도 **그래서 어떤 단가를 확인하지 못했는지**를
+ * 말하지 못하면, 사람은 "그래서 지금 무엇이 위험한가"에 답할 수 없습니다.
+ */
+test.describe("공지가 책임지는 단가 (TASK-3501)", () => {
+  test("죽은 공지가 책임지던 단가를 이름으로 말한다", async ({ page }) => {
+    await setMode("empty");
+    await openPage(page);
+    await page.getByTestId("pricing-detect").click();
+
+    const note = page.getByTestId("price-source-unverified-keys");
+    await expect(note).toContainText("gpt-4o");
+    await expect(note).toContainText("지금 바뀌었는지 알 수 없습니다");
+  });
+
+  test("소스마다 책임 단가를 함께 보여준다", async ({ page }) => {
+    await setMode("empty");
+    await openPage(page);
+    await page.getByTestId("pricing-detect").click();
+
+    await expect(page.getByTestId("price-source-google")).toContainText(
+      "책임 단가: google-vision",
+    );
+  });
+});

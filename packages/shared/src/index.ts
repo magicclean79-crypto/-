@@ -2278,7 +2278,9 @@ export type CutoverStatusDto =
   | "not-production"
   | "unverified"
   | "not-configured"
-  | "invalid";
+  | "invalid"
+  /** 공식 주소에 닿지 못한다 (TASK-3501) — 자격 증명 이전의 문제다 */
+  | "unreachable";
 
 export interface ProductionCutoverDto {
   dependencies: {
@@ -2298,6 +2300,18 @@ export interface ProductionCutoverDto {
   detail: string;
   /** 성공 기록을 근거로 인정하는 기한 (일) */
   evidenceWindowDays: number;
+  /**
+   * 공식 주소 도달 점검 (TASK-3501) — 비어 있으면 점검하지 않은 것이다.
+   * 인증 실패(401·403)도 **닿은 것**으로 본다: 우리가 보는 것은 길이지
+   * 권한이 아니다.
+   */
+  egress: {
+    host: string;
+    /** reachable | blocked | ambiguous(403 — 누가 막았는지 모른다) */
+    status: string;
+    reachable: boolean;
+    detail: string;
+  }[];
   checkedAt: string;
 }
 
@@ -2414,7 +2428,16 @@ export interface PriceSourceStatusDto {
     status: string;
     unparsedCount: number;
     detail: string;
+    /** 이 소스가 책임진다고 선언한 단가 키 (TASK-3501) */
+    keys: string[];
   }[];
+  /**
+   * 읽지 못한 소스가 책임지던 단가 키 (TASK-3501 — CTO 지시 5).
+   *
+   * 어느 공지가 죽었는지는 알아도 **그래서 어떤 단가를 확인하지 못했는지**를
+   * 말하지 못하면, 사람은 "그래서 지금 무엇이 위험한가"에 답할 수 없다.
+   */
+  unverifiedKeys: string[];
   /** 받아들이지 않은 공지 설정 — 조용히 버리지 않는다 */
   rejected: { name: string; reason: string }[];
 }

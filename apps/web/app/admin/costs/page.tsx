@@ -448,6 +448,12 @@ export default function CostIntelligencePage() {
                         </td>
                         <td className="py-1 text-xs text-zinc-500">
                           {row.url ?? "-"} · {row.detail}
+                          {/* 이 소스가 책임지는 단가 (TASK-3501) */}
+                          {row.keys.length > 0 ? (
+                            <span className="block">
+                              책임 단가: {row.keys.join(", ")}
+                            </span>
+                          ) : null}
                         </td>
                       </tr>
                     ))}
@@ -455,6 +461,23 @@ export default function CostIntelligencePage() {
                 </table>
               </div>
             </div>
+          ) : null}
+
+          {/*
+            죽은 공지가 책임지던 단가 (TASK-3501 — CTO 지시 5).
+            어느 공지가 죽었는지는 알아도 **그래서 어떤 단가를 확인하지
+            못했는지**를 말하지 못하면, 사람은 "그래서 지금 무엇이 위험한가"에
+            답할 수 없다.
+          */}
+          {source !== null && source.unverifiedKeys.length > 0 ? (
+            <p
+              data-testid="price-source-unverified-keys"
+              className="mt-2 text-sm text-amber-700 dark:text-amber-400"
+            >
+              읽지 못한 공지 때문에 확인하지 못한 단가:{" "}
+              {source.unverifiedKeys.join(", ")} — 이 단가들은 지금 바뀌었는지
+              알 수 없습니다.
+            </p>
           ) : null}
 
           {source !== null && source.rejected.length > 0 ? (
