@@ -46,6 +46,7 @@ import type {
 } from "@acos/shared";
 import { AdminSettingsService } from "../admin/admin-settings.service";
 import { EXECUTION_STORE } from "../execution/execution.constants";
+import { PricingService } from "../pricing/pricing.service";
 import { allExperiments, featureExperiment } from "./experiment-config";
 import { ExperimentLifecycleService } from "./experiment-lifecycle.service";
 import {
@@ -115,6 +116,7 @@ export class LlmService {
     providerMap?: Map<string, LlmProvider>,
     @Optional() private readonly lifecycleService?: ExperimentLifecycleService,
     @Optional() private readonly settings?: AdminSettingsService,
+    @Optional() pricingService?: PricingService,
   ) {
     const createGateway = (target: LlmProvider): LlmGateway =>
       new LlmGateway(target, {
@@ -136,6 +138,14 @@ export class LlmService {
       ? new ExecutionTracker(executionStore, {
           onRecordError: (error) =>
             this.logger.warn(`Execution 기록 실패: ${error}`),
+          // 단가는 코드 상수가 아니라 **적용된 가격표**에서 온다
+          // (TASK-3101, CTO 정책 3101-①). 미주입이면 기본 가격표를 쓴다 —
+          // 비용을 null로 남기면 예산 계산에서 빠져 상한이 무력해진다.
+          ...(pricingService
+            ? {
+                pricing: async () => (await pricingService.effective()).llm,
+              }
+            : {}),
         })
       : null;
   }

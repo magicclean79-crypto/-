@@ -7,14 +7,17 @@ import { join } from "node:path";
 import { Test } from "@nestjs/testing";
 import request from "supertest";
 import { resolveProvisioningPolicy, SCHEDULED_JOBS } from "@acos/core";
+import { Prisma } from "@prisma/client";
 import { AuthService } from "../auth/auth.service";
 import { WriteProtectionGuard } from "../auth/write-protection.guard";
 import { LlmBudgetService } from "../llm/llm-budget.service";
+import { PricingService } from "../pricing/pricing.service";
 import { ProviderProductionService } from "../llm/provider-production.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
 import { AlertService } from "./alert.service";
 import { BackupService } from "./backup.service";
+import { CostIntelligenceService } from "./cost-intelligence.service";
 import { DistributedLockService } from "./distributed-lock.service";
 import { NotificationQueueService } from "./notification-queue.service";
 import { NotificationService } from "./notification.service";
@@ -153,6 +156,101 @@ function createPrismaStub() {
     status: string;
     createdAt: Date;
   }[] = [];
+  /**
+   * 비용 원장 (TASK-3101) — 리포트·예측이 이것을 읽는다.
+   *
+   * 스텁이 조건을 무시하고 아무 값이나 돌려주면 "기간·성공만 집계하는가"가
+   * 검증되지 않는다 — 그래서 `where`를 실제로 적용한다.
+   */
+  const executions: {
+    provider: string;
+    model: string;
+    status: string;
+    cost: number | null;
+    createdAt: Date;
+  }[] = [];
+  const ocrResults: {
+    provider: string;
+    status: string;
+    cost: number | null;
+    createdAt: Date;
+  }[] = [];
+  /** 단가 제안 (TASK-3101) — 검토 → 승인 → 적용 절차의 저장소 */
+  const pricingProposals: Record<string, unknown>[] = [];
+
+  /** 기간·상태 조건을 적용한 비용 집계 (Prisma groupBy와 같은 모양) */
+  const groupCost = (
+    rows: {
+      provider: string;
+      model?: string;
+      status: string;
+      cost: number | null;
+      createdAt: Date;
+    }[],
+    args: {
+      where?: { createdAt?: { gte?: Date; lte?: Date }; status?: string };
+    },
+    withModel: boolean,
+  ) => {
+    const buckets = new Map<
+      string,
+      {
+        provider: string;
+        model?: string;
+        _sum: { cost: number | null };
+        _count: { _all: number; cost: number };
+      }
+    >();
+    for (const row of rows) {
+      if (args.where?.status !== undefined && row.status !== args.where.status) {
+        continue;
+      }
+      const gte = args.where?.createdAt?.gte;
+      const lte = args.where?.createdAt?.lte;
+      if (gte && row.createdAt.getTime() < gte.getTime()) continue;
+      if (lte && row.createdAt.getTime() > lte.getTime()) continue;
+      const key = withModel ? `${row.provider}/${row.model ?? ""}` : row.provider;
+      const bucket = buckets.get(key) ?? {
+        provider: row.provider,
+        ...(withModel ? { model: row.model ?? "" } : {}),
+        _sum: { cost: null as number | null },
+        _count: { _all: 0, cost: 0 },
+      };
+      bucket._count._all += 1;
+      if (row.cost !== null) {
+        bucket._count.cost += 1;
+        bucket._sum.cost = Number(((bucket._sum.cost ?? 0) + row.cost).toFixed(6));
+      }
+      buckets.set(key, bucket);
+    }
+    return [...buckets.values()];
+  };
+
+  /** UTC 일자별 지출 (예측이 읽는 date_trunc 집계와 같은 모양) */
+  const dailyCost = (
+    rows: { status: string; cost: number | null; createdAt: Date }[],
+    from?: Date,
+  ) => {
+    const buckets = new Map<
+      string,
+      { date: string; total: number; calls: number; unpriced: number }
+    >();
+    for (const row of rows) {
+      if (row.status !== "SUCCESS") continue;
+      if (from && row.createdAt.getTime() < from.getTime()) continue;
+      const date = row.createdAt.toISOString().slice(0, 10);
+      const bucket = buckets.get(date) ?? { date, total: 0, calls: 0, unpriced: 0 };
+      bucket.calls += 1;
+      if (row.cost === null) {
+        bucket.unpriced += 1;
+      } else {
+        bucket.total = Number((bucket.total + row.cost).toFixed(6));
+      }
+      buckets.set(date, bucket);
+    }
+    return [...buckets.values()];
+  };
+
   const migrations = {
     // 기본은 **실제 디렉터리 그대로 적용됨** — 정상 상태에서 경보가 나지 않아야
     // 경보가 났을 때 그것이 신호가 된다
@@ -168,6 +266,9 @@ function createPrismaStub() {
     governanceScanRuns,
     projects,
     contents,
+    executions,
+    ocrResults,
+    pricingProposals,
     runs,
     deliveries,
     queue,
@@ -288,6 +389,91 @@ function createPrismaStub() {
             rows = rows.slice(0, args.take);
           }
           return rows.map((row) => ({ ...row }));
+        },
+      },
+      /**
+       * 비용 원장 집계 (TASK-3101) — 리포트가 Provider·모델별로 읽는다.
+       */
+      execution: {
+        groupBy: async (args: {
+          where?: { createdAt?: { gte?: Date; lte?: Date }; status?: string };
+        }) => groupCost(executions, args, true),
+      },
+      ocrResult: {
+        groupBy: async (args: {
+          where?: { createdAt?: { gte?: Date; lte?: Date }; status?: string };
+        }) => groupCost(ocrResults, args, false),
+      },
+      /**
+       * 단가 제안 (TASK-3101) — 단계 전이가 실제로 저장돼야 "건너뛸 수
+       * 없다"와 "적용 뒤에는 되돌릴 수 없다"가 검증된다.
+       */
+      pricingProposal: {
+        create: async (args: { data: Record<string, unknown> }) => {
+          seq += 1;
+          const row = {
+            id: `pp-${seq}`,
+            currentPrice: null,
+            reviewedBy: null,
+            reviewedAt: null,
+            approvedBy: null,
+            approvedAt: null,
+            appliedBy: null,
+            appliedAt: null,
+            rejectedBy: null,
+            rejectedAt: null,
+            rejectedReason: null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            ...args.data,
+          } as Record<string, unknown>;
+          pricingProposals.push(row);
+          return { ...row };
+        },
+        findUnique: async (args: { where: { id: string } }) => {
+          const found = pricingProposals.find((row) => row.id === args.where.id);
+          return found ? { ...found } : null;
+        },
+        findMany: async (args?: {
+          where?: { stage?: string; appliedAt?: { not: null } };
+          take?: number;
+        }) => {
+          let rows = [...pricingProposals];
+          const stage = args?.where?.stage;
+          if (stage !== undefined) {
+            rows = rows.filter((row) => row.stage === stage);
+          }
+          if (args?.where?.appliedAt !== undefined) {
+            rows = rows.filter((row) => row.appliedAt !== null);
+          }
+          rows = rows.slice().reverse();
+          if (typeof args?.take === "number") {
+            rows = rows.slice(0, args.take);
+          }
+          return rows.map((row) => ({ ...row }));
+        },
+        /**
+         * `where.stage`도 실제로 본다 — 무시하면 "조회와 갱신 사이에 단계가
+         * 바뀌었을 때 갱신하지 않는다"가 검증되지 않는다.
+         */
+        update: async (args: {
+          where: { id: string; stage?: string };
+          data: Record<string, unknown>;
+        }) => {
+          const row = pricingProposals.find(
+            (candidate) =>
+              candidate.id === args.where.id &&
+              (args.where.stage === undefined ||
+                candidate.stage === args.where.stage),
+          );
+          if (row === undefined) {
+            throw new Prisma.PrismaClientKnownRequestError(
+              "레코드를 찾을 수 없습니다.",
+              { code: "P2025", clientVersion: "test" },
+            );
+          }
+          Object.assign(row, args.data, { updatedAt: new Date() });
+          return { ...row };
         },
       },
       content: {
@@ -518,8 +704,28 @@ function createPrismaStub() {
       },
       // 실제 서비스와 같이 **템플릿을 읽고** 답한다 — 무엇을 물어도 같은 값을
       // 돌려주면 마이그레이션 판정이 검증되지 않는다 (TASK-2401)
-      $queryRaw: async (strings?: TemplateStringsArray) => {
-        const sql = strings ? strings.join(" ") : "";
+      $queryRaw: async (query?: unknown) => {
+        // 태그 템플릿(TemplateStringsArray)과 Prisma.sql 객체 둘 다 온다
+        const source = query as
+          | string[]
+          | { strings?: string[]; values?: unknown[] }
+          | undefined;
+        const sql = Array.isArray(source)
+          ? source.join(" ")
+          : (source?.strings ?? []).join(" ");
+        const values: unknown[] = Array.isArray(source)
+          ? []
+          : (source?.values ?? []);
+        // 일별 지출 집계 (TASK-3101) — 예측이 읽는다
+        if (sql.includes("date_trunc('day'")) {
+          const from = values.find((value) => value instanceof Date) as
+            | Date
+            | undefined;
+          return dailyCost(
+            sql.includes("ocr_results") ? ocrResults : executions,
+            from,
+          );
+        }
         if (sql.includes("migration_name")) {
           if (migrations.applied === null) {
             throw new Error('relation "_prisma_migrations" does not exist');
@@ -569,6 +775,8 @@ interface Overrides {
   ocrMonitor?: Record<string, unknown>;
   /** Provider 연결 순서 (TASK-2901) */
   rollout?: Record<string, unknown>;
+  /** 월 예산 (TASK-3101 예측 — 표시용이며 차단에 쓰이지 않는다) */
+  monthlyBudget?: number | null;
 }
 
 /** 저장소 스텁 상태 (TASK-1701) — 테스트마다 바꿔 쓴다 */
@@ -687,6 +895,12 @@ async function build(overrides: Overrides = {}) {
   };
 
   const budget = {
+    // 예측이 월 예산을 읽는다 (TASK-3101) — 미설정이 기본이다
+    limits: () => ({
+      daily: null,
+      monthly: (overrides.monthlyBudget ?? null) as number | null,
+      alertRatio: 0.8,
+    }),
     status: async () => ({
       daily: OFF,
       monthly: OFF,
@@ -714,6 +928,10 @@ async function build(overrides: Overrides = {}) {
       // 복구 판정의 단일 원천 (TASK-2401, 결정 2301-①) — 컨트롤러가 이것을 쓴다
       RecoveryEvaluationService,
       MigrationGovernanceService,
+      // 가격표 거버넌스·비용 인텔리전스 (TASK-3101) — 실제 서비스를 쓴다.
+      // 스텁을 끼우면 절차(검토 → 승인 → 적용)가 검증되지 않는다.
+      PricingService,
+      CostIntelligenceService,
       // 발행 판정 기록 보관이 예약 정리 작업에 편입됐다 (TASK-2601)
       ContentGovernanceService,
       GovernanceRulesService,
@@ -3627,6 +3845,450 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
         expect(
           built.prisma.alerts.get("provider-failure:google-vision")?.status,
         ).toBe("ACTIVE");
+      });
+    });
+  });
+  describe("Enterprise AI Cost Intelligence Platform (TASK-3101)", () => {
+    /** 제안 등록 (ADMIN 토큰) — supertest 체인을 그대로 돌려준다 */
+    const propose = (
+      server: unknown,
+      body: Record<string, unknown>,
+      token = "tok-admin",
+    ) =>
+      request(server as never)
+        .post("/ops/pricing")
+        .set("Authorization", `Bearer ${token}`)
+        .send(body);
+
+    /** 단계 진행 (검토·승인·적용·반려) */
+    const advance = (
+      server: unknown,
+      id: string,
+      action: string,
+      body: Record<string, unknown> = {},
+      token = "tok-admin",
+    ) =>
+      request(server as never)
+        .post(`/ops/pricing/${id}/${action}`)
+        .set("Authorization", `Bearer ${token}`)
+        .send(body);
+
+    describe("가격표는 검토 → 승인 → 적용 절차를 거친다 (CTO 정책 3101-①)", () => {
+      it("제안하면 현재 단가를 함께 남기고 DRAFT로 시작한다", async () => {
+        const built = await build();
+        app = built.app;
+
+        const response = await propose(built.app.getHttpServer(), {
+          target: "ocr",
+          key: "google-vision",
+          price: { perUnitUsd: 0.002 },
+          reason: "2026년 7월 단가 인상 공지 반영",
+        }).expect(201);
+
+        expect(response.body.stage).toBe("DRAFT");
+        // 무엇에서 무엇으로 바뀌는지가 남아야 나중에 판단을 되짚을 수 있다
+        expect(response.body.currentPrice).toEqual({ perUnitUsd: 0.0015 });
+        expect(response.body.proposedBy).toBe("a@acos.local");
+        expect(response.body.nextStages).toEqual(["REVIEWED", "REJECTED"]);
+      });
+
+      it("사유 없는 제안은 400 — 왜 바꿨는지가 남지 않으면 이력이 무의미하다", async () => {
+        const built = await build();
+        app = built.app;
+
+        const response = await propose(built.app.getHttpServer(), {
+          target: "ocr",
+          key: "google-vision",
+          price: { perUnitUsd: 0.002 },
+          reason: "  ",
+        }).expect(400);
+        expect(response.body.message).toContain("변경 사유");
+      });
+
+      it("음수 단가는 400 — 지출을 줄여 예산 상한을 무력화한다", async () => {
+        const built = await build();
+        app = built.app;
+
+        await propose(built.app.getHttpServer(), {
+          target: "llm",
+          key: "gpt-4o",
+          price: { inputPerMillion: -1, outputPerMillion: 1 },
+          reason: "실수",
+        }).expect(400);
+      });
+
+      it("검토 없이 승인할 수 없고, 승인 없이 적용할 수 없다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        const created = await propose(server, {
+          target: "ocr",
+          key: "google-vision",
+          price: { perUnitUsd: 0.002 },
+          reason: "단가 인상",
+        }).expect(201);
+        const id = created.body.id as string;
+
+        const skipped = await advance(server, id, "approve").expect(400);
+        expect(skipped.body.message).toContain("건너뛸 수 없습니다");
+        await advance(server, id, "apply").expect(400);
+
+        await advance(server, id, "review").expect(200);
+        await advance(server, id, "apply").expect(400);
+        await advance(server, id, "approve").expect(200);
+        const applied = await advance(server, id, "apply").expect(200);
+        expect(applied.body.stage).toBe("APPLIED");
+        expect(applied.body.appliedAt).not.toBeNull();
+        expect(applied.body.detail).toContain("이후 호출에 이 단가가 쓰입니다");
+      });
+
+      it("적용된 제안은 되돌릴 수 없다 — 새 제안을 내야 한다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        const created = await propose(server, {
+          target: "ocr",
+          key: "google-vision",
+          price: { perUnitUsd: 0.002 },
+          reason: "단가 인상",
+        });
+        const id = created.body.id as string;
+        await advance(server, id, "review");
+        await advance(server, id, "approve");
+        await advance(server, id, "apply");
+
+        const response = await advance(server, id, "reject", {
+          reason: "되돌리고 싶다",
+        }).expect(400);
+        expect(response.body.message).toContain("적용 기록은 바꾸지 않습니다");
+      });
+
+      it("반려는 사유가 있어야 한다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        const created = await propose(server, {
+          target: "ocr",
+          key: "google-vision",
+          price: { perUnitUsd: 0.002 },
+          reason: "단가 인상",
+        });
+        const id = created.body.id as string;
+
+        await advance(server, id, "reject").expect(400);
+        const rejected = await advance(server, id, "reject", {
+          reason: "공지 원문 확인 필요",
+        }).expect(200);
+        expect(rejected.body.stage).toBe("REJECTED");
+        expect(rejected.body.rejectedReason).toBe("공지 원문 확인 필요");
+        expect(rejected.body.rejectedBy).toBe("a@acos.local");
+      });
+
+      it("제안자와 승인자가 같으면 사실을 남기되 막지 않는다", async () => {
+        // 운영자가 한 명인 환경에서 절차가 막히면 사람은 코드를 고쳐 우회하고,
+        // 그러면 이력이 아예 없어진다 (결정 2601-① 교훈)
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        const created = await propose(server, {
+          target: "ocr",
+          key: "google-vision",
+          price: { perUnitUsd: 0.002 },
+          reason: "단가 인상",
+        });
+        const id = created.body.id as string;
+        await advance(server, id, "review");
+        const approved = await advance(server, id, "approve").expect(200);
+        expect(approved.body.selfApproval).toContain("제안자와 승인자가 같습니다");
+      });
+
+      it("알 수 없는 단계 이름은 400", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await advance(
+          built.app.getHttpServer(),
+          "pp-1",
+          "publish",
+        ).expect(400);
+        expect(response.body.message).toContain("지원하지 않는 단계");
+      });
+
+      it("ADMIN 전용이다 — 단가는 돈의 기준이다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        await request(server).get("/ops/pricing").expect(401);
+        await request(server)
+          .get("/ops/pricing")
+          .set("Authorization", "Bearer tok-editor")
+          .expect(403);
+        await propose(
+          server,
+          {
+            target: "ocr",
+            key: "google-vision",
+            price: { perUnitUsd: 0.002 },
+            reason: "단가 인상",
+          },
+          "tok-editor",
+        ).expect(403);
+      });
+    });
+
+    describe("적용된 단가가 이후 계산에 쓰인다", () => {
+      it("GET /ops/pricing — 실효 가격표가 적용된 값을 보여 준다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        const created = await propose(server, {
+          target: "ocr",
+          key: "google-vision",
+          price: { perUnitUsd: 0.002 },
+          reason: "단가 인상",
+        });
+        const id = created.body.id as string;
+        await advance(server, id, "review");
+        await advance(server, id, "approve");
+        await advance(server, id, "apply");
+
+        const board = await request(server)
+          .get("/ops/pricing")
+          .set("Authorization", "Bearer tok-admin")
+          .expect(200);
+
+        const vision = board.body.effective.ocr.find(
+          (row: { provider: string }) => row.provider === "google-vision",
+        );
+        expect(vision.perUnitUsd).toBe(0.002);
+        // 코드 기본값과 구분된다 — 누구의 승인으로 적용된 값인지가 남는다
+        expect(vision.note).toContain("승인된 제안으로 적용됨");
+        expect(board.body.effective.appliedCount).toBe(1);
+        expect(board.body.open).toEqual([]);
+        expect(board.body.closed).toHaveLength(1);
+        expect(board.body.detail).toContain("과거 비용 기록은 바뀌지 않습니다");
+      });
+
+      it("적용 전에는 기준 가격표를 그대로 쓴다 — 승인만으로 바뀌지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        const created = await propose(server, {
+          target: "ocr",
+          key: "google-vision",
+          price: { perUnitUsd: 0.002 },
+          reason: "단가 인상",
+        });
+        const id = created.body.id as string;
+        await advance(server, id, "review");
+        await advance(server, id, "approve");
+
+        const board = await request(server)
+          .get("/ops/pricing")
+          .set("Authorization", "Bearer tok-admin")
+          .expect(200);
+        const vision = board.body.effective.ocr.find(
+          (row: { provider: string }) => row.provider === "google-vision",
+        );
+        expect(vision.perUnitUsd).toBe(0.0015);
+        expect(board.body.effective.appliedCount).toBe(0);
+      });
+    });
+
+    describe("운영 비용 리포트는 회계 청구서가 아니다 (CTO 정책 3101-④)", () => {
+      const seed = (built: Awaited<ReturnType<typeof build>>) => {
+        const at = new Date();
+        built.prisma.executions.push(
+          {
+            provider: "openai",
+            model: "gpt-4o",
+            status: "SUCCESS",
+            cost: 0.1,
+            createdAt: at,
+          },
+          {
+            provider: "openai",
+            model: "gpt-4o",
+            status: "SUCCESS",
+            cost: 0.05,
+            createdAt: at,
+          },
+          // 가격표에 없어 비용이 빠진 호출
+          {
+            provider: "openai",
+            model: "gpt-9",
+            status: "SUCCESS",
+            cost: null,
+            createdAt: at,
+          },
+          // 실패한 호출은 집계하지 않는다 (비용이 기록되지 않는다)
+          {
+            provider: "openai",
+            model: "gpt-4o",
+            status: "FAILED",
+            cost: null,
+            createdAt: at,
+          },
+        );
+        built.prisma.ocrResults.push({
+          provider: "google-vision",
+          status: "SUCCESS",
+          cost: 0.003,
+          createdAt: at,
+        });
+      };
+
+      it("GET /ops/billing — 두 원장을 합산하고 큰 것부터 보여 준다", async () => {
+        const built = await build();
+        app = built.app;
+        seed(built);
+
+        const response = await request(built.app.getHttpServer())
+          .get("/ops/billing")
+          .set("Authorization", "Bearer tok-admin")
+          .expect(200);
+
+        expect(response.body.bySource).toEqual({ llm: 0.15, ocr: 0.003 });
+        expect(response.body.total).toBe(0.153);
+        expect(response.body.rows[0].model).toBe("gpt-4o");
+        // 미산정이 있으면 총액이 실제보다 작다고 말한다
+        expect(response.body.unpricedCalls).toBe(1);
+        expect(response.body.detail).toContain("합계는 실제보다 작습니다");
+        expect(response.body.disclaimer).toContain(
+          "회계 청구서를 대체하지 않습니다",
+        );
+      });
+
+      it("잘못된 기간은 조용히 무시하지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        await request(server)
+          .get("/ops/billing?from=어제")
+          .set("Authorization", "Bearer tok-admin")
+          .expect(400);
+        await request(server)
+          .get("/ops/billing?from=2026-07-31&to=2026-07-01")
+          .set("Authorization", "Bearer tok-admin")
+          .expect(400);
+      });
+
+      it("ADMIN 전용이다", async () => {
+        const built = await build();
+        app = built.app;
+        await request(built.app.getHttpServer())
+          .get("/ops/billing")
+          .set("Authorization", "Bearer tok-editor")
+          .expect(403);
+      });
+    });
+
+    describe("예측은 참고자료다 (CTO 정책 3101-③)", () => {
+      /** 이번 달 안의 서로 다른 UTC 일자 (예측 표본) */
+      const daysThisMonth = (count: number): Date[] => {
+        const now = new Date();
+        return Array.from({ length: count }, (_, index) =>
+          new Date(
+            Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), index + 1, 12),
+          ),
+        );
+      };
+
+      it("표본이 적으면 숫자를 만들지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        for (const at of daysThisMonth(2)) {
+          built.prisma.executions.push({
+            provider: "openai",
+            model: "gpt-4o",
+            status: "SUCCESS",
+            cost: 1,
+            createdAt: at,
+          });
+        }
+
+        const response = await request(built.app.getHttpServer())
+          .get("/ops/cost-forecast")
+          .set("Authorization", "Bearer tok-admin")
+          .expect(200);
+
+        expect(response.body.verdict).toBe("insufficient");
+        expect(response.body.projectedMonthEnd).toBeNull();
+        // 실제 지출은 사실이므로 그대로 말한다
+        expect(response.body.monthToDate).toBe(2);
+        expect(response.body.detail).toContain("최소 3일이 필요합니다");
+      });
+
+      it("관측이 쌓이면 추정하고, 참고자료라는 사실을 밝힌다", async () => {
+        const built = await build({ monthlyBudget: 10 });
+        app = built.app;
+        for (const at of daysThisMonth(3)) {
+          built.prisma.executions.push({
+            provider: "openai",
+            model: "gpt-4o",
+            status: "SUCCESS",
+            cost: 1,
+            createdAt: at,
+          });
+          built.prisma.ocrResults.push({
+            provider: "google-vision",
+            status: "SUCCESS",
+            cost: 1,
+            createdAt: at,
+          });
+        }
+
+        const response = await request(built.app.getHttpServer())
+          .get("/ops/cost-forecast")
+          .set("Authorization", "Bearer tok-admin")
+          .expect(200);
+
+        // 두 원장을 합쳐 하루 2달러로 본다
+        expect(response.body.verdict).toBe("projected");
+        expect(response.body.dailyAverage).toBe(2);
+        expect(response.body.points).toHaveLength(3);
+        expect(response.body.budget).toBe(10);
+        expect(response.body.detail).toContain(
+          "예산 차단은 실제 비용만 사용합니다",
+        );
+      });
+
+      it("비용이 빠진 호출이 있으면 추정도 작을 수 있다고 말한다", async () => {
+        const built = await build();
+        app = built.app;
+        for (const at of daysThisMonth(3)) {
+          built.prisma.executions.push({
+            provider: "openai",
+            model: "gpt-9",
+            status: "SUCCESS",
+            cost: null,
+            createdAt: at,
+          });
+        }
+
+        const response = await request(built.app.getHttpServer())
+          .get("/ops/cost-forecast")
+          .set("Authorization", "Bearer tok-admin")
+          .expect(200);
+
+        expect(response.body.unpricedCalls).toBe(3);
+        expect(response.body.detail).toContain("추정도 실제보다 작을 수 있습니다");
+      });
+
+      it("ADMIN 전용이다", async () => {
+        const built = await build();
+        app = built.app;
+        await request(built.app.getHttpServer())
+          .get("/ops/cost-forecast")
+          .set("Authorization", "Bearer tok-editor")
+          .expect(403);
       });
     });
   });

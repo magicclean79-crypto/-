@@ -106,6 +106,55 @@ describe("LlmService — Execution 기록 (TASK-0601)", () => {
     expect(store.entries[0].latencyMs).toBeGreaterThanOrEqual(0);
   });
 
+  it("비용은 승인·적용된 가격표로 계산된다 (TASK-3101, CTO 정책 3101-①)", async () => {
+    // 코드 상수로 계산하면 "왜 이 금액인가"에 답할 수 없다 — 단가의 출처는
+    // 절차를 거친 가격표 하나여야 한다
+    const store = new InMemoryExecutionStore();
+    const service = new LlmService(
+      new MockLlmProvider(),
+      store,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        effective: async () => ({
+          llm: {
+            "mock-llm-1": { inputPerMillion: 1_000_000, outputPerMillion: 0 },
+          },
+          ocr: {},
+        }),
+      } as never,
+    );
+
+    await service.complete(request);
+
+    // 입력 1토큰 = $1로 계산되는 가격표를 적용했다
+    expect(store.entries[0].cost).toBe(store.entries[0].inputTokens);
+  });
+
+  it("가격표 조회가 실패해도 비용을 null로 남기지 않는다", async () => {
+    // 비용이 null이면 그 호출은 예산 계산에서 빠지고 상한이 무력해진다 —
+    // 조회 실패보다 그것이 위험하다
+    const store = new InMemoryExecutionStore();
+    const service = new LlmService(
+      new MockLlmProvider(),
+      store,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        effective: async () => {
+          throw new Error("DB 연결 실패");
+        },
+      } as never,
+    );
+
+    await service.complete(request);
+    expect(store.entries[0].cost).toBe(0); // mock 단가 0 — null이 아니다
+  });
+
   it("feature 미지정 시 'dev'로 기록한다 (개발용 API 경로)", async () => {
     const store = new InMemoryExecutionStore();
     const service = new LlmService(new MockLlmProvider(), store);

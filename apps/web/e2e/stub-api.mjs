@@ -24,6 +24,14 @@ let stubDrills = [];
 let stubRequirements = [];
 // 백업 무결성 스텁 상태 (TASK-2001)
 let stubRemoteVerified = false;
+/**
+ * 가격표 거버넌스 스텁 상태 (TASK-3101).
+ *
+ * 실제 서비스처럼 **단계를 지킨다** — 스텁이 아무 전이나 통과시키면
+ * "검토 없이 승인할 수 없다"가 화면에서 검증되지 않는다.
+ */
+let stubProposals = [];
+let stubAppliedOcr = null;
 
 const stats = (totals, groups) => ({
   range: { from: null, to: null },
@@ -357,6 +365,8 @@ const server = http.createServer((req, res) => {
       stubDrills = [];
       stubRequirements = [];
       stubRemoteVerified = false;
+      stubProposals = [];
+      stubAppliedOcr = null;
       resetPublishing();
       resetUsers();
       res.end(JSON.stringify({ mode }));
@@ -1795,6 +1805,320 @@ const server = http.createServer((req, res) => {
     );
     return;
   }
+  // ── AI 비용 관리 (TASK-3101, CTO 정책 3101-①③④) ── ADMIN 전용
+  if (url.pathname.startsWith("/ops/pricing")) {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+
+    const NEXT_STAGES = {
+      DRAFT: ["REVIEWED", "REJECTED"],
+      REVIEWED: ["APPROVED", "REJECTED"],
+      APPROVED: ["APPLIED", "REJECTED"],
+      APPLIED: [],
+      REJECTED: [],
+    };
+    const priceText = (target, price) =>
+      price === null
+        ? "가격표에 없던 항목"
+        : target === "llm"
+          ? `입력 $${price.inputPerMillion}/1M · 출력 $${price.outputPerMillion}/1M`
+          : `단위당 $${price.perUnitUsd}`;
+    const WAITING = {
+      DRAFT: "검토를 기다립니다",
+      REVIEWED: "승인을 기다립니다",
+      APPROVED: "적용을 기다립니다",
+      APPLIED: "적용되었습니다 — 이후 호출에 이 단가가 쓰입니다",
+      REJECTED: "반려되었습니다",
+    };
+    const STAGE_LABEL = {
+      DRAFT: "작성됨",
+      REVIEWED: "검토됨",
+      APPROVED: "승인됨",
+      APPLIED: "적용됨",
+      REJECTED: "반려됨",
+    };
+    const view = (proposal) => ({
+      ...proposal,
+      nextStages: NEXT_STAGES[proposal.stage],
+      selfApproval:
+        proposal.approvedBy && proposal.approvedBy === proposal.proposedBy
+          ? `제안자와 승인자가 같습니다 (${proposal.approvedBy}) — 절차는 진행되지만 교차 확인은 이뤄지지 않았습니다.`
+          : null,
+      detail:
+        `${proposal.target}/${proposal.key}: ${priceText(proposal.target, proposal.currentPrice)} → ` +
+        `${priceText(proposal.target, proposal.price)} · ${STAGE_LABEL[proposal.stage]} — ${WAITING[proposal.stage]}`,
+    });
+
+    // 제안 등록
+    if (req.method === "POST" && url.pathname === "/ops/pricing") {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        const parsed = JSON.parse(body || "{}");
+        if (!parsed.reason || String(parsed.reason).trim() === "") {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ message: "변경 사유가 필요합니다." }));
+          return;
+        }
+        const proposal = {
+          id: `pp-${stubProposals.length + 1}`,
+          target: parsed.target,
+          key: parsed.key,
+          price: parsed.price,
+          currentPrice:
+            parsed.target === "ocr" && parsed.key === "google-vision"
+              ? { perUnitUsd: stubAppliedOcr ?? 0.0015 }
+              : null,
+          reason: parsed.reason,
+          stage: "DRAFT",
+          proposedBy: "admin@acos.local",
+          reviewedBy: null,
+          reviewedAt: null,
+          approvedBy: null,
+          approvedAt: null,
+          appliedBy: null,
+          appliedAt: null,
+          rejectedBy: null,
+          rejectedAt: null,
+          rejectedReason: null,
+          createdAt: new Date().toISOString(),
+        };
+        stubProposals.push(proposal);
+        res.statusCode = 201;
+        res.end(JSON.stringify(view(proposal)));
+      });
+      return;
+    }
+
+    // 단계 진행
+    const advance = url.pathname.match(/^\/ops\/pricing\/([^/]+)\/([^/]+)$/);
+    if (req.method === "POST" && advance) {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        const [, id, action] = advance;
+        const to = {
+          review: "REVIEWED",
+          approve: "APPROVED",
+          apply: "APPLIED",
+          reject: "REJECTED",
+        }[action];
+        const proposal = stubProposals.find((row) => row.id === id);
+        if (to === undefined || proposal === undefined) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ message: "지원하지 않는 단계입니다." }));
+          return;
+        }
+        if (!NEXT_STAGES[proposal.stage].includes(to)) {
+          res.statusCode = 400;
+          res.end(
+            JSON.stringify({
+              message:
+                `${proposal.stage}에서 ${to}로 갈 수 없습니다. ` +
+                "단가는 검토 → 승인 → 적용 순서를 건너뛸 수 없습니다 (CTO 정책 3101-①).",
+            }),
+          );
+          return;
+        }
+        if (to === "REJECTED" && !JSON.parse(body || "{}").reason) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ message: "반려 사유가 필요합니다." }));
+          return;
+        }
+        proposal.stage = to;
+        const now = new Date().toISOString();
+        if (to === "REVIEWED") {
+          proposal.reviewedBy = "admin@acos.local";
+          proposal.reviewedAt = now;
+        } else if (to === "APPROVED") {
+          proposal.approvedBy = "admin@acos.local";
+          proposal.approvedAt = now;
+        } else if (to === "APPLIED") {
+          proposal.appliedBy = "admin@acos.local";
+          proposal.appliedAt = now;
+          if (proposal.target === "ocr" && proposal.key === "google-vision") {
+            stubAppliedOcr = proposal.price.perUnitUsd;
+          }
+        } else {
+          proposal.rejectedBy = "admin@acos.local";
+          proposal.rejectedAt = now;
+          proposal.rejectedReason = JSON.parse(body || "{}").reason;
+        }
+        res.end(JSON.stringify(view(proposal)));
+      });
+      return;
+    }
+
+    // 목록 + 실효 가격표
+    const applied = stubProposals.filter((row) => row.stage === "APPLIED");
+    res.end(
+      JSON.stringify({
+        open: stubProposals
+          .filter((row) => !["APPLIED", "REJECTED"].includes(row.stage))
+          .map(view)
+          .reverse(),
+        closed: stubProposals
+          .filter((row) => ["APPLIED", "REJECTED"].includes(row.stage))
+          .map(view)
+          .reverse(),
+        effective: {
+          llm: [
+            {
+              model: "gpt-4o",
+              inputPerMillion: 2.5,
+              outputPerMillion: 10,
+              note: "코드 기본값 — 승인 이력이 없습니다",
+            },
+          ],
+          ocr: [
+            {
+              provider: "google-vision",
+              perUnitUsd: stubAppliedOcr ?? 0.0015,
+              note:
+                stubAppliedOcr === null
+                  ? "TEXT_DETECTION 1,000장 $1.50 기준 (무료 구간은 반영하지 않습니다)"
+                  : `승인된 제안으로 적용됨 (${new Date().toISOString()})`,
+            },
+          ],
+          appliedCount: applied.length,
+          lastAppliedAt: applied.length > 0 ? applied.at(-1).appliedAt : null,
+        },
+        stages: ["DRAFT", "REVIEWED", "APPROVED", "APPLIED", "REJECTED"],
+        detail:
+          `진행 중 ${stubProposals.filter((row) => !["APPLIED", "REJECTED"].includes(row.stage)).length}건 · ` +
+          `적용 이력 ${applied.length}건. 단가는 검토 → 승인 → 적용 절차를 거칩니다 (CTO 정책 3101-①). ` +
+          "적용된 단가는 이후 호출에만 쓰이고, 과거 비용 기록은 바뀌지 않습니다 (정책 3101-②).",
+        checkedAt: new Date().toISOString(),
+      }),
+    );
+    return;
+  }
+
+  if (url.pathname === "/ops/cost-forecast" || url.pathname === "/ops/billing") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    const enough = mode === "data";
+
+    if (url.pathname === "/ops/cost-forecast") {
+      // data: 관측이 쌓인 상태 / 그 외: 표본 부족 (숫자를 만들지 않는다)
+      res.end(
+        JSON.stringify(
+          enough
+            ? {
+                verdict: "projected",
+                observedDays: 5,
+                minDays: 3,
+                dailyAverage: 2,
+                monthToDate: 10,
+                projectedMonthEnd: 62,
+                budget: 50,
+                projectedRatio: 1.24,
+                projectedExceeds: true,
+                points: [
+                  { date: "2026-07-01", total: 2 },
+                  { date: "2026-07-02", total: 2 },
+                  { date: "2026-07-03", total: 2 },
+                  { date: "2026-07-04", total: 2 },
+                  { date: "2026-07-05", total: 2 },
+                ],
+                unpricedCalls: 0,
+                detail:
+                  "관측 5일 · 하루 평균 $2.000000 → 월말 예상 $62.000000 / 예산 $50 — 이 추세면 예산을 넘습니다. " +
+                  "참고용 추정입니다 — 예산 차단은 실제 비용만 사용합니다 (CTO 정책 3101-③).",
+                checkedAt: new Date().toISOString(),
+              }
+            : {
+                verdict: "insufficient",
+                observedDays: 2,
+                minDays: 3,
+                dailyAverage: null,
+                monthToDate: 3,
+                projectedMonthEnd: null,
+                budget: null,
+                projectedRatio: null,
+                projectedExceeds: false,
+                points: [
+                  { date: "2026-07-01", total: 1 },
+                  { date: "2026-07-02", total: 2 },
+                ],
+                unpricedCalls: 4,
+                detail:
+                  "관측 2일 — 예측에는 최소 3일이 필요합니다. 지금까지 실제 지출은 $3.000000입니다. " +
+                  "참고용 추정입니다 — 예산 차단은 실제 비용만 사용합니다 (CTO 정책 3101-③). " +
+                  "비용이 빠진 호출 4건이 있어 추정도 실제보다 작을 수 있습니다.",
+                checkedAt: new Date().toISOString(),
+              },
+        ),
+      );
+      return;
+    }
+
+    const disclaimer =
+      "이 리포트는 운영 지표입니다 — 회계 청구서를 대체하지 않습니다. " +
+      "미산정·실패 호출·무료 구간·환율 차이로 실제 청구와 다를 수 있습니다.";
+    res.end(
+      JSON.stringify({
+        period: {
+          from: "2026-07-01T00:00:00.000Z",
+          to: "2026-07-30T00:00:00.000Z",
+        },
+        total: enough ? 0.153 : 0,
+        bySource: enough ? { llm: 0.15, ocr: 0.003 } : { llm: 0, ocr: 0 },
+        rows: enough
+          ? [
+              {
+                source: "llm",
+                provider: "openai",
+                model: "gpt-4o",
+                calls: 2,
+                cost: 0.15,
+                unpricedCalls: 0,
+                share: 0.980392,
+              },
+              {
+                source: "ocr",
+                provider: "google-vision",
+                model: "text-detection",
+                calls: 1,
+                cost: 0.003,
+                unpricedCalls: 0,
+                share: 0.019608,
+              },
+              {
+                source: "llm",
+                provider: "openai",
+                model: "gpt-9",
+                calls: 1,
+                cost: null,
+                unpricedCalls: 1,
+                share: 0,
+              },
+            ]
+          : [],
+        calls: enough ? 4 : 0,
+        unpricedCalls: enough ? 1 : 0,
+        disclaimer,
+        detail: enough
+          ? "호출 4건 · 합계 $0.153000 (LLM $0.150000 · OCR $0.003000). " +
+            "비용이 빠진 호출 1건이 있어 합계는 실제보다 작습니다. " +
+            disclaimer
+          : `호출 0건 · 합계 $0.000000 (LLM $0.000000 · OCR $0.000000). ${disclaimer}`,
+        checkedAt: new Date().toISOString(),
+      }),
+    );
+    return;
+  }
+
   // ── Provider 연결 순서 (TASK-2901, CTO 결정 2801-⑤) ── ADMIN 전용
   if (url.pathname === "/ops/providers") {
     if (req.headers.authorization !== "Bearer stub-token") {

@@ -77,6 +77,17 @@ export class LlmBudgetService {
   }
 
   /**
+   * 설정된 예산 상한 (TASK-3101) — 미설정은 null(무제한)이다.
+   *
+   * 예측이 "예산 대비 얼마"를 말할 때 이 값을 읽는다. **예측은 이 값으로
+   * 아무것도 막지 않는다** (CTO 정책 3101-③) — 차단은 실제 지출을 보는
+   * `assertWithinBudget`만 한다.
+   */
+  limits(): { daily: number | null; monthly: number | null; alertRatio: number } {
+    return this.config();
+  }
+
+  /**
    * 기간 내 AI 지출 — **두 원장을 합친다** (TASK-3001).
    *
    * OCR은 성공한 호출에만 비용이 붙고, 가격표에 없는 엔진은 `null`이라

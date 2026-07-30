@@ -1,4 +1,5 @@
 import { Test } from "@nestjs/testing";
+import { PricingService } from "../pricing/pricing.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { LlmService } from "./llm.service";
 import { ProviderProductionService } from "./provider-production.service";
@@ -58,6 +59,13 @@ async function build(options: {
   ocrSuccesses?: Record<string, number>;
   /** OCR 실행 이력 (비용 검증·관측용) */
   ocrRows?: OcrRow[];
+  /** 적용된 단가 이력 (TASK-3101 — 시점별 대조) */
+  appliedPricing?: {
+    target: string;
+    key: string;
+    price: Record<string, number>;
+    appliedAt: Date;
+  }[];
 }) {
   const calls: FindManyArgs[] = [];
   const countCalls: FindManyArgs[] = [];
@@ -73,6 +81,10 @@ async function build(options: {
       .map(([provider, count]) => ({ provider, _count: { _all: count } }));
 
   const prisma = {
+    // 적용된 단가 이력 (TASK-3101) — 비용 검증이 시점별 단가로 대조한다
+    pricingProposal: {
+      findMany: async () => options.appliedPricing ?? [],
+    },
     execution: {
       findMany: async (args: FindManyArgs) => {
         calls.push(args);
@@ -139,6 +151,9 @@ async function build(options: {
       ProviderProductionService,
       { provide: PrismaService, useValue: prisma },
       { provide: LlmService, useValue: llm },
+      // 실제 PricingService를 쓴다 — 스텁을 끼우면 "적용된 단가로 대조하는가"가
+      // 검증되지 않는다 (TASK-3101)
+      PricingService,
     ],
   }).compile();
 

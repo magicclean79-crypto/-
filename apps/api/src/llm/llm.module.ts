@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { AuthModule } from "../auth/auth.module";
 import { ExecutionModule } from "../execution/execution.module";
+import { PricingModule } from "../pricing/pricing.module";
 import { ExperimentAnalyticsService } from "./experiment-analytics.service";
 import { ExperimentLifecycleService } from "./experiment-lifecycle.service";
 import { LlmBudgetService } from "./llm-budget.service";
@@ -17,7 +18,8 @@ import { createLlmProvider, createLlmProviderMap } from "./provider.factory";
  * 대체된다. 자세한 구조: docs/architecture/llm.md
  */
 @Module({
-  imports: [ExecutionModule, AuthModule],
+  // 비용 계산에 쓰는 단가는 승인·적용된 가격표에서 온다 (TASK-3101, 정책 3101-①)
+  imports: [ExecutionModule, AuthModule, PricingModule],
   controllers: [LlmController],
   providers: [
     LlmService,

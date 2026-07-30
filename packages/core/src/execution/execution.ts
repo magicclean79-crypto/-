@@ -115,12 +115,23 @@ export function estimateLlmCost(
   return Number(cost.toFixed(6));
 }
 
+/**
+ * 가격표 공급자 (TASK-3101, CTO 정책 3101-①).
+ *
+ * 표 자체를 받거나 **매번 물어보는 함수**를 받는다. 함수를 허용하는 이유는
+ * 단가가 절차(검토 → 승인 → 적용)를 거쳐 **운영 중에 바뀌기** 때문이다 —
+ * 기동 시점에 한 번 읽어 두면 적용된 단가가 재기동 전까지 반영되지 않는다.
+ */
+export type LlmPricingSource =
+  | typeof DEFAULT_LLM_PRICING
+  | (() => typeof DEFAULT_LLM_PRICING | Promise<typeof DEFAULT_LLM_PRICING>);
+
 export interface ExecutionTrackerOptions {
   /** 시각 함수 — 테스트에서 가짜로 대체할 수 있다 (기본 Date.now) */
   now?: () => number;
   /** 기록 실패 훅 (로깅용) — 기록 실패는 호출을 실패시키지 않는다 */
   onRecordError?: (error: string) => void;
-  pricing?: typeof DEFAULT_LLM_PRICING;
+  pricing?: LlmPricingSource;
 }
 
 export interface TrackedLlmResult {
@@ -137,7 +148,7 @@ export interface TrackedLlmResult {
 export class ExecutionTracker {
   private readonly now: () => number;
   private readonly onRecordError?: (error: string) => void;
-  private readonly pricing: typeof DEFAULT_LLM_PRICING;
+  private readonly pricing: LlmPricingSource;
 
   constructor(
     private readonly store: ExecutionStore,
@@ -146,6 +157,23 @@ export class ExecutionTracker {
     this.now = options.now ?? Date.now;
     this.onRecordError = options.onRecordError;
     this.pricing = options.pricing ?? DEFAULT_LLM_PRICING;
+  }
+
+  /**
+   * 지금 유효한 가격표.
+   *
+   * 읽지 못하면 **기본 표로 계산한다** — 비용을 `null`로 남기면 예산 계산에서
+   * 빠져 상한이 무력해지고, 그것이 조회 실패보다 위험하다.
+   */
+  private async table(): Promise<typeof DEFAULT_LLM_PRICING> {
+    if (typeof this.pricing !== "function") {
+      return this.pricing;
+    }
+    try {
+      return await this.pricing();
+    } catch {
+      return DEFAULT_LLM_PRICING;
+    }
   }
 
   async track<T extends TrackedLlmResult>(
@@ -166,7 +194,7 @@ export class ExecutionTracker {
         status: "SUCCESS",
         inputTokens: result.usage.inputTokens,
         outputTokens: result.usage.outputTokens,
-        cost: estimateLlmCost(result.model, result.usage, this.pricing),
+        cost: estimateLlmCost(result.model, result.usage, await this.table()),
         latencyMs: this.now() - startedAt,
         error: null,
         diagnostic,

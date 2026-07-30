@@ -4,6 +4,7 @@ import { MockOcrProvider } from "@acos/core";
 import type { OcrProvider } from "@acos/core";
 import type { OcrResult } from "@prisma/client";
 import { LlmBudgetService } from "../llm/llm-budget.service";
+import { PricingService } from "../pricing/pricing.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
 import { OCR_PROVIDER } from "./ocr.constants";
@@ -73,7 +74,12 @@ function createPrismaMock() {
 describe("OcrService (Service Test)", () => {
   async function createService(
     prisma: ReturnType<typeof createPrismaMock>,
-    options: { provider?: OcrProvider; budget?: unknown } = {},
+    options: {
+      provider?: OcrProvider;
+      budget?: unknown;
+      /** 적용된 OCR 단가 (TASK-3101) — 미지정이면 가격표를 주입하지 않는다 */
+      pricing?: unknown;
+    } = {},
   ) {
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -94,6 +100,11 @@ describe("OcrService (Service Test)", () => {
           provide: LlmBudgetService,
           useValue: options.budget ?? { assertWithinBudget: jest.fn() },
         },
+        // 단가는 승인·적용된 가격표에서 온다 (TASK-3101, CTO 정책 3101-①).
+        // 미주입이면 기준 가격표를 쓴다 — 기존 동작과 같다.
+        ...(options.pricing
+          ? [{ provide: PricingService, useValue: options.pricing }]
+          : []),
       ],
     }).compile();
     return moduleRef.get(OcrService);
@@ -179,6 +190,30 @@ describe("OcrService (Service Test)", () => {
       expect(result.status).toBe("SUCCESS");
       // 1단위 = $0.0015 (google-vision 공개 단가)
       expect(Number([...prisma.rows.values()][0].cost)).toBe(0.0015);
+    });
+
+    it("적용된 단가가 있으면 그 단가로 기록된다 (TASK-3101, 정책 3101-①)", async () => {
+      // 코드 기본값은 아무도 승인하지 않은 값이다 — 그 값으로 계산한 비용은
+      // "왜 이 금액인가"에 답할 수 없다
+      const prisma = createPrismaMock();
+      prisma.image.findUnique.mockResolvedValue(image);
+      const service = await createService(prisma, {
+        provider: new FakeGoogleVision(),
+        pricing: {
+          effective: async () => ({
+            llm: {},
+            ocr: {
+              "google-vision": {
+                perUnitUsd: 0.002,
+                note: "승인된 제안으로 적용됨",
+              },
+            },
+          }),
+        },
+      });
+
+      await service.runOcr("img-1");
+      expect(Number([...prisma.rows.values()][0].cost)).toBe(0.002);
     });
 
     it("과금 없는 엔진은 0으로 기록된다 — null(모름)과 다르다", async () => {

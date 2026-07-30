@@ -26,6 +26,7 @@ import type {
   ProviderValidationDto,
   ProviderValidationReportDto,
 } from "@acos/shared";
+import { PricingService } from "../pricing/pricing.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { LlmService } from "./llm.service";
 
@@ -49,6 +50,8 @@ export class ProviderProductionService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly llm: LlmService,
+    // 단가는 승인·적용된 가격표에서 온다 (TASK-3101, CTO 정책 3101-①)
+    private readonly pricing: PricingService,
   ) {}
 
   private get production(): boolean {
@@ -193,8 +196,13 @@ export class ProviderProductionService {
       createdAt: record.createdAt.toISOString(),
     }));
 
-    const result = verifyCosts(samples);
-    const ocr = verifyOcrCosts(ocrSamples);
+    // 검증은 **그 시점에 유효했던 단가**로 대조한다 (TASK-3101, 정책 3101-②).
+    // 비용 기록은 수정하지 않으므로, 새 단가로 과거를 대조하면 단가를 한 번
+    // 바꿀 때마다 과거 전체가 "불일치"로 보고되고 그 경보는 곧 무시된다.
+    const resolvers = await this.pricing.resolvers();
+    const result = verifyCosts(samples, resolvers.llm);
+    const ocr = verifyOcrCosts(ocrSamples, resolvers.ocr);
+    const effective = await this.pricing.effective();
     return {
       ok: result.ok && ocr.ok,
       hours,
@@ -212,8 +220,10 @@ export class ProviderProductionService {
         llm: result.recordedTotal,
         ocr: ocr.recordedTotal,
       },
-      pricing: pricedModels(),
-      ocrPricing: describeOcrPricing(),
+      // 지금 실제로 쓰는 단가를 보여 준다 — 코드 기본값을 보여 주면
+      // 승인·적용된 단가와 화면이 어긋난다 (TASK-3101)
+      pricing: pricedModels(effective.llm),
+      ocrPricing: describeOcrPricing(effective.ocr),
       checkedAt: new Date().toISOString(),
     };
   }

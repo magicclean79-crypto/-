@@ -203,7 +203,9 @@ Google Cloud Vision은 월 1,000단위까지 무료지만 **빼지 않고 전액
 빼면 예산이 실제보다 낙관적으로 보이고, 한 계정을 여러 환경이 공유하면 남은
 무료 구간을 **우리가 알 수 없습니다** — 모르는 것을 유리하게 가정하지 않습니다.
 
-단가는 코드 선언(`DEFAULT_OCR_PRICING`) 중앙 정의입니다. 표에 없는 엔진은
+단가는 코드 선언(`DEFAULT_OCR_PRICING`)이 **기준값**이고, 운영에서 바꿀 때는
+검토 → 승인 → 적용 절차를 거칩니다 (TASK-3101, CTO 정책 3101-① —
+[ai-cost-governance.md](ai-cost-governance.md)). 표에 없는 엔진은
 비용이 **`null`(미산정)**이고, 그 상태는 예산 계산에서 빠지므로
 `unpriced-model` 경보가 나갑니다 — LLM의 가격표 없는 모델과 같은 취급입니다.
 
@@ -235,3 +237,4 @@ OCR 성공률·지연·비용은 **LLM과 같은 판정 함수**로 봅니다(�
 | [../architecture/vision.md](../architecture/vision.md) | Vision 엔진 구조 |
 | [deployment-checklist.md](deployment-checklist.md) | 배포 게이트 (환경 검증 포함) |
 | [production-runbook.md](production-runbook.md) | 배포 실행 절차 |
+| [ai-cost-governance.md](ai-cost-governance.md) | 가격표 절차 · 예측 · 운영 비용 리포트 (TASK-3101) |

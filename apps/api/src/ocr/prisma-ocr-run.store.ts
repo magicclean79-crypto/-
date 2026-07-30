@@ -1,7 +1,8 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Optional } from "@nestjs/common";
 import { estimateOcrCost } from "@acos/core";
 import type { OcrRecognition, OcrRun, OcrRunStore } from "@acos/core";
 import { Prisma, type OcrResult } from "@prisma/client";
+import { PricingService } from "../pricing/pricing.service";
 import { PrismaService } from "../prisma/prisma.service";
 
 export function toOcrRun(record: OcrResult): OcrRun {
@@ -26,7 +27,11 @@ export function toOcrRun(record: OcrResult): OcrRun {
  */
 @Injectable()
 export class PrismaOcrRunStore implements OcrRunStore {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    // 단가는 승인·적용된 가격표에서 온다 (TASK-3101, CTO 정책 3101-①)
+    @Optional() private readonly pricing?: PricingService,
+  ) {}
 
   async start(imageId: string, provider: string): Promise<OcrRun> {
     const record = await this.prisma.ocrResult.create({
@@ -49,6 +54,10 @@ export class PrismaOcrRunStore implements OcrRunStore {
    *
    * 가격표에 없는 엔진은 `null`(미산정)입니다 — 0으로 채우면 예산 상한이
    * 조용히 무력해집니다.
+   *
+   * 단가는 **적용된 가격표**를 씁니다 (TASK-3101, CTO 정책 3101-①) — 코드
+   * 기본값은 아무도 승인하지 않은 값이고, 그 값으로 계산한 비용은 "왜 이
+   * 금액인가"에 답할 수 없습니다.
    */
   async markSuccess(
     id: string,
@@ -60,7 +69,8 @@ export class PrismaOcrRunStore implements OcrRunStore {
       where: { id },
       select: { provider: true, units: true },
     });
-    const cost = estimateOcrCost(current.provider, current.units);
+    const table = this.pricing ? (await this.pricing.effective()).ocr : undefined;
+    const cost = estimateOcrCost(current.provider, current.units, table);
 
     const record = await this.prisma.ocrResult.update({
       where: { id },

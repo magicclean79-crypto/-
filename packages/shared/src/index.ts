@@ -2132,3 +2132,136 @@ export interface OperationsReadinessDto {
   enterprise: EnterpriseRecoveryDto;
   checkedAt: string;
 }
+
+// ── 가격표 거버넌스 · 비용 인텔리전스 (TASK-3101, Sprint 31) ─────────
+
+export type PricingTargetDto = "llm" | "ocr";
+
+export type PricingStageDto =
+  | "DRAFT"
+  | "REVIEWED"
+  | "APPROVED"
+  | "APPLIED"
+  | "REJECTED";
+
+/** 단가 제안 1건 (GET /ops/pricing) */
+export interface PricingProposalDto {
+  id: string;
+  target: PricingTargetDto;
+  /** LLM은 모델 이름, OCR은 엔진 이름 */
+  key: string;
+  /** llm: `{inputPerMillion, outputPerMillion}` · ocr: `{perUnitUsd}` */
+  price: Record<string, number>;
+  /** 제안 당시의 유효 단가 — 가격표에 없던 항목이면 null */
+  currentPrice: Record<string, number> | null;
+  reason: string;
+  stage: PricingStageDto;
+  /** 이 단계에서 갈 수 있는 다음 단계 (끝난 제안은 빈 배열) */
+  nextStages: PricingStageDto[];
+  proposedBy: string | null;
+  reviewedBy: string | null;
+  reviewedAt: string | null;
+  approvedBy: string | null;
+  approvedAt: string | null;
+  appliedBy: string | null;
+  appliedAt: string | null;
+  rejectedBy: string | null;
+  rejectedAt: string | null;
+  rejectedReason: string | null;
+  /**
+   * 제안자와 승인자가 같을 때의 경고 — **차단하지 않는다.**
+   * 절차가 막히면 사람은 코드를 고쳐 우회하고 이력이 끊긴다.
+   */
+  selfApproval: string | null;
+  detail: string;
+  createdAt: string;
+}
+
+/** 실효 가격표 (GET /ops/pricing) — 적용된 제안이 기준 가격표를 덮은 결과 */
+export interface EffectivePricingDto {
+  /**
+   * `note`는 **출처**다 — 승인된 제안으로 적용된 단가와 코드 기본값은
+   * 구분되어야 한다. 구분되지 않으면 "이 금액은 누가 정했나"에 답할 수 없다.
+   */
+  llm: {
+    model: string;
+    inputPerMillion: number;
+    outputPerMillion: number;
+    note: string;
+  }[];
+  ocr: { provider: string; perUnitUsd: number; note: string }[];
+  /** 적용 이력 건수 */
+  appliedCount: number;
+  /** 마지막 적용 시각 (없으면 null) */
+  lastAppliedAt: string | null;
+}
+
+export interface PricingBoardDto {
+  /** 진행 중인 제안 (DRAFT·REVIEWED·APPROVED) — 최신순 */
+  open: PricingProposalDto[];
+  /** 끝난 제안 (APPLIED·REJECTED) — 최신순 */
+  closed: PricingProposalDto[];
+  effective: EffectivePricingDto;
+  /** 단계 순서 안내 (검토 → 승인 → 적용) */
+  stages: PricingStageDto[];
+  detail: string;
+  checkedAt: string;
+}
+
+export interface ProposePricingRequest {
+  target: PricingTargetDto;
+  key: string;
+  price: Record<string, number>;
+  reason: string;
+}
+
+export interface AdvancePricingRequest {
+  /** 반려 사유 (반려에만 쓰인다) */
+  reason?: string;
+}
+
+/** 월말 비용 예측 (GET /ops/cost-forecast) — 참고자료다 */
+export interface CostForecastDto {
+  verdict: "insufficient" | "projected";
+  observedDays: number;
+  minDays: number;
+  dailyAverage: number | null;
+  monthToDate: number;
+  projectedMonthEnd: number | null;
+  budget: number | null;
+  projectedRatio: number | null;
+  /** 표시용 — 이 값으로 호출을 막지 않는다 (CTO 정책 3101-③) */
+  projectedExceeds: boolean;
+  /** 일별 지출 (UTC 일자) */
+  points: { date: string; total: number }[];
+  /**
+   * 비용이 빠진 호출 수 — 0이 아니면 **추정도 실제보다 작을 수 있다.**
+   * 미산정을 숨기면 "예산 안에 들어온다"는 낙관이 사실처럼 읽힌다.
+   */
+  unpricedCalls: number;
+  detail: string;
+  checkedAt: string;
+}
+
+/** 운영 비용 리포트 (GET /ops/billing) — 회계 청구서가 아니다 */
+export interface BillingReportDto {
+  period: { from: string; to: string };
+  total: number;
+  bySource: { llm: number; ocr: number };
+  rows: {
+    source: "llm" | "ocr";
+    provider: string;
+    model: string;
+    calls: number;
+    cost: number | null;
+    unpricedCalls: number;
+    /** 총액이 0이면 null — 0%로 적으면 "안 썼다"로 읽힌다 */
+    share: number | null;
+  }[];
+  calls: number;
+  unpricedCalls: number;
+  /** 항상 붙는 면책 문구 (CTO 정책 3101-④) */
+  disclaimer: string;
+  detail: string;
+  checkedAt: string;
+}

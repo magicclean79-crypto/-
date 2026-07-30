@@ -72,6 +72,29 @@ export interface CostVerificationResult {
   issues: CostIssue[];
 }
 
+/**
+ * 가격표 또는 **시점별 가격표 해석 함수** (TASK-3101, CTO 정책 3101-①②).
+ *
+ * 단가가 절차를 거쳐 바뀌면, 그 뒤로 과거 기록을 그냥 새 단가로 대조하면
+ * **과거 전체가 "불일치"로 보고**됩니다. 비용 기록은 수정하지 않으므로
+ * (Append Only, 정책 3101-②) 검증은 **그 시점에 유효했던 단가**로 물어야
+ * 합니다 — 그래서 함수를 받습니다.
+ */
+export type LlmPricingResolver =
+  | typeof DEFAULT_LLM_PRICING
+  | ((at: string) => typeof DEFAULT_LLM_PRICING);
+
+export type OcrPricingResolver =
+  | Record<string, OcrUnitPrice>
+  | ((at: string) => Record<string, OcrUnitPrice>);
+
+/** 표본 시점의 가격표를 고른다 */
+function tableFor<T>(resolver: T | ((at: string) => T), at: string): T {
+  return typeof resolver === "function"
+    ? (resolver as (at: string) => T)(at)
+    : resolver;
+}
+
 /** 부동소수 비교 허용 오차 (기록은 소수 6자리로 반올림된다) */
 const TOLERANCE = 0.000_002;
 
@@ -85,7 +108,7 @@ function round(value: number): number {
  */
 export function verifyCosts(
   samples: CostSample[],
-  pricing: typeof DEFAULT_LLM_PRICING = DEFAULT_LLM_PRICING,
+  pricing: LlmPricingResolver = DEFAULT_LLM_PRICING,
 ): CostVerificationResult {
   const unpriced = new Map<string, CostSample[]>();
   const mismatched = new Map<string, CostSample[]>();
@@ -102,7 +125,7 @@ export function verifyCosts(
     const expected = estimateLlmCost(
       sample.model,
       { inputTokens: sample.inputTokens, outputTokens: sample.outputTokens },
-      pricing,
+      tableFor(pricing, sample.createdAt),
     );
     const key = `${sample.provider}|${sample.model}`;
 
@@ -153,7 +176,7 @@ export function verifyCosts(
                 inputTokens: sample.inputTokens,
                 outputTokens: sample.outputTokens,
               },
-              pricing,
+              tableFor(pricing, sample.createdAt),
             ) ?? 0),
           0,
         ),
@@ -184,7 +207,7 @@ export function verifyCosts(
         (estimateLlmCost(
           sample.model,
           { inputTokens: sample.inputTokens, outputTokens: sample.outputTokens },
-          pricing,
+          tableFor(pricing, sample.createdAt),
         ) ?? 0),
       0,
     );
@@ -263,7 +286,7 @@ export interface OcrCostSample {
  */
 export function verifyOcrCosts(
   samples: OcrCostSample[],
-  pricing: Record<string, OcrUnitPrice> = DEFAULT_OCR_PRICING,
+  pricing: OcrPricingResolver = DEFAULT_OCR_PRICING,
 ): CostVerificationResult {
   const unpriced = new Map<string, OcrCostSample[]>();
   const mismatched = new Map<string, OcrCostSample[]>();
@@ -275,7 +298,11 @@ export function verifyOcrCosts(
 
   for (const sample of samples) {
     recordedTotal += sample.cost ?? 0;
-    const expected = estimateOcrCost(sample.provider, sample.units, pricing);
+    const expected = estimateOcrCost(
+      sample.provider,
+      sample.units,
+      tableFor(pricing, sample.createdAt),
+    );
     const key = sample.provider;
 
     if (expected === null) {
@@ -310,7 +337,12 @@ export function verifyOcrCosts(
       expectedTotal: round(
         group.reduce(
           (sum, sample) =>
-            sum + (estimateOcrCost(sample.provider, sample.units, pricing) ?? 0),
+            sum +
+            (estimateOcrCost(
+              sample.provider,
+              sample.units,
+              tableFor(pricing, sample.createdAt),
+            ) ?? 0),
           0,
         ),
       ),
@@ -334,7 +366,12 @@ export function verifyOcrCosts(
     const recorded = group.reduce((sum, sample) => sum + (sample.cost ?? 0), 0);
     const expected = group.reduce(
       (sum, sample) =>
-        sum + (estimateOcrCost(sample.provider, sample.units, pricing) ?? 0),
+        sum +
+        (estimateOcrCost(
+          sample.provider,
+          sample.units,
+          tableFor(pricing, sample.createdAt),
+        ) ?? 0),
       0,
     );
     issues.push({

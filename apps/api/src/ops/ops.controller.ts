@@ -7,6 +7,7 @@ import {
   Param,
   Post,
   Query,
+  Req,
   UseGuards,
 } from "@nestjs/common";
 import {
@@ -17,14 +18,21 @@ import {
   summarizeAlerts,
 } from "@acos/core";
 import type {
+  PricingStage,
   DrillTrigger as ScheduledDrillTrigger,
   ScheduledJob,
 } from "@acos/core";
 import type {
+  AdvancePricingRequest,
   AlertArchiveResultDto,
   AlertBoardDto,
   AlertHistoryDto,
+  BillingReportDto,
   CheckRunResultDto,
+  CostForecastDto,
+  PricingBoardDto,
+  PricingProposalDto,
+  ProposePricingRequest,
   NotificationDeliveryDto,
   NotificationQueueStatusDto,
   DrillRequirementDto,
@@ -35,16 +43,33 @@ import type {
   SmtpValidationDto,
 } from "@acos/shared";
 import { AuthGuard, RequireRole } from "../auth/auth.guard";
+import type { AuthenticatedRequest } from "../auth/auth.guard";
 import { ProviderProductionService } from "../llm/provider-production.service";
+import { PricingService } from "../pricing/pricing.service";
 import { StorageService } from "../storage/storage.service";
 import { AlertService } from "./alert.service";
 import { BackupService } from "./backup.service";
+import { CostIntelligenceService } from "./cost-intelligence.service";
 import { DistributedLockService } from "./distributed-lock.service";
 import { NotificationQueueService } from "./notification-queue.service";
 import { NotificationService } from "./notification.service";
 import { RecoveryDrillService } from "./recovery-drill.service";
 import { RecoveryEvaluationService } from "./recovery-evaluation.service";
 import { ScheduledChecksService } from "./scheduled-checks.service";
+
+/**
+ * 단가 제안의 단계 전이 경로 (TASK-3101).
+ *
+ * 경로 이름을 단계 값과 따로 두는 이유: URL은 **행동**이고(`approve`) 저장되는
+ * 것은 **상태**다(`APPROVED`). 둘을 같게 두면 나중에 상태 이름을 바꿀 때
+ * 외부 호출이 함께 깨진다.
+ */
+const PRICING_ACTIONS: Record<string, PricingStage> = {
+  review: "REVIEWED",
+  approve: "APPROVED",
+  apply: "APPLIED",
+  reject: "REJECTED",
+};
 
 /**
  * 운영 자동화·경보 API. (TASK-1302, Sprint 13)
@@ -69,6 +94,9 @@ export class OpsController {
     private readonly recovery: RecoveryEvaluationService,
     // Provider 연결 순서 (TASK-2901, CTO 결정 2801-⑤)
     private readonly providers: ProviderProductionService,
+    // 가격표 거버넌스·비용 인텔리전스 (TASK-3101, CTO 정책 3101-①③④)
+    private readonly pricing: PricingService,
+    private readonly costs: CostIntelligenceService,
   ) {}
 
   /**
@@ -519,5 +547,87 @@ export class OpsController {
       );
     }
     return [await this.checks.run(job as ScheduledJob, "manual")];
+  }
+
+  // ── 가격표 거버넌스 (TASK-3101, CTO 정책 3101-①②) ─────────────
+
+  /**
+   * 단가 제안 목록 + 실효 가격표 (GET /ops/pricing).
+   *
+   * 지금 무슨 단가로 계산하고 있는지, 그 단가가 **누구의 승인으로** 적용된
+   * 것인지를 한 화면에서 본다. 코드 기본값과 승인된 값이 구분되지 않으면
+   * "이 금액은 왜 이런가"에 아무도 답할 수 없다.
+   */
+  @Get("pricing")
+  async pricingBoard(): Promise<PricingBoardDto> {
+    return this.pricing.board();
+  }
+
+  /** 단가 변경 제안 (DRAFT) — 사유 없이는 등록되지 않는다 */
+  @Post("pricing")
+  @HttpCode(201)
+  async proposePricing(
+    @Body() body: ProposePricingRequest,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<PricingProposalDto> {
+    return this.pricing.propose({
+      target: body?.target,
+      key: body?.key,
+      price: body?.price,
+      reason: body?.reason,
+      actor: request.user?.email ?? null,
+    });
+  }
+
+  /**
+   * 단계 진행 — 검토 → 승인 → 적용 순서를 건너뛸 수 없다 (정책 3101-①).
+   *
+   * **적용만 실효 가격표를 바꾼다.** 승인은 "적용해도 된다"는 뜻이고, 실제로
+   * 계산에 쓰이기 시작한 시점은 적용 시각이다 — 그 시각이 있어야 "언제부터
+   * 이 단가로 계산됐나"에 답할 수 있다.
+   */
+  @Post("pricing/:id/:stage")
+  @HttpCode(200)
+  async advancePricing(
+    @Param("id") id: string,
+    @Param("stage") stage: string,
+    @Body() body: AdvancePricingRequest,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<PricingProposalDto> {
+    const action = PRICING_ACTIONS[stage];
+    if (action === undefined) {
+      throw new BadRequestException(
+        `지원하지 않는 단계입니다: ${stage} (${Object.keys(PRICING_ACTIONS).join(" / ")})`,
+      );
+    }
+    return this.pricing.advance(id, action, request.user?.email ?? null, {
+      reason: body?.reason,
+    });
+  }
+
+  // ── 비용 인텔리전스 (TASK-3101, CTO 정책 3101-③④) ─────────────
+
+  /**
+   * 운영 비용 리포트 (GET /ops/billing?from=&to=).
+   *
+   * **회계 청구서가 아니다** (정책 3101-④) — 응답에 그 사실이 항상 담긴다.
+   */
+  @Get("billing")
+  async billing(
+    @Query("from") from?: string,
+    @Query("to") to?: string,
+  ): Promise<BillingReportDto> {
+    return this.costs.billing({ from, to });
+  }
+
+  /**
+   * 월말 비용 예측 (GET /ops/cost-forecast).
+   *
+   * **참고자료다** (정책 3101-③) — 이 값으로 호출을 막지 않는다. 차단은
+   * 실제 지출을 보는 예산 관문만 한다.
+   */
+  @Get("cost-forecast")
+  async costForecast(): Promise<CostForecastDto> {
+    return this.costs.forecast();
   }
 }

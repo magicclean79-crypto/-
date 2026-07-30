@@ -2,9 +2,11 @@ import { Module } from "@nestjs/common";
 import { AuthModule } from "../auth/auth.module";
 import { ContentGovernanceModule } from "../content-governance/content-governance.module";
 import { LlmModule } from "../llm/llm.module";
+import { PricingModule } from "../pricing/pricing.module";
 import { StorageModule } from "../storage/storage.module";
 import { AlertService } from "./alert.service";
 import { BackupService } from "./backup.service";
+import { CostIntelligenceService } from "./cost-intelligence.service";
 import { MigrationGovernanceService } from "./migration-governance.service";
 import { RecoveryDrillService } from "./recovery-drill.service";
 import { RecoveryEvaluationService } from "./recovery-evaluation.service";
@@ -22,7 +24,14 @@ import { ScheduledChecksService } from "./scheduled-checks.service";
  */
 @Module({
   // 발행 판정 기록 보관을 예약 정리 작업에 편입한다 (CTO 결정 2501-⑤)
-  imports: [AuthModule, LlmModule, StorageModule, ContentGovernanceModule],
+  // 단가 거버넌스는 /ops/pricing이 쓴다 (TASK-3101, CTO 정책 3101-①)
+  imports: [
+    AuthModule,
+    LlmModule,
+    StorageModule,
+    ContentGovernanceModule,
+    PricingModule,
+  ],
   controllers: [OpsController],
   providers: [
     AlertService,
@@ -34,6 +43,7 @@ import { ScheduledChecksService } from "./scheduled-checks.service";
     RecoveryDrillService,
     RecoveryEvaluationService,
     MigrationGovernanceService,
+    CostIntelligenceService,
   ],
   exports: [
     AlertService,
@@ -45,6 +55,7 @@ import { ScheduledChecksService } from "./scheduled-checks.service";
     RecoveryDrillService,
     RecoveryEvaluationService,
     MigrationGovernanceService,
+    CostIntelligenceService,
   ],
 })
 export class OpsModule {}

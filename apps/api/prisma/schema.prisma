@@ -237,6 +237,40 @@ model GovernanceScanRun {
   @@map("governance_scan_runs")
 }
 
+// 가격표 변경 제안 (TASK-3101, CTO 정책 3101-①) — 검토 → 승인 → 적용.
+//
+// 단가는 **앞으로의 계산 기준**이고, 이미 기록된 비용은 수정하지 않는다
+// (Append Only, 정책 3101-②). 그래서 이 표는 "언제부터 어떤 단가였는가"의
+// 이력이 되고, 비용 검증은 **그 시점에 유효했던 단가**로 대조한다.
+model PricingProposal {
+  id             String    @id @default(cuid())
+  target         String // llm | ocr
+  key            String // LLM은 모델 이름, OCR은 엔진 이름
+  price          Json // 제안 단가
+  // 제안 당시의 유효 단가 — 가격표에 없던 항목이면 null.
+  currentPrice   Json?
+  reason         String
+  // 단계를 건너뛸 수 없다 (검토 없이 승인·승인 없이 적용 금지)
+  stage          String    @default("DRAFT")
+  proposedBy     String?
+  reviewedBy     String?
+  reviewedAt     DateTime?
+  approvedBy     String?
+  approvedAt     DateTime?
+  appliedBy      String?
+  appliedAt      DateTime?
+  rejectedBy     String?
+  rejectedAt     DateTime?
+  rejectedReason String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  // 실효 단가 해석이 적용된 것만 시각순으로 읽는다
+  @@index([target, key, appliedAt])
+  @@index([stage, createdAt])
+  @@map("pricing_proposals")
+}
+
 // 발행 파이프라인 감사 이력 (TASK-0704) — 상태 전이 1건당 1레코드
 model ContentStatusHistory {
   id         String        @id @default(cuid())

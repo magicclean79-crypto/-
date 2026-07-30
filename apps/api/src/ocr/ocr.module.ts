@@ -6,6 +6,7 @@ import {
   PRODUCTION_OCR_PROVIDER,
 } from "@acos/core";
 import { LlmModule } from "../llm/llm.module";
+import { PricingModule } from "../pricing/pricing.module";
 import { OCR_PROVIDER } from "./ocr.constants";
 import { OcrController } from "./ocr.controller";
 import { OcrService } from "./ocr.service";
@@ -90,7 +91,8 @@ export function createOcrProvider(
 
 @Module({
   // AI 비용 예산을 LLM과 공유한다 (TASK-3001, CTO 결정 2901-④)
-  imports: [LlmModule],
+  // 단가는 승인·적용된 가격표에서 온다 (TASK-3101, CTO 정책 3101-①)
+  imports: [LlmModule, PricingModule],
   controllers: [OcrController],
   providers: [
     OcrService,
