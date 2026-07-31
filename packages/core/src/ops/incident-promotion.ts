@@ -161,7 +161,7 @@ export function judgeIncidentPromotion(input: PromotionInput): PromotionReport {
       detectedAt: new Date(alert.firstRaisedAt),
       detail:
         `CRITICAL 경보 \`${alert.key}\`가 ${Math.round(livedMs / 60000)}분째 ` +
-        `이어져 자동으로 만든 **초안**입니다. ${alert.message}\n\n` +
+        `이어져 자동으로 만든 초안입니다. ${alert.message}\n\n` +
         "이것은 장애가 아니라 질문입니다 — 실제로 사용자가 영향을 받았다면 " +
         "확인해 장애로 올리고, 아니면 사유와 함께 기각하세요.",
     });

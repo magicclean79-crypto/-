@@ -27,6 +27,11 @@ export const SCHEDULED_JOBS = [
   "pricing-detect",
   // 월말 비용 예측 경보 (TASK-3201, CTO 정책 3201-④) — 하루 1회, **경보만**
   "cost-forecast",
+  // 일일 운영 진단 (TASK-4001, CTO 정책 4001-⑤) — 밤새 바뀐 것을 업무 시작
+  // 전에 확인한다. 초안 수명·KPI 스냅샷도 같은 순간에 본다: 세 가지 모두
+  // "아침에 사람이 알아야 하는 것"이고, 예약을 나누면 서로 다른 시각에 돌아
+  // 무엇이 언제 기준인지 흐려진다 (결정 1401-③과 같은 판단).
+  "daily-diagnostics",
 ] as const;
 
 export type ScheduledJob = (typeof SCHEDULED_JOBS)[number];
@@ -57,6 +62,8 @@ export const DEFAULT_JOB_INTERVALS: Record<ScheduledJob, number> = {
   "pricing-detect": 6 * 60 * 60 * 1000,
   // 예측은 하루 단위 사안이다 — 시각으로 돌린다 (아래 DAILY_JOBS)
   "cost-forecast": 24 * 60 * 60 * 1000,
+  // 진단도 시각으로 돈다 (아래 DAILY_JOBS)
+  "daily-diagnostics": 24 * 60 * 60 * 1000,
 };
 
 /**
@@ -103,6 +110,8 @@ export const DAILY_JOBS: Partial<Record<ScheduledJob, string>> = {
   "governance-scan": "OPS_CHECK_GOVERNANCE_SCAN_AT",
   // 비용 예측 (TASK-3201) — 하루가 끝난 뒤 봐야 관측 일수가 채워진다
   "cost-forecast": "OPS_CHECK_FORECAST_AT",
+  // 일일 진단 (TASK-4001) — 새벽 정리가 모두 끝난 뒤, 사람이 출근하기 전에
+  "daily-diagnostics": "OPS_CHECK_DIAGNOSTICS_AT",
 };
 
 /** 점검별 기본 실행 시각 — 서로 겹치지 않게 둔다 (백업 → 복구 검증 → 보관) */
@@ -113,6 +122,9 @@ export const DEFAULT_DAILY_TIMES: Partial<Record<ScheduledJob, string>> = {
   "governance-scan": "03:50",
   "alert-archive": "04:00",
   "provider-smoke": "05:00",
+  // 진단은 **맨 마지막**이다 — 정리·스모크가 남긴 상태를 보고 판정해야
+  // 하는데, 앞서 돌면 방금 고쳐진 것을 문제로 부른다
+  "daily-diagnostics": "07:00",
 };
 
 /**
@@ -187,6 +199,7 @@ export const JOB_INTERVAL_ENV: Record<ScheduledJob, string> = {
   "governance-scan": "OPS_CHECK_GOVERNANCE_SCAN_AT",
   "pricing-detect": "OPS_CHECK_PRICING_DETECT_INTERVAL",
   "cost-forecast": "OPS_CHECK_FORECAST_AT",
+  "daily-diagnostics": "OPS_CHECK_DIAGNOSTICS_AT",
 };
 
 /**

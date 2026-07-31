@@ -447,6 +447,25 @@ export const ENV_SPECS: EnvSpec[] = [
     fallback: "06:00 로컬",
   },
   {
+    // 일일 운영 진단 (TASK-4001, CTO 정책 4001-⑤)
+    name: "OPS_CHECK_DIAGNOSTICS_AT",
+    category: "ops",
+    description:
+      "일일 운영 진단 실행 시각 HH:MM (운영 서버 로컬 시각) — off로 중단. 진단은 경보만 내고 서비스를 막지 않는다",
+    fallback: "07:00 로컬",
+  },
+  {
+    // 검증 스프린트 대상 환경 (TASK-4001, CTO 정책 4001-⑥)
+    name: "VALIDATION_TARGET_URL",
+    category: "ops",
+    description:
+      "Production Validation Sprint를 돌릴 대상 환경 주소 — 미설정은 실패가 아니지만, 정해지지 않은 상태에서 실 자격 증명으로 스모크를 돌리는 것은 검증이 아니라 사고다",
+    validate: (value) =>
+      /^https?:\/\//.test(value)
+        ? null
+        : "http(s) 주소여야 합니다 (예: https://staging.example.com)",
+  },
+  {
     // 외부 가격 공지 (TASK-3301, CTO 정책 3301-①)
     name: "PRICE_SOURCE_URL",
     category: "ops",

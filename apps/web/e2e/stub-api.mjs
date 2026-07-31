@@ -3153,6 +3153,268 @@ const server = http.createServer((req, res) => {
   }
 
   /** 운영 설정 현황 (TASK-3901, CTO 정책 3901-②③④⑤) — ADMIN 전용 */
+  /**
+   * KPI 추세 (TASK-4001, CTO 정책 4001-②) — ADMIN 전용.
+   *
+   * 화면이 검증해야 하는 것: **한 점으로 선을 긋지 않는가**(스냅샷이
+   * 하나면 "0% 변화"가 아니라 "낼 수 없음"), 그리고 **기준이 움직인
+   * 구간을 개선으로 읽지 않는가**.
+   */
+  if (url.pathname === "/ops/kpi/trend") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify({
+        trends: [
+          {
+            kpiId: "mttr",
+            title: "평균 복구 시간",
+            direction: "worsening",
+            delta: 140,
+            unit: "분",
+            comparedTo: "2026-07-01T00:00:00.000Z",
+            samples: 12,
+            thresholdChanged: false,
+            detail: "평균 복구 시간 60분 → 200분 (+140분, 표본 12개)",
+          },
+          {
+            kpiId: "incidents-open",
+            title: "진행 중인 장애",
+            direction: "flat",
+            delta: 0,
+            unit: "건",
+            comparedTo: "2026-07-01T00:00:00.000Z",
+            samples: 12,
+            thresholdChanged: true,
+            detail:
+              "진행 중인 장애 1건 → 1건 (+0건, 표본 12개) 이 구간에 임계값이 " +
+              "바뀌었습니다 — 값은 비교할 수 있지만 정상/주의/나쁨의 변화는 " +
+              "상태가 아니라 기준이 움직인 결과입니다.",
+          },
+          {
+            kpiId: "smoke",
+            title: "실 호출 스모크",
+            direction: "unknown",
+            delta: null,
+            unit: "%",
+            comparedTo: null,
+            samples: 1,
+            thresholdChanged: false,
+            detail: "스냅샷이 1개뿐입니다 — 한 점으로는 추세가 아닙니다.",
+          },
+        ],
+        windowDays: 30,
+        improving: 0,
+        worsening: 1,
+        unknown: 1,
+        thresholdChanged: 1,
+        lastTakenAt: "2026-07-30T04:00:00.000Z",
+        detail:
+          "최근 30일 추세. 나빠지는 중 1개: 평균 복구 시간. 추세를 낼 수 없는 " +
+          "지표 1개 — 표본이 부족하거나 값을 낼 수 없었던 시점이 있습니다. " +
+          "이 구간에 임계값이 바뀐 지표 1개 — 색의 변화를 상태의 변화로 읽지 마세요.",
+      }),
+    );
+    return;
+  }
+
+  /** KPI 임계값 변경 이력 (TASK-4001, CTO 정책 4001-③) — ADMIN 전용 */
+  if (url.pathname === "/ops/kpi/history") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify([
+        {
+          id: "chg-1",
+          key: "kpi.threshold.incidents-open.good",
+          title: "진행 중인 장애 정상 경계",
+          action: "SETTING_UPDATED",
+          before: "0",
+          after: "3",
+          actor: "admin@acos.local",
+          relaxed: true,
+          createdAt: "2026-07-20T02:00:00.000Z",
+        },
+        {
+          id: "chg-2",
+          key: "kpi.threshold.mttd.good",
+          title: "평균 감지 시간 정상 경계",
+          action: "SETTING_CLEARED",
+          before: "10",
+          after: null,
+          // 판정할 수 없는 것을 false로 적으면 목록이 안전해 보인다
+          relaxed: null,
+          actor: "admin@acos.local",
+          createdAt: "2026-07-18T02:00:00.000Z",
+        },
+      ]),
+    );
+    return;
+  }
+
+  /**
+   * 검증 스프린트 준비 (TASK-4001, CTO 정책 4001-⑥) — ADMIN 전용.
+   *
+   * 화면이 검증해야 하는 것: **사람이 줄 것이 남았는데 "시작할 수 있다"고
+   * 말하지 않는가**, 그리고 **막힌 것과 안 한 것을 가르는가**.
+   */
+  if (url.pathname === "/ops/validation-plan") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify({
+        steps: [
+          {
+            id: "credentials",
+            title: "실 Provider 자격 증명 주입",
+            owner: "operator",
+            why: "실 호출 없이 재는 모든 숫자는 스텁의 숫자입니다.",
+            evidence: "GET /ops/activation의 credentials 조건이 충족으로 바뀝니다.",
+            status: "pending",
+            detail: "실 자격 증명이 아직 없습니다 — 지금 재는 값은 스텁의 값입니다.",
+            blockedBy: [],
+          },
+          {
+            id: "smoke",
+            title: "실 호출 스모크 3종 통과",
+            owner: "system",
+            why: "스텁 통과는 계약 확인이지 연결 확인이 아닙니다.",
+            evidence: "POST /ops/smoke가 세 대상 모두 passed이고, stubbed가 0건입니다.",
+            status: "blocked",
+            detail:
+              "앞 단계가 끝나지 않아 시작할 수 없습니다 (실 Provider 자격 증명 주입). " +
+              "실 호출 스모크를 아직 돌리지 않았습니다.",
+            blockedBy: ["credentials"],
+          },
+          {
+            id: "baseline",
+            title: "KPI 기준선 확보",
+            owner: "system",
+            why: "시작 시점의 점이 없으면 끝나고 나서 비교할 대상이 없습니다.",
+            evidence: "KPI 스냅샷이 2점 이상 쌓여 추세를 낼 수 있습니다.",
+            status: "done",
+            detail: "스냅샷 12점 — 추세를 낼 수 있습니다.",
+            blockedBy: [],
+          },
+        ],
+        readiness: "blocked",
+        done: 1,
+        total: 3,
+        waitingOnPeople: 1,
+        waitingOnUs: 0,
+        unknown: 0,
+        blocked: 1,
+        detail:
+          "검증 스프린트 준비 1/3 단계 완료. 사람이 줘야 끝나는 단계 1건: " +
+          "실 Provider 자격 증명 주입. 이 단계들은 코드로 해결되지 않습니다. " +
+          "앞 단계가 막혀 시작할 수 없는 단계 1건: 실 호출 스모크 3종 통과. " +
+          "이 단계들은 우리가 부지런해져서 풀리지 않습니다.",
+        checkedAt: new Date().toISOString(),
+      }),
+    );
+    return;
+  }
+
+  /** 운영 진단 (TASK-4001, CTO 정책 4001-④⑤) — ADMIN 전용 */
+  if (url.pathname === "/ops/diagnostics") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify({
+        stage: "daily",
+        checks: [
+          {
+            id: "env",
+            title: "환경변수",
+            status: "ok",
+            detail: "필수 환경변수가 모두 설정돼 있습니다.",
+            next: null,
+          },
+          {
+            id: "migrations",
+            title: "마이그레이션 적용",
+            status: "unknown",
+            detail: "적용 상태를 읽지 못했습니다 — 0건이라는 뜻이 아닙니다.",
+            next: "pnpm --filter api exec prisma migrate status로 직접 확인하세요.",
+          },
+          {
+            id: "urgent-channel",
+            title: "긴급 알림 경로",
+            status: "warn",
+            detail:
+              "운영인데 긴급 경로가 없어 급한 알림이 일반 채널로 나갑니다. " +
+              "지금은 동작하지만, 급한 것이 안 급한 것들 사이에 묻힙니다 — " +
+              "폴백은 임시 조치이고 임시 조치는 아무도 보지 않으면 영구가 됩니다.",
+            next: "ALERT_URGENT_SLACK_WEBHOOK_URL 또는 ALERT_URGENT_WEBHOOK_URL을 설정하세요.",
+          },
+        ],
+        ok: 1,
+        warn: 1,
+        fail: 0,
+        unknown: 1,
+        blocked: false,
+        detail:
+          "일일 진단. 주의 1건. 모르는 것 1건 — 통과로 세지 않았습니다. " +
+          "진단 결과와 무관하게 서비스는 계속 뜹니다 (경보와 차단은 다릅니다).",
+        ranAt: new Date().toISOString(),
+      }),
+    );
+    return;
+  }
+
+  /** 장애 초안 수명 (TASK-4001, CTO 정책 4001-①) — ADMIN 전용 */
+  if (url.pathname === "/ops/incidents/drafts") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify({
+        stale: [
+          {
+            id: "inc-draft-1",
+            summary: "경보에서 만든 초안: OpenAI 호출 실패",
+            createdAt: "2026-07-25T02:00:00.000Z",
+            ageDays: 6,
+          },
+        ],
+        expiring: [],
+        expired: [
+          {
+            id: "inc-draft-0",
+            summary: "경보에서 만든 초안: 저장소 응답 지연",
+            createdAt: "2026-06-01T02:00:00.000Z",
+            expiredAt: "2026-07-01T04:00:00.000Z",
+          },
+        ],
+        staleAfterDays: 3,
+        expireAfterDays: 30,
+        detail:
+          "3일 넘게 확인되지 않은 초안 1건 — 감시가 무언가를 잡았는데 아무도 " +
+          "보지 않았다는 뜻입니다.",
+      }),
+    );
+    return;
+  }
+
   if (url.pathname === "/ops/settings") {
     if (req.headers.authorization !== "Bearer stub-token") {
       res.statusCode = req.headers.authorization ? 403 : 401;
@@ -3986,6 +4248,20 @@ const server = http.createServer((req, res) => {
         if (key === "budget.daily" && value !== null && Number(value) <= 0) {
           res.statusCode = 400;
           res.end(JSON.stringify({ message: "예산 값은 0보다 큰 숫자여야 합니다." }));
+          return;
+        }
+        // KPI 임계값 범위 (TASK-3901 정책 3901-② · TASK-4001 정책 4001-③).
+        // 범위 밖의 값은 임계값이 아니라 **임계값을 없앤 것**이고, 화면이
+        // 그 거절을 그대로 보여 주는지가 이 스텁으로 검증된다.
+        if (key === "kpi.threshold.mttr.watch" && value !== null && Number(value) > 1440) {
+          res.statusCode = 400;
+          res.end(
+            JSON.stringify({
+              message:
+                `평균 복구 시간 임계값은 5~1440분 사이여야 합니다 (받은 값: ${value}분). ` +
+                "범위 밖의 값은 임계값이 아니라 임계값을 없앤 것이고, 그건 설정이 아니라 우회입니다.",
+            }),
+          );
           return;
         }
         const before = stubSettings[key] ?? null;

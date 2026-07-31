@@ -53,6 +53,12 @@ import type {
   RemoteVerifyResultDto,
   SmokeReportDto,
   SmtpValidationDto,
+  // TASK-4001 (CTO 정책 4001-①②③④⑤⑥)
+  DiagnosticReportDto,
+  DraftLifecycleDto,
+  KpiSettingChangeDto,
+  KpiTrendReportDto,
+  ValidationPlanDto,
 } from "@acos/shared";
 import { AuthGuard, RequireRole } from "../auth/auth.guard";
 import type { AuthenticatedRequest } from "../auth/auth.guard";
@@ -77,6 +83,10 @@ import { NotificationService } from "./notification.service";
 import { RecoveryDrillService } from "./recovery-drill.service";
 import { RecoveryEvaluationService } from "./recovery-evaluation.service";
 import { ScheduledChecksService } from "./scheduled-checks.service";
+import { DiagnosticsService } from "./diagnostics.service";
+import { DraftLifecycleService } from "./draft-lifecycle.service";
+import { KpiTrendService } from "./kpi-trend.service";
+import { ValidationPlanService } from "./validation-plan.service";
 
 /**
  * 단가 제안의 단계 전이 경로 (TASK-3101).
@@ -139,6 +149,12 @@ export class OpsController {
     // 운영 설정 · 초안 승격 (TASK-3901, CTO 정책 3901-②③④⑤)
     private readonly opsSettings: OpsSettingsService,
     private readonly promotion: IncidentPromotionService,
+    // KPI 추세·설정 이력 · 초안 수명 · 진단 · 검증 준비
+    // (TASK-4001, CTO 정책 4001-①②③④⑤⑥)
+    private readonly trends: KpiTrendService,
+    private readonly drafts: DraftLifecycleService,
+    private readonly diagnostics: DiagnosticsService,
+    private readonly validation: ValidationPlanService,
   ) {}
 
   /**
@@ -263,6 +279,82 @@ export class OpsController {
   @Get("kpi")
   async operationsKpi(@Query("branch") branch?: string): Promise<OperationsKpiDto> {
     return this.kpis.report(branch?.trim() || undefined);
+  }
+
+  /**
+   * KPI 추세 (TASK-4001, CTO 정책 4001-②).
+   *
+   * 현재값만으로는 아무 행동도 만들어지지 않는다 — 사람이 알아야 하는 것은
+   * **나아지는 중인가**이고, 그건 두 번 재야 안다. 임계값이 바뀐 구간에서는
+   * 값은 비교할 수 있어도 **상태는 비교할 수 없다**고 말한다.
+   */
+  @Get("kpi/trend")
+  async kpiTrend(@Query("days") days?: string): Promise<KpiTrendReportDto> {
+    const parsed = Number(days);
+    return this.trends.trend(
+      Number.isInteger(parsed) && parsed > 0 && parsed <= 365 ? parsed : undefined,
+    );
+  }
+
+  /**
+   * KPI 임계값 변경 이력 (TASK-4001, CTO 정책 4001-③).
+   *
+   * 임계값은 화면 색을 바꾸는 설정이므로 다른 설정과 섞어 두면 **언제 왜
+   * 기준이 움직였는지**를 사람이 눈으로 골라야 한다. 각 줄에 느슨해진
+   * 변경인지도 붙는다 — 판정할 수 없으면 null이고, null을 false로 바꾸지
+   * 않는다.
+   */
+  @Get("kpi/history")
+  async kpiSettingHistory(@Query("limit") limit?: string): Promise<KpiSettingChangeDto[]> {
+    const parsed = Number(limit);
+    return this.trends.settingHistory(
+      Number.isInteger(parsed) && parsed > 0 && parsed <= 200 ? parsed : 50,
+    );
+  }
+
+  /**
+   * 오늘 스냅샷을 지금 찍는다 (TASK-4001, CTO 정책 4001-②).
+   *
+   * 예약으로도 찍지만, 기준선을 만들 때 하루를 기다릴 이유는 없다.
+   * 이미 오늘 찍었으면 아무것도 하지 않는다.
+   */
+  @Post("kpi/snapshot")
+  @HttpCode(200)
+  async takeKpiSnapshot(): Promise<{ taken: boolean; detail: string }> {
+    return this.trends.snapshot();
+  }
+
+  /**
+   * 장애 초안 수명 (TASK-4001, CTO 정책 4001-①).
+   *
+   * **만료는 기각이 아니다** — 기각은 "아무것도 아니었다"는 사람의 판단이고,
+   * 만료는 "아무도 판단하지 않았다"는 기록이다.
+   */
+  @Get("incidents/drafts")
+  async draftLifecycle(): Promise<DraftLifecycleDto> {
+    return this.drafts.report();
+  }
+
+  /**
+   * 운영 진단 (TASK-4001, CTO 정책 4001-④⑤).
+   *
+   * **진단은 서비스를 막지 않는다** — 경보와 차단은 다르다.
+   */
+  @Get("diagnostics")
+  async runDiagnostics(@Query("stage") stage?: string): Promise<DiagnosticReportDto> {
+    return this.diagnostics.run(stage === "startup" ? "startup" : "daily");
+  }
+
+  /**
+   * Production Validation Sprint 준비 (TASK-4001, CTO 정책 4001-⑥).
+   *
+   * "준비 완료"를 스스로 선언하지 않는다 — 남은 것은 자격 증명·나가는
+   * 길·검증용 환경이고 셋 다 사람이 주는 것이다. 대신 단계마다 담당과
+   * 증거를 밝히고, **못 하고 있는 것과 안 하고 있는 것을 가른다.**
+   */
+  @Get("validation-plan")
+  async validationPlan(): Promise<ValidationPlanDto> {
+    return this.validation.report();
   }
 
   /**

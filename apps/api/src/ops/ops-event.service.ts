@@ -45,7 +45,12 @@ export class OpsEventService {
     previous: ActivationSnapshot | null,
     current: ActivationSnapshot,
   ): Promise<ActivationEvent | null> {
-    const event = judgeActivationEvent(previous, current);
+    // **순번을 넘긴다** (TASK-3901 정책 3901-①, TASK-4001에서 배선 누락 수정).
+    // 이 인자를 안 넘기면 순번이 늘 0이라 `완료 → 풀림 → 다시 완료`의 두
+    // 번째 완료가 첫 번째와 같은 키가 되어 조용히 버려집니다 — 고친 코드가
+    // 있어도 부르지 않으면 안 고친 것과 같습니다.
+    const sequence = await this.transitionCount();
+    const event = judgeActivationEvent(previous, current, { sequence });
     if (event === null) {
       return null;
     }
@@ -99,6 +104,18 @@ export class OpsEventService {
     } catch (error) {
       this.logger.warn(`운영 이벤트 기록 실패 (판정은 계속합니다): ${String(error)}`);
       return null;
+    }
+  }
+
+  /** 지금까지 기록된 전이 수 — 키를 서로 다르게 만드는 순번 */
+  private async transitionCount(): Promise<number> {
+    try {
+      return await this.prisma.opsEvent.count();
+    } catch (error) {
+      // 못 세면 0으로 둔다 — 그러면 최악의 경우 한 번 덜 알리지만,
+      // 세다가 판정이 멈추는 것보다는 낫다
+      this.logger.warn(`전이 순번을 읽지 못했습니다: ${String(error)}`);
+      return 0;
     }
   }
 

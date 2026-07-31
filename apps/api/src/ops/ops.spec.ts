@@ -22,6 +22,10 @@ import { OpsEventService } from "./ops-event.service";
 import { judgeAuditAction } from "@acos/core";
 import { OpsSettingsService } from "./ops-settings.service";
 import { IncidentPromotionService } from "./incident-promotion.service";
+import { DiagnosticsService } from "./diagnostics.service";
+import { DraftLifecycleService } from "./draft-lifecycle.service";
+import { KpiTrendService } from "./kpi-trend.service";
+import { ValidationPlanService } from "./validation-plan.service";
 import { AdminSettingsService } from "../admin/admin-settings.service";
 import { RequestContextService } from "../common/request-context.service";
 import { PriceSourceService } from "../pricing/price-source.service";
@@ -109,6 +113,9 @@ function createPrismaStub() {
   const incidents: Record<string, unknown>[] = [];
   // 운영 이벤트 · 감사 기록 (TASK-3801)
   const opsEvents: Record<string, unknown>[] = [];
+  // TASK-4001 — KPI 스냅샷 · 설정 변경 이력
+  const kpiSnapshots: Record<string, unknown>[] = [];
+  const adminAudit: Record<string, unknown>[] = [];
   const opsAudit: Record<string, unknown>[] = [];
   const deliveries: {
     id: string;
@@ -406,6 +413,22 @@ function createPrismaStub() {
         archivedAt: null,
         ...row,
       } as AlertRow);
+    },
+    /**
+     * 설정 변경 이력을 직접 심는다 (TASK-4001) — 임계값 변경은 관리자
+     * 설정 API가 남기는데, 그 API는 이 스펙의 대상이 아니다.
+     */
+    seedSettingChange(row: Record<string, unknown>) {
+      seq += 1;
+      adminAudit.push({
+        id: `adm-${seq}`,
+        createdAt: new Date(),
+        actor: null,
+        before: null,
+        after: null,
+        note: null,
+        ...row,
+      });
     },
     alerts,
     migrations,
@@ -911,6 +934,75 @@ function createPrismaStub() {
           return { ...row };
         },
         findMany: async () => [...drills].reverse().map((row) => ({ ...row })),
+        // 되돌리는 절차 확인 (TASK-4001, 정책 4001-⑥)
+        findFirst: async () => {
+          const row = [...drills].reverse()[0] as Record<string, unknown> | undefined;
+          return row === undefined ? null : { ...row };
+        },
+      },
+      // KPI 스냅샷 (TASK-4001, 정책 4001-②) — **값이 null인 줄도 저장된다**:
+      // 표본이 없었던 시점을 0으로 적으면 "완벽한 날"이 된다
+      kpiSnapshot: {
+        findFirst: async () => {
+          const row = [...kpiSnapshots].sort(
+            (left, right) =>
+              (right.takenAt as Date).getTime() - (left.takenAt as Date).getTime(),
+          )[0];
+          return row === undefined ? null : { ...row };
+        },
+        findMany: async (args?: { where?: { takenAt?: { gte?: Date } } }) => {
+          const since = args?.where?.takenAt?.gte;
+          return [...kpiSnapshots]
+            .filter((row) => since === undefined || (row.takenAt as Date) >= since)
+            .sort(
+              (left, right) =>
+                (left.takenAt as Date).getTime() - (right.takenAt as Date).getTime(),
+            )
+            .map((row) => ({ ...row }));
+        },
+        createMany: async (args: { data: Record<string, unknown>[] }) => {
+          for (const item of args.data) {
+            seq += 1;
+            kpiSnapshots.push({ id: `snap-${seq}`, ...item });
+          }
+          return { count: args.data.length };
+        },
+        groupBy: async () => {
+          const stamps = new Set(
+            kpiSnapshots.map((row) => (row.takenAt as Date).getTime()),
+          );
+          return [...stamps].map((takenAt) => ({ takenAt: new Date(takenAt) }));
+        },
+      },
+      // 설정 변경 이력 (TASK-4001, 정책 4001-③)
+      adminAuditLog: {
+        findMany: async (args?: {
+          where?: { key?: { startsWith?: string } };
+          take?: number;
+        }) => {
+          const prefix = args?.where?.key?.startsWith;
+          return [...adminAudit]
+            .filter(
+              (row) => prefix === undefined || String(row.key).startsWith(prefix),
+            )
+            .reverse()
+            .slice(0, args?.take ?? adminAudit.length)
+            .map((row) => ({ ...row }));
+        },
+        create: async (args: { data: Record<string, unknown> }) => {
+          seq += 1;
+          const row = {
+            id: `adm-${seq}`,
+            createdAt: new Date(),
+            actor: null,
+            before: null,
+            after: null,
+            note: null,
+            ...args.data,
+          } as Record<string, unknown>;
+          adminAudit.push(row);
+          return { ...row };
+        },
       },
       backupRun: {
         create: async (args: { data: Record<string, unknown> }) => {
@@ -1087,7 +1179,11 @@ function createPrismaStub() {
       incident: {
         findMany: async (args?: {
           take?: number;
-          where?: { sourceAlertKey?: { not: null } };
+          where?: {
+            sourceAlertKey?: { not: null };
+            status?: string;
+            expiredAt?: null | { not: null };
+          };
           select?: Record<string, boolean>;
         }) =>
           [...incidents]
@@ -1096,6 +1192,19 @@ function createPrismaStub() {
                 args?.where?.sourceAlertKey === undefined ||
                 row.sourceAlertKey !== null,
             )
+            // 초안 수명 (TASK-4001, 정책 4001-①)
+            .filter(
+              (row) =>
+                args?.where?.status === undefined || row.status === args.where.status,
+            )
+            .filter((row) => {
+              if (args?.where?.expiredAt === undefined) {
+                return true;
+              }
+              return args.where.expiredAt === null
+                ? row.expiredAt === null
+                : row.expiredAt !== null;
+            })
             .sort(
               (left, right) =>
                 (right.startedAt as Date).getTime() - (left.startedAt as Date).getTime(),
@@ -1127,6 +1236,8 @@ function createPrismaStub() {
             sourceAlertKey: null,
             dismissedAt: null,
             dismissReason: null,
+            // 만료는 기각이 아니다 (TASK-4001, 정책 4001-①)
+            expiredAt: null,
             ...args.data,
           } as Record<string, unknown>;
           incidents.push(row);
@@ -1143,8 +1254,22 @@ function createPrismaStub() {
           Object.assign(row, args.data, { updatedAt: new Date() });
           return { ...row };
         },
+        updateMany: async (args: {
+          where: { id: { in: string[] } };
+          data: Record<string, unknown>;
+        }) => {
+          const targets = incidents.filter((row) =>
+            args.where.id.in.includes(row.id as string),
+          );
+          for (const row of targets) {
+            Object.assign(row, args.data, { updatedAt: new Date() });
+          }
+          return { count: targets.length };
+        },
       },
       opsEvent: {
+        // 전이 순번 (TASK-3901 정책 3901-① 배선)
+        count: async () => opsEvents.length,
         findUnique: async (args: { where: { key: string } }) => {
           const row = opsEvents.find((item) => item.key === args.where.key);
           return row === undefined ? null : { ...row };
@@ -1517,6 +1642,15 @@ async function build(overrides: Overrides = {}) {
       // 스텁으로 검증되지 않는다.
       OpsSettingsService,
       IncidentPromotionService,
+      // KPI 추세 · 초안 수명 · 진단 · 검증 준비 (TASK-4001, 정책 4001-①②③④⑤⑥)
+      // — 전부 실제 서비스를 쓴다. 이 기능들의 본질(한 점으로 선을 긋지
+      // 않는가 · 만료를 기각으로 적지 않는가 · 모르는 것을 통과로 세지
+      // 않는가 · 준비 완료를 스스로 선언하지 않는가)은 스텁으로 검증되지
+      // 않는다.
+      KpiTrendService,
+      DraftLifecycleService,
+      DiagnosticsService,
+      ValidationPlanService,
       {
         // 운영 설정 저장소 — 테스트가 값을 정한다
         provide: AdminSettingsService,
@@ -2004,6 +2138,8 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
         // 가격 변경 감지 · 월말 예측 경보 (TASK-3201, CTO 정책 3201-①④)
         "pricing-detect",
         "cost-forecast",
+        // 일일 운영 진단 (TASK-4001, 정책 4001-⑤)
+        "daily-diagnostics",
       ]);
       // 마지막 실행 결과가 붙는다
       expect(
@@ -2031,8 +2167,9 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
         .set("Authorization", "Bearer tok-admin")
         .expect(200);
       // provider-smoke는 기본 꺼짐이라 runAll 대상이 아니다 (과금 방지).
-      // 가격 감지·예측 경보가 추가돼 9종이 돈다 (TASK-3201)
-      expect(all.body).toHaveLength(9);
+      // 가격 감지·예측 경보가 추가돼 9종이 됐고 (TASK-3201),
+      // 일일 진단이 더해져 10종이 돈다 (TASK-4001, 정책 4001-⑤)
+      expect(all.body).toHaveLength(10);
       expect(all.body.map((entry: { job: string }) => entry.job)).not.toContain(
         "provider-smoke",
       );
@@ -7272,6 +7409,289 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
         const after = await admin(server, "/ops/incidents").expect(200);
         expect(after.body.open).toBe(1);
         expect(after.body.drafts).toBe(0);
+      });
+    });
+  });
+
+  describe("Enterprise Operations Intelligence Platform (TASK-4001)", () => {
+    const admin = (server: unknown, path: string) =>
+      request(server as never).get(path).set("Authorization", "Bearer tok-admin");
+
+    const post = (server: unknown, path: string) =>
+      request(server as never).post(path).set("Authorization", "Bearer tok-admin");
+
+    describe("장애 초안 수명 (정책 4001-①)", () => {
+      it("초안이 없으면 아무 말도 만들지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await admin(built.app.getHttpServer(), "/ops/incidents/drafts")
+          .expect(200);
+        expect(response.body.stale).toEqual([]);
+        expect(response.body.expired).toEqual([]);
+        expect(response.body.detail).toContain("수명을 넘긴 초안이 없습니다");
+      });
+
+      it("설정 화면이 말하는 기간이 실제 판정 기간과 같다", async () => {
+        const built = await build();
+        app = built.app;
+        opsSettingsStub["incident.draft.staleAfterDays"] = "5";
+        opsSettingsStub["incident.draft.expireAfterDays"] = "45";
+        const response = await admin(built.app.getHttpServer(), "/ops/incidents/drafts")
+          .expect(200);
+        expect(response.body.staleAfterDays).toBe(5);
+        expect(response.body.expireAfterDays).toBe(45);
+      });
+
+      it("만료가 경보보다 빠른 설정은 받아들이지 않고 그 사실을 말한다", async () => {
+        const built = await build();
+        app = built.app;
+        opsSettingsStub["incident.draft.staleAfterDays"] = "20";
+        opsSettingsStub["incident.draft.expireAfterDays"] = "10";
+        const response = await admin(built.app.getHttpServer(), "/ops/incidents/drafts")
+          .expect(200);
+        // 기본값으로 되돌아가되 **조용히 되돌리지 않는다**
+        expect(response.body.staleAfterDays).toBe(3);
+        expect(response.body.expireAfterDays).toBe(30);
+        expect(response.body.detail).toContain("받아들이지 않은 설정");
+      });
+
+      /**
+       * 라이브 검증에서 드러난 결함: 요약이 "만료할 초안 1건"이라고 말하는데
+       * 목록(`expired`)은 비어 있었다. 판정(아직 표시 안 됨)과 기록(이미
+       * 표시됨)을 한 칸에 넣었기 때문이다.
+       */
+      it("만료될 초안과 이미 만료된 초안을 나눠 보여 준다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        // 40일 된 초안 — 아직 정리가 돌지 않았다
+        built.prisma.seedAlert({
+          key: "provider-failure:old",
+          level: "CRITICAL",
+          status: "RESOLVED",
+          firstRaisedAt: new Date(Date.now() - 40 * 86_400_000),
+        });
+        opsSettingsStub["incident.promotion.enabled"] = "true";
+        await post(server, "/ops/incidents/promote").expect(200);
+        // 초안 생성 시각을 뒤로 민다 (승격은 지금 만든다)
+        const drafts = await admin(server, "/ops/incidents").expect(200);
+        expect(drafts.body.drafts).toBe(1);
+
+        const before = await admin(server, "/ops/incidents/drafts").expect(200);
+        // 방금 만들어졌으므로 수명을 넘기지 않았다
+        expect(before.body.expiring).toEqual([]);
+        expect(before.body.expired).toEqual([]);
+        expect(before.body.detail).toContain("수명을 넘긴 초안이 없습니다");
+      });
+
+      it("ADMIN 전용이다", async () => {
+        const built = await build();
+        app = built.app;
+        await request(built.app.getHttpServer() as never)
+          .get("/ops/incidents/drafts")
+          .expect(401);
+      });
+    });
+
+    describe("KPI 추세 (정책 4001-②)", () => {
+      it("스냅샷이 한 점뿐이면 추세를 내지 않는다 — 0% 변화가 아니다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        await post(server, "/ops/kpi/snapshot").expect(200);
+
+        const response = await admin(server, "/ops/kpi/trend").expect(200);
+        expect(response.body.trends.length).toBeGreaterThan(0);
+        for (const trend of response.body.trends) {
+          expect(trend.direction).toBe("unknown");
+          expect(trend.delta).toBeNull();
+        }
+        expect(response.body.detail).toContain("추세를 낼 수 없는 지표");
+      });
+
+      it("하루 한 번만 찍는다 — 화면을 많이 본 날로 표본이 기울지 않게", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        const first = await post(server, "/ops/kpi/snapshot").expect(200);
+        expect(first.body.taken).toBe(true);
+
+        const second = await post(server, "/ops/kpi/snapshot").expect(200);
+        expect(second.body.taken).toBe(false);
+        expect(second.body.detail).toContain("하루 한 번");
+      });
+
+      it("스냅샷이 하나도 없으면 마지막 시각은 null이다 — 0이 아니다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await admin(built.app.getHttpServer(), "/ops/kpi/trend")
+          .expect(200);
+        expect(response.body.lastTakenAt).toBeNull();
+        expect(response.body.unknown).toBe(response.body.trends.length);
+      });
+    });
+
+    describe("KPI 임계값 변경 이력 (정책 4001-③)", () => {
+      it("임계값 설정만 골라 보여 준다", async () => {
+        const built = await build();
+        app = built.app;
+        built.prisma.seedSettingChange({
+          action: "SETTING_UPDATED",
+          key: "kpi.threshold.mttr.watch",
+          before: "240",
+          after: "600",
+          actor: "admin@acos.local",
+        });
+        // 임계값이 아닌 설정은 이 목록에 끼지 않는다
+        built.prisma.seedSettingChange({
+          action: "SETTING_UPDATED",
+          key: "smtp.host",
+          after: "x",
+        });
+
+        const response = await admin(built.app.getHttpServer(), "/ops/kpi/history")
+          .expect(200);
+        expect(response.body).toHaveLength(1);
+        expect(response.body[0].key).toBe("kpi.threshold.mttr.watch");
+        // 원시 키가 아니라 사람이 읽는 이름이 붙는다
+        expect(response.body[0].title).toContain("평균 복구 시간");
+        // **느슨해진 변경임을 목록이 말한다** — 그러지 않으면 "240 → 600"이
+        // 좋은 소식인지 나쁜 소식인지 사람이 다시 계산해야 한다
+        expect(response.body[0].relaxed).toBe(true);
+      });
+
+      /**
+       * 라이브 검증에서 드러난 결함: 오버라이드가 없던 상태에서 처음
+       * 느슨하게 바꾸면 `before`가 null이라 "판정할 수 없음"으로 찍혔다.
+       * 그때 실제로 쓰이던 기준은 없었던 것이 아니라 **기본값**이었고,
+       * 이 기능이 잡으려는 바로 그 경우가 회색으로 지나갔다.
+       */
+      it("오버라이드가 없던 상태에서 처음 느슨하게 바꾼 것도 느슨해짐이다", async () => {
+        const built = await build();
+        app = built.app;
+        built.prisma.seedSettingChange({
+          action: "SETTING_UPDATED",
+          key: "kpi.threshold.mttr.watch",
+          before: null, // 기본값 240분을 쓰고 있었다
+          after: "600",
+        });
+
+        const response = await admin(built.app.getHttpServer(), "/ops/kpi/history")
+          .expect(200);
+        expect(response.body[0].relaxed).toBe(true);
+      });
+
+      it("해제는 기본값으로 되돌아간 것이며, 그 방향도 판정한다", async () => {
+        const built = await build();
+        app = built.app;
+        built.prisma.seedSettingChange({
+          action: "SETTING_CLEARED",
+          key: "kpi.threshold.mttr.good",
+          before: "30", // 기본값 60분보다 엄격했다
+          after: null, // 되돌리면 느슨해지는 것이다
+        });
+
+        const response = await admin(built.app.getHttpServer(), "/ops/kpi/history")
+          .expect(200);
+        expect(response.body[0].relaxed).toBe(true);
+      });
+
+      it("임계값 지표가 아닌 키는 방향을 판정하지 않는다 — false로 적지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        built.prisma.seedSettingChange({
+          action: "SETTING_UPDATED",
+          key: "kpi.threshold.unknown-metric.good",
+          before: "1",
+          after: "2",
+        });
+
+        const response = await admin(built.app.getHttpServer(), "/ops/kpi/history")
+          .expect(200);
+        expect(response.body[0].relaxed).toBeNull();
+      });
+    });
+
+    describe("운영 진단 (정책 4001-④⑤)", () => {
+      it("진단은 서비스를 막지 않는다 — 경보와 차단은 다르다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await admin(built.app.getHttpServer(), "/ops/diagnostics")
+          .expect(200);
+        expect(response.body.blocked).toBe(false);
+        expect(response.body.detail).toContain("서비스는 계속 뜹니다");
+      });
+
+      it("긴급 알림 경로가 진단 항목에 들어 있다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await admin(built.app.getHttpServer(), "/ops/diagnostics")
+          .expect(200);
+        const urgent = response.body.checks.find(
+          (check: { id: string }) => check.id === "urgent-channel",
+        );
+        expect(urgent).toBeDefined();
+      });
+
+      it("기동 진단은 '아직 아무것도 안 해 봤다'를 통과로 세지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await admin(
+          built.app.getHttpServer(),
+          "/ops/diagnostics?stage=startup",
+        ).expect(200);
+        const fresh = response.body.checks.find(
+          (check: { id: string }) => check.id === "fresh",
+        );
+        expect(fresh.status).toBe("unknown");
+        expect(response.body.unknown).toBeGreaterThan(0);
+      });
+    });
+
+    describe("검증 스프린트 준비 (정책 4001-⑥)", () => {
+      it("사람이 줄 것이 남아 있으면 준비 완료라고 말하지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await admin(built.app.getHttpServer(), "/ops/validation-plan")
+          .expect(200);
+        expect(response.body.readiness).not.toBe("ready");
+        expect(response.body.waitingOnPeople).toBeGreaterThan(0);
+        expect(response.body.detail).toContain("코드로 해결되지 않습니다");
+      });
+
+      it("단계마다 담당과 증거가 붙는다 — 증거가 없으면 '아마 됐을 것'이 들어온다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await admin(built.app.getHttpServer(), "/ops/validation-plan")
+          .expect(200);
+        expect(response.body.steps.length).toBe(response.body.total);
+        for (const step of response.body.steps) {
+          expect(["system", "operator"]).toContain(step.owner);
+          expect(String(step.evidence).length).toBeGreaterThan(0);
+        }
+      });
+
+      it("앞 단계가 막혀 못 하는 것을 안 한 것으로 적지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await admin(built.app.getHttpServer(), "/ops/validation-plan")
+          .expect(200);
+        const smoke = response.body.steps.find(
+          (step: { id: string }) => step.id === "smoke",
+        );
+        expect(smoke.status).toBe("blocked");
+        expect(smoke.blockedBy.length).toBeGreaterThan(0);
+      });
+
+      it("ADMIN 전용이다", async () => {
+        const built = await build();
+        app = built.app;
+        await request(built.app.getHttpServer() as never)
+          .get("/ops/validation-plan")
+          .expect(401);
       });
     });
   });

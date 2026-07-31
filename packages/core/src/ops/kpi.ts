@@ -443,7 +443,7 @@ export function summarizeOperationsKpi(input: KpiInput): KpiReport {
   // 화면이 구분해 주지 않으면, 대시보드는 스스로를 속이는 도구가 된다.
   if (relaxed > 0) {
     parts.push(
-      `임계값을 **느슨하게** 바꾼 지표 ${relaxed}개 — 기준을 내린 것이지 ` +
+      `임계값을 느슨하게 바꾼 지표 ${relaxed}개 — 기준을 내린 것이지 ` +
         "상태가 좋아진 것이 아닙니다.",
     );
   } else if (adjusted > 0) {

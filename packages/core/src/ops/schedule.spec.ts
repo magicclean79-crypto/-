@@ -86,13 +86,15 @@ describe("Scheduled Checks (TASK-1302)", () => {
       expect(byJob["cost-verification"].enabled).toBe(true);
     });
 
-    it("선언된 점검 11종을 빠짐없이 돌려준다", () => {
+    it("선언된 점검 12종을 빠짐없이 돌려준다", () => {
       expect(resolveSchedules({}).map((entry) => entry.job).sort()).toEqual([
         "alert-archive",
         "backup",
         // 월말 예측 경보 (TASK-3201, CTO 정책 3201-④)
         "cost-forecast",
         "cost-verification",
+        // 일일 운영 진단 (TASK-4001, CTO 정책 4001-⑤)
+        "daily-diagnostics",
         "governance-scan",
         "health-check",
         // 가격 변경 감지 (TASK-3201, CTO 정책 3201-①)

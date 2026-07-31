@@ -5,6 +5,11 @@ import {
   resolvePromotionSettings,
 } from "../ops/incident-promotion";
 import { validateThreshold } from "../ops/kpi-thresholds";
+import {
+  DRAFT_EXPIRE_KEY,
+  DRAFT_STALE_KEY,
+  resolveDraftLifecycleSettings,
+} from "../ops/draft-lifecycle";
 import { validateRetention } from "../ops/retention";
 import { LLM_PROVIDER_REGISTRY } from "../llm/provider-registry";
 import { LLM_FEATURE_MODEL_ENV } from "../llm/provider-registry";
@@ -162,6 +167,18 @@ export function validateSetting(key: string, value: string | null): void {
     }
     return;
   }
+  // 장애 초안 수명 (TASK-4001, CTO 정책 4001-①) — 판정 규칙은 ops 쪽에
+  // 있고 여기서는 그 판정을 그대로 쓴다.
+  if (key === DRAFT_STALE_KEY || key === DRAFT_EXPIRE_KEY) {
+    if (value === null) {
+      return;
+    }
+    const rejected = resolveDraftLifecycleSettings({ [key]: value }).rejected;
+    if (rejected.length > 0) {
+      throw new SettingValidationError(rejected[0].reason);
+    }
+    return;
+  }
   if (key === PROMOTION_SETTING_KEY) {
     if (value === null) {
       return;
@@ -174,7 +191,7 @@ export function validateSetting(key: string, value: string | null): void {
   }
 
   throw new SettingValidationError(
-    `지원하지 않는 설정 키입니다: ${key} (provider.<name>.enabled / model.<feature> / budget.daily|monthly|alertRatio / experiment.<feature> / kpi.threshold.<id>.<good|watch> / retention.<target>.days / incident.promotion.*)`,
+    `지원하지 않는 설정 키입니다: ${key} (provider.<name>.enabled / model.<feature> / budget.daily|monthly|alertRatio / experiment.<feature> / kpi.threshold.<id>.<good|watch> / retention.<target>.days / incident.promotion.* / incident.draft.*)`,
   );
 }
 

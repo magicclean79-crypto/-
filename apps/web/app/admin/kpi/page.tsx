@@ -2,7 +2,15 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import type { OperationsKpiDto, OpsAuditDto, OpsEventDto } from "@acos/shared";
+import type {
+  KpiSettingChangeDto,
+  KpiThresholdDto,
+  KpiTrendReportDto,
+  OperationsKpiDto,
+  OpsAuditDto,
+  OpsEventDto,
+  OpsSettingsDto,
+} from "@acos/shared";
 import { authFetchInit } from "../../../lib/auth-client";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
@@ -23,7 +31,33 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
  *
  * 그리고 **좋아 보이는 0에 주석을 답니다**: "장애 0건"은 장애가 없었다는
  * 뜻일 수도, 아무도 적지 않았다는 뜻일 수도 있습니다.
+ *
+ * ## 추세·임계값 설정·변경 이력 (TASK-4001, CTO 정책 4001-②③)
+ *
+ * 현재값만으로는 아무 행동도 만들어지지 않습니다 — 사람이 알아야 하는
+ * 것은 **"나아지는 중인가"** 이고, 그건 두 번 재야 압니다. 그래서 추세를
+ * 함께 보여 주되, **한 점으로 선을 긋지 않습니다**: 스냅샷이 하나뿐이면
+ * "0% 변화"가 아니라 "추세를 낼 수 없음"입니다.
+ *
+ * 임계값은 여기서 바꿉니다. 바꾸면 화면 색이 바뀌므로 **느슨하게 바꾼
+ * 것은 그렇다고 적고**, 그 변경이 언제 누구에 의해 일어났는지도 같은
+ * 화면에 남깁니다 — 기준을 내려 초록을 산 사실이 화면 밖에 있으면,
+ * 다음에 이 화면을 보는 사람은 상태가 좋아진 줄 압니다.
  */
+
+const TREND_LABEL: Record<string, string> = {
+  improving: "나아지는 중",
+  worsening: "나빠지는 중",
+  flat: "변화 없음",
+  unknown: "낼 수 없음",
+};
+
+const TREND_BADGE: Record<string, string> = {
+  improving: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
+  worsening: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300",
+  flat: "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
+  unknown: "bg-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
+};
 
 const STATUS_STYLE: Record<string, string> = {
   good: "border-emerald-200 dark:border-emerald-900",
@@ -51,6 +85,12 @@ export default function OperationsKpiPage() {
   const [kpi, setKpi] = useState<OperationsKpiDto | null>(null);
   const [events, setEvents] = useState<OpsEventDto[]>([]);
   const [audit, setAudit] = useState<OpsAuditDto[]>([]);
+  // TASK-4001 — 추세 · 임계값 설정 · 변경 이력
+  const [trend, setTrend] = useState<KpiTrendReportDto | null>(null);
+  const [thresholds, setThresholds] = useState<KpiThresholdDto[]>([]);
+  const [history, setHistory] = useState<KpiSettingChangeDto[]>([]);
+  const [saving, setSaving] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -61,14 +101,21 @@ export default function OperationsKpiPage() {
         const response = await fetch(`${API_URL}${path}`, authFetchInit());
         return response.ok ? ((await response.json()) as T) : null;
       };
-      const [next, nextEvents, nextAudit] = await Promise.all([
-        get<OperationsKpiDto>("/ops/kpi"),
-        get<OpsEventDto[]>("/ops/events?limit=20"),
-        get<OpsAuditDto[]>("/ops/audit?limit=30"),
-      ]);
+      const [next, nextEvents, nextAudit, nextTrend, nextSettings, nextHistory] =
+        await Promise.all([
+          get<OperationsKpiDto>("/ops/kpi"),
+          get<OpsEventDto[]>("/ops/events?limit=20"),
+          get<OpsAuditDto[]>("/ops/audit?limit=30"),
+          get<KpiTrendReportDto>("/ops/kpi/trend"),
+          get<OpsSettingsDto>("/ops/settings"),
+          get<KpiSettingChangeDto[]>("/ops/kpi/history?limit=20"),
+        ]);
       setKpi(next);
       setEvents(nextEvents ?? []);
       setAudit(nextAudit ?? []);
+      setTrend(nextTrend);
+      setThresholds(nextSettings?.thresholds ?? []);
+      setHistory(nextHistory ?? []);
       setError(next === null ? "KPI를 읽지 못했습니다 (ADMIN 로그인이 필요합니다)." : null);
     } catch {
       setError("API 서버에 연결할 수 없습니다.");
@@ -76,6 +123,45 @@ export default function OperationsKpiPage() {
       setLoading(false);
     }
   }, []);
+
+  /**
+   * 임계값을 저장한다 (CTO 정책 4001-③).
+   *
+   * 값을 비우면 **해제**입니다 — 기본값으로 되돌리는 것이고, 삭제가
+   * 아닙니다. 저장이 거절되면 그 이유를 그대로 보여 줍니다: 범위 밖의
+   * 값은 임계값이 아니라 임계값을 없앤 것이고, 그건 조용히 넘어가면 안
+   * 되는 거절입니다.
+   */
+  const saveThreshold = useCallback(
+    async (key: string, raw: string) => {
+      setSaving(key);
+      setSaveError(null);
+      try {
+        const response = await fetch(`${API_URL}/admin/settings/${key}`, {
+          ...authFetchInit(),
+          method: "PUT",
+          headers: {
+            ...(authFetchInit().headers as Record<string, string>),
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ value: raw.trim() === "" ? null : raw.trim() }),
+        });
+        if (!response.ok) {
+          const body = (await response.json().catch(() => null)) as
+            | { message?: string }
+            | null;
+          setSaveError(body?.message ?? "저장하지 못했습니다.");
+          return;
+        }
+        await load();
+      } catch {
+        setSaveError("API 서버에 연결할 수 없습니다.");
+      } finally {
+        setSaving(null);
+      }
+    },
+    [load],
+  );
 
   useEffect(() => {
     void load();
@@ -214,6 +300,223 @@ export default function OperationsKpiPage() {
           </ul>
         </section>
       ) : null}
+
+      {/* 추세 — 현재값만으로는 나아지는지 알 수 없다 (TASK-4001, 정책 4001-②) */}
+      <section
+        data-testid="kpi-trend"
+        className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800"
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="text-lg font-medium">추세</h2>
+          {trend !== null ? (
+            <span className="text-xs text-zinc-500">최근 {trend.windowDays}일</span>
+          ) : null}
+          {trend !== null && trend.worsening > 0 ? (
+            <span
+              data-testid="trend-worsening-count"
+              className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800 dark:bg-red-900/40 dark:text-red-300"
+            >
+              나빠지는 중 {trend.worsening}개
+            </span>
+          ) : null}
+          {trend !== null && trend.unknown > 0 ? (
+            <span
+              data-testid="trend-unknown-count"
+              className="rounded-full bg-zinc-200 px-2 py-0.5 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
+            >
+              낼 수 없음 {trend.unknown}개
+            </span>
+          ) : null}
+        </div>
+        {trend === null ? (
+          <p className="mt-2 text-sm text-zinc-500">추세를 읽지 못했습니다.</p>
+        ) : (
+          <>
+            <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+              {trend.detail}
+            </p>
+            <p className="mt-1 text-xs text-zinc-500">
+              {/* 한 번도 안 찍은 것을 "오늘 찍었다"로 적지 않는다 */}
+              {trend.lastTakenAt === null
+                ? "아직 스냅샷이 없습니다 — 두 점이 쌓여야 추세가 됩니다."
+                : `마지막 스냅샷 ${new Date(trend.lastTakenAt).toLocaleString("ko-KR")}`}
+            </p>
+            <ul data-testid="trend-list" className="mt-3 grid gap-2 sm:grid-cols-3">
+              {trend.trends.map((row) => (
+                <li
+                  key={row.kpiId}
+                  data-testid={`trend-${row.kpiId}`}
+                  className="rounded-lg border border-zinc-100 p-3 dark:border-zinc-900"
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-medium">{row.title}</span>
+                    <span
+                      data-testid={`trend-direction-${row.kpiId}`}
+                      className={`rounded-full px-2 py-0.5 text-xs ${TREND_BADGE[row.direction] ?? TREND_BADGE.unknown}`}
+                    >
+                      {TREND_LABEL[row.direction] ?? row.direction}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+                    {row.detail}
+                  </p>
+                  {/*
+                    기준이 움직인 구간에서는 색의 변화가 상태의 변화가 아니다
+                    (정책 3901-②의 연장) — 카드가 직접 말한다.
+                  */}
+                  {row.thresholdChanged ? (
+                    <p
+                      data-testid={`trend-threshold-changed-${row.kpiId}`}
+                      className="mt-1 text-xs text-amber-700 dark:text-amber-400"
+                    >
+                      이 구간에 임계값이 바뀌었습니다 — 색의 변화를 상태의 변화로
+                      읽지 마세요.
+                    </p>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </section>
+
+      {/* 임계값 설정 — 바꾸면 화면 색이 바뀐다 (TASK-4001, 정책 4001-③) */}
+      <section
+        data-testid="kpi-thresholds"
+        className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800"
+      >
+        <h2 className="text-lg font-medium">임계값 설정</h2>
+        <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+          임계값을 바꾸면 <strong>아무것도 나아지지 않았는데 화면이 초록이 될 수
+          있습니다</strong>. 그래서 기본값보다 느슨하게 바꾼 값은 그렇다고
+          적습니다. 비우고 저장하면 기본값으로 되돌아갑니다.
+        </p>
+        {saveError !== null ? (
+          <p
+            data-testid="threshold-error"
+            className="mt-2 rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300"
+          >
+            {saveError}
+          </p>
+        ) : null}
+        <ul className="mt-3 space-y-2">
+          {thresholds.map((row) => (
+            <li
+              key={row.id}
+              data-testid={`threshold-${row.id}`}
+              className="rounded-lg border border-zinc-100 p-3 dark:border-zinc-900"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium">{row.title}</span>
+                <span className="text-xs text-zinc-500">
+                  {row.direction === "lower-is-better" ? "작을수록 좋음" : "클수록 좋음"}
+                  {" · "}
+                  {row.min}~{row.max}
+                  {row.unit}
+                </span>
+                {row.relaxed ? (
+                  <span
+                    data-testid={`threshold-relaxed-${row.id}`}
+                    className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                  >
+                    느슨해진 기준 — 초록을 산 것입니다
+                  </span>
+                ) : null}
+                {!row.isDefault && !row.relaxed ? (
+                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">
+                    기본값보다 엄격
+                  </span>
+                ) : null}
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                {(["good", "watch"] as const).map((bound) => (
+                  <label key={bound} className="flex items-center gap-1 text-xs">
+                    <span className="text-zinc-500">
+                      {bound === "good" ? "정상 경계" : "주의 경계"}
+                    </span>
+                    <input
+                      data-testid={`threshold-input-${row.id}-${bound}`}
+                      type="number"
+                      defaultValue={bound === "good" ? row.good : row.watch}
+                      className="w-24 rounded border border-zinc-300 px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900"
+                      onBlur={(event) => {
+                        const current = String(bound === "good" ? row.good : row.watch);
+                        if (event.target.value.trim() === current) {
+                          return;
+                        }
+                        void saveThreshold(
+                          `kpi.threshold.${row.id}.${bound}`,
+                          event.target.value,
+                        );
+                      }}
+                    />
+                  </label>
+                ))}
+                <span className="text-xs text-zinc-500">
+                  기본 {row.defaultGood}/{row.defaultWatch}
+                  {row.unit}
+                </span>
+                {saving !== null && saving.startsWith(`kpi.threshold.${row.id}.`) ? (
+                  <span className="text-xs text-zinc-500">저장 중…</span>
+                ) : null}
+              </div>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      {/* 임계값 변경 이력 — 기준이 언제 왜 움직였는가 (정책 4001-③) */}
+      <section
+        data-testid="kpi-setting-history"
+        className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800"
+      >
+        <h2 className="text-lg font-medium">임계값 변경 이력</h2>
+        <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+          기준이 움직인 사실이 화면 밖에 있으면, 다음에 이 화면을 보는 사람은
+          <strong> 상태가 좋아진 줄 압니다</strong>.
+        </p>
+        {history.length === 0 ? (
+          <p data-testid="setting-history-empty" className="mt-3 text-sm text-zinc-500">
+            임계값을 바꾼 기록이 없습니다 — 지금 판정은 전부 기본 기준입니다.
+          </p>
+        ) : (
+          <ul data-testid="setting-history-list" className="mt-3 space-y-1 text-sm">
+            {history.map((row) => (
+              <li
+                key={row.id}
+                data-testid="setting-history-item"
+                className="flex flex-wrap items-baseline gap-2 rounded-lg border border-zinc-100 px-3 py-2 dark:border-zinc-900"
+              >
+                <span className="font-medium">{row.title}</span>
+                <span className="text-xs text-zinc-500">
+                  {row.before ?? "기본값"} → {row.after ?? "기본값"}
+                </span>
+                {/* 판정할 수 없는 것은 안전해 보이게 적지 않는다 */}
+                {row.relaxed === true ? (
+                  <span
+                    data-testid="setting-history-relaxed"
+                    className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                  >
+                    느슨해짐
+                  </span>
+                ) : row.relaxed === false ? (
+                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">
+                    엄격해짐
+                  </span>
+                ) : (
+                  <span className="rounded-full bg-zinc-200 px-2 py-0.5 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+                    방향을 판정할 수 없음
+                  </span>
+                )}
+                <span className="text-xs text-zinc-500">
+                  {row.actor ?? "알 수 없음"} ·{" "}
+                  {new Date(row.createdAt).toLocaleString("ko-KR")}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
       {/* 운영 이벤트 — 시스템이 관측한 상태 변화 */}
       <section

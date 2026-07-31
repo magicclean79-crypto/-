@@ -2785,3 +2785,135 @@ export interface BillingReportDto {
   detail: string;
   checkedAt: string;
 }
+
+// ── 운영 진단 · KPI 추세 · 초안 수명 · 검증 준비 (TASK-4001, Sprint 40) ──
+
+/** 진단 항목 1건 (CTO 정책 4001-④⑤) */
+export interface DiagnosticCheckDto {
+  id: string;
+  title: string;
+  /** ok | warn | fail | unknown — **`unknown`은 통과가 아니다** */
+  status: string;
+  detail: string;
+  /** 사람이 다음에 할 일 — 없으면 null */
+  next: string | null;
+}
+
+/** 기동·일일 진단 (GET /ops/diagnostics) */
+export interface DiagnosticReportDto {
+  /** startup | daily */
+  stage: string;
+  checks: DiagnosticCheckDto[];
+  ok: number;
+  warn: number;
+  fail: number;
+  unknown: number;
+  /** 진단이 서비스를 막았는가 — **언제나 false다** (경보와 차단은 다르다) */
+  blocked: boolean;
+  detail: string;
+  ranAt: string;
+}
+
+/** KPI 추세 1건 (CTO 정책 4001-②) */
+export interface KpiTrendDto {
+  kpiId: string;
+  title: string;
+  /** improving | worsening | flat | unknown */
+  direction: string;
+  /** 값 변화 — 비교할 수 없으면 null (0이 아니다) */
+  delta: number | null;
+  unit: string;
+  /** 비교 대상 시점 — 없으면 null */
+  comparedTo: string | null;
+  samples: number;
+  /** 이 구간에 임계값이 바뀌었는가 — 바뀌었으면 색의 변화는 상태가 아니다 */
+  thresholdChanged: boolean;
+  detail: string;
+}
+
+/** KPI 추세 보고 (GET /ops/kpi/trend) */
+export interface KpiTrendReportDto {
+  trends: KpiTrendDto[];
+  windowDays: number;
+  improving: number;
+  worsening: number;
+  /** 추세를 낼 수 없는 지표 수 — 많으면 이 화면을 믿을 수 없다 */
+  unknown: number;
+  thresholdChanged: number;
+  /** 마지막 스냅샷 시각 — 한 번도 안 찍었으면 null */
+  lastTakenAt: string | null;
+  detail: string;
+}
+
+/** KPI 임계값 변경 이력 1건 (GET /ops/kpi/history, CTO 정책 4001-③) */
+export interface KpiSettingChangeDto {
+  id: string;
+  key: string;
+  /** 어떤 지표의 어떤 경계인가 — 해석할 수 없으면 원래 키 */
+  title: string;
+  action: string;
+  before: string | null;
+  after: string | null;
+  actor: string | null;
+  /**
+   * 이 변경이 기준을 **느슨하게** 했는가 — 느슨하게 바꾼 것은 초록을 산
+   * 것이고, 그 사실이 이력에 남아야 한다. 판정할 수 없으면 null.
+   */
+  relaxed: boolean | null;
+  createdAt: string;
+}
+
+/** 장애 초안 수명 (GET /ops/incidents/drafts) */
+export interface DraftLifecycleDto {
+  /** 오래 방치돼 경보 대상인 초안 */
+  stale: { id: string; summary: string; createdAt: string; ageDays: number }[];
+  /**
+   * 수명을 넘겨 **다음 정리에서 만료로 표시될** 초안.
+   * 아직 표시되지 않았다 — 판정과 기록을 한 칸에 넣으면 요약이 말하는 수와
+   * 목록의 수가 어긋난다.
+   */
+  expiring: { id: string; summary: string; createdAt: string; ageDays: number }[];
+  /** 이미 만료로 표시된 초안 — **기각이 아니다** */
+  expired: { id: string; summary: string; createdAt: string; expiredAt: string }[];
+  staleAfterDays: number;
+  expireAfterDays: number;
+  detail: string;
+}
+
+/** 검증 스프린트 준비 단계 1건 (CTO 정책 4001-⑥) */
+export interface ValidationStepDto {
+  id: string;
+  title: string;
+  /** system | operator — 코드로 끝낼 수 있는가, 사람이 줘야 하는가 */
+  owner: string;
+  why: string;
+  /** 무엇을 보면 "됐다"인가 */
+  evidence: string;
+  /** done | blocked | pending | unknown */
+  status: string;
+  detail: string;
+  blockedBy: string[];
+}
+
+/** 검증 스프린트 준비 (GET /ops/validation-plan) */
+export interface ValidationPlanDto {
+  steps: ValidationStepDto[];
+  /** ready | blocked | not-ready — **blocked을 ready로 올리는 경로는 없다** */
+  readiness: string;
+  done: number;
+  total: number;
+  /** 사람이 줘야 끝나는 단계 수 */
+  waitingOnPeople: number;
+  /** 지금 우리가 할 수 있는 단계 수 — 막힌 것은 여기 들어가지 않는다 */
+  waitingOnUs: number;
+  /** 확인하지 못한 단계 수 — 통과로 세지 않았다 */
+  unknown: number;
+  /**
+   * 앞 단계가 막혀 시작할 수 없는 단계 수.
+   * 우리 몫으로도 사람 몫으로도 세지 않는다 — 우리가 부지런해져서 풀리지
+   * 않고, 사람이 직접 할 수 있는 일도 아니다.
+   */
+  blocked: number;
+  detail: string;
+  checkedAt: string;
+}

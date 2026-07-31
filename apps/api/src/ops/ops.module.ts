@@ -28,6 +28,11 @@ import { NotificationQueueService } from "./notification-queue.service";
 import { NotificationService } from "./notification.service";
 import { OpsController } from "./ops.controller";
 import { ScheduledChecksService } from "./scheduled-checks.service";
+// TASK-4001 (CTO 정책 4001-①②③④⑤⑥)
+import { DiagnosticsService } from "./diagnostics.service";
+import { DraftLifecycleService } from "./draft-lifecycle.service";
+import { KpiTrendService } from "./kpi-trend.service";
+import { ValidationPlanService } from "./validation-plan.service";
 
 /**
  * 운영 자동화·경보 모듈. (TASK-1302, Sprint 13)
@@ -74,6 +79,10 @@ import { ScheduledChecksService } from "./scheduled-checks.service";
     OpsAuditInterceptor,
     OpsSettingsService,
     IncidentPromotionService,
+    KpiTrendService,
+    DraftLifecycleService,
+    DiagnosticsService,
+    ValidationPlanService,
   ],
   exports: [
     AlertService,
@@ -97,6 +106,10 @@ import { ScheduledChecksService } from "./scheduled-checks.service";
     OpsAuditService,
     OpsSettingsService,
     IncidentPromotionService,
+    KpiTrendService,
+    DraftLifecycleService,
+    DiagnosticsService,
+    ValidationPlanService,
   ],
 })
 export class OpsModule {}

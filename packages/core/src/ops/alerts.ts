@@ -37,6 +37,10 @@ export const ALERT_KINDS = [
   "cost-forecast",
   // 외부 가격 공지 (TASK-3301, CTO 정책 3301-①) — 못 읽은 것은 "변경 없음"이 아니다
   "price-source",
+  // 확인되지 않은 장애 초안 (TASK-4001, CTO 정책 4001-①) — 대답 없는 질문이 쌓인 것
+  "incident-draft",
+  // 기동·일일 진단 (TASK-4001, CTO 정책 4001-④⑤) — 운영에서만 낸다
+  "diagnostics",
 ] as const;
 
 export type AlertKind = (typeof ALERT_KINDS)[number];
@@ -706,6 +710,10 @@ export const ALERT_COOLDOWN_ENV: Record<AlertKind, string> = {
   "cost-forecast": "ALERT_COOLDOWN_FORECAST_MS",
   // 공지를 못 읽는 상태는 사람이 고칠 때까지 이어진다
   "price-source": "ALERT_COOLDOWN_PRICE_SOURCE_MS",
+  // 초안 방치는 날 단위 사안이다 — 30분마다 부르면 그 경보부터 무시된다
+  "incident-draft": "ALERT_COOLDOWN_INCIDENT_DRAFT_MS",
+  // 진단은 기동과 하루 한 번 도므로 쿨다운은 재알림만 막는다
+  diagnostics: "ALERT_COOLDOWN_DIAGNOSTICS_MS",
 };
 
 /** 전체 기본값 환경변수 (종류별 값이 없을 때) */

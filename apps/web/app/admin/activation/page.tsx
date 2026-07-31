@@ -4,9 +4,12 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import type {
   ActivationHistoryDto,
+  DiagnosticReportDto,
+  DraftLifecycleDto,
   IncidentBoardDto,
   ProductionActivationDto,
   SmokeReportDto,
+  ValidationPlanDto,
 } from "@acos/shared";
 import { authFetchInit } from "../../../lib/auth-client";
 
@@ -85,6 +88,10 @@ export default function ActivationDashboardPage() {
   const [history, setHistory] = useState<ActivationHistoryDto | null>(null);
   const [smoke, setSmoke] = useState<SmokeReportDto | null>(null);
   const [incidents, setIncidents] = useState<IncidentBoardDto | null>(null);
+  // TASK-4001 — 검증 준비 · 운영 진단 · 초안 수명
+  const [plan, setPlan] = useState<ValidationPlanDto | null>(null);
+  const [diagnostics, setDiagnostics] = useState<DiagnosticReportDto | null>(null);
+  const [drafts, setDrafts] = useState<DraftLifecycleDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [smokeRunning, setSmokeRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -97,16 +104,23 @@ export default function ActivationDashboardPage() {
         const response = await fetch(`${API_URL}${path}`, authFetchInit());
         return response.ok ? ((await response.json()) as T) : null;
       };
-      const [next, log, probe, board] = await Promise.all([
+      const [next, log, probe, board, plan, diag, draft] = await Promise.all([
         get<ProductionActivationDto>("/ops/activation"),
         get<ActivationHistoryDto>("/ops/activation/history"),
         get<SmokeReportDto>("/ops/smoke"),
         get<IncidentBoardDto>("/ops/incidents"),
+        // TASK-4001 — 검증 준비 · 진단 · 초안 수명
+        get<ValidationPlanDto>("/ops/validation-plan"),
+        get<DiagnosticReportDto>("/ops/diagnostics"),
+        get<DraftLifecycleDto>("/ops/incidents/drafts"),
       ]);
       setActivation(next);
       setHistory(log);
       setSmoke(probe);
       setIncidents(board);
+      setPlan(plan);
+      setDiagnostics(diag);
+      setDrafts(draft);
       setError(next === null ? "활성화 판정을 읽지 못했습니다 (ADMIN 로그인이 필요합니다)." : null);
     } catch {
       setError("API 서버에 연결할 수 없습니다.");
@@ -306,6 +320,229 @@ export default function ActivationDashboardPage() {
               ))}
             </ol>
           )}
+        </section>
+      ) : null}
+
+      {/* 검증 스프린트 준비 (TASK-4001, CTO 정책 4001-⑥) */}
+      {plan ? (
+        <section
+          data-testid="validation-plan"
+          className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-lg font-medium">검증 스프린트 준비</h2>
+            <span
+              data-testid="validation-readiness"
+              className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                plan.readiness === "ready"
+                  ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
+                  : plan.readiness === "blocked"
+                    ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                    : "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+              }`}
+            >
+              {plan.readiness === "ready"
+                ? "시작할 수 있습니다"
+                : plan.readiness === "blocked"
+                  ? "사람이 줄 것이 남았습니다"
+                  : "우리 쪽 일이 남았습니다"}
+            </span>
+            <span className="text-xs text-zinc-500">
+              {plan.done}/{plan.total} 단계
+            </span>
+            {/*
+              막힌 단계를 "우리 쪽에 남은 일"과 섞지 않는다 — 섞으면 우리가
+              게을러서 안 한 것처럼 보이고 진짜 병목이 작아 보인다.
+            */}
+            {plan.blocked > 0 ? (
+              <span
+                data-testid="validation-blocked-count"
+                className="rounded-full bg-zinc-200 px-2 py-0.5 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
+              >
+                앞 단계에 막힘 {plan.blocked}건
+              </span>
+            ) : null}
+          </div>
+          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">{plan.detail}</p>
+          <ul data-testid="validation-steps" className="mt-3 space-y-2">
+            {plan.steps.map((step) => (
+              <li
+                key={step.id}
+                data-testid={`validation-step-${step.id}`}
+                className={`rounded-lg border p-3 ${
+                  step.status === "done"
+                    ? "border-emerald-200 dark:border-emerald-900"
+                    : step.status === "blocked"
+                      ? "border-amber-200 dark:border-amber-900"
+                      : "border-zinc-200 dark:border-zinc-800"
+                }`}
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-medium">{step.title}</span>
+                  <span
+                    data-testid={`validation-status-${step.id}`}
+                    className="rounded-full bg-zinc-200 px-2 py-0.5 text-xs text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                  >
+                    {step.status === "done"
+                      ? "완료"
+                      : step.status === "blocked"
+                        ? "앞 단계에 막힘"
+                        : step.status === "unknown"
+                          ? "확인 못 함"
+                          : "남음"}
+                  </span>
+                  {/*
+                    코드로 끝낼 수 있는 것과 사람이 줘야 하는 것을 가른다 —
+                    가르지 않으면 남은 일이 전부 "우리가 게을러서"로 보인다.
+                  */}
+                  <span
+                    data-testid={`validation-owner-${step.id}`}
+                    className={`rounded-full px-2 py-0.5 text-xs ${
+                      step.owner === "operator"
+                        ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                        : "bg-zinc-100 text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"
+                    }`}
+                  >
+                    {step.owner === "operator" ? "사람이 줘야 함" : "우리가 함"}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+                  {step.detail}
+                </p>
+                <p className="mt-1 text-xs text-zinc-500">증거: {step.evidence}</p>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {/* 운영 진단 (TASK-4001, CTO 정책 4001-④⑤) */}
+      {diagnostics ? (
+        <section
+          data-testid="diagnostics-section"
+          className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-lg font-medium">운영 진단</h2>
+            {diagnostics.fail > 0 ? (
+              <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800 dark:bg-red-900/40 dark:text-red-300">
+                실패 {diagnostics.fail}건
+              </span>
+            ) : null}
+            {diagnostics.unknown > 0 ? (
+              <span
+                data-testid="diagnostics-unknown-count"
+                className="rounded-full bg-zinc-200 px-2 py-0.5 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
+              >
+                확인 못 함 {diagnostics.unknown}건
+              </span>
+            ) : null}
+          </div>
+          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+            {diagnostics.detail}
+          </p>
+          <ul data-testid="diagnostics-checks" className="mt-3 space-y-1 text-sm">
+            {diagnostics.checks.map((check) => (
+              <li
+                key={check.id}
+                data-testid={`diagnostic-${check.id}`}
+                className="rounded-lg border border-zinc-100 px-3 py-2 dark:border-zinc-900"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium">{check.title}</span>
+                  <span
+                    data-testid={`diagnostic-status-${check.id}`}
+                    className={`rounded-full px-2 py-0.5 text-xs ${
+                      check.status === "ok"
+                        ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
+                        : check.status === "fail"
+                          ? "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"
+                          : check.status === "warn"
+                            ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                            : "bg-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
+                    }`}
+                  >
+                    {check.status === "ok"
+                      ? "정상"
+                      : check.status === "fail"
+                        ? "실패"
+                        : check.status === "warn"
+                          ? "주의"
+                          : "확인 못 함"}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+                  {check.detail}
+                </p>
+                {check.next !== null ? (
+                  <p className="mt-1 text-xs text-zinc-500">다음: {check.next}</p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {/* 장애 초안 수명 (TASK-4001, CTO 정책 4001-①) */}
+      {drafts ? (
+        <section
+          data-testid="draft-lifecycle"
+          className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-lg font-medium">장애 초안 수명</h2>
+            {drafts.stale.length > 0 ? (
+              <span
+                data-testid="draft-stale-count"
+                className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+              >
+                확인 대기 {drafts.stale.length}건
+              </span>
+            ) : null}
+          </div>
+          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">{drafts.detail}</p>
+          <p className="mt-1 text-xs text-zinc-500">
+            {drafts.staleAfterDays}일이 지나면 경보를 내고, {drafts.expireAfterDays}
+            일이 지나면 만료로 표시합니다 — <strong>만료는 기각이 아닙니다</strong>:
+            기각은 &ldquo;아무것도 아니었다&rdquo;는 판단이고, 만료는 &ldquo;아무도
+            판단하지 않았다&rdquo;는 기록입니다.
+          </p>
+          {/*
+            아직 표시되지 않은 것과 이미 표시된 것을 나눠 보여 준다 —
+            한 칸에 넣으면 요약이 말하는 수와 목록의 수가 어긋난다.
+          */}
+          {drafts.expiring.length > 0 ? (
+            <ul data-testid="draft-expiring" className="mt-3 space-y-1 text-sm">
+              {drafts.expiring.map((row) => (
+                <li
+                  key={row.id}
+                  className="rounded-lg border border-amber-200 px-3 py-2 dark:border-amber-900"
+                >
+                  <span className="font-medium">{row.summary}</span>
+                  <span className="ml-2 text-xs text-zinc-500">
+                    {row.ageDays}일 경과 — 다음 정리에서 만료로 표시됩니다 (기각이
+                    아닙니다)
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {drafts.expired.length > 0 ? (
+            <ul data-testid="draft-expired" className="mt-3 space-y-1 text-sm">
+              {drafts.expired.map((row) => (
+                <li
+                  key={row.id}
+                  className="rounded-lg border border-zinc-100 px-3 py-2 dark:border-zinc-900"
+                >
+                  <span className="font-medium">{row.summary}</span>
+                  <span className="ml-2 text-xs text-zinc-500">
+                    만료 {new Date(row.expiredAt).toLocaleString("ko-KR")} — 기각이
+                    아닙니다
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </section>
       ) : null}
 

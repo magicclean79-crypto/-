@@ -195,7 +195,7 @@ export function validateThreshold(
       reason:
         `${spec.title} 임계값은 ${spec.min}~${spec.max}${spec.unit} 사이여야 ` +
         `합니다 (받은 값: ${value}${spec.unit}). 범위 밖의 값은 임계값이 ` +
-        "아니라 **임계값을 없앤 것**이고, 그건 설정이 아니라 우회입니다.",
+        "아니라 임계값을 없앤 것이고, 그건 설정이 아니라 우회입니다.",
     };
   }
   return { ok: true };

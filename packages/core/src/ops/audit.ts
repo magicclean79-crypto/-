@@ -88,6 +88,10 @@ const ROUTE_ACTIONS: {
   { method: "POST", pattern: /^\/ops\/incidents\/:id\/confirm$/, action: "incident.confirm", title: "장애 초안 확인 (초안 → 장애)" },
   { method: "POST", pattern: /^\/ops\/incidents\/:id\/dismiss$/, action: "incident.dismiss", title: "장애 초안 기각" },
   { method: "POST", pattern: /^\/ops\/notifications\/test$/, action: "notifications.test", title: "알림 채널 시험 발송" },
+  // TASK-4001에서 더한 경로 (정책 4001-②). 이번에는 **엔드포인트를 만들면서
+  // 같이 적었다** — 지난번에는 나중에 라이브 화면에서 원시 경로를 보고 나서
+  // 고쳤고, 그 사이의 감사 기록은 읽기 어려운 채로 남았다.
+  { method: "POST", pattern: /^\/ops\/kpi\/snapshot$/, action: "kpi.snapshot", title: "KPI 스냅샷 기록" },
 ];
 
 /**

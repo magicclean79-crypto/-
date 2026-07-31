@@ -1068,6 +1068,13 @@ model Incident {
   dismissedAt    DateTime?
   dismissReason  String?
   dismissedById  String?
+  /**
+   * 아무도 판단하지 않은 채 수명을 넘긴 시각 (TASK-4001, CTO 정책 4001-①).
+   * **기각이 아니다.** 기각은 "아무것도 아니었다"는 사람의 판단이고, 이것은
+   * "아무도 판단하지 않았다"는 사실이다. 둘을 같은 칸에 넣으면 나중에
+   * 이력을 읽는 사람이 "우리 팀은 초안을 잘 기각한다"고 잘못 읽는다.
+   */
+  expiredAt      DateTime?
   /// temporary | permanent — 닫을 때 반드시 고른다
   fixKind        String?
   rootCause      String?
@@ -1149,4 +1156,37 @@ model OpsAuditLog {
   @@index([action, createdAt])
   @@index([actorId, createdAt])
   @@map("ops_audit_log")
+}
+
+// ── KPI 스냅샷 (TASK-4001, Sprint 40) ──────────────────────────
+
+/**
+ * KPI 한 시점의 값 (CTO 정책 4001-②).
+ * TASK-3801의 KPI는 **현재값만** 말한다. "MTTR 180분"은 그 자체로 아무
+ * 행동도 만들지 않고, 사람이 알아야 하는 것은 "나아지는 중인가"인데 그건
+ * 두 번 재야 안다.
+ *
+ * 그때 쓰인 임계값을 함께 적는 이유: 임계값이 바뀐 구간에서는 **값은
+ * 비교할 수 있어도 상태(정상/주의/나쁨)는 비교할 수 없다.** 그 사실을
+ * 나중에 복원할 수 없으면 "watch → good"을 개선으로 잘못 읽는다.
+ *
+ * `value`가 null인 이유: 표본이 없어 값을 낼 수 없었던 시점이 있고, 그것을
+ * 0으로 적으면 "완벽한 날"로 보인다 (정책 3801-③에서 세운 원칙).
+ */
+model KpiSnapshot {
+  id             String   @id @default(cuid())
+  /// mttr | mttd | incidents-open | … (packages/core의 KPI_IDS)
+  kpiId          String
+  /// 그때 값 — 표본이 없었으면 null. **0으로 적지 않는다**
+  value          Float?
+  /// good | watch | bad | unknown
+  status         String
+  /// 그때 쓰인 임계값 — 바뀌었으면 상태는 비교할 수 없다
+  thresholdGood  Float?
+  thresholdWatch Float?
+  takenAt        DateTime @default(now())
+
+  @@index([kpiId, takenAt])
+  @@index([takenAt])
+  @@map("kpi_snapshots")
 }

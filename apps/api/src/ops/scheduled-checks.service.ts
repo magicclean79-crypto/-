@@ -47,6 +47,9 @@ import { ContentGovernanceService } from "../content-governance/content-governan
 import { GovernanceScanService } from "../content-governance/governance-scan.service";
 import { MigrationGovernanceService } from "./migration-governance.service";
 import { RecoveryDrillService } from "./recovery-drill.service";
+import { DiagnosticsService } from "./diagnostics.service";
+import { DraftLifecycleService } from "./draft-lifecycle.service";
+import { KpiTrendService } from "./kpi-trend.service";
 
 interface CheckRunRow {
   id: string;
@@ -91,6 +94,10 @@ const JOB_ALERT_KINDS: Record<ScheduledJob, AlertKind[]> = {
   // 공지 실패도 같은 점검이 책임진다 (TASK-3301, 정책 3301-①)
   "pricing-detect": ["pricing-drift", "price-source"],
   "cost-forecast": ["cost-forecast"],
+  // 일일 진단은 자기 종류만 책임진다 (TASK-4001, 정책 4001-④⑤).
+  // 초안 방치도 같은 점검이 본다 (정책 4001-①) — 둘 다 "아침에 사람이
+  // 알아야 하는 것"이고, 예약을 나누면 서로 다른 시각에 돈다.
+  "daily-diagnostics": ["diagnostics", "incident-draft"],
 };
 
 /** 사람이 읽는 주기 설명 (경보 문구용) */
@@ -174,6 +181,10 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
     // 보존 정리 · 초안 승격 (TASK-3901, CTO 정책 3901-③⑤)
     private readonly opsSettings: OpsSettingsService,
     private readonly promotion: IncidentPromotionService,
+    // 일일 진단 · 초안 수명 · KPI 스냅샷 (TASK-4001, CTO 정책 4001-①②⑤)
+    private readonly diagnostics: DiagnosticsService,
+    private readonly drafts: DraftLifecycleService,
+    private readonly trends: KpiTrendService,
   ) {}
 
   /** 점검 1건의 잠금 이름 */
@@ -611,6 +622,36 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
           // 보존 정리는 **삭제**다 — 위 보관과 성격이 다르므로 문장을 나눈다
           `보존 정리: ${retention.detail} ${promoted.detail}`,
         notified: [],
+      };
+    }
+
+    if (job === "daily-diagnostics") {
+      // 세 가지를 한 순간에 본다 (TASK-4001, 정책 4001-①②⑤).
+      //
+      // **스냅샷을 먼저 찍는다** — 진단이 무언가를 고치지는 않지만, 초안
+      // 만료는 목록을 바꾼다. 바뀐 뒤의 상태를 찍으면 "그날 아침의 값"이
+      // 아니라 "정리한 뒤의 값"이 남는다.
+      const snapshot = await this.trends.snapshot();
+      const sweep = await this.drafts.sweep();
+      const { report, alerts } = await this.diagnostics.detect("daily");
+
+      // 진단과 초안 경보를 **한 번에** 동기화한다 — 같은 종류를 두 번 부르면
+      // 뒤 호출이 앞의 경보를 "이번에 감지되지 않았다"며 해소한다
+      const notified = await this.alerts.sync(JOB_ALERT_KINDS[job], [
+        ...alerts,
+        ...sweep.alerts,
+      ]);
+
+      return {
+        // **진단이 빨간 것은 점검의 실패가 아니다** — 점검은 제대로 돌았고,
+        // 본 것이 나빴을 뿐이다. ok=false로 두면 예약 점검 실패로 읽혀
+        // 엉뚱한 곳을 보게 된다.
+        ok: true,
+        detail:
+          `일일 진단: ${report.detail} ` +
+          `초안 수명: ${sweep.detail} (만료 표시 ${sweep.expired}건 — 기각이 아닙니다.) ` +
+          `KPI 스냅샷: ${snapshot.detail}`,
+        notified,
       };
     }
 
