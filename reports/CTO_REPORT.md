@@ -34,7 +34,7 @@
 | 품질 게이트 자체 검증 | `pnpm check:ci-gates` | ✅ 필수 게이트 7개 순서 일치 |
 | Major Migration 교차 검증 | `pnpm check:major-migrations` | ✅ 2건 일치 (신규 1건은 major 아님 — §6) |
 | Live Verification | 실 PostgreSQL + 실 Redis + 실 S3 + Vision 스텁 + 공지 스텁 4곳 + GitHub Actions 스텁 + **알림 수신 스텁** | ✅ §4 |
-| **GitHub Actions** | 실제 워크플로 실행 (병렬 2 Job) | ✅ §4 (푸시 후 확인) |
+| **GitHub Actions** | 실제 워크플로 실행 (병렬 2 Job) | ✅ **run 30611006171 통과 — 3분 0초** (두 Job 모두 success) |
 | **`/ops/cutover`** | `pnpm cutover` | ⚠️ **exit 1 — 활성화 0/3 조건** |
 
 ## 3. 변경 사항 (이번 보고 주기)
@@ -165,6 +165,16 @@ TASK-3701의 "경보와 장애는 다르다"는 지금도 맞습니다. 그런�
 | **초안 승격** | 초안 10건 생성 · **진행 중 장애 수는 1(사람이 연 것)로 그대로** |
 | **초안 기각** | 사유 없이 ❌ 400 · 사유와 함께 ✅ `DISMISSED` |
 | **초안 확인** | 경보 제목("경보") ❌ 400 |
+
+### GitHub Actions 실제 실행 (TASK-3901 커밋 `6cd9568`)
+
+| Job | 결과 | 소요 |
+| --- | --- | --- |
+| `quality-gates` (Build · 교차 검증 · **게이트 자체 검증** · TypeScript · Lint · Core/API) | ✅ success | 1분 47초 |
+| `web-e2e` (브라우저 설치 · Build · Web e2e) | ✅ success | 2분 56초 |
+| **run 30611006171 전체** | **✅ success** | **3분 0초** |
+
+**13회 연속 실패를 끊은 뒤로 9회 연속 초록**입니다.
 
 ### 자체 발견 결함 3건 — 전부 라이브에서만 보였습니다
 
