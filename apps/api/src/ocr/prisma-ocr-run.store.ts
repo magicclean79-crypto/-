@@ -1,5 +1,5 @@
-import { Injectable, Optional } from "@nestjs/common";
-import { estimateOcrCost, resolveCallTarget } from "@acos/core";
+import { Injectable, Logger, Optional } from "@nestjs/common";
+import { estimateOcrCost, resolveCallTarget, resolveImageProject } from "@acos/core";
 import type { OcrRecognition, OcrRun, OcrRunStore } from "@acos/core";
 import { Prisma, type OcrResult } from "@prisma/client";
 import { PricingService } from "../pricing/pricing.service";
@@ -28,6 +28,8 @@ export function toOcrRun(record: OcrResult): OcrRun {
  */
 @Injectable()
 export class PrismaOcrRunStore implements OcrRunStore {
+  private readonly logger = new Logger(PrismaOcrRunStore.name);
+
   constructor(
     private readonly prisma: PrismaService,
     // 단가는 승인·적용된 가격표에서 온다 (TASK-3101, CTO 정책 3101-①)
@@ -45,9 +47,14 @@ export class PrismaOcrRunStore implements OcrRunStore {
         startedAt: new Date(),
         // 어느 프로젝트의 비용인가 (TASK-4301, CTO 정책 4301-②).
         // **짐작이 아니라 조인입니다** — 이미지는 상품에, 상품은 프로젝트에
-        // 붙어 있고 그 연결은 기록에 이미 있던 사실입니다. 연결이 없으면
-        // (상품에 안 붙은 이미지) null이며, null은 "공용"이 아니라
-        // "모른다"입니다.
+        // 붙어 있고 그 연결은 기록에 이미 있던 사실입니다.
+        //
+        // TASK-4501(정책 4501-②)에서 두 번째 근거가 늘었습니다: 아직 상품에
+        // 붙지 않은 이미지는 업로드 때 밝힌 소속을 씁니다. 그 전까지 이런
+        // 이미지의 OCR 비용은 전부 미귀속으로 떨어졌고, 나중에 상품을 붙여도
+        // 기록은 실행 시점의 사실이라 소급되지 않았습니다.
+        //
+        // 둘 다 없으면 null이며, null은 "공용"이 아니라 "모른다"입니다.
         projectId: await this.projectOf(imageId),
       },
     });
@@ -55,7 +62,10 @@ export class PrismaOcrRunStore implements OcrRunStore {
   }
 
   /**
-   * 이미지 → 상품 → 프로젝트.
+   * 이미지 → 상품 → 프로젝트, 또는 업로드 때 밝힌 소속.
+   *
+   * 우선순위와 다툼 처리는 core가 판정합니다(`resolveImageProject`) — 여기서
+   * 다시 정하면 화면과 기록이 다른 규칙을 쓰게 됩니다.
    *
    * 읽지 못하면 `null`입니다 — 조회가 실패했다고 OCR을 실패시키지 않습니다
    * (비용 귀속은 부수적인 일이고, 그것 때문에 본 기능이 멈추면 안 됩니다).
@@ -64,9 +74,20 @@ export class PrismaOcrRunStore implements OcrRunStore {
     try {
       const image = await this.prisma.image.findUnique({
         where: { id: imageId },
-        select: { product: { select: { projectId: true } } },
+        select: {
+          projectId: true,
+          product: { select: { projectId: true } },
+        },
       });
-      return image?.product?.projectId ?? null;
+      const attribution = resolveImageProject({
+        productProjectId: image?.product?.projectId ?? null,
+        imageProjectId: image?.projectId ?? null,
+      });
+      if (attribution.source === "conflict") {
+        // 조용히 고르면 "두 곳이 달랐다"는 사실이 사라집니다.
+        this.logger.warn(`이미지 ${imageId} 귀속 불일치: ${attribution.detail}`);
+      }
+      return attribution.projectId;
     } catch {
       return null;
     }

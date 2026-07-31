@@ -40,6 +40,10 @@ function createPrismaMock() {
           attempts: 0,
           startedAt: data.startedAt ?? null,
           completedAt: null,
+          // 프로젝트 귀속 (TASK-4201·4301, TASK-4501 정책 4501-②) —
+          // 실제 스키마와 같은 모양이어야 "귀속이 기록되는가"가 구조적으로
+          // 검증된다
+          projectId: data.projectId ?? null,
           createdAt: now,
           updatedAt: now,
         } as OcrResult;
@@ -268,6 +272,80 @@ describe("OcrService (Service Test)", () => {
       await service.runOcr("img-1");
       // "LLM 예산"이라고만 하면 OCR을 눌렀다 429를 받은 사람이 엉뚱한 곳을 본다
       expect(assertWithinBudget).toHaveBeenCalledWith({ what: "OCR 호출" });
+    });
+  });
+
+  describe("프로젝트 귀속 (TASK-4501, 정책 4501-②)", () => {
+    it("상품에 붙어 있으면 그 프로젝트로 귀속한다", async () => {
+      const prisma = createPrismaMock();
+      prisma.image.findUnique.mockResolvedValue({
+        id: "img-1",
+        key: "images/img.png",
+        mimeType: "image/png",
+        projectId: null,
+        product: { projectId: "prj-a" },
+      });
+      const service = await createService(prisma);
+
+      const result = await service.runOcr("img-1");
+      expect(prisma.rows.get(result.id)?.projectId).toBe("prj-a");
+    });
+
+    /**
+     * 이것이 이번 정책의 핵심이다 — 상품에 붙기 전에 돌린 OCR의 비용이
+     * 지금까지 전부 미귀속으로 떨어졌고, 나중에 상품을 붙여도 기록은
+     * 실행 시점의 사실이라 소급되지 않았다.
+     */
+    it("상품에 안 붙었어도 업로드 때 밝힌 소속을 쓴다", async () => {
+      const prisma = createPrismaMock();
+      prisma.image.findUnique.mockResolvedValue({
+        id: "img-1",
+        key: "images/img.png",
+        mimeType: "image/png",
+        projectId: "prj-b",
+        product: null,
+      });
+      const service = await createService(prisma);
+
+      const result = await service.runOcr("img-1");
+      expect(prisma.rows.get(result.id)?.projectId).toBe("prj-b");
+    });
+
+    /**
+     * 배분할 수 없는 것을 배분하면 그 숫자는 만들어낸 것이다.
+     */
+    it("둘 다 없으면 null로 남긴다 — 아무 프로젝트에 떠넘기지 않는다", async () => {
+      const prisma = createPrismaMock();
+      prisma.image.findUnique.mockResolvedValue({
+        id: "img-1",
+        key: "images/img.png",
+        mimeType: "image/png",
+        projectId: null,
+        product: null,
+      });
+      const service = await createService(prisma);
+
+      const result = await service.runOcr("img-1");
+      expect(prisma.rows.get(result.id)?.projectId).toBeNull();
+    });
+
+    /**
+     * 귀속은 부수적인 일이다 — 그것 때문에 OCR 본 기능이 멈추면 안 된다.
+     */
+    it("귀속을 읽지 못해도 OCR은 돈다", async () => {
+      const prisma = createPrismaMock();
+      prisma.image.findUnique
+        .mockResolvedValueOnce({
+          id: "img-1",
+          key: "images/img.png",
+          mimeType: "image/png",
+        })
+        .mockRejectedValueOnce(new Error("boom"));
+      const service = await createService(prisma);
+
+      const result = await service.runOcr("img-1");
+      expect(result.status).toBe("SUCCESS");
+      expect(prisma.rows.get(result.id)?.projectId).toBeNull();
     });
   });
 });

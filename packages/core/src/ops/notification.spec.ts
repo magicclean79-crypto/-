@@ -1,5 +1,7 @@
 import {
+  CHANNEL_ENV,
   DEFAULT_CHANNEL_POLICY,
+  NOTIFICATION_CHANNELS,
   decideQueueOutcome,
   decideRetry,
   DEFAULT_RETRY_POLICY,
@@ -12,6 +14,7 @@ import {
   shouldNotify,
   summarizeQueue,
   slackBody,
+  teamsBody,
   webhookBody,
 } from "./notification";
 import type {
@@ -19,6 +22,7 @@ import type {
   NotificationPayload,
   QueueItemState,
 } from "./notification";
+import { URGENT_CHANNEL_ENV } from "./urgent-routing";
 
 function channel(overrides: Partial<ChannelConfig> = {}): ChannelConfig {
   return {
@@ -164,7 +168,7 @@ describe("Notification Center (TASK-1401)", () => {
   });
 
   describe("resolveChannelPolicy (CTO 결정 1401-④)", () => {
-    const ALL_ON = { slack: true, email: true, webhook: true };
+    const ALL_ON = { slack: true, email: true, webhook: true, teams: true };
 
     it("운영 기본값 — Slack Warning 이상 / Email Critical 이상 / Webhook Warning 이상 / 해소 포함", () => {
       const policy = resolveChannelPolicy({}, ALL_ON);
@@ -209,17 +213,23 @@ describe("Notification Center (TASK-1401)", () => {
         slack: false,
         email: false,
         webhook: true,
+        teams: false,
       });
       expect(policy.filter((entry) => entry.enabled)).toHaveLength(1);
     });
 
     it("기본 정책에서 warning은 메일로 가지 않는다 — 메일은 쌓이면 안 읽는다", () => {
       const policy = resolveChannelPolicy({}, ALL_ON);
-      expect(selectChannels(policy, "warning")).toEqual(["slack", "webhook"]);
+      expect(selectChannels(policy, "warning")).toEqual([
+        "slack",
+        "webhook",
+        "teams",
+      ]);
       expect(selectChannels(policy, "critical")).toEqual([
         "slack",
         "email",
         "webhook",
+        "teams",
       ]);
     });
   });
@@ -283,6 +293,91 @@ describe("Notification Center (TASK-1401)", () => {
         archived: 0,
         due: 1,
       });
+    });
+  });
+});
+
+/**
+ * 채널 확장 (TASK-4501, CTO 정책 4501-③).
+ *
+ * 채널을 더할 때 빠뜨리기 쉬운 것이 넷 있습니다: 기본 정책 · 설정
+ * 환경변수 · 긴급 경로 환경변수 · 본문 형식. 넷 중 하나만 빠져도 그 채널은
+ * **조용히 안 갑니다** — 설정한 사람은 보냈다고 믿고 있고요.
+ * 사람의 기억에 기대는 규칙은 반드시 어긋나므로 기계가 검사합니다.
+ */
+describe("채널 확장 (TASK-4501)", () => {
+  it("모든 채널에 기본 정책이 있다", () => {
+    for (const channel of NOTIFICATION_CHANNELS) {
+      expect(DEFAULT_CHANNEL_POLICY[channel]).toBeDefined();
+    }
+  });
+
+  it("모든 채널에 설정 환경변수 이름이 있다", () => {
+    for (const channel of NOTIFICATION_CHANNELS) {
+      const spec = CHANNEL_ENV[channel];
+      expect(spec?.minLevel).toBeTruthy();
+      expect(spec?.resolved).toBeTruthy();
+      expect(spec?.target).toBeTruthy();
+    }
+  });
+
+  it("모든 채널에 긴급 경로 환경변수가 있다", () => {
+    for (const channel of NOTIFICATION_CHANNELS) {
+      expect(URGENT_CHANNEL_ENV[channel]).toBeTruthy();
+    }
+  });
+
+  describe("Teams 본문", () => {
+    const payload = {
+      level: "critical" as const,
+      kind: "diagnostics",
+      key: "diagnostics:staging:daily",
+      title: "일일 진단 실패 2건",
+      message: "저장소와 긴급 경로가 실패했습니다.",
+      at: "2026-07-31T09:00:00.000Z",
+      environment: "staging",
+      url: "https://acos.example/admin/readiness",
+    };
+
+    it("Teams가 받는 MessageCard 형식으로 만든다", () => {
+      const body = teamsBody(payload) as Record<string, unknown>;
+      expect(body["@type"]).toBe("MessageCard");
+      expect(body["@context"]).toBe("https://schema.org/extensions");
+      expect(body.text).toBe(payload.message);
+    });
+
+    /**
+     * 색만 쓰면 색을 구분하지 못하는 사람에게는 아무 정보도 아니다.
+     */
+    it("심각도를 색과 글자 둘 다로 남긴다", () => {
+      const body = teamsBody(payload) as {
+        themeColor: string;
+        title: string;
+        sections: { facts: { name: string; value: string }[] }[];
+      };
+      expect(body.themeColor).toBeTruthy();
+      expect(body.title).toContain("심각");
+      expect(body.sections[0].facts).toContainEqual({
+        name: "심각도",
+        value: "심각",
+      });
+    });
+
+    /**
+     * 채널마다 다른 사실이 보이면, 두 채널을 다 보는 사람이 둘 다 못 믿는다.
+     */
+    it("다른 채널과 같은 사실을 담는다", () => {
+      const teams = JSON.stringify(teamsBody(payload));
+      const webhook = webhookBody(payload);
+      for (const value of [payload.title, payload.message, payload.key, payload.environment]) {
+        expect(teams).toContain(value);
+        expect(JSON.stringify(webhook)).toContain(value);
+      }
+    });
+
+    it("주소가 없으면 버튼을 만들지 않는다 — 빈 링크를 지어내지 않는다", () => {
+      const body = teamsBody({ ...payload, url: null }) as Record<string, unknown>;
+      expect(body.potentialAction).toBeUndefined();
     });
   });
 });

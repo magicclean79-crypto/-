@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   UPLOAD_ALLOWED_MIME_TYPES,
@@ -8,6 +8,7 @@ import {
   UPLOAD_MAX_FILE_SIZE,
   type ImageDto,
   type ProductDetailDto,
+  type ProjectListItemDto,
 } from "@acos/shared";
 import { Badge } from "@acos/ui";
 import { authFetchInit, getAuthToken } from "../../lib/auth-client";
@@ -36,6 +37,14 @@ function formatBytes(bytes: number): string {
 function uploadWithProgress(
   file: File,
   onProgress: (percent: number) => void,
+  /**
+   * 이 사진이 어느 프로젝트의 것인가 (TASK-4501, CTO 정책 4501-②).
+   *
+   * 여기서 안 보내면 상품에 붙기 전에 돌린 OCR의 비용은 미귀속으로 남고,
+   * 나중에 상품을 붙여도 **그 기록은 바뀌지 않습니다** — 기록은 실행 시점의
+   * 사실이기 때문입니다.
+   */
+  projectId?: string,
 ): Promise<ImageDto> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -67,7 +76,8 @@ function uploadWithProgress(
     };
     xhr.onerror = () =>
       reject(new Error("API 서버에 연결할 수 없습니다. (localhost:4000)"));
-    xhr.open("POST", `${API_URL}/uploads/images`);
+    const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
+    xhr.open("POST", `${API_URL}/uploads/images${query}`);
     // TASK-0802: 모든 쓰기 API 인증 — 토큰 첨부 (+쿠키 전용 모드는 쿠키 전송)
     xhr.withCredentials = true;
     const token = getAuthToken();
@@ -84,9 +94,30 @@ export function Uploader() {
   const [isDragging, setIsDragging] = useState(false);
   const [rejected, setRejected] = useState<string[]>([]);
   const [productName, setProductName] = useState("");
+  // 소속 프로젝트 (TASK-4501, 정책 4501-②) — 비워 두는 것도 정상이다.
+  // 비어 있으면 "공용"이 아니라 "모른다"이고, 화면이 그렇게 말한다.
+  const [projects, setProjects] = useState<ProjectListItemDto[]>([]);
+  const [projectId, setProjectId] = useState("");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await fetch(`${API_URL}/projects?take=50`, authFetchInit());
+        if (!response.ok) return;
+        const body = (await response.json()) as { projects: ProjectListItemDto[] };
+        if (!cancelled) setProjects(body.projects);
+      } catch {
+        // 목록을 못 읽어도 업로드는 된다 — 소속을 못 고르는 것뿐이다
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const doneImageIds = items
     .filter((item) => item.status === "done" && item.result)
@@ -172,8 +203,10 @@ export function Uploader() {
           ...prev,
         ]);
 
-        uploadWithProgress(file, (percent) =>
-          updateItem(id, { progress: percent }),
+        uploadWithProgress(
+          file,
+          (percent) => updateItem(id, { progress: percent }),
+          projectId || undefined,
         )
           .then((result) =>
             updateItem(id, { status: "done", progress: 100, result }),
@@ -183,7 +216,7 @@ export function Uploader() {
           );
       }
     },
-    [updateItem],
+    [updateItem, projectId],
   );
 
   const onDrop = useCallback(
@@ -197,6 +230,33 @@ export function Uploader() {
 
   return (
     <div className="flex flex-col gap-6">
+      {/*
+        소속을 여기서 받습니다 (TASK-4501, CTO 정책 4501-②). 상품에 붙이는
+        것은 나중이고, OCR은 그 전에 돌 수 있습니다 — 그때 나간 비용은
+        나중에 상품을 붙여도 소급되지 않습니다.
+      */}
+      <label className="flex flex-col gap-1 text-sm">
+        <span className="font-medium">소속 프로젝트 (선택)</span>
+        <select
+          data-testid="upload-project"
+          value={projectId}
+          onChange={(event) => setProjectId(event.target.value)}
+          className="rounded-lg border border-zinc-300 bg-white px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900"
+        >
+          <option value="">밝히지 않음 (상품에 붙일 때 귀속)</option>
+          {projects.map((project) => (
+            <option key={project.id} value={project.id}>
+              {project.name}
+            </option>
+          ))}
+        </select>
+        <span className="text-xs text-zinc-500">
+          비워 두면 이 사진으로 돌린 OCR 비용은 상품에 붙기 전까지 미귀속으로
+          남습니다. 미귀속은 공용이 아니라 모른다는 뜻이고, 나중에 상품을
+          붙여도 이미 남은 기록은 바뀌지 않습니다.
+        </span>
+      </label>
+
       <div
         role="button"
         tabIndex={0}

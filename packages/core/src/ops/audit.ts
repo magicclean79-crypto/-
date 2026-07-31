@@ -102,6 +102,9 @@ const ROUTE_ACTIONS: {
   // 남으면, 나중에 "왜 이 항목이 조용했는가"에 답할 수 없다.
   { method: "POST", pattern: /^\/ops\/neglect\/[^/]+\/ignore$/, action: "neglect.ignore", title: "방치 항목 무시 (사유·담당자·검토일)" },
   { method: "POST", pattern: /^\/ops\/neglect\/ignores\/[^/]+\/revoke$/, action: "neglect.ignore-revoke", title: "방치 무시 취소" },
+  // TASK-4501에서 더한 경로 (정책 4501-④). 실 호출이 나가고 과금되는
+  // 행동이므로 **누가 눌렀는지**가 반드시 남아야 한다.
+  { method: "POST", pattern: /^\/ops\/validation-run\/execute$/, action: "validation.run-execute", title: "실 Production Validation 수행 (실 호출·과금)" },
 ];
 
 /**

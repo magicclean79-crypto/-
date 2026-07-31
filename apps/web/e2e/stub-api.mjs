@@ -640,6 +640,29 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  /**
+   * 프로젝트 목록 — 업로드 화면의 소속 선택지 (TASK-4501, CTO 정책 4501-②).
+   */
+  if (url.pathname === "/projects") {
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify({
+        projects: [
+          {
+            id: "proj-pub",
+            name: "발행 테스트 프로젝트",
+            description: null,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            productCount: 1,
+            productObjectCount: 1,
+          },
+        ],
+      }),
+    );
+    return;
+  }
+
   // ── 발행 파이프라인 (프로젝트 상세 화면용, mode 무관 동작) ──
   if (url.pathname === "/projects/proj-pub") {
     res.setHeader("content-type", "application/json");
@@ -3698,6 +3721,75 @@ const server = http.createServer(async (req, res) => {
           "사람이 줘야 끝나는 단계 1건: 실 Provider 자격 증명 주입. 이 " +
           "단계들은 코드로 해결되지 않습니다. 상태를 읽지 못한 단계 1건은 " +
           "통과로 세지 않았습니다: 전환 후 관측 창 유지.",
+        checkedAt: new Date().toISOString(),
+      }),
+    );
+    return;
+  }
+
+  /**
+   * 최종 Go-Live 체크리스트 (TASK-4501, CTO 정책 4501-⑤) — ADMIN 전용.
+   *
+   * 검증이 성공하지 않은 상태를 그대로 보여 준다: 나머지가 초록이어도
+   * **준비 완료가 아니라 아직 시작도 안 한 것**이다.
+   */
+  if (url.pathname === "/ops/go-live") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify({
+        verdict: "not-started",
+        items: [
+          {
+            id: "validation",
+            title: "실 Production Validation 성공",
+            why: "실 호출 없이 얻은 초록은 전부 스텁의 초록입니다.",
+            evidence:
+              "POST /ops/validation-run/execute가 성공으로 끝난 기록이 있고, " +
+              "그 실행에서 스텁 응답이 0건입니다.",
+            source: "POST /ops/validation-run/execute",
+            state: "unmet",
+            detail:
+              "실 Production Validation을 아직 한 번도 돌린 적이 없습니다 — " +
+              "실패가 아니라 안 한 것입니다.",
+          },
+          {
+            id: "runbook",
+            title: "운영 활성화 런북 전 단계 완료",
+            why: "순서를 건너뛰고 도달한 상태는 되돌릴 곳을 모르는 상태입니다.",
+            evidence: "GET /ops/runbook의 모든 단계가 done입니다.",
+            source: "GET /ops/runbook",
+            state: "unmet",
+            detail: "운영 활성화 런북 0/4 단계 완료.",
+          },
+          {
+            id: "drill",
+            title: "되돌리는 절차 확인",
+            why: "되돌릴 수 없다면 그건 검증이 아니라 그냥 전환입니다.",
+            evidence: "최근 복구 리허설이 성공했습니다.",
+            source: "GET /ops/drills",
+            state: "unknown",
+            detail: "이 항목의 상태를 읽지 못했습니다 — 됐다는 뜻이 아닙니다.",
+          },
+        ],
+        met: 0,
+        total: 3,
+        blocking: [
+          "실 Production Validation 성공",
+          "운영 활성화 런북 전 단계 완료",
+          "되돌리는 절차 확인",
+        ],
+        lastValidation: null,
+        detail:
+          "실 Production Validation이 아직 성공하지 않았습니다. 실 Production " +
+          "Validation을 아직 한 번도 돌린 적이 없습니다 — 실패가 아니라 안 한 " +
+          "것입니다. 이 상태에서 나머지 항목이 초록인 것은 준비가 끝났다는 뜻이 " +
+          "아니라 아직 시작도 안 했다는 뜻입니다 — 지금까지의 초록은 전부 스텁을 " +
+          "상대로 얻은 것입니다.",
         checkedAt: new Date().toISOString(),
       }),
     );

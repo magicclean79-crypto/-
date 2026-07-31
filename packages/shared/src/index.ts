@@ -146,6 +146,11 @@ export interface ImageDto {
   mimeType: string;
   size: number;
   productId?: string | null;
+  /**
+   * 업로드 때 밝힌 소속 (TASK-4501, 정책 4501-②).
+   * null은 "공용"이 아니라 "모른다"이다.
+   */
+  projectId?: string | null;
   createdAt: string;
 }
 
@@ -1683,7 +1688,8 @@ export interface CheckRunResultDto {
 
 // ── Production Operations Platform (TASK-1401, Sprint 14) ──
 
-export type NotificationChannelDto = "slack" | "email" | "webhook";
+/** TASK-4501 정책 ③으로 `teams`가 늘었다 */
+export type NotificationChannelDto = "slack" | "email" | "webhook" | "teams";
 
 /** 알림 채널 구성 — 주소(웹훅 URL·SMTP·수신자)는 노출하지 않는다 */
 export interface NotificationChannelStatusDto {
@@ -3210,6 +3216,54 @@ export interface ActivationRunbookDto {
   nextStepId: string | null;
   irreversibleStarted: boolean;
   waitingOnPeople: string[];
+  detail: string;
+  checkedAt: string;
+}
+
+// ── 실 Production Validation 실행과 Go-Live (TASK-4501, Sprint 45) ──
+
+/** 검증 실행 1건 (CTO 정책 4501-④) */
+export interface ValidationExecutionDto {
+  id: string;
+  /** running | success | failed — 행이 없는 것은 실패가 아니라 아직 안 한 것이다 */
+  status: "running" | "success" | "failed";
+  targetUrl: string | null;
+  targetHost: string | null;
+  tier: string;
+  steps: { id: string; title: string; ok: boolean; detail: string }[];
+  /** 실제로 나간 호출 수 */
+  realCalls: number;
+  /** 스텁이 답한 호출 수 — 0이 아니면 성공이 아니다 */
+  stubbedCalls: number;
+  detail: string;
+  error: string | null;
+  startedAt: string;
+  completedAt: string | null;
+}
+
+/** Go-Live 조건 1건 (CTO 정책 4501-⑤) */
+export interface GoLiveItemDto {
+  id: string;
+  title: string;
+  why: string;
+  evidence: string;
+  /** 어느 판정에서 상태를 인용했는가 */
+  source: string;
+  /** met | unmet | unknown — unknown은 통과가 아니다 */
+  state: string;
+  detail: string;
+}
+
+/** 최종 Go-Live 체크리스트 (GET /ops/go-live) */
+export interface GoLiveChecklistDto {
+  /** not-started | incomplete | declarable */
+  verdict: string;
+  items: GoLiveItemDto[];
+  met: number;
+  total: number;
+  blocking: string[];
+  /** 마지막 검증 실행 — 없으면 null */
+  lastValidation: ValidationExecutionDto | null;
   detail: string;
   checkedAt: string;
 }

@@ -17,7 +17,16 @@
  *   사람이 알림을 끈다.
  */
 
-export const NOTIFICATION_CHANNELS = ["slack", "email", "webhook"] as const;
+/**
+ * 보낼 수 있는 채널 (TASK-4501에서 `teams` 추가 — CTO 정책 4501-③).
+ *
+ * **채널을 더할 때 빠뜨리기 쉬운 것이 넷 있습니다**: 기본 정책 ·
+ * 설정 환경변수 · 긴급 경로 환경변수 · 본문 형식. 넷 중 하나만 빠져도
+ * 그 채널은 **조용히 안 갑니다** — 설정한 사람은 보냈다고 믿고 있고요.
+ * 사람의 기억에 기대는 규칙은 반드시 어긋나므로, `notification.spec.ts`가
+ * 이 목록을 돌며 넷이 다 있는지 검사합니다.
+ */
+export const NOTIFICATION_CHANNELS = ["slack", "email", "webhook", "teams"] as const;
 export type NotificationChannel = (typeof NOTIFICATION_CHANNELS)[number];
 
 export type NotificationLevel = "warning" | "critical" | "resolved";
@@ -166,6 +175,18 @@ const LEVEL_EMOJI: Record<NotificationLevel, string> = {
   resolved: "✅",
 };
 
+/**
+ * Teams 카드 색 (TASK-4501).
+ *
+ * **색은 글자를 대신하지 않습니다** — 카드에는 심각도를 글자로도 적습니다.
+ * 색만 쓰면 색을 구분하지 못하는 사람에게는 아무 정보도 아닙니다.
+ */
+const LEVEL_COLOR: Record<NotificationLevel, string> = {
+  warning: "F2C744",
+  critical: "D64545",
+  resolved: "3AA76D",
+};
+
 const LEVEL_LABEL: Record<NotificationLevel, string> = {
   warning: "주의",
   critical: "심각",
@@ -205,6 +226,47 @@ export function emailBody(payload: NotificationPayload): {
   return { subject, text };
 }
 
+/**
+ * Microsoft Teams incoming webhook 본문 (TASK-4501, CTO 정책 4501-③).
+ *
+ * Teams는 평문을 받지 않고 **MessageCard** 형식을 요구합니다. 그래서 같은
+ * 알림이라도 모양을 따로 만들어야 합니다 — 그런데 **내용이 달라지면 안
+ * 됩니다.** 채널마다 다른 사실이 보이면, 두 채널을 다 보는 사람이 둘 다
+ * 못 믿게 됩니다.
+ *
+ * `themeColor`로 심각도를 색으로도 보여 주되, **글자로도 남깁니다** — 색만
+ * 쓰면 색을 구분하지 못하는 사람에게는 아무 정보도 아닙니다.
+ */
+export function teamsBody(payload: NotificationPayload): Record<string, unknown> {
+  const facts = [
+    { name: "심각도", value: LEVEL_LABEL[payload.level] },
+    { name: "종류", value: payload.kind },
+    { name: "키", value: payload.key },
+    { name: "환경", value: payload.environment },
+    { name: "시각", value: payload.at },
+  ];
+  return {
+    "@type": "MessageCard",
+    "@context": "https://schema.org/extensions",
+    themeColor: LEVEL_COLOR[payload.level],
+    summary: `[${LEVEL_LABEL[payload.level]}] ${payload.title}`,
+    title: `${LEVEL_EMOJI[payload.level]} [${LEVEL_LABEL[payload.level]}] ${payload.title}`,
+    text: payload.message,
+    sections: [{ facts }],
+    ...(payload.url === null
+      ? {}
+      : {
+          potentialAction: [
+            {
+              "@type": "OpenUri",
+              name: "화면에서 보기",
+              targets: [{ os: "default", uri: payload.url }],
+            },
+          ],
+        }),
+  };
+}
+
 /** 범용 웹훅 본문 — 기계가 읽는다 (TASK-1302 계약 유지) */
 export function webhookBody(payload: NotificationPayload): Record<string, unknown> {
   return {
@@ -237,6 +299,9 @@ export const DEFAULT_CHANNEL_POLICY: Record<
   slack: { minLevel: "warning", resolved: true },
   email: { minLevel: "critical", resolved: true },
   webhook: { minLevel: "warning", resolved: true },
+  // Teams는 Slack과 같은 자리(팀 채널)이므로 같은 기본값으로 둡니다 —
+  // 다르게 두면 "왜 슬랙에는 왔는데 팀즈에는 안 왔지"가 생깁니다
+  teams: { minLevel: "warning", resolved: true },
 };
 
 /** 채널별 설정 환경변수 이름 */
@@ -258,6 +323,11 @@ export const CHANNEL_ENV: Record<
     minLevel: "ALERT_WEBHOOK_MIN_LEVEL",
     resolved: "ALERT_WEBHOOK_RESOLVED",
     target: "ALERT_WEBHOOK_URL",
+  },
+  teams: {
+    minLevel: "ALERT_TEAMS_MIN_LEVEL",
+    resolved: "ALERT_TEAMS_RESOLVED",
+    target: "ALERT_TEAMS_WEBHOOK_URL",
   },
 };
 

@@ -19,9 +19,23 @@ describe("parseTrustedProxies", () => {
    * 조용히 버리면 오타 하나로 신뢰 경계가 좁아진 것을 아무도 모른다.
    */
   it("읽을 수 없는 선언을 버리되 돌려준다", () => {
-    const { rules, rejected } = parseTrustedProxies("10.0.0.5, nonsense, 10.0.0.0/99, ::1");
+    const { rules, rejected } = parseTrustedProxies(
+      "10.0.0.5, nonsense, 10.0.0.0/99, 2001:db8::/200",
+    );
     expect(rules).toHaveLength(1);
-    expect(rejected).toEqual(["nonsense", "10.0.0.0/99", "::1"]);
+    expect(rejected).toEqual(["nonsense", "10.0.0.0/99", "2001:db8::/200"]);
+  });
+
+  /**
+   * TASK-4401은 IPv6 선언을 버렸다. 그 상태는 IPv6로 들어오는 프록시 뒤에서
+   * 이 보호가 통째로 꺼진 것과 같다 — 선언을 아무리 적어도 안 맞는다.
+   */
+  it("IPv6 단일 주소와 CIDR을 읽는다 (TASK-4501)", () => {
+    const { rules, rejected } = parseTrustedProxies("::1, 2001:db8::/32");
+    expect(rejected).toEqual([]);
+    expect(rules.map((rule) => rule.family)).toEqual([6, 6]);
+    expect(rules[0].bits).toBe(128);
+    expect(rules[1].bits).toBe(32);
   });
 
   it("비어 있으면 규칙이 없다", () => {
@@ -54,6 +68,57 @@ describe("isTrustedPeer", () => {
 
   it("선언이 없으면 아무도 신뢰하지 않는다", () => {
     expect(isTrustedPeer("10.0.0.5", [])).toBe(false);
+  });
+
+  describe("IPv6 (TASK-4501, 정책 4501-①)", () => {
+    const v6 = parseTrustedProxies("::1, 2001:db8:abcd::/48").rules;
+
+    it("단일 주소와 CIDR 범위를 맞춘다", () => {
+      expect(isTrustedPeer("::1", v6)).toBe(true);
+      expect(isTrustedPeer("2001:db8:abcd:1234::9", v6)).toBe(true);
+      expect(isTrustedPeer("2001:db8:abce::1", v6)).toBe(false);
+      expect(isTrustedPeer("::2", v6)).toBe(false);
+    });
+
+    /**
+     * 문자열을 정규화해 비교하면 이 둘이 다른 값이 되고, 그 차이는 사람이
+     * 눈으로 못 찾는다.
+     */
+    it("같은 주소의 다른 표기를 같게 본다", () => {
+      expect(isTrustedPeer("0:0:0:0:0:0:0:1", v6)).toBe(true);
+      expect(isTrustedPeer("[::1]", v6)).toBe(true);
+      expect(isTrustedPeer("::0001", v6)).toBe(true);
+    });
+
+    /**
+     * 같은 기계를 두 가지로 적을 수 있으면, 한쪽으로 적은 선언이 다른 쪽으로
+     * 들어온 요청을 놓친다.
+     */
+    it("IPv4-mapped는 IPv4로 되돌려 맞춘다", () => {
+      expect(isTrustedPeer("::ffff:10.0.0.5", RULES)).toBe(true);
+      const mapped = parseTrustedProxies("::ffff:10.0.0.5").rules;
+      expect(mapped[0].family).toBe(4);
+      expect(isTrustedPeer("10.0.0.5", mapped)).toBe(true);
+    });
+
+    /**
+     * IPv4 선언이 IPv6 상대와 우연히 맞아떨어지면 그건 신뢰가 아니라 사고다.
+     */
+    it("다른 체계끼리는 비교하지 않는다", () => {
+      expect(isTrustedPeer("::1", RULES)).toBe(false);
+      expect(isTrustedPeer("10.0.0.5", v6)).toBe(false);
+    });
+
+    it("전체 대역 선언(::/0)도 맞지 않는 것으로 본다", () => {
+      const all = parseTrustedProxies("::/0").rules;
+      expect(isTrustedPeer("2001:db8::1", all)).toBe(false);
+    });
+
+    it("읽을 수 없는 주소는 맞지 않는다 — 읽은 척하지 않는다", () => {
+      expect(isTrustedPeer("2001:db8:::1", v6)).toBe(false);
+      expect(isTrustedPeer("zzzz::1", v6)).toBe(false);
+      expect(isTrustedPeer("1:2:3:4:5:6:7:8:9", v6)).toBe(false);
+    });
   });
 
   /**

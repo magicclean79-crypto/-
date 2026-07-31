@@ -13,6 +13,7 @@ import {
   URGENT_CHANNEL_ENV,
   urgentChannelStatus,
   slackBody,
+  teamsBody,
   webhookBody,
 } from "@acos/core";
 import type {
@@ -93,6 +94,7 @@ export class NotificationService {
         Boolean(process.env.ALERT_EMAIL_TO?.trim()) &&
         Boolean(process.env.SMTP_HOST?.trim()),
       webhook: Boolean(process.env.ALERT_WEBHOOK_URL?.trim()),
+      teams: Boolean(process.env.ALERT_TEAMS_WEBHOOK_URL?.trim()),
     });
   }
 
@@ -283,6 +285,19 @@ export class NotificationService {
       return response.status;
     }
 
+    // Teams (TASK-4501, 정책 4501-③). Slack과 같은 사실을 Teams가 읽는
+    // 모양(MessageCard)으로 담을 뿐, **판단은 하나도 다르지 않다** —
+    // 채널마다 다른 사실이 나가면 같은 장애에 두 개의 답이 생긴다.
+    if (channel === "teams") {
+      const url = this.address("teams", urgent)!;
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(teamsBody(payload)),
+      });
+      return response.status;
+    }
+
     const body = emailBody(payload);
     await this.transporter().sendMail({
       from: process.env.ALERT_EMAIL_FROM ?? "acos@localhost",
@@ -367,6 +382,22 @@ export class NotificationService {
       error: row.error,
       createdAt: row.createdAt.toISOString(),
     }));
+  }
+
+  /**
+   * 최근에 **실제로 도달한** 채널 목록. (TASK-4501, CTO 정책 4501-⑤)
+   *
+   * 설정돼 있다는 것과 닿는다는 것은 다른 사실입니다. 주소가 죽어 있어도
+   * 설정은 그대로 남아 있고, 그 차이는 첫 장애 때 알게 됩니다.
+   */
+  async recentSuccessChannels(limit = 200): Promise<string[]> {
+    const rows = await this.prisma.notificationDelivery.findMany({
+      where: { ok: true },
+      orderBy: { createdAt: "desc" },
+      take: Math.min(Math.max(limit, 1), 500),
+      select: { channel: true },
+    });
+    return [...new Set(rows.map((row) => row.channel))];
   }
 
   /** 채널 연결 시험 — 운영자가 설정 직후 확인용 (실제 전송) */

@@ -63,6 +63,8 @@ import type {
   DiagnosticRunDto,
   DraftRevivalSummaryDto,
   ValidationRunDto,
+  ValidationExecutionDto,
+  GoLiveChecklistDto,
   // TASK-4201 (CTO 정책 4201-①②④)
   ActivationRunbookDto,
   AttributionGapDto,
@@ -107,6 +109,7 @@ import { ReadinessBoardService } from "./readiness-board.service";
 import { HostDiscoveryService } from "./host-discovery.service";
 import { ActivationRunbookService } from "./activation-runbook.service";
 import { IgnoreEscalationService } from "./ignore-escalation.service";
+import { GoLiveService } from "./go-live.service";
 import { ProjectCostService } from "./project-cost.service";
 
 /**
@@ -179,6 +182,7 @@ export class OpsController {
     // 만료 초안 되살림 · 검증 실행 잠금 (TASK-4101, CTO 정책 4101-④⑤⑥)
     private readonly revival: DraftRevivalService,
     private readonly validationRun: ValidationRunService,
+    private readonly goLiveService: GoLiveService,
     // 방치 지표 · 프로젝트 비용 (TASK-4201, CTO 정책 4201-②④)
     private readonly neglect: NeglectService,
     private readonly readinessBoard: ReadinessBoardService,
@@ -641,6 +645,36 @@ export class OpsController {
   @HttpCode(200)
   async startValidationRun(): Promise<ValidationRunDto> {
     return this.validationRun.assertRunnable();
+  }
+
+  /**
+   * 실 Production Validation을 **실제로 수행한다** (TASK-4501, CTO 정책 4501-④).
+   *
+   * 위의 `POST /ops/validation-run`은 순서만 돌려줍니다. 이 경로는 그
+   * 순서를 실제로 밟습니다 — **실 호출이 나가고 과금됩니다.**
+   *
+   * 잠금은 그대로입니다: 준비되지 않았으면 여기서도 403입니다. 준비가 끝난
+   * 순간 이 경로 하나로 검증이 시작되고, 그 결과는 성공이든 실패든
+   * 기록됩니다. 실패한 검증을 지우면 "몇 번 만에 됐는가"에 답할 수 없습니다.
+   */
+  @Post("validation-run/execute")
+  @HttpCode(200)
+  async executeValidationRun(
+    @Req() request: AuthenticatedRequest,
+  ): Promise<ValidationExecutionDto> {
+    return this.validationRun.execute(request.user?.id);
+  }
+
+  /**
+   * 최종 Go-Live 체크리스트 (TASK-4501, CTO 정책 4501-⑤).
+   *
+   * **여기서 새로 판정하지 않습니다** — 이미 있는 판정을 인용하고, 못 읽은
+   * 항목은 `unknown`이며 통과가 아닙니다. 검증이 성공하지 않았으면 나머지가
+   * 다 초록이어도 "준비 완료"가 아니라 **아직 시작도 안 한 것**입니다.
+   */
+  @Get("go-live")
+  async goLive(): Promise<GoLiveChecklistDto> {
+    return this.goLiveService.report();
   }
 
   /**

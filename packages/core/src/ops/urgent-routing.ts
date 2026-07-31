@@ -29,6 +29,8 @@ export const URGENT_CHANNEL_ENV: Record<NotificationChannel, string> = {
   slack: "ALERT_URGENT_SLACK_WEBHOOK_URL",
   webhook: "ALERT_URGENT_WEBHOOK_URL",
   email: "ALERT_URGENT_EMAIL_TO",
+  // TASK-4501에서 더한 채널 — 긴급 경로를 빠뜨리면 그 채널만 조용해진다
+  teams: "ALERT_URGENT_TEAMS_WEBHOOK_URL",
 };
 
 /** 어떤 알림이 긴급인가 — `critical`만이다 */

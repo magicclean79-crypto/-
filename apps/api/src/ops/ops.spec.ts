@@ -35,6 +35,7 @@ import { AppModule } from "../app.module";
 import { ReadinessBoardService } from "./readiness-board.service";
 import { ActivationRunbookService } from "./activation-runbook.service";
 import { IgnoreEscalationService } from "./ignore-escalation.service";
+import { GoLiveService } from "./go-live.service";
 import { AdminSettingsService } from "../admin/admin-settings.service";
 import { RequestContextService } from "../common/request-context.service";
 import { PriceSourceService } from "../pricing/price-source.service";
@@ -130,6 +131,7 @@ function createPrismaStub() {
   // TASK-4301 — 트래픽 호스트 관측 · 방치 무시 결정
   const observedHosts: Record<string, unknown>[] = [];
   const neglectDecisions: Record<string, unknown>[] = [];
+  const validationRuns: Record<string, unknown>[] = [];
   const opsAudit: Record<string, unknown>[] = [];
   const deliveries: {
     id: string;
@@ -1067,6 +1069,38 @@ function createPrismaStub() {
           return { count };
         },
       },
+      // 실 검증 실행 기록 (TASK-4501, 정책 4501-④⑤).
+      // **행이 없는 것은 실패가 아니라 아직 안 한 것이다** — 다만 Go-Live에는
+      // 둘 다 통과가 아니다.
+      validationRun: {
+        findFirst: async () => {
+          const rows = [...validationRuns].sort(
+            (left, right) =>
+              (right.startedAt as Date).getTime() - (left.startedAt as Date).getTime(),
+          );
+          return rows[0] === undefined ? null : { ...rows[0] };
+        },
+        create: async (args: { data: Record<string, unknown> }) => {
+          seq += 1;
+          const created = {
+            id: `validation-run-${seq}`,
+            realCalls: 0,
+            stubbedCalls: 0,
+            error: null,
+            completedAt: null,
+            startedAt: new Date(),
+            ...args.data,
+          };
+          validationRuns.push(created);
+          return { ...created };
+        },
+        update: async (args: { where: { id: string }; data: Record<string, unknown> }) => {
+          const found = validationRuns.find((row) => row.id === args.where.id);
+          if (found === undefined) throw new Error("no validation run");
+          Object.assign(found, args.data);
+          return { ...found };
+        },
+      },
       // 진단 이력 (TASK-4101, 정책 4101-②) — **같은 tier·stage끼리만 비교한다**
       diagnosticRun: {
         findFirst: async (args?: { where?: { tier?: string; stage?: string } }) => {
@@ -1815,6 +1849,7 @@ async function build(overrides: Overrides = {}) {
       ReadinessBoardService,
       ActivationRunbookService,
       IgnoreEscalationService,
+      GoLiveService,
       {
         // 운영 설정 저장소 — 테스트가 값을 정한다
         provide: AdminSettingsService,
@@ -8989,6 +9024,93 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
         const built = await build();
         app = built.app;
         await request(built.app.getHttpServer() as never).get("/ops/runbook").expect(401);
+      });
+    });
+  });
+
+  describe("Go-Live Platform (TASK-4501)", () => {
+    const admin = (server: unknown, path: string) =>
+      request(server as never).get(path).set("Authorization", "Bearer tok-admin");
+
+    const post = (server: unknown, path: string) =>
+      request(server as never).post(path).set("Authorization", "Bearer tok-admin");
+
+    describe("실 Validation 수행 (정책 4501-④)", () => {
+      /**
+       * 정책 ④는 "준비되는 즉시 수행한다"이지 "언제든 수행한다"가 아니다.
+       * 준비되지 않은 채 돌리면 스텁을 상대로 한 성공 기록이 남고, 그 기록은
+       * 나중에 실연결의 증거로 읽힌다.
+       */
+      it("준비되지 않았으면 실행을 거절한다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await post(
+          built.app.getHttpServer(),
+          "/ops/validation-run/execute",
+        ).expect(403);
+        expect(String(response.body.message)).toContain("검증");
+      });
+
+      it("ADMIN 전용이다", async () => {
+        const built = await build();
+        app = built.app;
+        await request(built.app.getHttpServer() as never)
+          .post("/ops/validation-run/execute")
+          .expect(401);
+      });
+    });
+
+    describe("최종 Go-Live 체크리스트 (정책 4501-⑤)", () => {
+      /**
+       * 이 판정의 존재 이유. 검증을 안 돌린 채 얻은 초록은 전부 스텁의
+       * 초록이고, 그 상태에서 "n/8 완료"라고 말하면 숫자가 진행을 흉내 낸다.
+       */
+      it("검증 기록이 없으면 시작도 안 한 것으로 본다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await admin(built.app.getHttpServer(), "/ops/go-live").expect(200);
+        expect(response.body.verdict).toBe("not-started");
+        expect(response.body.lastValidation).toBeNull();
+        expect(String(response.body.detail)).toContain("아직 시작도 안 했다는 뜻");
+      });
+
+      /**
+       * 여기서 새로 판정하지 않는다 — 항목마다 어느 판정을 인용했는지가
+       * 적혀 있어야, 화면 둘이 다른 말을 할 때 어느 쪽이 원본인지 안다.
+       */
+      it("모든 항목이 인용처와 증거를 달고 온다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await admin(built.app.getHttpServer(), "/ops/go-live").expect(200);
+        expect(response.body.items.length).toBeGreaterThan(0);
+        for (const item of response.body.items) {
+          expect(String(item.source)).toMatch(/^(GET|POST) \//);
+          expect(String(item.evidence).length).toBeGreaterThan(0);
+          expect(String(item.detail)).not.toContain("**");
+        }
+      });
+
+      /**
+       * 못 읽은 항목을 통과로 세면, 화면이 초록인 이유가 "됐다"인지 "못
+       * 봤다"인지 구별할 수 없다.
+       */
+      it("읽지 못한 항목을 충족으로 세지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await admin(built.app.getHttpServer(), "/ops/go-live").expect(200);
+        const met = response.body.items.filter(
+          (item: { state: string }) => item.state === "met",
+        ).length;
+        expect(response.body.met).toBe(met);
+        expect(response.body.blocking.length).toBe(
+          response.body.total - response.body.met,
+        );
+      });
+
+      it("ADMIN 전용이다", async () => {
+        const built = await build();
+        app = built.app;
+        await request(built.app.getHttpServer() as never).get("/ops/go-live").expect(401);
       });
     });
   });

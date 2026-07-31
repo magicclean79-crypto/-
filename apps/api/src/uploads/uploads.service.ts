@@ -5,6 +5,7 @@ import {
   ServiceUnavailableException,
 } from "@nestjs/common";
 import { randomUUID } from "node:crypto";
+import { checkUploadProject } from "@acos/core";
 import type { ImageDto } from "@acos/shared";
 import type { Image } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
@@ -31,6 +32,7 @@ function toDto(image: Image): ImageDto {
     mimeType: image.mimeType,
     size: image.size,
     productId: image.productId,
+    projectId: image.projectId,
     createdAt: image.createdAt.toISOString(),
   };
 }
@@ -44,10 +46,21 @@ export class UploadsService {
     private readonly storage: StorageService,
   ) {}
 
-  async uploadImages(files: Express.Multer.File[]): Promise<ImageDto[]> {
+  /**
+   * @param projectId 업로드하는 사람이 밝힌 소속 (TASK-4501, CTO 정책 4501-②).
+   *   선택 값이지만 **적혔다면 반드시 확인합니다** — 없는 프로젝트 id를 조용히
+   *   버리면 사용자는 소속을 밝혔다고 믿는데 기록에는 미귀속으로 남고, 그
+   *   차이는 몇 주 뒤 비용 보고에서야 드러납니다.
+   */
+  async uploadImages(
+    files: Express.Multer.File[],
+    projectId?: string | null,
+  ): Promise<ImageDto[]> {
     if (!files || files.length === 0) {
       throw new BadRequestException("업로드할 파일이 없습니다.");
     }
+
+    const project = await this.resolveProject(projectId);
 
     const stored: {
       key: string;
@@ -81,7 +94,9 @@ export class UploadsService {
 
     try {
       const records = await this.prisma.$transaction(
-        stored.map((item) => this.prisma.image.create({ data: item })),
+        stored.map((item) =>
+          this.prisma.image.create({ data: { ...item, projectId: project } }),
+        ),
       );
       return records.map(toDto);
     } catch (error) {
@@ -92,6 +107,32 @@ export class UploadsService {
         "데이터베이스에 저장할 수 없습니다. PostgreSQL이 실행 중인지 확인해 주세요. (pnpm docker:up)",
       );
     }
+  }
+
+  /**
+   * 밝힌 소속을 확인한다 (TASK-4501, CTO 정책 4501-②).
+   *
+   * 판정은 core가 하고 여기서는 **존재 여부만 읽어다 줍니다.** 조회가 실패하면
+   * 통과시키지 않고 그대로 실패시킵니다 — "확인 못 했으니 일단 받자"는
+   * 확인하지 않은 값을 확인한 값과 같은 자리에 넣는 일입니다.
+   */
+  private async resolveProject(raw?: string | null): Promise<string | null> {
+    const value = raw?.trim();
+    if (!value) {
+      return null;
+    }
+    const found = await this.prisma.project.findUnique({
+      where: { id: value },
+      select: { id: true },
+    });
+    const check = checkUploadProject(
+      value,
+      new Set(found ? [found.id] : []),
+    );
+    if (check.verdict !== "accepted") {
+      throw new BadRequestException(check.detail);
+    }
+    return check.projectId;
   }
 
   async listImages(take: number): Promise<ImageDto[]> {

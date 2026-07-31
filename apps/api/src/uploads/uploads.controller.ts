@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  Body,
   Controller,
   Get,
   Post,
@@ -44,8 +45,15 @@ export class UploadsController {
   )
   async uploadImages(
     @UploadedFiles() files: Express.Multer.File[],
+    // 소속을 여기서 받는다 (TASK-4501, CTO 정책 4501-②). multipart 본문은
+    // 파일과 섞이므로 쿼리로 받되, 값의 확인은 서비스가 한다.
+    @Query("projectId") projectId?: string,
+    @Body("projectId") bodyProjectId?: string,
   ): Promise<UploadImagesResponse> {
-    const images = await this.uploadsService.uploadImages(files);
+    const images = await this.uploadsService.uploadImages(
+      files,
+      projectId ?? bodyProjectId,
+    );
     return { images };
   }
 

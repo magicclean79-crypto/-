@@ -40,6 +40,7 @@ import { ValidationRunService } from "./validation-run.service";
 import { HostDiscoveryService } from "./host-discovery.service";
 import { ActivationRunbookService } from "./activation-runbook.service";
 import { IgnoreEscalationService } from "./ignore-escalation.service";
+import { GoLiveService } from "./go-live.service";
 import { NeglectService } from "./neglect.service";
 import { ReadinessBoardService } from "./readiness-board.service";
 import { ProjectCostService } from "./project-cost.service";
@@ -101,6 +102,7 @@ import { ProjectCostService } from "./project-cost.service";
     ReadinessBoardService,
     ActivationRunbookService,
     IgnoreEscalationService,
+    GoLiveService,
   ],
   exports: [
     AlertService,
@@ -136,6 +138,7 @@ import { ProjectCostService } from "./project-cost.service";
     ReadinessBoardService,
     ActivationRunbookService,
     IgnoreEscalationService,
+    GoLiveService,
   ],
 })
 export class OpsModule {}

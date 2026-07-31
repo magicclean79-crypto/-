@@ -27,15 +27,37 @@
  * 3. **여러 값이 들어 있으면 추측하지 않습니다.** 프록시가 덧붙이는
  *    구성인지 덮어쓰는 구성인지 우리는 모르고, 그 상태에서 하나를 고르면
  *    **고른 이유가 없는 값**이 관측에 들어갑니다.
+ *
+ * ## IPv6 (TASK-4501, 정책 4501-①)
+ *
+ * TASK-4401은 IPv4만 받고 IPv6 선언은 버렸습니다 — 받는 척하고 못 맞추는
+ * 것보다 못 받는다고 말하는 편이 낫다고 봤기 때문입니다. 그런데 그 상태는
+ * **IPv6로 들어오는 프록시 뒤에서 이 보호가 통째로 꺼진 것**과 같습니다:
+ * 선언을 아무리 적어도 맞지 않으니 전달 헤더를 영영 안 봅니다.
+ *
+ * 그래서 IPv6를 받습니다. 주소 비교는 **128비트 정수 하나로** 합니다 —
+ * 문자열을 정규화해 비교하면 `::1`과 `0:0:0:0:0:0:0:1`이 다른 값이 되고,
+ * 그 차이는 사람이 눈으로 못 찾습니다.
+ *
+ * IPv4-mapped(`::ffff:10.0.0.1`)는 **IPv4로 되돌려** 비교합니다. 같은
+ * 기계를 두 가지로 적을 수 있으면, 한쪽으로 적은 선언이 다른 쪽으로 들어온
+ * 요청을 놓칩니다.
  */
 
 /** 선언된 신뢰 프록시 하나 — 단일 IP이거나 CIDR */
 export interface TrustedProxyRule {
   raw: string;
-  /** IPv4 정수 표현 */
-  base: number;
-  /** 앞에서 몇 비트를 비교하는가 (단일 IP면 32) */
+  /**
+   * 주소를 정수 하나로 (IPv4는 32비트, IPv6는 128비트).
+   *
+   * 문자열로 비교하면 `::1`과 `0:0:0:0:0:0:0:1`이 다른 값이 되고, 그 차이는
+   * 사람이 눈으로 못 찾습니다.
+   */
+  base: bigint;
+  /** 앞에서 몇 비트를 비교하는가 */
   bits: number;
+  /** 주소 체계 — 다른 체계끼리는 비교하지 않는다 */
+  family: 4 | 6;
 }
 
 /** 전달 헤더를 어떻게 다뤘는가 */
@@ -61,12 +83,12 @@ export interface ForwardedHostResult {
 }
 
 /** IPv4 문자열 → 정수. IPv4가 아니면 null */
-function toIpv4(value: string): number | null {
+function toIpv4(value: string): bigint | null {
   const parts = value.trim().split(".");
   if (parts.length !== 4) {
     return null;
   }
-  let result = 0;
+  let result = 0n;
   for (const part of parts) {
     if (!/^\d{1,3}$/.test(part)) {
       return null;
@@ -75,9 +97,98 @@ function toIpv4(value: string): number | null {
     if (octet > 255) {
       return null;
     }
-    result = result * 256 + octet;
+    result = result * 256n + BigInt(octet);
   }
   return result;
+}
+
+/**
+ * IPv6 문자열 → 128비트 정수 (순수 함수, TASK-4501).
+ *
+ * `::` 축약과 끝자리 IPv4 표기(`::ffff:10.0.0.1`)를 함께 받습니다.
+ * 읽을 수 없으면 `null`입니다 — **읽은 척하지 않습니다.**
+ */
+function toIpv6(value: string): bigint | null {
+  const raw = value.trim().replace(/^\[|\]$/g, "").toLowerCase();
+  if (raw.length === 0 || !/^[0-9a-f:.]+$/.test(raw)) {
+    return null;
+  }
+  // 축약(::)은 한 번만 쓸 수 있다
+  const halves = raw.split("::");
+  if (halves.length > 2) {
+    return null;
+  }
+
+  const expand = (part: string): string[] =>
+    part.length === 0 ? [] : part.split(":");
+
+  const head = expand(halves[0]);
+  const tail = halves.length === 2 ? expand(halves[1]) : [];
+  const groups: string[] = [];
+
+  // 끝자리가 IPv4 표기면 두 그룹으로 바꾼다 (::ffff:10.0.0.1)
+  const last = (tail.length > 0 ? tail : head)[
+    (tail.length > 0 ? tail : head).length - 1
+  ];
+  let trailingIpv4: string[] | null = null;
+  if (last !== undefined && last.includes(".")) {
+    const ipv4 = toIpv4(last);
+    if (ipv4 === null) {
+      return null;
+    }
+    trailingIpv4 = [
+      ((ipv4 >> 16n) & 0xffffn).toString(16),
+      (ipv4 & 0xffffn).toString(16),
+    ];
+    if (tail.length > 0) {
+      tail.pop();
+    } else {
+      head.pop();
+    }
+  }
+
+  const headGroups = [...head];
+  const tailGroups = [...tail, ...(trailingIpv4 ?? [])];
+  const filled = headGroups.length + tailGroups.length;
+
+  if (halves.length === 2) {
+    if (filled > 7) {
+      return null;
+    }
+    groups.push(
+      ...headGroups,
+      ...Array.from({ length: 8 - filled }, () => "0"),
+      ...tailGroups,
+    );
+  } else {
+    if (filled !== 8) {
+      return null;
+    }
+    groups.push(...headGroups, ...tailGroups);
+  }
+
+  let result = 0n;
+  for (const group of groups) {
+    if (!/^[0-9a-f]{1,4}$/.test(group)) {
+      return null;
+    }
+    result = (result << 16n) + BigInt(parseInt(group, 16));
+  }
+  return result;
+}
+
+/** 주소를 정수와 체계로 — 읽을 수 없으면 null */
+function parseAddress(value: string): { value: bigint; family: 4 | 6 } | null {
+  const normalized = normalizePeerAddress(value);
+  if (normalized === null) {
+    return null;
+  }
+  const ipv4 = toIpv4(normalized);
+  if (ipv4 !== null) {
+    return { value: ipv4, family: 4 };
+  }
+  const ipv6 = toIpv6(normalized);
+  return ipv6 === null ? null : { value: ipv6, family: 6 };
 }
 
 /**
@@ -116,20 +227,23 @@ export function parseTrustedProxies(raw: string | undefined): {
     if (token.length === 0) {
       continue;
     }
-    const [address, prefix] = token.split("/");
-    const base = toIpv4(address);
-    if (base === null) {
-      // IPv6는 아직 받지 않습니다 — 받는 척하고 못 맞추는 것보다
-      // 못 받는다고 말하는 편이 낫습니다
+    // CIDR의 `/`는 마지막 것만 본다 — IPv6 주소 안에는 `/`가 없다
+    const slash = token.lastIndexOf("/");
+    const address = slash === -1 ? token : token.slice(0, slash);
+    const prefix = slash === -1 ? undefined : token.slice(slash + 1);
+
+    const parsed = parseAddress(address);
+    if (parsed === null) {
       rejected.push(token);
       continue;
     }
-    const bits = prefix === undefined ? 32 : Number(prefix);
-    if (!Number.isInteger(bits) || bits < 0 || bits > 32) {
+    const width = parsed.family === 4 ? 32 : 128;
+    const bits = prefix === undefined ? width : Number(prefix);
+    if (!Number.isInteger(bits) || bits < 0 || bits > width) {
       rejected.push(token);
       continue;
     }
-    rules.push({ raw: token, base, bits });
+    rules.push({ raw: token, base: parsed.value, bits, family: parsed.family });
   }
   return { rules, rejected };
 }
@@ -139,22 +253,27 @@ export function isTrustedPeer(
   peer: string | null | undefined,
   rules: TrustedProxyRule[],
 ): boolean {
-  const normalized = normalizePeerAddress(peer);
-  if (normalized === null || rules.length === 0) {
+  if (rules.length === 0 || peer === null || peer === undefined) {
     return false;
   }
-  const address = toIpv4(normalized);
+  const address = parseAddress(peer);
   if (address === null) {
     return false;
   }
   return rules.some((rule) => {
-    if (rule.bits === 0) {
-      // 0.0.0.0/0은 "아무나"입니다 — 그건 신뢰 경계가 아니라 경계를 없앤
-      // 것이므로 맞지 않는 것으로 봅니다
+    // **다른 체계끼리는 비교하지 않습니다** — IPv4 선언이 IPv6 상대와
+    // 우연히 맞아떨어지면 그건 신뢰가 아니라 사고입니다
+    if (rule.family !== address.family) {
       return false;
     }
-    const mask = rule.bits === 32 ? -1 : ~((1 << (32 - rule.bits)) - 1);
-    return (address & mask) === (rule.base & mask);
+    if (rule.bits === 0) {
+      // `0.0.0.0/0`·`::/0`은 "아무나"입니다 — 그건 신뢰 경계가 아니라 경계를
+      // 없앤 것이므로 맞지 않는 것으로 봅니다
+      return false;
+    }
+    const width = rule.family === 4 ? 32n : 128n;
+    const shift = width - BigInt(rule.bits);
+    return address.value >> shift === rule.base >> shift;
   });
 }
 
