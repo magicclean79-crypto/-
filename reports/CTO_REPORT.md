@@ -34,7 +34,7 @@
 | 품질 게이트 자체 검증 | `pnpm check:ci-gates` | ✅ 필수 게이트 7개 순서 일치 |
 | Major Migration 교차 검증 | `pnpm check:major-migrations` | ✅ 2건 일치 (신규 1건은 major 아님 — §6) |
 | Live Verification | 실 PostgreSQL + 실 Redis + 실 S3 + Vision 스텁 + 공지 스텁 4곳 + GitHub Actions 스텁 | ✅ §4 |
-| **GitHub Actions** | 실제 워크플로 실행 (병렬 2 Job) | ✅ §4 (푸시 후 확인) |
+| **GitHub Actions** | 실제 워크플로 실행 (병렬 2 Job) | ✅ **run 30593356613 통과 — 3분 0초** (두 Job 모두 success) |
 | **`/ops/cutover`** | `pnpm cutover` | ⚠️ **exit 1 — 활성화 0/3 조건.** 전환은 아직이며 판정이 그 사실을 말한다 |
 
 > **게이트 실행 중 발견한 환경 문제 1건**: e2e 2~3건이 간헐 실패했습니다.
@@ -188,6 +188,17 @@
 | **활성화 3조건** | 0/3 — `S3_ENDPOINT` · `api.openai.com` 403 · 전환 판정 1/4 |
 | **`pnpm cutover`** | 항목별 판정 + 활성화 세 조건 두 겹 출력, **exit 1** |
 | **대시보드** | 스크린샷 첨부 — 스텁 성공이 호박색으로, 진행 중 장애가 붉게 |
+
+### GitHub Actions 실제 실행 (TASK-3701 커밋 `8834dae`)
+
+| Job | 결과 | 소요 |
+| --- | --- | --- |
+| `quality-gates` (Build · 교차 검증 · **게이트 자체 검증** · TypeScript · Lint · Core/API) | ✅ success | 1분 49초 |
+| `web-e2e` (브라우저 설치 · Build · Web e2e) | ✅ success | 2분 57초 |
+| **run 30593356613 전체** | **✅ success** | **3분 0초** |
+
+두 Job이 서로를 기다리지 않으므로 전체 소요는 느린 쪽 하나입니다.
+**13회 연속 실패를 끊은 뒤로 7회 연속 초록**입니다.
 
 ### 자체 발견 결함 1건 — 라이브에서만 보였습니다
 
