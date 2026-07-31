@@ -336,7 +336,22 @@ function resetPublishing() {
 }
 resetPublishing();
 
-const server = http.createServer((req, res) => {
+/** 요청 본문을 JSON으로 (TASK-4301 무시 등록에 쓴다) */
+function readJson(req) {
+  return new Promise((resolve) => {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      try {
+        resolve(JSON.parse(body || "{}"));
+      } catch {
+        resolve({});
+      }
+    });
+  });
+}
+
+const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
 
   // 브라우저(3100)에서의 클라이언트 호출 허용 (실제 API도 CORS 허용)
@@ -3521,6 +3536,171 @@ const server = http.createServer((req, res) => {
           "통과시킵니다 — 목록을 고쳐 주세요. 자동으로 넣지 않는 이유는 " +
           "그러면 스테이징까지 운영으로 올라가 정작 검증 대상이 막히기 " +
           "때문입니다.",
+        // 운영 트래픽 관측 (TASK-4301, 정책 4301-①) — **허가가 아니다**
+        discovery: {
+          sightings: [
+            {
+              host: "m.acos.example",
+              requests: 812,
+              firstSeenAt: "2026-07-29T02:00:00.000Z",
+              lastSeenAt: "2026-07-31T11:00:00.000Z",
+            },
+          ],
+          distinct: 1,
+          overflowed: false,
+          detail:
+            "운영 트래픽에서 호스트 1개를 봤습니다 (요청 812건). 관측은 " +
+            "증거이지 허가가 아닙니다 — Host 헤더는 요청하는 쪽이 적는 " +
+            "값이므로 이 목록을 운영 호스트로 자동 등록하지 않습니다.",
+        },
+      }),
+    );
+    return;
+  }
+
+  /**
+   * Production Readiness Dashboard (TASK-4301, CTO 정책 4301-④) — ADMIN 전용.
+   *
+   * **여기서 새로 판정하지 않는다** — 각 칸은 어느 판정에서 왔는지를 달고
+   * 다니고, 읽지 못한 칸은 unknown이다(통과가 아니다).
+   */
+  if (url.pathname === "/ops/readiness-board") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify({
+        tiles: [
+          {
+            id: "validation-plan",
+            title: "검증 준비 단계",
+            status: "blocked",
+            detail: "검증 스프린트 준비 2/11 단계 완료.",
+            source: "GET /ops/validation-plan",
+            next: "사람이 줘야 끝나는 단계: 실 Provider 자격 증명 주입",
+          },
+          {
+            id: "validation-run",
+            title: "검증 실행 잠금",
+            status: "blocked",
+            detail: "4가지 이유로 막혀 있습니다: 검증 대상이 정해지지 않았습니다",
+            source: "GET /ops/validation-run",
+            next: "강제로 여는 방법은 없습니다 — 막는 조건을 없애야 합니다.",
+          },
+          {
+            id: "diagnostics",
+            title: "운영 진단",
+            status: "unknown",
+            detail: "이 판정을 읽지 못했습니다 — 괜찮다는 뜻이 아닙니다.",
+            source: "GET /ops/diagnostics",
+            next: "GET /ops/diagnostics이 응답하는지 확인해 주세요.",
+          },
+          {
+            id: "hosts",
+            title: "운영 호스트 목록",
+            status: "warn",
+            detail: "선언된 운영 호스트 1개. 목록에 없는데 쓰이는 호스트 1개.",
+            source: "GET /ops/hosts",
+            next: "목록에 없는 호스트가 운영인지 사람이 답해야 합니다.",
+          },
+          {
+            id: "neglect",
+            title: "방치",
+            status: "warn",
+            detail:
+              "기준을 넘게 그대로인 항목 1건 (무시 중 1건 · 검토일 지남 0건) — " +
+              "가장 오래된 것은 오브젝트 저장소(23일째)입니다.",
+            source: "GET /ops/neglect",
+            next: null,
+          },
+          {
+            id: "attribution",
+            title: "비용 귀속",
+            status: "ok",
+            detail:
+              "지금 들어오는 기록 100% · 최근 창 전체 40% — 옛 기록은 고칠 수 " +
+              "없으므로 전체는 천천히 따라옵니다.",
+            source: "GET /ops/cost/projects",
+            next: null,
+          },
+        ],
+        steps: { done: 2, total: 11 },
+        readiness: "blocked",
+        blockers: ["validation-plan", "validation-run"],
+        unknowns: ["diagnostics"],
+        fail: 0,
+        warn: 2,
+        tier: "staging",
+        detail:
+          "[staging] 운영 준비 화면. 준비 2/11 단계 (사람이 줄 것이 남음). " +
+          "지금 막고 있는 것 2가지: 검증 준비 단계 · 검증 실행 잠금. " +
+          "확인하지 못한 칸 1개는 통과로 세지 않았습니다: 운영 진단. " +
+          "이 화면은 다른 판정을 인용만 합니다 — 여기서 다시 판정하면 같은 " +
+          "사실에 두 개의 답이 생기고, 어긋나는 순간 둘 다 못 믿게 됩니다.",
+        checkedAt: new Date().toISOString(),
+      }),
+    );
+    return;
+  }
+
+  /** 방치 항목 무시 (TASK-4301, CTO 정책 4301-③) — 사유·담당자·검토일 필수 */
+  if (/^\/ops\/neglect\/[^/]+\/ignore$/.test(url.pathname) && req.method === "POST") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    const body = await readJson(req);
+    res.setHeader("content-type", "application/json");
+    if (typeof body.owner !== "string" || body.owner.trim() === "") {
+      res.statusCode = 400;
+      res.end(
+        JSON.stringify({
+          message:
+            "담당자가 필요합니다. 팀 이름이 아니라 사람이어야 합니다 — " +
+            "검토일이 왔을 때 아무에게도 돌아가지 않으면 그 무시는 영구 " +
+            "삭제와 같습니다.",
+        }),
+      );
+      return;
+    }
+    if (typeof body.reason !== "string" || body.reason.trim().length < 10) {
+      res.statusCode = 400;
+      res.end(
+        JSON.stringify({
+          message:
+            "무시하는 이유를 10자 이상 적어 주세요. 검토일에 이 글을 읽는 " +
+            "사람은 지금의 사정을 모릅니다.",
+        }),
+      );
+      return;
+    }
+    res.end(
+      JSON.stringify({
+        id: "ignore-1",
+        detail:
+          `${body.owner}가 30일 뒤에 다시 봅니다. 그때까지 경보만 쉬고, ` +
+          "목록과 연속 기간은 그대로 갑니다 — 무시는 해결이 아닙니다.",
+      }),
+    );
+    return;
+  }
+
+  /** 방치 무시 취소 (TASK-4301) — 행은 남고 취소 기록이 붙는다 */
+  if (/^\/ops\/neglect\/ignores\/[^/]+\/revoke$/.test(url.pathname) && req.method === "POST") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify({
+        revoked: true,
+        detail: "무시를 취소했습니다. 이 항목은 다시 경보 대상입니다.",
       }),
     );
     return;
@@ -3551,6 +3731,14 @@ const server = http.createServer((req, res) => {
               "나빴습니다 — 실제로는 더 오래됐을 수 있으니 최소값으로 읽으세요. " +
               "이 정도면 대응 중인 것이 아니라 대응하지 않기로 한 것에 " +
               "가깝습니다.",
+            // 무시 중이지만 목록에도 남고 기간도 계속 간다 (TASK-4301)
+            ignored: true,
+            ignoreId: "ignore-1",
+            ignoreOwner: "김운영",
+            ignoreReason: "S3 전환이 다음 분기 계획에 잡혀 있습니다",
+            ignoreReviewAt: "2026-08-20T00:00:00.000Z",
+            reviewOverdue: false,
+            ignoreLabel: "무시 중 · 20일 뒤 검토 (김운영)",
           },
           {
             id: "urgent-channel",
@@ -3562,6 +3750,13 @@ const server = http.createServer((req, res) => {
             durationLabel: "1일",
             truncated: false,
             detail: "긴급 알림 경로: 2회 연속 · 1일째",
+            ignored: false,
+            ignoreId: null,
+            ignoreOwner: null,
+            ignoreReason: null,
+            ignoreReviewAt: null,
+            reviewOverdue: false,
+            ignoreLabel: null,
           },
         ],
         worst: {
@@ -3574,14 +3769,26 @@ const server = http.createServer((req, res) => {
           durationLabel: "23일",
           truncated: true,
           detail: "오브젝트 저장소: 21회 연속 · 23일째",
+          ignored: true,
+          ignoreId: "ignore-1",
+          ignoreOwner: "김운영",
+          ignoreReason: "S3 전환이 다음 분기 계획에 잡혀 있습니다",
+          ignoreReviewAt: "2026-08-20T00:00:00.000Z",
+          reviewOverdue: false,
+          ignoreLabel: "무시 중 · 20일 뒤 검토 (김운영)",
         },
         runs: 21,
         largestGapDays: null,
         neglectAfterDays: 7,
+        ignoredCount: 1,
+        overdueCount: 0,
+        maxIgnoreDays: 90,
         detail:
           "진단 21회를 봤습니다. 나쁜 항목 2개 중 가장 오래된 것은 오브젝트 " +
           "저장소(23일째)입니다. 7일 넘게 그대로인 항목 1개: 오브젝트 저장소. " +
-          "실패 수가 늘지 않았다고 나아진 것이 아닙니다.",
+          "실패 수가 늘지 않았다고 나아진 것이 아닙니다. 이 중 1건은 무시 " +
+          "중입니다 — 방치 건수에서 빼지 않았습니다. 무시는 경보를 쉬게 할 뿐 " +
+          "해결이 아닙니다.",
       }),
     );
     return;
@@ -3615,6 +3822,12 @@ const server = http.createServer((req, res) => {
         unpricedCalls: 3,
         unattributedCalls: 60,
         coverage: 40,
+        // 지금 들어오는 기록은 멀쩡하다 — 옛 기록 때문에 전체가 낮다 (TASK-4301)
+        recentCoverage: 100,
+        recentCalls: 12,
+        recentWindowHours: 24,
+        unattributable: 0,
+        unattributableCalls: 0,
         windowDays: 30,
         detail:
           "최근 30일 · 프로젝트 1개에 $1.200000 귀속. 귀속되지 않은 호출 " +

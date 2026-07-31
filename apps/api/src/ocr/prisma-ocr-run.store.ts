@@ -43,9 +43,33 @@ export class PrismaOcrRunStore implements OcrRunStore {
         provider,
         status: "RUNNING",
         startedAt: new Date(),
+        // 어느 프로젝트의 비용인가 (TASK-4301, CTO 정책 4301-②).
+        // **짐작이 아니라 조인입니다** — 이미지는 상품에, 상품은 프로젝트에
+        // 붙어 있고 그 연결은 기록에 이미 있던 사실입니다. 연결이 없으면
+        // (상품에 안 붙은 이미지) null이며, null은 "공용"이 아니라
+        // "모른다"입니다.
+        projectId: await this.projectOf(imageId),
       },
     });
     return toOcrRun(record);
+  }
+
+  /**
+   * 이미지 → 상품 → 프로젝트.
+   *
+   * 읽지 못하면 `null`입니다 — 조회가 실패했다고 OCR을 실패시키지 않습니다
+   * (비용 귀속은 부수적인 일이고, 그것 때문에 본 기능이 멈추면 안 됩니다).
+   */
+  private async projectOf(imageId: string): Promise<string | null> {
+    try {
+      const image = await this.prisma.image.findUnique({
+        where: { id: imageId },
+        select: { product: { select: { projectId: true } } },
+      });
+      return image?.product?.projectId ?? null;
+    } catch {
+      return null;
+    }
   }
 
   /**

@@ -327,9 +327,16 @@ export class LlmService {
                 model: attemptRequest.model ?? gateway.defaultModel,
               },
               run,
-              // 진단 호출은 이력에 남기되 운영 통계에서 분리한다
-              // (TASK-1302, CTO 결정 1301-③)
-              { diagnostic: !counted },
+              {
+                // 진단 호출은 이력에 남기되 운영 통계에서 분리한다
+                // (TASK-1302, CTO 결정 1301-③)
+                diagnostic: !counted,
+                // 어느 프로젝트가 쓴 호출인가 (TASK-4301, CTO 정책 4301-②).
+                // 이 값은 이미 여기까지 와 있었는데 기록에는 안 남고 있었다 —
+                // 그래서 비용표의 귀속률이 0에 가까웠다. 모르면 null이며
+                // null은 "공용"이 아니라 "모른다"다.
+                projectId: options.projectId ?? null,
+              },
             )
           : await run();
 

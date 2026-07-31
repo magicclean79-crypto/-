@@ -65,7 +65,9 @@ import type {
   ValidationRunDto,
   // TASK-4201 (CTO 정책 4201-①②④)
   HostVerificationDto,
+  NeglectDecisionDto,
   NeglectReportDto,
+  ReadinessBoardDto,
   ProjectCostDto,
 } from "@acos/shared";
 import { AuthGuard, RequireRole } from "../auth/auth.guard";
@@ -98,6 +100,7 @@ import { ValidationPlanService } from "./validation-plan.service";
 import { DraftRevivalService } from "./draft-revival.service";
 import { ValidationRunService } from "./validation-run.service";
 import { NeglectService } from "./neglect.service";
+import { ReadinessBoardService } from "./readiness-board.service";
 import { ProjectCostService } from "./project-cost.service";
 
 /**
@@ -172,6 +175,7 @@ export class OpsController {
     private readonly validationRun: ValidationRunService,
     // 방치 지표 · 프로젝트 비용 (TASK-4201, CTO 정책 4201-②④)
     private readonly neglect: NeglectService,
+    private readonly readinessBoard: ReadinessBoardService,
     private readonly projectCost: ProjectCostService,
   ) {}
 
@@ -401,8 +405,8 @@ export class OpsController {
    * 운영으로 올라가 정작 검증 대상이 막히기 때문입니다.
    */
   @Get("hosts")
-  productionHosts(): HostVerificationDto {
-    const report = this.diagnostics.hosts();
+  async productionHosts(): Promise<HostVerificationDto> {
+    const { report, discovery } = await this.diagnostics.hosts();
     return {
       findings: report.findings,
       declared: report.declared,
@@ -410,7 +414,93 @@ export class OpsController {
       unseen: report.unseen.length,
       required: report.required,
       detail: report.detail,
+      // 운영 트래픽 관측 (TASK-4301, 정책 4301-①) — 설정값에 없는 별칭
+      // 도메인은 이 경로로만 보입니다. **자동으로 목록에 들어가지 않습니다.**
+      discovery: {
+        sightings: discovery.sightings.map((row) => ({
+          host: row.host,
+          requests: row.requests,
+          firstSeenAt: new Date(row.firstSeenAt).toISOString(),
+          lastSeenAt: new Date(row.lastSeenAt).toISOString(),
+        })),
+        distinct: discovery.distinct,
+        overflowed: discovery.overflowed,
+        detail: discovery.detail,
+      },
     };
+  }
+
+  /**
+   * Production Readiness Dashboard (TASK-4301, CTO 정책 4301-④).
+   *
+   * **여기서 새로 판정하지 않습니다** — 여섯 판정을 불러 그 결론을 그대로
+   * 옮깁니다. 각 칸은 어느 판정에서 왔는지(`source`)를 달고 다니고, 읽지
+   * 못한 칸은 `unknown`입니다(통과가 아닙니다).
+   */
+  @Get("readiness-board")
+  async productionReadinessBoard(): Promise<ReadinessBoardDto> {
+    return this.readinessBoard.report();
+  }
+
+  /**
+   * 방치 항목 무시 (TASK-4301, CTO 정책 4301-③).
+   *
+   * **무시는 해결이 아닙니다.** 목록에서 사라지지 않고, 연속 기간도 계속
+   * 갑니다. 바뀌는 것은 경보뿐이며 검토일이 지나면 자동으로 풀립니다.
+   * 사유·담당자·검토일이 없으면 400입니다.
+   */
+  @Post("neglect/:checkId/ignore")
+  @HttpCode(200)
+  async ignoreNeglect(
+    @Param("checkId") checkId: string,
+    @Body()
+    body: { reason?: string; owner?: string; reviewAt?: string; title?: string },
+    @Req() req: AuthenticatedRequest,
+  ): Promise<{ id: string; detail: string }> {
+    const reviewAt = Date.parse(body?.reviewAt ?? "");
+    if (Number.isNaN(reviewAt)) {
+      throw new BadRequestException(
+        "검토일(reviewAt)이 필요합니다 — 무기한 무시는 기록이 아니라 잊는 것입니다.",
+      );
+    }
+    const result = await this.neglect.ignore({
+      checkId,
+      tier: this.diagnostics.tier(),
+      title: body?.title,
+      reason: body?.reason ?? "",
+      owner: body?.owner ?? "",
+      reviewAt,
+      decidedById: req.user?.id ?? null,
+    });
+    if (!result.ok || result.id === null) {
+      throw new BadRequestException(result.reason);
+    }
+    return { id: result.id, detail: result.reason };
+  }
+
+  /** 무시 취소 — 행은 남고 취소 기록이 붙는다 */
+  @Post("neglect/ignores/:id/revoke")
+  @HttpCode(200)
+  async revokeIgnore(
+    @Param("id") id: string,
+    @Req() req: AuthenticatedRequest,
+  ): Promise<{ revoked: boolean; detail: string }> {
+    const revoked = await this.neglect.revoke(id, req.user?.id ?? null);
+    if (!revoked) {
+      throw new BadRequestException(
+        "이미 취소됐거나 없는 결정입니다 — 지난 기록은 다시 쓰지 않습니다.",
+      );
+    }
+    return {
+      revoked,
+      detail: "무시를 취소했습니다. 이 항목은 다시 경보 대상입니다.",
+    };
+  }
+
+  /** 무시 이력 — 취소된 것도 보인다 */
+  @Get("neglect/ignores")
+  async neglectIgnores(): Promise<NeglectDecisionDto[]> {
+    return this.neglect.decisions(this.diagnostics.tier());
   }
 
   /**

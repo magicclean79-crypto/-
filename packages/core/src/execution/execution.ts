@@ -63,6 +63,16 @@ export interface NewExecution {
    */
   requestId?: string | null;
   traceId?: string | null;
+  /**
+   * 어느 프로젝트가 쓴 호출인가 (TASK-4201 정책 ④ · TASK-4301 정책 ②).
+   *
+   * **호출하는 그 자리에서** 남깁니다. 나중에 요청 기록을 뒤져 짐작하면
+   * 그 순간부터 비용표는 관측이 아니라 추정이 되고, 그 추정으로 팀에 비용을
+   * 청구하게 됩니다.
+   *
+   * 모르면 `null`이며 **null은 "공용"이 아니라 "모른다"** 입니다.
+   */
+  projectId?: string | null;
 }
 
 /** Execution Domain 모델 — 저장소와 무관한 순수 표현 */
@@ -208,7 +218,7 @@ export class ExecutionTracker {
   }
 
   /** 호출 대상 — 모르면 세 칸 모두 null (모르는 것을 지어내지 않는다) */
-  private target(provider: string, calledAt: number) {
+  private target(provider: string, calledAt: number, projectId: string | null) {
     const resolved = this.callTarget?.(provider) ?? null;
     const trace = this.trace?.() ?? null;
     return {
@@ -218,6 +228,8 @@ export class ExecutionTracker {
       // 한 요청이 부른 호출들을 묶는 끈 (정책 3601-②)
       requestId: trace?.requestId ?? null,
       traceId: trace?.traceId ?? null,
+      // 프로젝트는 부르는 쪽이 알려 준다 (TASK-4301, 정책 4301-②)
+      projectId,
     };
   }
 
@@ -243,7 +255,7 @@ export class ExecutionTracker {
     fallback: { provider: string; model: string },
     run: () => Promise<T>,
     /** 진단 호출이면 true (TASK-1302, CTO 결정 1301-③) */
-    options: { diagnostic?: boolean } = {},
+    options: { diagnostic?: boolean; projectId?: string | null } = {},
   ): Promise<T> {
     const startedAt = this.now();
     const diagnostic = options.diagnostic === true;
@@ -261,7 +273,7 @@ export class ExecutionTracker {
         error: null,
         diagnostic,
         // 성공한 호출이 **누구를 상대로** 이뤄졌는지 남긴다 (정책 3501-④)
-        ...this.target(result.provider, startedAt),
+        ...this.target(result.provider, startedAt, options.projectId ?? null),
       });
       return result;
     } catch (error) {
@@ -276,7 +288,7 @@ export class ExecutionTracker {
         latencyMs: this.now() - startedAt,
         error: error instanceof Error ? error.message : String(error),
         diagnostic,
-        ...this.target(fallback.provider, startedAt),
+        ...this.target(fallback.provider, startedAt, options.projectId ?? null),
       });
       throw error;
     }

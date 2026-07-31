@@ -1236,6 +1236,53 @@ model KpiSnapshot {
  * `checks`에 항목 전체를 남기는 이유: 개수만 남기면 "무엇이" 나빠졌는지
  * 비교할 수 없고, 그러면 이력이 있어도 쓸 수 없다.
  */
+// ── Traffic Host Discovery & Neglect Governance (TASK-4301, Sprint 43) ──
+
+/// 운영 트래픽에서 관측한 호스트 (CTO 정책 4301-①).
+///
+/// 설정값만 보면 리버스 프록시 뒤의 별칭 도메인이 보이지 않는다. 사용자는
+/// 그 주소로 들어오는데 우리 설정 어디에도 그 이름이 없고, 검증 대상 보호는
+/// 그 주소를 모르는 주소로 통과시킨다.
+///
+/// **관측은 증거이지 허가가 아니다.** Host 헤더는 요청하는 쪽이 적는 값이며,
+/// 이 표의 이름이 자동으로 PRODUCTION_HOSTS가 되는 경로는 없다.
+model ObservedHost {
+  id          String   @id @default(cuid())
+  host        String
+  /// development | staging | production
+  tier        String
+  requests    Int      @default(0)
+  firstSeenAt DateTime
+  lastSeenAt  DateTime
+
+  @@unique([tier, host])
+  @@index([lastSeenAt])
+  @@map("observed_hosts")
+}
+
+/// 방치 항목의 무시 결정 (CTO 정책 4301-③).
+///
+/// `reviewAt`은 NULL일 수 없다 — 무기한 무시는 기록이 아니라 잊는 것이다.
+/// `owner`가 필요한 이유는 검토일이 왔을 때 돌아갈 곳이 있어야 하기
+/// 때문이다. 취소는 행을 지우지 않고 `revokedAt`으로 남긴다: 지우면
+/// 무시했던 사실까지 사라진다.
+model NeglectDecision {
+  id          String    @id @default(cuid())
+  checkId     String
+  tier        String
+  reason      String
+  owner       String
+  reviewAt    DateTime
+  decidedAt   DateTime  @default(now())
+  decidedById String?
+  revokedAt   DateTime?
+  revokedById String?
+
+  @@index([tier, checkId])
+  @@index([reviewAt])
+  @@map("neglect_decisions")
+}
+
 model DiagnosticRun {
   id      String   @id @default(cuid())
   /// startup | daily | manual

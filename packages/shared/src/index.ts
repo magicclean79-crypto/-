@@ -3036,6 +3036,8 @@ export interface HostVerificationDto {
   declared: number;
   undeclared: number;
   unseen: number;
+  /** 운영 트래픽 관측 (TASK-4301, 정책 4301-①) */
+  discovery: HostDiscoveryDto;
   /** 이 배포 단계에서 목록을 요구하는가 */
   required: boolean;
   detail: string;
@@ -3059,6 +3061,16 @@ export interface FailureStreakDto {
   /** 기록이 남은 구간 내내 나빴는가 — 그렇다면 **최소값으로 읽어야 한다** */
   truncated: boolean;
   detail: string;
+  /** 지금 무시 중인가 (TASK-4301) — 검토일이 지나면 false */
+  ignored: boolean;
+  /** 무시 결정의 id — 화면이 취소를 걸 수 있어야 한다 */
+  ignoreId: string | null;
+  ignoreOwner: string | null;
+  ignoreReason: string | null;
+  ignoreReviewAt: string | null;
+  /** 검토일이 지났는가 — **지났으면 무시가 아니다** */
+  reviewOverdue: boolean;
+  ignoreLabel: string | null;
 }
 
 /** 방치 지표 (GET /ops/neglect) */
@@ -3071,7 +3083,79 @@ export interface NeglectReportDto {
   largestGapDays: number | null;
   /** 방치로 보는 기준 (일) */
   neglectAfterDays: number;
+  /** 지금 무시 중인 건수 — **방치 건수에서 빼지 않는다** (TASK-4301) */
+  ignoredCount: number;
+  /** 검토일이 지나 무시가 풀린 건수 */
+  overdueCount: number;
+  /** 검토일 상한 (일) — 무기한 무시는 없다 */
+  maxIgnoreDays: number;
   detail: string;
+}
+
+/** 방치 무시 결정 1건 (CTO 정책 4301-③) */
+export interface NeglectDecisionDto {
+  id: string;
+  checkId: string;
+  tier: string;
+  reason: string;
+  owner: string;
+  reviewAt: string;
+  decidedAt: string;
+  decidedById: string | null;
+  revokedAt: string | null;
+  /** 지금 효력이 있는가 */
+  active: boolean;
+  /** 검토일이 지났는가 — 그러면 경보가 되돌아온다 */
+  reviewOverdue: boolean;
+}
+
+/** 트래픽에서 관측한 호스트 (CTO 정책 4301-①) */
+export interface HostSightingDto {
+  host: string;
+  requests: number;
+  firstSeenAt: string;
+  lastSeenAt: string;
+}
+
+/** 트래픽 호스트 관측 (GET /ops/hosts) */
+export interface HostDiscoveryDto {
+  sightings: HostSightingDto[];
+  /** 서로 다른 호스트 수 */
+  distinct: number;
+  /**
+   * 상한을 넘겨 더 담지 못했는가 — `true`면 이 관측은 불완전하고,
+   * "목록에 없는 호스트 0개"라고 말하면 안 된다.
+   */
+  overflowed: boolean;
+  detail: string;
+}
+
+/** 운영 준비 화면의 칸 1개 (CTO 정책 4301-④) */
+export interface ReadinessTileDto {
+  id: string;
+  title: string;
+  /** ok | warn | fail | unknown | blocked */
+  status: string;
+  detail: string;
+  /** 이 값을 말한 판정 — 어긋나면 숨길 수 없게 */
+  source: string;
+  next: string | null;
+}
+
+/** Production Readiness Dashboard (GET /ops/readiness) */
+export interface ReadinessBoardDto {
+  tiles: ReadinessTileDto[];
+  /** 준비 단계 판정에서 그대로 가져온 값 */
+  steps: { done: number; total: number };
+  readiness: string;
+  blockers: string[];
+  /** 확인하지 못한 칸 — **초록으로 세지 않는다** */
+  unknowns: string[];
+  fail: number;
+  warn: number;
+  tier: string;
+  detail: string;
+  checkedAt: string;
 }
 
 /** 프로젝트 1건의 비용 (CTO 정책 4201-④) */
@@ -3100,6 +3184,16 @@ export interface ProjectCostDto {
   unattributedCalls: number;
   /** 귀속률(%) — 표본이 없으면 null */
   coverage: number | null;
+  /**
+   * 지금 들어오는 기록의 귀속률(%) — 표본이 없으면 null (TASK-4301).
+   * 전체 창은 옛 기록 때문에 영원히 낮으므로 둘 다 낸다.
+   */
+  recentCoverage: number | null;
+  recentCalls: number;
+  recentWindowHours: number;
+  /** 프로젝트가 있을 수 없는 호출(개발용) — 미배분과 다르다 */
+  unattributable: number;
+  unattributableCalls: number;
   windowDays: number;
   detail: string;
   /** 이 숫자를 어떻게 읽어야 하는지 — 항상 붙는다 */

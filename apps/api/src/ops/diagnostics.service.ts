@@ -22,6 +22,7 @@ import type {
   DiagnosticRunRecord,
   DiagnosticStage,
   HostVerificationReport,
+  HostDiscoveryReport,
   ObservedHost,
   ValidationTargetJudgement,
 } from "@acos/core";
@@ -31,6 +32,7 @@ import type {
   DiagnosticRunDto,
 } from "@acos/shared";
 import { PrismaService } from "../prisma/prisma.service";
+import { HostDiscoveryService } from "./host-discovery.service";
 import { StorageService } from "../storage/storage.service";
 import { MigrationGovernanceService } from "./migration-governance.service";
 import { NotificationService } from "./notification.service";
@@ -59,6 +61,7 @@ export class DiagnosticsService implements OnApplicationBootstrap {
     private readonly migrations: MigrationGovernanceService,
     private readonly cutover: ProductionCutoverService,
     private readonly notifications: NotificationService,
+    private readonly discovery: HostDiscoveryService,
   ) {}
 
   /**
@@ -100,7 +103,10 @@ export class DiagnosticsService implements OnApplicationBootstrap {
    * 그건 우리 운영 도메인이 아니라 남의 서비스 주소입니다. 그것을 목록에
    * 넣으라고 권하면 검증 대상 보호가 엉뚱한 것을 막게 됩니다.
    */
-  hosts(): HostVerificationReport {
+  async hosts(now = Date.now()): Promise<{
+    report: HostVerificationReport;
+    discovery: HostDiscoveryReport;
+  }> {
     const env = process.env as Record<string, string | undefined>;
     const observed: ObservedHost[] = [];
     const add = (raw: string | undefined, source: string): void => {
@@ -113,11 +119,19 @@ export class DiagnosticsService implements OnApplicationBootstrap {
     add(env.NEXT_PUBLIC_API_URL, "NEXT_PUBLIC_API_URL");
     add(env.S3_PUBLIC_URL, "S3_PUBLIC_URL");
 
-    return verifyProductionHosts({
-      declared: parseHostList(env.PRODUCTION_HOSTS),
-      observed,
-      tier: this.tier(),
-    });
+    // 운영 트래픽에서 본 호스트 (TASK-4301, 정책 4301-①) — 설정값에는 없는
+    // 별칭 도메인은 이 경로로만 보입니다. 관측일 뿐이며 자동으로 목록에
+    // 들어가지 않습니다.
+    const discovery = await this.discovery.report(this.tier(), now);
+
+    return {
+      report: verifyProductionHosts({
+        declared: parseHostList(env.PRODUCTION_HOSTS),
+        observed: [...observed, ...discovery.observed],
+        tier: this.tier(),
+      }),
+      discovery,
+    };
   }
 
   /** 검증 대상 판정 (CTO 정책 4101-①) */
@@ -159,6 +173,20 @@ export class DiagnosticsService implements OnApplicationBootstrap {
       (schedule) => schedule.enabled,
     );
 
+    // 설정값 관측 + 트래픽 관측을 **한 곳에서** 만든다 — 진단과 /ops/hosts가
+    // 다른 관측을 쓰면 같은 값을 두고 두 화면이 다른 말을 하게 된다
+    const hostObservation = tierPolicy(tier).requiresOperationalConfig
+      ? (await this.hosts(now)).report.findings
+          .filter((row) => row.verdict !== "unseen")
+          .flatMap((row) =>
+            row.sources.map((source) => ({
+              host: row.host,
+              source,
+              fromTraffic: source.startsWith("운영 트래픽"),
+            })),
+          )
+      : [];
+
     const report = runDiagnostics({
       stage,
       tier,
@@ -178,15 +206,7 @@ export class DiagnosticsService implements OnApplicationBootstrap {
       hosts: tierPolicy(tier).requiresOperationalConfig
         ? {
             declared: parseHostList(env.PRODUCTION_HOSTS),
-            observed: this.hosts().findings
-              .filter((row) => row.verdict !== "unseen")
-              .flatMap((row) =>
-                row.sources.map((source) => ({
-                  host: row.host,
-                  source,
-                  fromTraffic: false,
-                })),
-              ),
+            observed: hostObservation,
           }
         : null,
       env,

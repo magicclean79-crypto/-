@@ -19,6 +19,7 @@ function blank(overrides: Partial<ValidationPlanInput> = {}): ValidationPlanInpu
     urgentChannelConfigured: false,
     stagingTarget: { url: null, usable: false, detail: "검증 대상이 아직 정해지지 않았습니다." },
     kpiSnapshots: 0,
+    kpiSnapshotSpanMs: null,
     lastDrillAt: null,
     hosts: { declared: 0, undeclared: 0 },
     now: NOW,

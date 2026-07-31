@@ -30,6 +30,9 @@ import { DraftRevivalService } from "./draft-revival.service";
 import { ValidationRunService } from "./validation-run.service";
 import { NeglectService } from "./neglect.service";
 import { ProjectCostService } from "./project-cost.service";
+import { HostDiscoveryService, HostObserverMiddleware } from "./host-discovery.service";
+import { AppModule } from "../app.module";
+import { ReadinessBoardService } from "./readiness-board.service";
 import { AdminSettingsService } from "../admin/admin-settings.service";
 import { RequestContextService } from "../common/request-context.service";
 import { PriceSourceService } from "../pricing/price-source.service";
@@ -122,6 +125,9 @@ function createPrismaStub() {
   const adminAudit: Record<string, unknown>[] = [];
   // TASK-4101 — 진단 이력
   const diagnosticRuns: Record<string, unknown>[] = [];
+  // TASK-4301 — 트래픽 호스트 관측 · 방치 무시 결정
+  const observedHosts: Record<string, unknown>[] = [];
+  const neglectDecisions: Record<string, unknown>[] = [];
   const opsAudit: Record<string, unknown>[] = [];
   const deliveries: {
     id: string;
@@ -210,6 +216,8 @@ function createPrismaStub() {
     /** 어느 프로젝트가 썼는가 (TASK-4201) — null은 "모른다"다 */
     projectId?: string | null;
     diagnostic?: boolean;
+    /** 호출 기능 (TASK-4301, 정책 4301-②) — `dev`는 프로젝트가 있을 수 없다 */
+    feature?: string | null;
   }[] = [];
   const ocrResults: {
     provider: string;
@@ -457,6 +465,7 @@ function createPrismaStub() {
     restores,
     drills,
     requirements,
+    kpiSnapshots,
     stub: {
       alert: {
         // 운영 KPI가 활성 경보·창 안 발생을 센다 (TASK-3801)
@@ -982,6 +991,78 @@ function createPrismaStub() {
             kpiSnapshots.map((row) => (row.takenAt as Date).getTime()),
           );
           return [...stamps].map((takenAt) => ({ takenAt: new Date(takenAt) }));
+        },
+      },
+      // 트래픽 호스트 관측 (TASK-4301, 정책 4301-①) — **관측일 뿐 허가가 아니다**
+      observedHost: {
+        findMany: async (args?: { where?: { tier?: string } }) =>
+          observedHosts
+            .filter(
+              (row) => args?.where?.tier === undefined || row.tier === args.where.tier,
+            )
+            .map((row) => ({ ...row })),
+        upsert: async (args: {
+          where: { tier_host: { tier: string; host: string } };
+          create: Record<string, unknown>;
+          update: { requests?: { increment?: number }; lastSeenAt?: Date };
+        }) => {
+          const found = observedHosts.find(
+            (row) =>
+              row.tier === args.where.tier_host.tier &&
+              row.host === args.where.tier_host.host,
+          );
+          if (found === undefined) {
+            seq += 1;
+            const created = { id: `host-${seq}`, ...args.create };
+            observedHosts.push(created);
+            return { ...created };
+          }
+          found.requests =
+            (found.requests as number) + (args.update.requests?.increment ?? 0);
+          if (args.update.lastSeenAt !== undefined) {
+            found.lastSeenAt = args.update.lastSeenAt;
+          }
+          return { ...found };
+        },
+      },
+      // 방치 무시 결정 (TASK-4301, 정책 4301-③) — 취소해도 행은 남는다
+      neglectDecision: {
+        findMany: async (args?: {
+          where?: { tier?: string; revokedAt?: null };
+        }) =>
+          neglectDecisions
+            .filter(
+              (row) =>
+                (args?.where?.tier === undefined || row.tier === args.where.tier) &&
+                (args?.where?.revokedAt === undefined || row.revokedAt === null),
+            )
+            .map((row) => ({ ...row })),
+        create: async (args: { data: Record<string, unknown> }) => {
+          seq += 1;
+          const created = {
+            id: `ignore-${seq}`,
+            revokedAt: null,
+            revokedById: null,
+            ...args.data,
+          };
+          neglectDecisions.push(created);
+          return { ...created };
+        },
+        updateMany: async (args: {
+          where: { id?: string; tier?: string; checkId?: string; revokedAt?: null };
+          data: Record<string, unknown>;
+        }) => {
+          let count = 0;
+          for (const row of neglectDecisions) {
+            if (args.where.id !== undefined && row.id !== args.where.id) continue;
+            if (args.where.tier !== undefined && row.tier !== args.where.tier) continue;
+            if (args.where.checkId !== undefined && row.checkId !== args.where.checkId)
+              continue;
+            if (args.where.revokedAt === null && row.revokedAt !== null) continue;
+            Object.assign(row, args.data);
+            count += 1;
+          }
+          return { count };
         },
       },
       // 진단 이력 (TASK-4101, 정책 4101-②) — **같은 tier·stage끼리만 비교한다**
@@ -1728,6 +1809,8 @@ async function build(overrides: Overrides = {}) {
       // 스텁으로 검증되지 않는다.
       NeglectService,
       ProjectCostService,
+      HostDiscoveryService,
+      ReadinessBoardService,
       {
         // 운영 설정 저장소 — 테스트가 값을 정한다
         provide: AdminSettingsService,
@@ -8271,6 +8354,359 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
         await request(built.app.getHttpServer() as never)
           .get("/ops/cost/projects")
           .expect(401);
+      });
+    });
+  });
+
+  describe("Production Readiness Platform (TASK-4301)", () => {
+    const admin = (server: unknown, path: string) =>
+      request(server as never).get(path).set("Authorization", "Bearer tok-admin");
+
+    const post = (server: unknown, path: string) =>
+      request(server as never).post(path).set("Authorization", "Bearer tok-admin");
+
+    describe("운영 트래픽 호스트 관측 (정책 4301-①)", () => {
+      /**
+       * 설정값만 보면 리버스 프록시 뒤의 별칭 도메인이 보이지 않는다 —
+       * 사용자는 그 주소로 들어오는데 우리 설정 어디에도 그 이름이 없다.
+       */
+      it("요청의 Host를 관측해 목록에 없는 호스트를 찾아낸다", async () => {
+        process.env.DEPLOY_TIER = "staging";
+        process.env.PRODUCTION_HOSTS = "acos.example";
+        process.env.PUBLIC_BASE_URL = "https://acos.example";
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        // 별칭 도메인으로 들어온 요청 — 설정값에는 없는 이름이다.
+        // (미들웨어가 붙어 있는지는 아래 "미들웨어 배선" 검사가 따로 본다)
+        built.app.get(HostDiscoveryService).observe("m.acos.example");
+        await post(server, "/ops/checks/run?job=daily-diagnostics").expect(200);
+
+        const response = await admin(server, "/ops/hosts").expect(200);
+        const found = response.body.findings.find(
+          (row: { host: string }) => row.host === "m.acos.example",
+        );
+        expect(found.verdict).toBe("undeclared");
+        expect(found.sources.join(" ")).toContain("운영 트래픽");
+      });
+
+      /**
+       * Host 헤더는 요청하는 쪽이 적는 값이다 — 자동 등록하면 바깥에서 우리
+       * 보호 목록에 글을 쓰는 것이 된다.
+       */
+      it("관측했다고 운영 호스트 목록에 넣지 않는다", async () => {
+        process.env.DEPLOY_TIER = "staging";
+        process.env.PRODUCTION_HOSTS = "acos.example";
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        built.app.get(HostDiscoveryService).observe("attacker.example");
+        await post(server, "/ops/checks/run?job=daily-diagnostics").expect(200);
+
+        const response = await admin(server, "/ops/hosts").expect(200);
+        // 선언된 수는 그대로다 — 목록은 사람만 바꾼다
+        expect(response.body.declared).toBe(1);
+        expect(response.body.discovery.detail).toContain("허가가 아닙니다");
+      });
+
+      it("관측을 저장해도 호스트 목록 자체는 바뀌지 않는다고 점검 기록에 적는다", async () => {
+        process.env.DEPLOY_TIER = "staging";
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        const response = await post(
+          server,
+          "/ops/checks/run?job=daily-diagnostics",
+        ).expect(200);
+        expect(response.body[0].detail).toContain("목록은 바꾸지 않습니다");
+      });
+
+      /**
+       * TASK-4201에서 겪은 결함: 함수도 시험도 화면도 정상인데 **부르는 곳만**
+       * 없었다. 단위 시험은 함수를 직접 부르므로 전부 초록이었다. 그래서
+       * 이번에는 배선 자체를 검사한다.
+       */
+      it("요청마다 Host를 담는 미들웨어가 실제로 붙어 있다", () => {
+        const applied: unknown[] = [];
+        const consumer = {
+          apply: (...middleware: unknown[]) => {
+            applied.push(...middleware);
+            return { forRoutes: () => undefined };
+          },
+        };
+        new AppModule().configure(consumer as never);
+        expect(applied).toContain(HostObserverMiddleware);
+      });
+    });
+
+    describe("실행 경로 프로젝트 귀속 (정책 4301-②)", () => {
+      /**
+       * 이 값은 이미 호출 지점까지 와 있었는데 기록에는 안 남고 있었다 —
+       * 그래서 비용표의 귀속률이 0에 가까웠다.
+       */
+      it("개발용 호출은 귀속 대상에서 빼되 합계에는 남긴다", async () => {
+        const built = await build();
+        app = built.app;
+        built.prisma.executions.push(
+          {
+            provider: "openai",
+            model: "gpt-4o",
+            status: "SUCCESS",
+            cost: 2,
+            createdAt: new Date(),
+            projectId: "proj-1",
+            diagnostic: false,
+            feature: "content-generation",
+          },
+          {
+            provider: "openai",
+            model: "gpt-4o",
+            status: "SUCCESS",
+            cost: 3,
+            createdAt: new Date(),
+            projectId: null,
+            diagnostic: false,
+            feature: "dev",
+          },
+        );
+
+        const response = await admin(
+          built.app.getHttpServer(),
+          "/ops/cost/projects",
+        ).expect(200);
+        expect(response.body.coverage).toBe(100);
+        expect(response.body.unattributableCalls).toBe(1);
+        expect(response.body.total).toBe(5);
+      });
+
+      /**
+       * 표본이 0인데 100%로 적으면 아무 호출도 없는 환경이 가장 잘한 환경이
+       * 된다.
+       */
+      it("최근 창에 표본이 없으면 지금 귀속률을 잴 수 없다고 말한다", async () => {
+        const built = await build();
+        app = built.app;
+        built.prisma.executions.push({
+          provider: "openai",
+          model: "gpt-4o",
+          status: "SUCCESS",
+          cost: 1,
+          createdAt: new Date(Date.now() - 10 * 86_400_000),
+          projectId: "proj-1",
+          diagnostic: false,
+          feature: "content-generation",
+        });
+
+        const response = await admin(
+          built.app.getHttpServer(),
+          "/ops/cost/projects",
+        ).expect(200);
+        expect(response.body.recentCoverage).toBeNull();
+        expect(response.body.detail).toContain("잴 수 없습니다");
+      });
+    });
+
+    describe("방치 무시 (정책 4301-③)", () => {
+      const future = (days: number) =>
+        new Date(Date.now() + days * 86_400_000).toISOString();
+
+      it("사유·담당자·검토일이 있어야 무시할 수 있다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        await post(server, "/ops/neglect/storage/ignore")
+          .send({ reason: "짧음", owner: "김운영", reviewAt: future(10) })
+          .expect(400);
+        await post(server, "/ops/neglect/storage/ignore")
+          .send({ reason: "다음 분기 계획에 잡혀 있습니다", owner: "", reviewAt: future(10) })
+          .expect(400);
+        await post(server, "/ops/neglect/storage/ignore")
+          .send({ reason: "다음 분기 계획에 잡혀 있습니다", owner: "김운영" })
+          .expect(400);
+      });
+
+      /**
+       * 무기한 무시는 "안 고치기로 했다"를 기록하는 것이 아니라 잊는 것이다.
+       */
+      it("검토일이 상한을 넘으면 거절한다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await post(
+          built.app.getHttpServer(),
+          "/ops/neglect/storage/ignore",
+        )
+          .send({
+            reason: "다음 분기 계획에 잡혀 있습니다",
+            owner: "김운영",
+            reviewAt: future(200),
+          })
+          .expect(400);
+        expect(response.body.message).toContain("잊는 것이고");
+      });
+
+      it("무시해도 목록에서 사라지지 않고 방치 건수에서도 빠지지 않는다", async () => {
+        // 운영 호스트 목록을 비워 두면 진단이 실패를 하나 낸다 — 그래야
+        // 무시할 대상이 생긴다
+        process.env.DEPLOY_TIER = "staging";
+        delete process.env.PRODUCTION_HOSTS;
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+        await post(server, "/ops/checks/run?job=daily-diagnostics").expect(200);
+
+        const before = await admin(server, "/ops/neglect").expect(200);
+        const target = before.body.streaks[0];
+        expect(target).toBeDefined();
+
+        await post(server, `/ops/neglect/${target.id}/ignore`)
+          .send({
+            reason: "자격 증명이 오기 전에는 고칠 수 없습니다",
+            owner: "김운영",
+            reviewAt: future(20),
+          })
+          .expect(200);
+
+        const after = await admin(server, "/ops/neglect").expect(200);
+        const row = after.body.streaks.find(
+          (item: { id: string }) => item.id === target.id,
+        );
+        expect(after.body.streaks).toHaveLength(before.body.streaks.length);
+        expect(row.ignored).toBe(true);
+        expect(row.ignoreOwner).toBe("김운영");
+        expect(row.ignoreLabel).toContain("무시 중");
+        expect(after.body.ignoredCount).toBe(1);
+        expect(after.body.detail).toContain("방치 건수에서 빼지");
+      });
+
+      it("무시를 취소하면 행은 남고 취소 기록이 붙는다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        const created = await post(server, "/ops/neglect/storage/ignore")
+          .send({
+            reason: "자격 증명이 오기 전에는 고칠 수 없습니다",
+            owner: "김운영",
+            reviewAt: future(20),
+          })
+          .expect(200);
+
+        await post(server, `/ops/neglect/ignores/${created.body.id}/revoke`).expect(200);
+        const list = await admin(server, "/ops/neglect/ignores").expect(200);
+        const row = list.body.find(
+          (item: { id: string }) => item.id === created.body.id,
+        );
+        expect(row.revokedAt).not.toBeNull();
+        expect(row.active).toBe(false);
+      });
+
+      it("무시와 취소는 감사 기록에 이름이 붙는다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        const created = await post(server, "/ops/neglect/storage/ignore")
+          .send({
+            reason: "자격 증명이 오기 전에는 고칠 수 없습니다",
+            owner: "김운영",
+            reviewAt: future(20),
+          })
+          .expect(200);
+        await post(server, `/ops/neglect/ignores/${created.body.id}/revoke`).expect(200);
+
+        const audit = await admin(server, "/ops/audit").expect(200);
+        const actions = audit.body.map((row: { action: string }) => row.action);
+        expect(actions).toContain("neglect.ignore");
+        expect(actions).toContain("neglect.ignore-revoke");
+      });
+
+      it("ADMIN 전용이다", async () => {
+        const built = await build();
+        app = built.app;
+        await request(built.app.getHttpServer() as never)
+          .post("/ops/neglect/storage/ignore")
+          .send({ reason: "x", owner: "y", reviewAt: future(1) })
+          .expect(401);
+      });
+    });
+
+    describe("Production Readiness Dashboard (정책 4301-④)", () => {
+      it("여섯 판정을 모으고 각 칸이 출처를 달고 있다", async () => {
+        process.env.DEPLOY_TIER = "staging";
+        const built = await build();
+        app = built.app;
+
+        const response = await admin(
+          built.app.getHttpServer(),
+          "/ops/readiness-board",
+        ).expect(200);
+        expect(response.body.tiles.length).toBeGreaterThanOrEqual(7);
+        for (const tile of response.body.tiles) {
+          expect(tile.source).toMatch(/^GET \/ops\//);
+        }
+      });
+
+      /**
+       * 대시보드가 자기 점수를 계산하면 같은 사실에 두 개의 답이 생기고,
+       * 어긋나는 순간 사람은 둘 다 안 믿는다 (TASK-4101 라이브 결함).
+       */
+      it("준비 단계의 분모를 그대로 쓴다 — 새로 계산하지 않는다", async () => {
+        process.env.DEPLOY_TIER = "staging";
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        const [board, plan] = await Promise.all([
+          admin(server, "/ops/readiness-board").expect(200),
+          admin(server, "/ops/validation-plan").expect(200),
+        ]);
+        expect(board.body.steps).toEqual({ done: plan.body.done, total: plan.body.total });
+        expect(board.body.readiness).toBe(plan.body.readiness);
+        expect(board.body.detail).toContain("인용만 합니다");
+      });
+
+      it("ADMIN 전용이다", async () => {
+        const built = await build();
+        app = built.app;
+        await request(built.app.getHttpServer() as never)
+          .get("/ops/readiness-board")
+          .expect(401);
+      });
+    });
+
+    describe("검증 환경 최종 준비 (정책 4301-⑤⑥)", () => {
+      /**
+       * 두 점을 몇 분 간격으로 찍어 이 단계를 통과시킬 수 있다면, 그 초록은
+       * 기준선이 아니라 우리가 산 것이다.
+       */
+      it("스냅샷 두 점이 너무 가까우면 기준선으로 세지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        // 두 점을 한 시간 간격으로 심는다 — 개수만 보면 통과할 상태다
+        built.prisma.kpiSnapshots.push(
+          { id: "snap-a", metric: "publish-rate", value: 1, takenAt: new Date(Date.now() - 3_600_000) },
+          { id: "snap-b", metric: "publish-rate", value: 1, takenAt: new Date() },
+        );
+
+        const response = await admin(server, "/ops/validation-plan").expect(200);
+        const step = response.body.steps.find(
+          (row: { id: string }) => row.id === "baseline",
+        );
+        expect(step.status).toBe("pending");
+        expect(step.detail).toContain("초록을 산 것");
+      });
+
+      it("실행 잠금은 그대로 유지된다", async () => {
+        process.env.DEPLOY_TIER = "staging";
+        const built = await build();
+        app = built.app;
+        await post(built.app.getHttpServer(), "/ops/validation-run").expect(403);
       });
     });
   });

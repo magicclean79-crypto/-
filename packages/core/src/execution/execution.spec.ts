@@ -110,7 +110,32 @@ describe("ExecutionTracker", () => {
       // 요청 추적 해석기를 주지 않으면 남지 않는다 (TASK-3601, 정책 3601-②)
       requestId: null,
       traceId: null,
+      // 프로젝트는 부르는 쪽이 알려 준다 (TASK-4301, 정책 4301-②) —
+      // 안 알려 주면 null이며 null은 "공용"이 아니라 "모른다"다
+      projectId: null,
     });
+  });
+
+  /**
+   * 이 값은 이미 호출 지점까지 와 있었는데 기록에는 안 남고 있었다 —
+   * 그래서 비용표의 귀속률이 0에 가까웠다 (TASK-4301, 정책 4301-②).
+   */
+  it("부르는 쪽이 프로젝트를 알려 주면 기록에 남는다", async () => {
+    const store = new InMemoryExecutionStore();
+    const tracker = new ExecutionTracker(store, { now: fakeClock() });
+
+    await tracker.track(
+      "product-analysis",
+      { provider: "mock", model: "mock-llm-1" },
+      async () => ({
+        provider: "mock",
+        model: "mock-llm-1",
+        usage: { inputTokens: 10, outputTokens: 5 },
+      }),
+      { projectId: "proj-1" },
+    );
+
+    expect(store.entries[0].projectId).toBe("proj-1");
   });
 
   it("진단 호출은 diagnostic=true로 기록된다 (CTO 결정 1301-③)", async () => {

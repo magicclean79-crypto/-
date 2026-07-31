@@ -30,6 +30,34 @@
  * 섞이고, 그러면 어느 쪽을 고쳐야 하는지 알 수 없습니다.
  */
 
+/**
+ * 프로젝트가 있을 수 없는 호출 기능 (TASK-4301, 정책 4301-②).
+ *
+ * `dev`는 개발용 API(`POST /llm/complete`)입니다 — 프로젝트 맥락 없이
+ * 부르는 호출이라 **애초에 주인이 없습니다.** 이것을 "귀속 누락"으로 세면
+ * 귀속률은 아무리 배선을 고쳐도 100%에 닿지 않고, **닿지 않는 지표는 곧
+ * 아무도 안 봅니다.** 그래서 "주인을 못 찾은 것"과 "주인이 없는 것"을
+ * 가릅니다 — 미산정과 미배분을 가른 것과 같은 이유입니다.
+ *
+ * 다만 **금액에서는 빼지 않습니다.** 청구서의 합계는 이것을 포함해야
+ * 합니다.
+ */
+export const UNATTRIBUTABLE_FEATURES = ["dev"] as const;
+
+/**
+ * 이 호출에 프로젝트가 있어야 하는가.
+ *
+ * **모르면 `true`입니다** — 기능을 모르는 기록을 "주인이 없는 것"으로
+ * 옮기면 귀속률이 저절로 좋아집니다. 모르는 것을 좋은 쪽으로 세지 않는다는
+ * 규칙은 여기서도 같습니다.
+ */
+export function isAttributableFeature(feature: string | null): boolean {
+  return (
+    feature === null ||
+    !(UNATTRIBUTABLE_FEATURES as readonly string[]).includes(feature)
+  );
+}
+
 /** 집계 입력 한 줄 — 실행 기록 하나 */
 export interface CostRecord {
   /** 프로젝트 id — 모르면 null (**공용이라는 뜻이 아니다**) */
@@ -39,6 +67,14 @@ export interface CostRecord {
   cost: number | null;
   /** 이 호출이 진단·스모크였는가 — 프로젝트 비용이 아니다 */
   diagnostic: boolean;
+  /**
+   * 호출 기능 (TASK-4301). OCR처럼 기능 구분이 없으면 null이며, null은
+   * **프로젝트가 있어야 하는 호출**로 봅니다 — 모르는 것을 "주인이 없는
+   * 것"으로 옮기면 귀속률이 저절로 좋아집니다.
+   */
+  feature?: string | null;
+  /** 언제 만들어진 기록인가 (ms) — 최근 창 귀속률을 내는 데 쓴다 */
+  at?: number;
 }
 
 export interface ProjectCostRow {
@@ -63,6 +99,13 @@ export interface ProjectCostReport {
   unattributed: number;
   /** 진단·스모크 — 애초에 프로젝트 비용이 아니다 */
   diagnostic: number;
+  /**
+   * 프로젝트가 있을 수 없는 호출(개발용 API)의 금액 (TASK-4301).
+   * **미배분과 다릅니다** — 이것은 누락이 아니라 원래 주인이 없는 것입니다.
+   * 그래서 귀속률의 분모에서 빼지만, **합계에서는 빼지 않습니다.**
+   */
+  unattributable: number;
+  unattributableCalls: number;
   total: number;
   /** 금액을 모르는 호출 수 (미배분과 다른 문제다) */
   unpricedCalls: number;
@@ -70,6 +113,21 @@ export interface ProjectCostReport {
   unattributedCalls: number;
   /** 귀속 비율 — 전체 호출이 0이면 null */
   coverage: number | null;
+  /**
+   * 최근 창의 귀속률 (TASK-4301, 정책 4301-②).
+   *
+   * 전체 창의 귀속률은 **옛 기록 때문에 영원히 낮습니다** — 귀속 배선을
+   * 오늘 고쳐도 지난 30일의 null은 그대로입니다. 그 숫자만 보면 고친 것이
+   * 보이지 않고, 이 숫자만 보면 청구서가 틀렸다는 사실이 가려집니다.
+   * **그래서 둘 다 냅니다.**
+   *
+   * 표본이 없으면 `null`입니다 — 0건을 100%로 계산하면 아무 호출도 없는
+   * 환경이 가장 잘한 환경이 됩니다.
+   */
+  recentCoverage: number | null;
+  /** 최근 창에서 귀속 대상이었던 호출 수 */
+  recentCalls: number;
+  recentWindowHours: number;
   windowDays: number;
   detail: string;
   /** 이 숫자를 어떻게 읽어야 하는지 (항상 붙는다) */
@@ -90,14 +148,25 @@ export function summarizeProjectCost(input: {
   records: CostRecord[];
   names: Record<string, string>;
   windowDays: number;
+  /** 최근 창 (기본 24시간) — 지금 들어오는 기록의 귀속률을 따로 본다 */
+  recentWindowHours?: number;
+  now?: number;
 }): ProjectCostReport {
   const byProject = new Map<string, { cost: number; calls: number; unpriced: number }>();
   let unattributed = 0;
   let unattributedCalls = 0;
   let diagnostic = 0;
+  let unattributable = 0;
+  let unattributableCalls = 0;
   let unpricedCalls = 0;
   let attributed = 0;
   let projectCalls = 0;
+  let recentCalls = 0;
+  let recentAttributed = 0;
+
+  const recentWindowHours = input.recentWindowHours ?? 24;
+  const recentSince =
+    input.now === undefined ? null : input.now - recentWindowHours * 3_600_000;
 
   for (const row of input.records) {
     const amount = row.cost ?? 0;
@@ -109,6 +178,25 @@ export function summarizeProjectCost(input: {
       // 진단·스모크는 프로젝트 비용이 아니다 — 미배분과도 다르다
       diagnostic += amount;
       continue;
+    }
+
+    if (!isAttributableFeature(row.feature ?? null)) {
+      // **주인이 없는 것**은 주인을 못 찾은 것과 다르다 (TASK-4301).
+      // 금액에는 그대로 들어가고, 귀속률의 분모에서만 빠진다.
+      unattributable += amount;
+      unattributableCalls += 1;
+      continue;
+    }
+
+    // 최근 창은 **귀속 대상 호출만** 센다 — 개발용 호출을 넣으면 최근
+    // 귀속률이 배선과 무관하게 흔들린다
+    const inRecent =
+      recentSince !== null && row.at !== undefined && row.at >= recentSince;
+    if (inRecent) {
+      recentCalls += 1;
+      if (row.projectId !== null) {
+        recentAttributed += 1;
+      }
     }
 
     if (row.projectId === null) {
@@ -129,8 +217,9 @@ export function summarizeProjectCost(input: {
   }
 
   // **미배분을 포함한 전체**가 분모다 — 빼고 나누면 각 프로젝트의 몫이
-  // 실제보다 커 보인다
-  const total = round(attributed + unattributed + diagnostic);
+  // 실제보다 커 보인다. 주인이 없는 호출(개발용)도 청구서에는 들어가므로
+  // 합계에서 빼지 않는다.
+  const total = round(attributed + unattributed + diagnostic + unattributable);
 
   const rows: ProjectCostRow[] = [...byProject.entries()]
     .map(([projectId, bucket]) => ({
@@ -146,6 +235,10 @@ export function summarizeProjectCost(input: {
   const totalCalls = projectCalls + unattributedCalls;
   const coverage =
     totalCalls === 0 ? null : Math.round((projectCalls / totalCalls) * 1000) / 10;
+  // **표본이 0이면 100%가 아니라 "잴 수 없음"이다** — 아무 호출도 없는
+  // 환경이 가장 잘한 환경으로 보이면 안 된다
+  const recentCoverage =
+    recentCalls === 0 ? null : Math.round((recentAttributed / recentCalls) * 1000) / 10;
 
   const parts: string[] = [
     `최근 ${input.windowDays}일 · 프로젝트 ${rows.length}개에 ` +
@@ -174,6 +267,26 @@ export function summarizeProjectCost(input: {
         "다른 문제입니다.",
     );
   }
+  if (unattributableCalls > 0) {
+    parts.push(
+      `개발용 호출 ${unattributableCalls}건($${round(unattributable).toFixed(6)})은 ` +
+        "프로젝트가 있을 수 없는 호출이라 귀속률에서 뺐습니다 — 다만 " +
+        "합계에는 그대로 들어 있습니다. 주인을 못 찾은 것과 주인이 없는 " +
+        "것은 다릅니다.",
+    );
+  }
+  if (recentCoverage !== null && coverage !== null && recentCoverage > coverage) {
+    parts.push(
+      `최근 ${recentWindowHours}시간에 들어온 기록의 귀속률은 ` +
+        `${recentCoverage}%입니다(${recentCalls}건 기준) — 지난 기록은 ` +
+        "고칠 수 없으므로 전체 귀속률은 천천히 따라옵니다.",
+    );
+  } else if (recentCoverage === null) {
+    parts.push(
+      `최근 ${recentWindowHours}시간에는 귀속 대상 호출이 없어 지금 ` +
+        "들어오는 기록의 귀속률을 잴 수 없습니다.",
+    );
+  }
   if (rows.length === 0 && unattributedCalls === 0 && diagnostic === 0) {
     parts.push("이 기간에 과금된 호출이 없습니다.");
   }
@@ -183,10 +296,15 @@ export function summarizeProjectCost(input: {
     attributed: round(attributed),
     unattributed: round(unattributed),
     diagnostic: round(diagnostic),
+    unattributable: round(unattributable),
+    unattributableCalls,
     total,
     unpricedCalls,
     unattributedCalls,
     coverage,
+    recentCoverage,
+    recentCalls,
+    recentWindowHours,
     windowDays: input.windowDays,
     detail: parts.join(" "),
     caveat:
@@ -218,10 +336,21 @@ export function detectAttributionAlerts(
   title: string;
   message: string;
 }[] {
-  if (!input.alerting || report.coverage === null) {
+  if (!input.alerting) {
     return [];
   }
-  if (report.coverage >= input.minCoverage) {
+  /**
+   * **최근 창을 봅니다** (TASK-4301에서 바꿈).
+   *
+   * 전체 창의 귀속률은 옛 기록 때문에 몇 주 동안 낮게 남습니다. 그것으로
+   * 매일 경보하면, 배선을 이미 고쳤는데도 같은 경보가 계속 오고 **그 경보는
+   * 곧 무시됩니다.** 여기서 알리고 싶은 것은 "지금 들어오는 기록이 주인
+   * 없이 쌓이고 있다"이고, 그것은 고칠 수 있는 사실입니다.
+   *
+   * 잴 수 없으면(표본 0) 경보하지 않습니다 — 다만 보고서는 잴 수 없다고
+   * 말합니다. 모르는 것을 통과로 적지 않되, 모른다고 울리지도 않습니다.
+   */
+  if (report.recentCoverage === null || report.recentCoverage >= input.minCoverage) {
     return [];
   }
   return [
@@ -230,12 +359,14 @@ export function detectAttributionAlerts(
       key: "cost-attribution:coverage",
       // 차단이 아니다 — 비용은 계속 나가고, 우리가 모르는 것은 표의 정확도다
       level: "warning",
-      title: `프로젝트 비용 귀속률 ${report.coverage}%`,
+      title: `프로젝트 비용 귀속률 ${report.recentCoverage}% (최근 ${report.recentWindowHours}시간)`,
       message:
-        `최근 ${report.windowDays}일 과금 호출 중 ${report.coverage}%만 ` +
-        `프로젝트에 귀속됐습니다(미귀속 ${report.unattributedCalls}건 · ` +
-        `$${report.unattributed.toFixed(6)}). 미귀속 금액을 프로젝트에 나눠 ` +
-        "얹지 않으므로, 지금 이 표로 비용을 청구하면 실제보다 적게 " +
+        `최근 ${report.recentWindowHours}시간에 들어온 귀속 대상 호출 ` +
+        `${report.recentCalls}건 중 ${report.recentCoverage}%만 프로젝트에 ` +
+        `귀속됐습니다. 최근 ${report.windowDays}일 전체로는 ` +
+        `${report.coverage ?? "-"}%(미귀속 ${report.unattributedCalls}건 · ` +
+        `$${report.unattributed.toFixed(6)})입니다. 미귀속 금액을 프로젝트에 ` +
+        "나눠 얹지 않으므로, 지금 이 표로 비용을 청구하면 실제보다 적게 " +
         "청구됩니다. 호출 경로에 프로젝트가 전달되는지 확인해 주세요.",
     },
   ];

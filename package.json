@@ -18,6 +18,7 @@
     "check:major-migrations": "node scripts/check-major-migrations.mjs",
     "check:ci-gates": "node scripts/check-ci-gates.mjs",
     "cutover": "node scripts/cutover.mjs",
+    "validation:preflight": "node scripts/validation-preflight.mjs",
     "clean": "turbo run clean && rm -rf node_modules",
     "docker:up": "docker compose up -d",
     "docker:down": "docker compose down",

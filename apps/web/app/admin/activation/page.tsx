@@ -104,6 +104,12 @@ export default function ActivationDashboardPage() {
   const [hosts, setHosts] = useState<HostVerificationDto | null>(null);
   const [neglect, setNeglect] = useState<NeglectReportDto | null>(null);
   const [costs, setCosts] = useState<ProjectCostDto | null>(null);
+  // TASK-4301 — 방치 무시 입력 (사유·담당자·검토일)
+  const [ignoreTarget, setIgnoreTarget] = useState<string | null>(null);
+  const [ignoreReason, setIgnoreReason] = useState("");
+  const [ignoreOwner, setIgnoreOwner] = useState("");
+  const [ignoreDays, setIgnoreDays] = useState("30");
+  const [ignoreNotice, setIgnoreNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [smokeRunning, setSmokeRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -188,6 +194,62 @@ export default function ActivationDashboardPage() {
       setNotice("API 서버에 연결할 수 없습니다.");
     } finally {
       setSmokeRunning(false);
+    }
+  }
+
+  /**
+   * 방치 항목 무시 (TASK-4301, CTO 정책 4301-③).
+   *
+   * **무시는 해결이 아닙니다.** 목록에서 사라지지 않고 연속 기간도 계속
+   * 갑니다. 거절되면 그 이유를 그대로 보여 줍니다 — 이유를 안 보여 주면
+   * 사람은 아무 글자나 채워 통과시킵니다.
+   */
+  async function submitIgnore(checkId: string, title: string) {
+    setIgnoreNotice(null);
+    const days = Number(ignoreDays);
+    const response = await fetch(`${API_URL}/ops/neglect/${checkId}/ignore`, {
+      ...authFetchInit(),
+      method: "POST",
+      headers: {
+        ...(authFetchInit().headers as Record<string, string>),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        reason: ignoreReason,
+        owner: ignoreOwner,
+        title,
+        reviewAt: new Date(
+          Date.now() + (Number.isFinite(days) ? days : 0) * 86_400_000,
+        ).toISOString(),
+      }),
+    });
+    const body = (await response.json()) as { detail?: string; message?: string };
+    setIgnoreNotice(body.detail ?? body.message ?? "무시를 처리하지 못했습니다.");
+    if (response.ok) {
+      setIgnoreTarget(null);
+      setIgnoreReason("");
+      setIgnoreOwner("");
+      await load();
+    }
+  }
+
+  /**
+   * 무시 취소 (TASK-4301, CTO 정책 4301-③).
+   *
+   * 등록만 되고 취소가 화면에 없으면, 잘못 적은 무시가 검토일까지 그대로
+   * 남습니다(라이브 검증에서 고침). 취소해도 **결정 기록은 지워지지
+   * 않습니다** — 무시했던 사실까지 사라지면 안 됩니다.
+   */
+  async function revokeIgnore(id: string) {
+    setIgnoreNotice(null);
+    const response = await fetch(`${API_URL}/ops/neglect/ignores/${id}/revoke`, {
+      ...authFetchInit(),
+      method: "POST",
+    });
+    const body = (await response.json()) as { detail?: string; message?: string };
+    setIgnoreNotice(body.detail ?? body.message ?? "취소하지 못했습니다.");
+    if (response.ok) {
+      await load();
     }
   }
 
@@ -582,6 +644,50 @@ export default function ActivationDashboardPage() {
               </li>
             ))}
           </ul>
+          {/*
+            운영 트래픽 관측 (TASK-4301, CTO 정책 4301-①).
+            설정값에는 없는 별칭 도메인은 이 경로로만 보입니다. 관측은
+            증거이지 허가가 아니므로 **여기서 목록에 넣는 버튼은 없습니다.**
+          */}
+          <div
+            data-testid="host-discovery"
+            className="mt-4 rounded-lg border border-zinc-100 p-3 dark:border-zinc-900"
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-sm font-medium">운영 트래픽 관측</h3>
+              <span className="text-xs text-zinc-500">
+                서로 다른 호스트 {hosts.discovery.distinct}개
+              </span>
+              {hosts.discovery.overflowed ? (
+                <span
+                  data-testid="discovery-overflow"
+                  className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                >
+                  관측 불완전
+                </span>
+              ) : null}
+            </div>
+            <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+              {hosts.discovery.detail}
+            </p>
+            {hosts.discovery.sightings.length > 0 ? (
+              <ul data-testid="discovery-list" className="mt-2 space-y-1 text-xs">
+                {hosts.discovery.sightings.map((row) => (
+                  <li
+                    key={row.host}
+                    data-testid={`sighting-${row.host}`}
+                    className="flex flex-wrap items-baseline gap-2"
+                  >
+                    <code>{row.host}</code>
+                    <span className="text-zinc-500">요청 {row.requests}건</span>
+                    <span className="text-zinc-500">
+                      마지막 {new Date(row.lastSeenAt).toLocaleString("ko-KR")}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
         </section>
       ) : null}
 
@@ -604,6 +710,27 @@ export default function ActivationDashboardPage() {
             <span className="text-xs text-zinc-500">
               기준 {neglect.neglectAfterDays}일 · 진단 {neglect.runs}회
             </span>
+            {/*
+              무시 중인 건수를 **방치 건수에서 빼지 않고 옆에 적는다**
+              (TASK-4301, 정책 4301-③) — 빼서 말하면 무시를 늘리는 것만으로
+              지표가 좋아지고, 그건 지표를 고친 것이 아니라 눈을 가린 것이다.
+            */}
+            {neglect.ignoredCount > 0 ? (
+              <span
+                data-testid="neglect-ignored"
+                className="rounded-full bg-zinc-200 px-2 py-0.5 text-xs text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+              >
+                무시 중 {neglect.ignoredCount}건 (빼지 않음)
+              </span>
+            ) : null}
+            {neglect.overdueCount > 0 ? (
+              <span
+                data-testid="neglect-overdue"
+                className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+              >
+                검토일 지남 {neglect.overdueCount}건
+              </span>
+            ) : null}
           </div>
           <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
             {neglect.detail}
@@ -633,13 +760,104 @@ export default function ActivationDashboardPage() {
                         최소값
                       </span>
                     ) : null}
+                    {/*
+                      무시 중이어도 목록에 그대로 있고 기간도 계속 간다
+                      (TASK-4301, 정책 4301-③).
+                    */}
+                    {row.ignoreLabel !== null ? (
+                      <span
+                        data-testid={`streak-ignore-${row.id}`}
+                        className={`rounded-full px-2 py-0.5 text-xs ${
+                          row.reviewOverdue
+                            ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                            : "bg-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
+                        }`}
+                      >
+                        {row.ignoreLabel}
+                      </span>
+                    ) : null}
                   </div>
                   <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
                     {row.detail}
                   </p>
+                  {row.ignoreReason !== null ? (
+                    <p
+                      data-testid={`streak-ignore-reason-${row.id}`}
+                      className="mt-1 text-xs text-zinc-500"
+                    >
+                      무시 사유: {row.ignoreReason}
+                    </p>
+                  ) : null}
+                  {ignoreTarget === row.id ? (
+                    <div
+                      data-testid={`ignore-form-${row.id}`}
+                      className="mt-2 space-y-2 rounded-lg border border-zinc-200 p-3 text-xs dark:border-zinc-800"
+                    >
+                      <p className="text-zinc-600 dark:text-zinc-400">
+                        무시해도 이 항목은 목록에 그대로 있고 연속 기간도 계속
+                        갑니다. 검토일이 지나면 자동으로 풀리고 경보가
+                        돌아옵니다 (최대 {neglect.maxIgnoreDays}일).
+                      </p>
+                      <input
+                        data-testid="ignore-owner"
+                        value={ignoreOwner}
+                        onChange={(event) => setIgnoreOwner(event.target.value)}
+                        placeholder="담당자 (팀 이름이 아니라 사람)"
+                        className="w-full rounded-lg border border-zinc-300 px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900"
+                      />
+                      <input
+                        data-testid="ignore-reason"
+                        value={ignoreReason}
+                        onChange={(event) => setIgnoreReason(event.target.value)}
+                        placeholder="왜 지금 고치지 않는가"
+                        className="w-full rounded-lg border border-zinc-300 px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900"
+                      />
+                      <input
+                        data-testid="ignore-days"
+                        value={ignoreDays}
+                        onChange={(event) => setIgnoreDays(event.target.value)}
+                        placeholder="며칠 뒤에 다시 볼까요"
+                        className="w-full rounded-lg border border-zinc-300 px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900"
+                      />
+                      <button
+                        type="button"
+                        data-testid="ignore-submit"
+                        onClick={() => void submitIgnore(row.id, row.title)}
+                        className="rounded-lg bg-zinc-900 px-3 py-1 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                      >
+                        무시 등록
+                      </button>
+                    </div>
+                  ) : row.ignoreId !== null ? (
+                    <button
+                      type="button"
+                      data-testid={`ignore-revoke-${row.id}`}
+                      onClick={() => void revokeIgnore(row.ignoreId ?? "")}
+                      className="mt-1 text-xs text-zinc-500 underline"
+                    >
+                      무시 취소 — 결정 기록은 남습니다
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      data-testid={`ignore-open-${row.id}`}
+                      onClick={() => setIgnoreTarget(row.id)}
+                      className="mt-1 text-xs text-zinc-500 underline"
+                    >
+                      사유·담당자·검토일을 적고 경보 쉬기
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>
+          ) : null}
+          {ignoreNotice !== null ? (
+            <p
+              data-testid="ignore-notice"
+              className="mt-2 text-xs text-amber-700 dark:text-amber-400"
+            >
+              {ignoreNotice}
+            </p>
           ) : null}
         </section>
       ) : null}
@@ -672,6 +890,20 @@ export default function ActivationDashboardPage() {
                 낼 수 없음
               </span>
             )}
+            {/*
+              지금 들어오는 기록의 귀속률 (TASK-4301, 정책 4301-②).
+              전체 창은 옛 기록 때문에 영원히 낮습니다 — 그 숫자만 보면
+              고친 것이 보이지 않고, 이 숫자만 보면 청구서가 틀렸다는 사실이
+              가려집니다. 그래서 둘 다 적습니다.
+            */}
+            <span
+              data-testid="cost-recent-coverage"
+              className="rounded-full bg-zinc-200 px-2 py-0.5 text-xs text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+            >
+              {costs.recentCoverage === null
+                ? `최근 ${costs.recentWindowHours}시간 표본 없음 — 잴 수 없음`
+                : `지금 들어오는 기록 ${costs.recentCoverage}% (${costs.recentCalls}건)`}
+            </span>
           </div>
           <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">{costs.detail}</p>
           {/*

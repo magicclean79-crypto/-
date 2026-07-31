@@ -201,6 +201,13 @@ export interface ValidationPlanInput {
   stagingTarget: { url: string | null; usable: boolean; detail: string } | null;
   /** 쌓인 KPI 스냅샷 수 */
   kpiSnapshots: number;
+  /**
+   * 첫 스냅샷과 마지막 스냅샷의 간격 (ms) — 못 읽었으면 null (TASK-4301).
+   *
+   * 점의 개수만 보면 **몇 분 간격으로 두 번 찍어** 기준선 단계를 통과시킬
+   * 수 있습니다. 그건 기준선이 아니라 초록을 산 것입니다.
+   */
+  kpiSnapshotSpanMs: number | null;
   /** 최근 복구 리허설 시각 (ms) — 없으면 null */
   lastDrillAt: number | null;
   /**
@@ -210,9 +217,21 @@ export interface ValidationPlanInput {
    * 실제로 쓰이는 호스트가 빠져 있으면, 보호가 **통과시키고 있을 뿐**
    * 지켜 주는 것이 아닙니다. 못 봤으면 null.
    */
-  hosts: { declared: number; undeclared: number } | null;
+  hosts: {
+    declared: number;
+    undeclared: number;
+    /**
+     * 관측이 완전했는가 (TASK-4301, 정책 4301-①). 트래픽 관측이 상한에
+     * 걸려 잘렸으면 `false`이며, 그때 "목록에 없는 호스트 0개"는 사실이
+     * 아니라 우리가 더 안 본 것입니다.
+     */
+    observationComplete?: boolean;
+  } | null;
   now: number;
 }
+
+/** 기준선의 두 점은 이만큼은 떨어져 있어야 한다 (TASK-4301, 정책 4301-⑤) */
+export const BASELINE_MIN_SPAN_MS = 20 * 60 * 60 * 1000;
 
 export interface ValidationStepState extends ValidationStep {
   status: StepStatus;
@@ -502,17 +521,33 @@ function evaluateStep(
           };
     }
     case "baseline": {
-      return input.kpiSnapshots >= 2
-        ? {
-            status: "done",
-            detail: `스냅샷 ${input.kpiSnapshots}점 — 추세를 낼 수 있습니다.`,
-          }
-        : {
-            status: "pending",
-            detail:
-              `스냅샷이 ${input.kpiSnapshots}점뿐입니다 — 한 점으로는 ` +
-              "검증 전후를 비교할 수 없습니다.",
-          };
+      if (input.kpiSnapshots < 2) {
+        return {
+          status: "pending",
+          detail:
+            `스냅샷이 ${input.kpiSnapshots}점뿐입니다 — 한 점으로는 ` +
+            "검증 전후를 비교할 수 없습니다.",
+        };
+      }
+      // **점 사이가 너무 좁으면 기준선이 아닙니다** (TASK-4301, 정책 4301-⑤).
+      // 두 점을 몇 분 간격으로 찍어서 이 단계를 초록으로 만들 수 있다면,
+      // 그 초록은 기준선이 아니라 우리가 산 것입니다. 하루 안의 두 점은
+      // 같은 시간대·같은 트래픽이라 "검증 전"을 대표하지 못합니다.
+      if (input.kpiSnapshotSpanMs !== null && input.kpiSnapshotSpanMs < BASELINE_MIN_SPAN_MS) {
+        return {
+          status: "pending",
+          detail:
+            `스냅샷은 ${input.kpiSnapshots}점이지만 처음과 마지막이 ` +
+            `${Math.round(input.kpiSnapshotSpanMs / 3_600_000)}시간 차이입니다 — ` +
+            `기준선으로 쓰려면 최소 ${Math.round(BASELINE_MIN_SPAN_MS / 3_600_000)}시간은 ` +
+            "떨어져 있어야 합니다. 몇 분 간격으로 두 점을 찍어 통과시키면 " +
+            "그건 기준선이 아니라 초록을 산 것입니다.",
+        };
+      }
+      return {
+        status: "done",
+        detail: `스냅샷 ${input.kpiSnapshots}점 — 추세를 낼 수 있습니다.`,
+      };
     }
     case "host-list": {
       if (input.hosts === null) {
@@ -527,6 +562,16 @@ function evaluateStep(
           detail:
             "운영 호스트가 하나도 선언돼 있지 않습니다 — 검증 대상 보호가 " +
             "대조할 것이 없어 사실상 꺼져 있습니다.",
+        };
+      }
+      // 관측이 상한에 걸려 잘렸으면 **"목록에 없는 호스트 0개"가 사실이
+      // 아닙니다** — 우리가 더 안 본 것입니다 (TASK-4301, 정책 4301-①).
+      if (input.hosts.observationComplete === false) {
+        return {
+          status: "unknown",
+          detail:
+            "관측한 호스트가 상한을 넘어 잘렸습니다 — 목록과 맞는지 " +
+            "확인할 수 없습니다. 목록에 없는 호스트가 더 있을 수 있습니다.",
         };
       }
       return input.hosts.undeclared === 0

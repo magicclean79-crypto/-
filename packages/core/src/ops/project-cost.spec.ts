@@ -1,12 +1,16 @@
 import { detectAttributionAlerts, summarizeProjectCost } from "./project-cost";
 import type { CostRecord } from "./project-cost";
 
+const NOW = Date.UTC(2026, 6, 31, 12, 0, 0);
+
 function record(overrides: Partial<CostRecord> = {}): CostRecord {
   return {
     projectId: "p1",
     source: "llm",
     cost: 1,
     diagnostic: false,
+    feature: "content-generation",
+    at: NOW - 60_000,
     ...overrides,
   };
 }
@@ -156,6 +160,7 @@ describe("detectAttributionAlerts", () => {
       records: [record({ projectId: "p1" }), record({ projectId: null })],
       names,
       windowDays: 30,
+      now: NOW,
     });
 
   it("경보를 내지 않는 단계에서는 아무것도 내지 않는다", () => {
@@ -167,12 +172,13 @@ describe("detectAttributionAlerts", () => {
       records: [record({ projectId: "p1" }), record({ projectId: "p2" })],
       names,
       windowDays: 30,
+      now: NOW,
     });
     expect(detectAttributionAlerts(good, { alerting: true, minCoverage: 80 })).toEqual([]);
   });
 
   it("표본이 없으면 경보하지 않는다 — 모르는 것은 나쁜 것이 아니다", () => {
-    const empty = summarizeProjectCost({ records: [], names, windowDays: 30 });
+    const empty = summarizeProjectCost({ records: [], names, windowDays: 30, now: NOW });
     expect(detectAttributionAlerts(empty, { alerting: true, minCoverage: 80 })).toEqual([]);
   });
 
@@ -182,5 +188,89 @@ describe("detectAttributionAlerts", () => {
     expect(alerts[0].level).toBe("warning");
     expect(alerts[0].key).toBe("cost-attribution:coverage");
     expect(alerts[0].message).toContain("실제보다 적게 청구됩니다");
+    // 최근 창을 기준으로 부른다 (TASK-4301) — 옛 기록 때문에 영원히 우는
+    // 경보는 곧 무시된다
+    expect(alerts[0].title).toContain("최근 24시간");
+  });
+
+  /**
+   * 배선을 이미 고쳤는데도 옛 기록 때문에 같은 경보가 매일 오면, 그 경보는
+   * 곧 아무도 안 읽는다. 지금 들어오는 기록이 멀쩡하면 부르지 않는다.
+   */
+  it("옛 기록 때문에 전체 귀속률이 낮아도 지금 들어오는 기록이 멀쩡하면 부르지 않는다", () => {
+    const report = summarizeProjectCost({
+      records: [
+        // 창 안이지만 최근 창 밖 — 배선 이전의 기록
+        record({ projectId: null, at: NOW - 10 * 86_400_000 }),
+        record({ projectId: null, at: NOW - 9 * 86_400_000 }),
+        record({ projectId: null, at: NOW - 8 * 86_400_000 }),
+        // 지금 들어오는 기록
+        record({ projectId: "p1" }),
+      ],
+      names,
+      windowDays: 30,
+      now: NOW,
+    });
+    expect(report.coverage).toBe(25);
+    expect(report.recentCoverage).toBe(100);
+    expect(detectAttributionAlerts(report, { alerting: true, minCoverage: 80 })).toEqual([]);
+  });
+});
+
+describe("귀속 대상과 귀속 불가 (TASK-4301, 정책 4301-②)", () => {
+  /**
+   * 개발용 호출을 "귀속 누락"으로 세면 귀속률은 배선을 아무리 고쳐도 100%에
+   * 닿지 않고, 닿지 않는 지표는 곧 아무도 안 본다.
+   */
+  it("프로젝트가 있을 수 없는 호출을 귀속률 분모에서 뺀다", () => {
+    const report = summarizeProjectCost({
+      records: [record({ projectId: "p1" }), record({ projectId: null, feature: "dev" })],
+      names,
+      windowDays: 30,
+      now: NOW,
+    });
+    expect(report.coverage).toBe(100);
+    expect(report.unattributableCalls).toBe(1);
+    expect(report.unattributed).toBe(0);
+    expect(report.detail).toContain("주인을 못 찾은 것과 주인이 없는");
+  });
+
+  it("귀속률에서 뺀 금액도 합계에는 남긴다 — 청구서는 그것을 포함한다", () => {
+    const report = summarizeProjectCost({
+      records: [record({ projectId: "p1", cost: 2 }), record({ feature: "dev", cost: 3 })],
+      names,
+      windowDays: 30,
+      now: NOW,
+    });
+    expect(report.unattributable).toBe(3);
+    expect(report.total).toBe(5);
+  });
+
+  /**
+   * 모르는 것을 "주인이 없는 것"으로 옮기면 귀속률이 저절로 좋아진다.
+   */
+  it("기능을 모르는 기록은 귀속 대상으로 본다", () => {
+    const report = summarizeProjectCost({
+      records: [record({ projectId: null, feature: null })],
+      names,
+      windowDays: 30,
+      now: NOW,
+    });
+    expect(report.unattributableCalls).toBe(0);
+    expect(report.coverage).toBe(0);
+  });
+
+  /**
+   * 0건을 100%로 계산하면 아무 호출도 없는 환경이 가장 잘한 환경이 된다.
+   */
+  it("최근 창에 표본이 없으면 100%가 아니라 잴 수 없음이다", () => {
+    const report = summarizeProjectCost({
+      records: [record({ projectId: "p1", at: NOW - 10 * 86_400_000 })],
+      names,
+      windowDays: 30,
+      now: NOW,
+    });
+    expect(report.recentCoverage).toBeNull();
+    expect(report.detail).toContain("귀속률을 잴 수 없습니다");
   });
 });

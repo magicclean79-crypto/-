@@ -2,6 +2,7 @@ import { MiddlewareConsumer, Module, NestModule } from "@nestjs/common";
 import { AppController } from "./app.controller";
 import { CommonModule } from "./common/common.module";
 import { RequestContextMiddleware } from "./common/request-context.service";
+import { HostObserverMiddleware } from "./ops/host-discovery.service";
 import { AppService } from "./app.service";
 import { AnalysisModule } from "./analysis/analysis.module";
 import { AdminSettingsModule } from "./admin/admin-settings.module";
@@ -67,6 +68,10 @@ export class AppModule implements NestModule {
    * 안 되는" 상태가 생기고, 그러면 아무도 추적을 믿지 않습니다.
    */
   configure(consumer: MiddlewareConsumer): void {
-    consumer.apply(RequestContextMiddleware).forRoutes("*path");
+    // 운영 트래픽 호스트 관측 (TASK-4301, CTO 정책 4301-①) — 요청마다
+    // Host 헤더를 메모리에 담기만 하고, 저장은 예약 작업이 한 번에 한다
+    consumer
+      .apply(RequestContextMiddleware, HostObserverMiddleware)
+      .forRoutes("*path");
   }
 }

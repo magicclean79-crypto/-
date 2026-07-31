@@ -39,11 +39,17 @@ export class ProjectCostService {
     const [executions, ocr, projects] = await Promise.all([
       this.prisma.execution.findMany({
         where: { createdAt: { gte: since } },
-        select: { projectId: true, cost: true, diagnostic: true },
+        select: {
+          projectId: true,
+          cost: true,
+          diagnostic: true,
+          feature: true,
+          createdAt: true,
+        },
       }),
       this.prisma.ocrResult.findMany({
         where: { createdAt: { gte: since } },
-        select: { projectId: true, cost: true },
+        select: { projectId: true, cost: true, createdAt: true },
       }),
       this.prisma.project.findMany({ select: { id: true, name: true } }),
     ]);
@@ -55,6 +61,10 @@ export class ProjectCostService {
           source: "llm",
           cost: row.cost === null ? null : Number(row.cost),
           diagnostic: row.diagnostic,
+          // 개발용 호출은 프로젝트가 있을 수 없다 (TASK-4301, 정책 ②) —
+          // 그것을 "귀속 누락"으로 세면 귀속률이 100%에 닿지 않는다
+          feature: row.feature,
+          at: row.createdAt.getTime(),
         }),
       ),
       ...ocr.map(
@@ -65,12 +75,16 @@ export class ProjectCostService {
           // OCR에는 진단 표시가 없다 — 스모크가 남기는 것도 여기 섞이지만,
           // 없는 칸을 있는 척하지 않는다
           diagnostic: false,
+          // 기능 구분이 없다 — null은 "귀속 대상"으로 본다 (모르는 것을
+          // "주인이 없는 것"으로 옮기면 귀속률이 저절로 좋아진다)
+          feature: null,
+          at: row.createdAt.getTime(),
         }),
       ),
     ];
 
     const names = Object.fromEntries(projects.map((row) => [row.id, row.name]));
-    const report = summarizeProjectCost({ records, names, windowDays });
+    const report = summarizeProjectCost({ records, names, windowDays, now });
 
     if (report.coverage !== null && report.coverage < MIN_ATTRIBUTION_COVERAGE) {
       this.logger.log(`프로젝트 비용 귀속률 ${report.coverage}% — ${report.caveat}`);

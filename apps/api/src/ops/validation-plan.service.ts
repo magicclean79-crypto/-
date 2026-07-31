@@ -29,19 +29,29 @@ export class ValidationPlanService {
   ) {}
 
   async report(now = Date.now()): Promise<ValidationPlanDto> {
-    const [activation, cutover, smoke, diagnostics, snapshots, drill] = await Promise.all([
-      this.activation(),
-      this.cutoverCounts(),
-      this.smokeCounts(),
-      this.diagnosticCounts(),
-      this.prisma.kpiSnapshot
-        .groupBy({ by: ["takenAt"] })
-        .then((rows) => rows.length)
-        .catch(() => 0),
-      this.prisma.recoveryDrill
-        .findFirst({ orderBy: { createdAt: "desc" }, select: { createdAt: true } })
-        .catch(() => null),
-    ]);
+    const [activation, cutover, smoke, diagnostics, snapshotTimes, drill, hosts] =
+      await Promise.all([
+        this.activation(),
+        this.cutoverCounts(),
+        this.smokeCounts(),
+        this.diagnosticCounts(),
+        this.prisma.kpiSnapshot
+          .groupBy({ by: ["takenAt"] })
+          .then((rows) => rows.map((row) => row.takenAt.getTime()))
+          .catch(() => [] as number[]),
+        this.prisma.recoveryDrill
+          .findFirst({ orderBy: { createdAt: "desc" }, select: { createdAt: true } })
+          .catch(() => null),
+        this.hostCounts(now),
+      ]);
+
+    // 점의 **개수**만 보면 몇 분 간격으로 두 번 찍어 기준선 단계를 통과시킬
+    // 수 있다 — 그건 기준선이 아니라 초록을 산 것이다 (TASK-4301, 정책 ⑤)
+    const snapshots = snapshotTimes.length;
+    const snapshotSpan =
+      snapshotTimes.length < 2
+        ? null
+        : Math.max(...snapshotTimes) - Math.min(...snapshotTimes);
 
     const report = judgeValidationPlan({
       activation,
@@ -64,16 +74,9 @@ export class ValidationPlanService {
       // 운영 호스트 목록 (TASK-4201, 정책 4201-①⑤) — 검증 대상 보호는 이
       // 목록과 대조해서 동작하므로, 목록이 비어 있으면 보호가 지켜 주는
       // 것이 아니라 통과시키고 있을 뿐이다
-      hosts: (() => {
-        try {
-          const report = this.diagnostics.hosts();
-          return { declared: report.declared, undeclared: report.undeclared.length };
-        } catch (error) {
-          this.logger.warn(`운영 호스트 목록을 읽지 못했습니다: ${String(error)}`);
-          return null;
-        }
-      })(),
+      hosts,
       kpiSnapshots: snapshots,
+      kpiSnapshotSpanMs: snapshotSpan,
       lastDrillAt: drill?.createdAt.getTime() ?? null,
       now,
     });
@@ -103,6 +106,31 @@ export class ValidationPlanService {
       detail: report.detail,
       checkedAt: new Date(now).toISOString(),
     };
+  }
+
+  /**
+   * 운영 호스트 목록 (TASK-4201 정책 ①⑤ · TASK-4301 정책 ①).
+   *
+   * 트래픽 관측이 상한에 걸려 잘렸으면 `observationComplete: false`이며,
+   * 그때 "목록에 없는 호스트 0개"는 사실이 아니라 우리가 더 안 본 것입니다.
+   */
+  private async hostCounts(now: number): Promise<{
+    declared: number;
+    undeclared: number;
+    observationComplete: boolean;
+  } | null> {
+    try {
+      const { report, discovery } = await this.diagnostics.hosts(now);
+      return {
+        declared: report.declared,
+        undeclared: report.undeclared.length,
+        observationComplete: !discovery.overflowed,
+      };
+    } catch (error) {
+      // 못 읽은 것은 "비어 있다"가 아니라 "모른다"다
+      this.logger.warn(`운영 호스트 목록을 읽지 못했습니다: ${String(error)}`);
+      return null;
+    }
   }
 
   private async activation(): Promise<{ id: string; met: boolean }[] | null> {

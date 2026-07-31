@@ -95,6 +95,13 @@ const ROUTE_ACTIONS: {
   // TASK-4101에서 더한 경로 (정책 4101-④⑥)
   { method: "POST", pattern: /^\/ops\/incidents\/:id\/revive$/, action: "incident.revive", title: "만료 초안 되살림" },
   { method: "POST", pattern: /^\/ops\/validation-run$/, action: "validation.run-start", title: "검증 실행 시작 (준비 확인)" },
+  // TASK-4301에서 더한 경로 (정책 4301-③). 여기 id 자리는 진단 항목 이름
+  // (storage · production-hosts …)이라 cuid로 보이지 않는다 — 자리표시자
+  // 정규화가 걸리지 않으므로 패턴이 두 모양을 다 받아야 한다. 무시는 **누가 언제 왜** 했는지가
+  // 남아야 하는 행동이다 — 경보를 쉬게 하는 결정이 이름 없는 원시 경로로
+  // 남으면, 나중에 "왜 이 항목이 조용했는가"에 답할 수 없다.
+  { method: "POST", pattern: /^\/ops\/neglect\/[^/]+\/ignore$/, action: "neglect.ignore", title: "방치 항목 무시 (사유·담당자·검토일)" },
+  { method: "POST", pattern: /^\/ops\/neglect\/ignores\/[^/]+\/revoke$/, action: "neglect.ignore-revoke", title: "방치 무시 취소" },
 ];
 
 /**

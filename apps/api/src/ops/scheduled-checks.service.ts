@@ -52,6 +52,7 @@ import { RecoveryDrillService } from "./recovery-drill.service";
 import { DiagnosticsService } from "./diagnostics.service";
 import { DraftLifecycleService } from "./draft-lifecycle.service";
 import { KpiTrendService } from "./kpi-trend.service";
+import { HostDiscoveryService } from "./host-discovery.service";
 import { NeglectService } from "./neglect.service";
 import { ProjectCostService } from "./project-cost.service";
 
@@ -193,6 +194,7 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
     private readonly trends: KpiTrendService,
     // 방치 지표 · 프로젝트 비용 귀속률 (TASK-4201, CTO 정책 4201-②④)
     private readonly neglect: NeglectService,
+    private readonly hostDiscovery: HostDiscoveryService,
     private readonly projectCost: ProjectCostService,
   ) {}
 
@@ -650,6 +652,11 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
       const alerting = tierPolicy(tier).alerting;
       const neglect = await this.neglect.detect(tier, alerting);
 
+      // 트래픽 호스트 관측을 저장한다 (TASK-4301, 정책 4301-①) — 요청마다
+      // 쓰면 트래픽이 곧 쓰기 부하가 되므로 여기서 한 번에 넘긴다.
+      // **저장은 관측일 뿐이며 운영 호스트 목록을 바꾸지 않는다.**
+      const savedHosts = await this.hostDiscovery.flush(tier);
+
       // 진단·초안·방치 경보를 **한 번에** 동기화한다 — 같은 종류를 두 번
       // 부르면 뒤 호출이 앞의 경보를 "이번에 감지되지 않았다"며 해소한다
       const notified = await this.alerts.sync(JOB_ALERT_KINDS[job], [
@@ -667,7 +674,8 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
           `일일 진단: ${report.detail} ` +
           `초안 수명: ${sweep.detail} (만료 표시 ${sweep.expired}건 — 기각이 아닙니다.) ` +
           `KPI 스냅샷: ${snapshot.detail} ` +
-          `방치 경보 ${neglect.length}건.`,
+          `방치 경보 ${neglect.length}건. ` +
+          `트래픽 호스트 관측 ${savedHosts}건 저장(목록은 바꾸지 않습니다).`,
         notified,
       };
     }
