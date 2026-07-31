@@ -34,7 +34,7 @@
 | 품질 게이트 자체 검증 | `pnpm check:ci-gates` | ✅ 필수 게이트 7개 순서 일치 |
 | Major Migration 교차 검증 | `pnpm check:major-migrations` | ✅ 2건 일치 (신규 1건은 major 아님 — §6) |
 | Live Verification | 실 PostgreSQL + 실 Redis + 실 S3 + Vision 스텁 + 공지 스텁 4곳 + GitHub Actions 스텁 | ✅ §4 |
-| **GitHub Actions** | 실제 워크플로 실행 (병렬 2 Job) | ✅ §4 (푸시 후 확인) |
+| **GitHub Actions** | 실제 워크플로 실행 (병렬 2 Job) | ✅ **run 30602466631 통과 — 2분 36초** (두 Job 모두 success) |
 | **`/ops/cutover`** | `pnpm cutover` | ⚠️ **exit 1 — 활성화 0/3 조건.** 전환은 아직이며 판정이 그 사실을 말한다 |
 
 ## 3. 변경 사항 (이번 보고 주기)
@@ -180,6 +180,16 @@ KPI가 거짓말하는 두 가지 방식을 막았습니다:
 | **감사: 조회 제외** | 기록 7건 전부 `POST` — GET은 하나도 없음 |
 | **KPI** | 낼 수 없음 1개 · 나쁨 4개 · 창 30일 · 요약이 모르는 지표를 먼저 말함 |
 | **대시보드** | 스크린샷 첨부 — 모르는 지표는 회색, 좋아 보이는 0에 주석 |
+
+### GitHub Actions 실제 실행 (TASK-3801 커밋 `ce5af0e`)
+
+| Job | 결과 | 소요 |
+| --- | --- | --- |
+| `quality-gates` (Build · 교차 검증 · **게이트 자체 검증** · TypeScript · Lint · Core/API) | ✅ success | 1분 50초 |
+| `web-e2e` (브라우저 설치 · Build · Web e2e) | ✅ success | 2분 28초 |
+| **run 30602466631 전체** | **✅ success** | **2분 36초** |
+
+**13회 연속 실패를 끊은 뒤로 8회 연속 초록**입니다.
 
 ### 자체 발견 결함 2건 — 라이브에서만 보였습니다
 
