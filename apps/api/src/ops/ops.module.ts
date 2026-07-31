@@ -14,6 +14,9 @@ import { ActivationHistoryService } from "./activation-history.service";
 import { IncidentService } from "./incident.service";
 import { ProductionCutoverService } from "./production-cutover.service";
 import { ProductionSmokeService } from "./production-smoke.service";
+import { KpiService } from "./kpi.service";
+import { OpsAuditInterceptor, OpsAuditService } from "./ops-audit.interceptor";
+import { OpsEventService } from "./ops-event.service";
 import { MigrationGovernanceService } from "./migration-governance.service";
 import { RecoveryDrillService } from "./recovery-drill.service";
 import { RecoveryEvaluationService } from "./recovery-evaluation.service";
@@ -60,6 +63,10 @@ import { ScheduledChecksService } from "./scheduled-checks.service";
     ActivationHistoryService,
     ProductionSmokeService,
     IncidentService,
+    OpsEventService,
+    KpiService,
+    OpsAuditService,
+    OpsAuditInterceptor,
   ],
   exports: [
     AlertService,
@@ -78,6 +85,9 @@ import { ScheduledChecksService } from "./scheduled-checks.service";
     ActivationHistoryService,
     ProductionSmokeService,
     IncidentService,
+    OpsEventService,
+    KpiService,
+    OpsAuditService,
   ],
 })
 export class OpsModule {}

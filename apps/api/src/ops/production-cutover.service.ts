@@ -12,6 +12,7 @@ import { StorageService } from "../storage/storage.service";
 import { ActivationHistoryService } from "./activation-history.service";
 import { CiStatusService } from "./ci-status.service";
 import { EgressService } from "./egress.service";
+import { OpsEventService } from "./ops-event.service";
 
 /**
  * 운영 전환 검증. (TASK-3401, Sprint 34 — CTO 지시 4·5·6)
@@ -39,6 +40,8 @@ export class ProductionCutoverService {
     private readonly egress: EgressService,
     // 활성화 **과정**을 시간순으로 남긴다 (TASK-3701, CTO 정책 3701-①)
     private readonly history: ActivationHistoryService,
+    // 경계를 넘는 순간을 알린다 (TASK-3801, CTO 정책 3801-①)
+    private readonly events: OpsEventService,
   ) {}
 
   async report(branch?: string): Promise<ProductionCutoverDto> {
@@ -122,7 +125,19 @@ export class ProductionCutoverService {
     // 상태가 바뀌었을 때만 새 줄이 생기고, 같은 상태면 "언제 마지막으로
     // 확인했는가"만 갱신된다 — 그래야 "3주째 그대로"와 "3주 동안 아무도 안
     // 봤다"를 나중에 가를 수 있다.
+    const previous = await this.history.snapshot();
     await this.history.record(report);
+
+    // 상태가 경계를 넘으면 **그 자리에서** 이벤트를 만든다 (정책 3801-①).
+    // 마지막 조건이 채워지는 순간은 대개 아무도 화면을 보고 있지 않을 때
+    // 오고, 그 순간을 아무도 모르면 운영은 이미 켤 수 있게 된 상태로
+    // 며칠을 더 논다.
+    await this.events.recordActivationTransition(previous, {
+      activated: report.activated,
+      met: report.conditions.filter((condition) => condition.met).map((c) => c.id),
+      environment: report.environment,
+      applicable: report.applicable,
+    });
 
     return {
       conditions: report.conditions,

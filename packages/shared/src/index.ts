@@ -2416,6 +2416,76 @@ export interface SmokeReportDto {
   ranAt: string | null;
 }
 
+/**
+ * 운영 이벤트 (TASK-3801 — CTO 정책 3801-①).
+ *
+ * 시스템이 관측한 **상태 변화**다. 감사 기록(누가 했나)과 섞지 않는다.
+ */
+export interface OpsEventDto {
+  id: string;
+  /** activation-completed | activation-lost */
+  kind: string;
+  title: string;
+  message: string;
+  /** 급한 소식인가 — 풀린 것은 급하다 */
+  urgent: boolean;
+  environment: string;
+  /** 알림 채널로 내보낸 시각 — 못 보냈으면 null ("알렸다"고 적지 않는다) */
+  notifiedAt: string | null;
+  createdAt: string;
+}
+
+/**
+ * 운영 감사 기록 (TASK-3801 — CTO 정책 3801-④).
+ *
+ * **실패한 시도도 남는다** — 성공만 남는 기록으로는 "그 시각에 누가 무엇을
+ * 눌렀는가"에 답할 수 없다.
+ */
+export interface OpsAuditDto {
+  id: string;
+  /** smoke.run | incident.resolve … (URL이 바뀌어도 유지되는 이름) */
+  action: string;
+  title: string;
+  method: string;
+  path: string;
+  target: string | null;
+  actorEmail: string | null;
+  /** ok | failed */
+  outcome: string;
+  statusCode: number | null;
+  durationMs: number | null;
+  /** 본문 요약 — 값이 아니라 이름만 */
+  detail: string | null;
+  requestId: string | null;
+  createdAt: string;
+}
+
+/**
+ * 운영 KPI (TASK-3801 — CTO 정책 3801-③).
+ *
+ * **표본이 없으면 `value`는 0이 아니라 `null`**이고, 그것은 좋음이 아니다.
+ */
+export interface OperationsKpiDto {
+  kpis: {
+    id: string;
+    title: string;
+    /** 표본이 없으면 null — 0이 아니다 */
+    value: number | null;
+    unit: string;
+    /** good | watch | bad | unknown */
+    status: string;
+    basis: string;
+    /** 이 숫자가 거짓말할 수 있는 지점 */
+    caveat: string | null;
+  }[];
+  windowDays: number;
+  /** 값을 낼 수 없었던 지표 수 — 많으면 대시보드를 믿을 수 없다 */
+  unknown: number;
+  bad: number;
+  detail: string;
+  checkedAt: string;
+}
+
 /** 운영 장애 1건 (TASK-3701 — CTO 정책 3701-④) */
 export interface IncidentDto {
   id: string;
@@ -2428,6 +2498,17 @@ export interface IncidentDto {
   resolvedAt: string | null;
   cause: string | null;
   recovery: string | null;
+  /**
+   * 사후 분석 (TASK-3801 — CTO 정책 3801-②).
+   * `fixKind`가 "재시작으로 살린 것"과 "원인을 없앤 것"을 가른다.
+   */
+  fixKind: string | null;
+  rootCause: string | null;
+  temporaryFix: string | null;
+  permanentFix: string | null;
+  prevention: string | null;
+  /** 임시 조치로 닫혀 **영구 조치를 기다리는가** — 목록에서는 '복구됨'이다 */
+  needsFollowUp: boolean;
   /** 시작 → 복구(또는 지금). `ongoing`이면 최종값이 아니다 */
   durationMs: number;
   ongoing: boolean;
@@ -2446,6 +2527,10 @@ export interface IncidentBoardDto {
   mttdMs: number | null;
   totalDowntimeMs: number;
   withoutCause: number;
+  /** 임시 조치로 닫혀 영구 조치를 기다리는 장애 수 (TASK-3801) */
+  awaitingPermanentFix: number;
+  withoutRootCause: number;
+  withPrevention: number;
   longestId: string | null;
   detail: string;
   checkedAt: string;

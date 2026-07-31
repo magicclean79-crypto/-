@@ -9,6 +9,7 @@ import {
   Query,
   Req,
   UseGuards,
+  UseInterceptors,
 } from "@nestjs/common";
 import {
   DRILL_TRIGGERS,
@@ -24,6 +25,9 @@ import type {
 } from "@acos/core";
 import type {
   ActivationHistoryDto,
+  OperationsKpiDto,
+  OpsAuditDto,
+  OpsEventDto,
   AdvancePricingRequest,
   AlertArchiveResultDto,
   AlertBoardDto,
@@ -59,6 +63,9 @@ import { BackupService } from "./backup.service";
 import { CostIntelligenceService } from "./cost-intelligence.service";
 import { ActivationHistoryService } from "./activation-history.service";
 import { IncidentService } from "./incident.service";
+import { KpiService } from "./kpi.service";
+import { OpsAuditInterceptor, OpsAuditService } from "./ops-audit.interceptor";
+import { OpsEventService } from "./ops-event.service";
 import { ProductionCutoverService } from "./production-cutover.service";
 import { ProductionSmokeService } from "./production-smoke.service";
 import { DistributedLockService } from "./distributed-lock.service";
@@ -96,6 +103,10 @@ const PRICING_ACTIONS: Record<string, PricingStage> = {
 @Controller("ops")
 @UseGuards(AuthGuard)
 @RequireRole("ADMIN")
+// 운영을 **바꾸는** 요청은 전부 남긴다 (TASK-3801, CTO 정책 3801-④).
+// 서비스마다 부르게 하면 다음에 추가되는 엔드포인트에서 누군가 빠뜨리고,
+// **빠진 감사 기록은 실패하지 않는다** — 사고가 난 뒤에야 알게 된다.
+@UseInterceptors(OpsAuditInterceptor)
 export class OpsController {
   constructor(
     private readonly alerts: AlertService,
@@ -118,6 +129,10 @@ export class OpsController {
     private readonly activationHistoryService: ActivationHistoryService,
     private readonly smoke: ProductionSmokeService,
     private readonly incidents: IncidentService,
+    // 운영 이벤트 · KPI · 감사 기록 (TASK-3801, CTO 정책 3801-①③④)
+    private readonly events: OpsEventService,
+    private readonly kpis: KpiService,
+    private readonly audit: OpsAuditService,
   ) {}
 
   /**
@@ -232,17 +247,82 @@ export class OpsController {
     });
   }
 
+  /**
+   * 운영 KPI (TASK-3801, CTO 정책 3801-③).
+   *
+   * 판정은 이미 일곱 군데에 있었고, 문제는 사람이 일곱 군데를 돌지 않는다는
+   * 것이었다. **모르는 지표를 좋음으로 세지 않는다** — 절반을 모르는 초록
+   * 화면이 가장 위험하다.
+   */
+  @Get("kpi")
+  async operationsKpi(@Query("branch") branch?: string): Promise<OperationsKpiDto> {
+    return this.kpis.report(branch?.trim() || undefined);
+  }
+
+  /**
+   * 운영 이벤트 (TASK-3801, CTO 정책 3801-①).
+   *
+   * 시스템이 관측한 **상태 변화**다 — 감사 기록(누가 했나)과 목적이 다르다.
+   */
+  @Get("events")
+  async opsEvents(@Query("limit") limit?: string): Promise<OpsEventDto[]> {
+    const parsed = Number(limit);
+    return this.events.recent(Number.isInteger(parsed) && parsed > 0 ? parsed : 50);
+  }
+
+  /**
+   * 운영 감사 기록 (TASK-3801, CTO 정책 3801-④).
+   *
+   * **실패한 시도도 남는다** — 거절된 시도는 그 자체가 신호다.
+   */
+  @Get("audit")
+  async opsAudit(
+    @Query("limit") limit?: string,
+    @Query("action") action?: string,
+  ): Promise<OpsAuditDto[]> {
+    const parsed = Number(limit);
+    return this.audit.recent({
+      limit: Number.isInteger(parsed) && parsed > 0 ? parsed : 50,
+      action: action?.trim() || undefined,
+    });
+  }
+
+  /**
+   * 장애 사후 분석 (TASK-3801, CTO 정책 3801-②).
+   *
+   * 닫는 것과 **원인을 알아내는 것**은 다른 일이고 대개 다른 날에 일어난다.
+   * 근본 원인 없이 재발 방지만 적을 수는 없다.
+   */
+  @Post("incidents/:id/analysis")
+  @HttpCode(200)
+  async analyzeIncident(
+    @Param("id") id: string,
+    @Req() request: AuthenticatedRequest,
+    @Body()
+    body: { rootCause?: string | null; permanentFix?: string | null; prevention?: string | null },
+  ): Promise<IncidentDto> {
+    return this.incidents.analyze(id, { ...body, actorId: request.user?.id });
+  }
+
   /** 복구 기록 — **무엇으로 살렸는지 없이는 닫히지 않는다** */
   @Post("incidents/:id/resolve")
   @HttpCode(200)
   async resolveIncident(
     @Param("id") id: string,
     @Req() request: AuthenticatedRequest,
-    @Body() body: { resolvedAt?: string; recovery?: string; cause?: string | null },
+    @Body()
+    body: {
+      resolvedAt?: string;
+      recovery?: string;
+      /** temporary | permanent — 기본값을 두지 않는다 (정책 3801-②) */
+      fixKind?: string;
+      cause?: string | null;
+    },
   ): Promise<IncidentDto> {
     return this.incidents.resolve(id, {
       resolvedAt: body.resolvedAt,
       recovery: body.recovery ?? "",
+      fixKind: body.fixKind ?? "",
       cause: body.cause,
       actorId: request.user?.id,
     });

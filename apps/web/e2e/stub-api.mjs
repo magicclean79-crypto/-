@@ -2971,6 +2971,205 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  /** 운영 KPI (TASK-3801, CTO 정책 3801-③) — ADMIN 전용 */
+  if (url.pathname === "/ops/kpi") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    // 화면이 검증해야 하는 것: **모르는 지표를 초록으로 칠하지 않는가**,
+    // 그리고 **좋아 보이는 0에 주석이 달리는가**.
+    res.end(
+      JSON.stringify({
+        kpis: [
+          {
+            id: "activation",
+            title: "운영 활성화",
+            value: 1,
+            unit: "/3 조건",
+            status: "bad",
+            basis: "충족 1/3 — 아직 전환되지 않았습니다.",
+            caveat: "되돌아간 적 1회 — 조용히 풀리는 조건이 있습니다.",
+          },
+          {
+            id: "smoke",
+            title: "실 호출 스모크",
+            value: 33.3,
+            unit: "%",
+            status: "bad",
+            basis: "실행 3건 중 공식 주소로 통과 1건.",
+            caveat: "1건은 스텁 응답이라 통과로 세지 않았습니다.",
+          },
+          {
+            id: "incidents-open",
+            title: "진행 중인 장애",
+            value: 0,
+            unit: "건",
+            status: "good",
+            basis: "지금 열려 있는 장애 0건.",
+            caveat:
+              "기록된 장애가 하나도 없습니다 — 장애가 없었다는 뜻일 수도, 아무도 적지 않았다는 뜻일 수도 있습니다.",
+          },
+          {
+            id: "mttr",
+            title: "평균 복구 시간",
+            value: null,
+            unit: "분",
+            status: "unknown",
+            basis: "표본이 없어 평균을 낼 수 없습니다.",
+            caveat: "0분이 아니라 '모른다'입니다.",
+          },
+          {
+            id: "mttd",
+            title: "평균 감지 시간",
+            value: null,
+            unit: "분",
+            status: "unknown",
+            basis: "표본이 없어 평균을 낼 수 없습니다.",
+            caveat: "0분이 아니라 '모른다'입니다.",
+          },
+          {
+            id: "follow-up",
+            title: "영구 조치 대기",
+            value: 2,
+            unit: "건",
+            status: "watch",
+            basis: "임시 조치로 닫힌 뒤 영구 조치를 기다리는 장애 2건.",
+            caveat: "목록에서는 '복구됨'으로 보이지만 원인은 그대로 있습니다.",
+          },
+          {
+            id: "alerts",
+            title: "활성 경보",
+            value: 0,
+            unit: "건",
+            status: "unknown",
+            basis: "지금 살아 있는 경보 0건.",
+            caveat:
+              "예약 점검이 돌고 있지 않습니다 — 이 숫자가 낮은 것은 조용해서가 아니라 아무도 보고 있지 않아서일 수 있습니다.",
+          },
+          {
+            id: "checks",
+            title: "예약 점검 통과율",
+            value: 100,
+            unit: "%",
+            status: "good",
+            basis: "12회 중 12회 통과.",
+            caveat: null,
+          },
+          {
+            id: "ci",
+            title: "CI 통과율",
+            value: 91.7,
+            unit: "%",
+            status: "watch",
+            basis: "12회 중 11회 통과.",
+            caveat: null,
+          },
+        ],
+        windowDays: 30,
+        unknown: 3,
+        bad: 2,
+        detail:
+          "최근 30일 기준. 나쁨 2개: 운영 활성화 · 실 호출 스모크. 값을 낼 수 없는 지표 3개: 평균 복구 시간 · 평균 감지 시간 · 활성 경보 — 모르는 것을 좋음으로 세지 않습니다.",
+        checkedAt: new Date().toISOString(),
+      }),
+    );
+    return;
+  }
+
+  /** 운영 이벤트 (TASK-3801, CTO 정책 3801-①) — ADMIN 전용 */
+  if (url.pathname === "/ops/events") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    if (mode === "empty") {
+      res.end(JSON.stringify([]));
+      return;
+    }
+    res.end(
+      JSON.stringify([
+        {
+          id: "evt-2",
+          kind: "activation-lost",
+          title: "운영 활성화가 풀렸습니다",
+          message:
+            "충족돼 있던 조건이 빠졌습니다: 자격 증명 (production). 되던 것이 안 되는 상태입니다 — 키 만료·방화벽 규칙 정리처럼 조용히 풀리는 원인을 먼저 확인하세요.",
+          urgent: true,
+          environment: "production",
+          notifiedAt: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+        },
+        {
+          id: "evt-1",
+          kind: "activation-completed",
+          title: "운영 활성화 완료",
+          message:
+            "자격 증명 · 네트워크 · 전환 판정 세 조건이 모두 충족됐습니다 (production).",
+          urgent: false,
+          // 못 보냈으면 못 보낸 채로 보여 준다
+          notifiedAt: null,
+          environment: "production",
+          createdAt: new Date(Date.now() - 86400000).toISOString(),
+        },
+      ]),
+    );
+    return;
+  }
+
+  /** 운영 감사 기록 (TASK-3801, CTO 정책 3801-④) — ADMIN 전용 */
+  if (url.pathname === "/ops/audit") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    if (mode === "empty") {
+      res.end(JSON.stringify([]));
+      return;
+    }
+    res.end(
+      JSON.stringify([
+        {
+          id: "audit-2",
+          action: "incident.run",
+          title: "장애 기록 생성",
+          method: "POST",
+          path: "/ops/incidents",
+          target: null,
+          actorEmail: "admin@acos.local",
+          outcome: "failed",
+          statusCode: 400,
+          durationMs: 12,
+          detail: "component · severity=CRITICAL · summary",
+          requestId: "req-2",
+          createdAt: new Date().toISOString(),
+        },
+        {
+          id: "audit-1",
+          action: "smoke.run",
+          title: "운영 스모크 실행 (실 호출·과금)",
+          method: "POST",
+          path: "/ops/smoke",
+          target: null,
+          actorEmail: "admin@acos.local",
+          outcome: "ok",
+          statusCode: 200,
+          durationMs: 1840,
+          detail: null,
+          requestId: "req-1",
+          createdAt: new Date(Date.now() - 3600000).toISOString(),
+        },
+      ]),
+    );
+    return;
+  }
+
   // ── Provider 연결 순서 (TASK-2901, CTO 결정 2801-⑤) ── ADMIN 전용
   if (url.pathname === "/ops/providers") {
     if (req.headers.authorization !== "Bearer stub-token") {

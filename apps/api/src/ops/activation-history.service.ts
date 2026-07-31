@@ -7,6 +7,7 @@ import type {
   ActivationConditionId,
   ActivationHistoryEntry,
   ActivationReport,
+  ActivationSnapshot,
 } from "@acos/core";
 import type { ActivationHistoryDto } from "@acos/shared";
 import { PrismaService } from "../prisma/prisma.service";
@@ -55,6 +56,34 @@ export class ActivationHistoryService {
       this.logger.log(`활성화 상태 변화 기록: ${signature}`);
     } catch (error) {
       this.logger.warn(`활성화 이력 기록 실패 (판정은 계속합니다): ${String(error)}`);
+    }
+  }
+
+  /**
+   * 마지막으로 기록된 상태 (CTO 정책 3801-①).
+   *
+   * 이벤트 판정이 "직전에 무엇이었나"를 알아야 전이를 가릴 수 있습니다.
+   * 기록이 없으면 `null`이며, 그때 이벤트는 나지 않습니다 — 우리가 못 보고
+   * 있는 동안 이미 그 상태였을 수 있고, "방금 완료됐다"고 알리면
+   * 거짓말이 됩니다.
+   */
+  async snapshot(): Promise<ActivationSnapshot | null> {
+    try {
+      const last = await this.prisma.activationEvent.findFirst({
+        orderBy: { recordedAt: "desc" },
+      });
+      if (last === null) {
+        return null;
+      }
+      return {
+        activated: last.activated,
+        met: last.met as ActivationConditionId[],
+        environment: last.environment,
+        applicable: true,
+      };
+    } catch (error) {
+      this.logger.warn(`활성화 직전 상태를 읽지 못했습니다: ${String(error)}`);
+      return null;
     }
   }
 

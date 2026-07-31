@@ -58,7 +58,32 @@ export interface IncidentRecord {
   cause: string | null;
   /** 무엇으로 살렸는가 — 복구 기록에 필수 */
   recovery: string | null;
+  /**
+   * 그 복구가 **임시였는가 영구였는가** (TASK-3801, CTO 정책 3801-②).
+   * 닫을 때 반드시 고른다 — 이 한 칸이 "끝난 장애"와 "멈춰 둔 장애"를
+   * 가른다. 옛 기록은 null(모름)이다.
+   */
+  fixKind: IncidentFixKind | null;
+  /** 근본 원인 — 조사해서 알아낸 것. 모르면 null */
+  rootCause: string | null;
+  /** 임시 조치 — 지금 살리기 위해 한 일 */
+  temporaryFix: string | null;
+  /** 영구 조치 — 같은 원인으로 다시 나지 않게 한 일 */
+  permanentFix: string | null;
+  /** 재발 방지 — 절차·감시·설계에 남긴 것 */
+  prevention: string | null;
 }
+
+/**
+ * 복구의 성격 (CTO 정책 3801-②).
+ *
+ * **임시 조치로 닫힌 장애는 끝난 것이 아닙니다.** 재시작으로 살렸다면 그
+ * 원인은 그대로 있고, 같은 일이 다음 주에 다시 납니다. 그런데 장애 목록에서
+ * 그 둘은 똑같이 "복구됨"으로 보입니다 — 그러면 팀은 자기가 **몇 개의
+ * 시한폭탄을 안고 있는지** 모릅니다.
+ */
+export const INCIDENT_FIX_KINDS = ["temporary", "permanent"] as const;
+export type IncidentFixKind = (typeof INCIDENT_FIX_KINDS)[number];
 
 /** 장애 한 건의 시간 정보 */
 export interface IncidentDuration {
@@ -163,6 +188,8 @@ export function validateResolution(input: {
   incident: IncidentRecord;
   resolvedAt: Date;
   recovery: string;
+  /** 그 복구가 임시인가 영구인가 (CTO 정책 3801-②) */
+  fixKind: string;
   now?: Date;
 }): { ok: true } | { ok: false; reason: string } {
   const now = input.now ?? new Date();
@@ -186,7 +213,82 @@ export function validateResolution(input: {
         "장애 때 아무 도움이 되지 않습니다 (CTO 정책 3701-④).",
     };
   }
+  // **임시인지 영구인지를 고르게 한다** (CTO 정책 3801-②). 기본값을 두지
+  // 않는 이유: 기본값이 "영구"면 시한폭탄이 해결된 것으로 세어지고,
+  // 기본값이 "임시"면 진짜 해결까지 미해결로 남아 목록이 거짓말을 한다.
+  // 이건 사람만 아는 사실이므로 사람이 고른다.
+  if (!(INCIDENT_FIX_KINDS as readonly string[]).includes(input.fixKind)) {
+    return {
+      ok: false,
+      reason:
+        "이 복구가 임시 조치인지 영구 조치인지 골라 주세요 " +
+        `(${INCIDENT_FIX_KINDS.join(" · ")}) — 재시작으로 살린 것과 원인을 ` +
+        "없앤 것이 목록에서 똑같이 '복구됨'으로 보이면, 팀은 자기가 몇 개의 " +
+        "시한폭탄을 안고 있는지 모릅니다 (CTO 정책 3801-②).",
+    };
+  }
   return { ok: true };
+}
+
+/**
+ * 사후 분석 기록이 성립하는가 (CTO 정책 3801-②).
+ *
+ * 장애를 닫는 것과 **원인을 알아내는 것**은 다른 일이고, 대개 다른 날에
+ * 일어납니다. 그래서 분석은 따로 채웁니다.
+ *
+ * 여기서 막는 것 하나: **원인을 모르는데 재발 방지를 적을 수는 없습니다.**
+ * 무엇이 원인인지 모르는 채 적은 재발 방지는 "무언가 했다"는 기분만 남기고,
+ * 그 기분이 다음 장애 때 조사를 건너뛰게 만듭니다.
+ */
+export function validateAnalysis(input: {
+  incident: IncidentRecord;
+  rootCause?: string | null;
+  permanentFix?: string | null;
+  prevention?: string | null;
+}): { ok: true } | { ok: false; reason: string } {
+  const filled = (value: string | null | undefined): boolean =>
+    typeof value === "string" && value.trim().length >= 5;
+
+  if (
+    !filled(input.rootCause) &&
+    !filled(input.permanentFix) &&
+    !filled(input.prevention)
+  ) {
+    return {
+      ok: false,
+      reason:
+        "근본 원인 · 영구 조치 · 재발 방지 중 적어도 하나는 적어 주세요 " +
+        "(각 5자 이상).",
+    };
+  }
+
+  const knowsCause = filled(input.rootCause) || filled(input.incident.rootCause);
+  if (filled(input.prevention) && !knowsCause) {
+    return {
+      ok: false,
+      reason:
+        "근본 원인 없이 재발 방지를 적을 수 없습니다 — 무엇이 원인인지 " +
+        "모르는 채 적은 재발 방지는 다음 장애 때 조사를 건너뛰게 만듭니다 " +
+        "(CTO 정책 3801-②).",
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * 이 장애가 **아직 끝나지 않았는가** (순수 함수, CTO 정책 3801-②).
+ *
+ * 복구로 닫혔더라도 임시 조치였다면 원인은 그대로 있습니다. 영구 조치가
+ * 적히면 그때 비로소 끝난 것으로 봅니다.
+ */
+export function needsFollowUp(incident: IncidentRecord): boolean {
+  if (incident.resolvedAt === null) {
+    return false; // 진행 중인 장애는 '후속'이 아니라 '지금'이다
+  }
+  if ((incident.permanentFix ?? "").trim() !== "") {
+    return false;
+  }
+  return incident.fixKind === "temporary";
 }
 
 export interface IncidentSummary {
@@ -209,6 +311,15 @@ export interface IncidentSummary {
   totalDowntimeMs: number;
   /** 원인이 적히지 않은 채 닫힌 장애 수 — 이력의 구멍이다 */
   withoutCause: number;
+  /**
+   * **임시 조치로 닫혀 영구 조치를 기다리는 장애** (CTO 정책 3801-②).
+   * 목록에서는 "복구됨"으로 보이지만 원인은 그대로 있습니다.
+   */
+  awaitingPermanentFix: IncidentRecord[];
+  /** 근본 원인이 적히지 않은 채 닫힌 장애 수 */
+  withoutRootCause: number;
+  /** 재발 방지가 적힌 장애 수 — 이력이 다음 사람에게 남기는 것 */
+  withPrevention: number;
   detail: string;
 }
 
@@ -282,6 +393,25 @@ export function summarizeIncidents(
     );
   }
 
+  // 임시 조치로 닫힌 장애 (CTO 정책 3801-②) — 목록에서는 "복구됨"이지만
+  // 원인은 그대로 있다. **이 숫자를 안 보여 주면 아무도 세지 않는다.**
+  const awaitingPermanentFix = resolved
+    .map((item) => item.incident)
+    .filter(needsFollowUp);
+  if (awaitingPermanentFix.length > 0) {
+    parts.push(
+      `임시 조치로 닫힌 장애 ${awaitingPermanentFix.length}건이 영구 조치를 ` +
+        "기다립니다 — 목록에서는 '복구됨'으로 보이지만 원인은 그대로 있습니다.",
+    );
+  }
+
+  const withoutRootCause = resolved.filter(
+    (item) => (item.incident.rootCause ?? "").trim() === "",
+  ).length;
+  const withPrevention = resolved.filter(
+    (item) => (item.incident.prevention ?? "").trim() !== "",
+  ).length;
+
   return {
     open,
     resolvedCount: resolved.length,
@@ -290,6 +420,9 @@ export function summarizeIncidents(
     longest,
     totalDowntimeMs: resolved.reduce((sum, item) => sum + item.duration.ms, 0),
     withoutCause,
+    awaitingPermanentFix,
+    withoutRootCause,
+    withPrevention,
     detail: parts.join(" "),
   };
 }

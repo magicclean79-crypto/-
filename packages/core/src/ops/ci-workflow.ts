@@ -163,6 +163,14 @@ export interface CiRunJudgement {
   /** 연속 실패 횟수 (최근부터) */
   consecutiveFailures: number;
   total: number;
+  /**
+   * 통과로 끝난 실행 수 (TASK-3801 — 운영 KPI가 통과율을 낸다).
+   *
+   * **끝나지 않은 실행은 세지 않습니다** — 진행 중인 것을 실패로도 성공으로도
+   * 세면 통과율이 시간에 따라 흔들립니다. `total`에는 들어가므로, 진행 중인
+   * 실행이 많으면 통과율은 그만큼 보수적으로 나옵니다.
+   */
+  passed: number;
   detail: string;
 }
 
@@ -194,6 +202,7 @@ export function judgeCiRuns(input: {
       latest: null,
       consecutiveFailures: 0,
       total: 0,
+      passed: 0,
       detail:
         "CI 실행 이력이 없습니다 — 통과한 적이 없는 것과 한 번도 돌지 않은 것은 " +
         "다릅니다. 워크플로가 이 브랜치에서 실제로 도는지 확인하세요.",
@@ -201,6 +210,7 @@ export function judgeCiRuns(input: {
   }
 
   const latest = runs[0];
+  const passed = runs.filter((run) => run.conclusion === "success").length;
   let consecutiveFailures = 0;
   for (const run of runs) {
     if (run.conclusion === "failure") {
@@ -216,6 +226,7 @@ export function judgeCiRuns(input: {
       latest,
       consecutiveFailures,
       total: runs.length,
+      passed,
       detail: `가장 최근 실행(${latest.sha.slice(0, 8)})이 아직 진행 중입니다.`,
     };
   }
@@ -226,6 +237,7 @@ export function judgeCiRuns(input: {
       latest,
       consecutiveFailures: 0,
       total: runs.length,
+      passed,
       detail: `가장 최근 실행(${latest.sha.slice(0, 8)})이 통과했습니다.`,
     };
   }
@@ -235,6 +247,7 @@ export function judgeCiRuns(input: {
     latest,
     consecutiveFailures,
     total: runs.length,
+    passed,
     detail:
       `가장 최근 실행(${latest.sha.slice(0, 8)})이 ${latest.conclusion}로 끝났습니다` +
       (consecutiveFailures > 1

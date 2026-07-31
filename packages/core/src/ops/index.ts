@@ -23,3 +23,6 @@ export * from "./activation";
 export * from "./activation-history";
 export * from "./smoke";
 export * from "./incident";
+export * from "./activation-event";
+export * from "./kpi";
+export * from "./audit";

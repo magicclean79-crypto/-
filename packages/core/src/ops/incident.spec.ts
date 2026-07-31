@@ -1,6 +1,8 @@
 import {
   incidentDuration,
+  needsFollowUp,
   summarizeIncidents,
+  validateAnalysis,
   validateIncident,
   validateResolution,
 } from "./incident";
@@ -24,6 +26,11 @@ describe("운영 장애 이력 (TASK-3701)", () => {
     resolvedAt: null,
     cause: null,
     recovery: null,
+    fixKind: null,
+    rootCause: null,
+    temporaryFix: null,
+    permanentFix: null,
+    prevention: null,
     ...overrides,
   });
 
@@ -137,6 +144,7 @@ describe("운영 장애 이력 (TASK-3701)", () => {
         incident: incident({}),
         resolvedAt: new Date("2026-07-30T10:00:00Z"),
         recovery: "",
+        fixKind: "permanent",
         now,
       });
       expect(result).toEqual({
@@ -150,6 +158,7 @@ describe("운영 장애 이력 (TASK-3701)", () => {
         incident: incident({ resolvedAt: new Date("2026-07-30T10:00:00Z") }),
         resolvedAt: new Date("2026-07-30T11:00:00Z"),
         recovery: "API 키 교체",
+        fixKind: "permanent",
         now,
       });
       expect(result.ok).toBe(false);
@@ -160,9 +169,24 @@ describe("운영 장애 이력 (TASK-3701)", () => {
         incident: incident({}),
         resolvedAt: new Date("2026-07-30T08:00:00Z"),
         recovery: "API 키 교체",
+        fixKind: "permanent",
         now,
       });
       expect(result.ok).toBe(false);
+    });
+
+    it("임시인지 영구인지 고르지 않으면 닫히지 않는다 — 기본값을 두면 목록이 거짓말한다", () => {
+      const result = validateResolution({
+        incident: incident({}),
+        resolvedAt: new Date("2026-07-30T10:00:00Z"),
+        recovery: "API 서버 재시작",
+        fixKind: "",
+        now,
+      });
+      expect(result).toEqual({
+        ok: false,
+        reason: expect.stringContaining("임시 조치인지 영구 조치인지"),
+      });
     });
 
     it("복구 방법이 적혀 있으면 닫을 수 있다", () => {
@@ -171,9 +195,83 @@ describe("운영 장애 이력 (TASK-3701)", () => {
           incident: incident({}),
           resolvedAt: new Date("2026-07-30T10:00:00Z"),
           recovery: "만료된 OPENAI_API_KEY를 새 키로 교체",
+          fixKind: "permanent",
           now,
         }),
       ).toEqual({ ok: true });
+    });
+  });
+
+  describe("사후 분석 (정책 3801-②)", () => {
+    it("근본 원인 없이 재발 방지를 적을 수 없다", () => {
+      const result = validateAnalysis({
+        incident: incident({ resolvedAt: new Date("2026-07-30T10:00:00Z") }),
+        prevention: "배포 전 키 만료일을 확인하는 단계를 추가",
+      });
+      expect(result).toEqual({
+        ok: false,
+        reason: expect.stringContaining("근본 원인 없이"),
+      });
+    });
+
+    it("이미 원인이 적힌 장애에는 재발 방지만 더할 수 있다", () => {
+      expect(
+        validateAnalysis({
+          incident: incident({ rootCause: "키 만료일을 아무도 보지 않았다" }),
+          prevention: "배포 전 키 만료일을 확인하는 단계를 추가",
+        }),
+      ).toEqual({ ok: true });
+    });
+
+    it("아무것도 적지 않으면 받지 않는다", () => {
+      expect(validateAnalysis({ incident: incident({}) }).ok).toBe(false);
+    });
+
+    it("원인과 재발 방지를 함께 적으면 통과한다", () => {
+      expect(
+        validateAnalysis({
+          incident: incident({}),
+          rootCause: "키 만료일을 아무도 보지 않았다",
+          permanentFix: "만료 30일 전 경보를 추가",
+          prevention: "배포 체크리스트에 키 만료 확인을 넣음",
+        }),
+      ).toEqual({ ok: true });
+    });
+  });
+
+  describe("영구 조치 대기 (정책 3801-②)", () => {
+    it("임시 조치로 닫힌 장애는 끝난 것이 아니다", () => {
+      expect(
+        needsFollowUp(
+          incident({
+            resolvedAt: new Date("2026-07-30T10:00:00Z"),
+            fixKind: "temporary",
+            temporaryFix: "API 서버 재시작",
+          }),
+        ),
+      ).toBe(true);
+    });
+
+    it("영구 조치가 적히면 해제된다", () => {
+      expect(
+        needsFollowUp(
+          incident({
+            resolvedAt: new Date("2026-07-30T10:00:00Z"),
+            fixKind: "temporary",
+            permanentFix: "연결 풀 설정을 고침",
+          }),
+        ),
+      ).toBe(false);
+    });
+
+    it("진행 중인 장애는 '후속'이 아니라 '지금'이다", () => {
+      expect(needsFollowUp(incident({ fixKind: "temporary" }))).toBe(false);
+    });
+
+    it("옛 기록(fixKind 없음)을 후속 대기로 세지 않는다 — 모르는 것을 문제로 만들지 않는다", () => {
+      expect(
+        needsFollowUp(incident({ resolvedAt: new Date("2026-07-30T10:00:00Z") })),
+      ).toBe(false);
     });
   });
 
@@ -229,6 +327,34 @@ describe("운영 장애 이력 (TASK-3701)", () => {
       );
       expect(summary.longest?.incident.id).toBe("b");
       expect(summary.totalDowntimeMs).toBe((30 + 360) * 60 * 1000);
+    });
+
+    it("임시 조치로 닫힌 장애를 따로 세어 말한다 — 목록에서는 '복구됨'으로 보인다", () => {
+      const summary = summarizeIncidents(
+        [
+          incident({
+            id: "a",
+            resolvedAt: new Date("2026-07-30T10:00:00Z"),
+            recovery: "재시작",
+            fixKind: "temporary",
+            temporaryFix: "재시작",
+          }),
+          incident({
+            id: "b",
+            resolvedAt: new Date("2026-07-30T10:00:00Z"),
+            recovery: "연결 풀 수정",
+            fixKind: "permanent",
+            permanentFix: "연결 풀 수정",
+            rootCause: "풀 크기가 1이었다",
+            prevention: "기본값을 바꾸고 테스트를 추가",
+          }),
+        ],
+        now,
+      );
+      expect(summary.awaitingPermanentFix.map((row) => row.id)).toEqual(["a"]);
+      expect(summary.withPrevention).toBe(1);
+      expect(summary.withoutRootCause).toBe(1);
+      expect(summary.detail).toContain("영구 조치를 기다립니다");
     });
 
     it("원인이 안 적힌 채 닫힌 장애를 세어 말한다", () => {

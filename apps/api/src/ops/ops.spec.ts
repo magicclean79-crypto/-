@@ -16,6 +16,10 @@ import { OCR_PROVIDER } from "../ocr/ocr.constants";
 import { ActivationHistoryService } from "./activation-history.service";
 import { IncidentService } from "./incident.service";
 import { ProductionSmokeService } from "./production-smoke.service";
+import { KpiService } from "./kpi.service";
+import { OpsAuditInterceptor, OpsAuditService } from "./ops-audit.interceptor";
+import { OpsEventService } from "./ops-event.service";
+import { RequestContextService } from "../common/request-context.service";
 import { PriceSourceService } from "../pricing/price-source.service";
 import { CiStatusService } from "./ci-status.service";
 import { EgressService } from "./egress.service";
@@ -99,6 +103,9 @@ function createPrismaStub() {
   const activationEvents: Record<string, unknown>[] = [];
   const smokeRuns: Record<string, unknown>[] = [];
   const incidents: Record<string, unknown>[] = [];
+  // 운영 이벤트 · 감사 기록 (TASK-3801)
+  const opsEvents: Record<string, unknown>[] = [];
+  const opsAudit: Record<string, unknown>[] = [];
   const deliveries: {
     id: string;
     alertKey: string;
@@ -393,6 +400,20 @@ function createPrismaStub() {
     requirements,
     stub: {
       alert: {
+        // 운영 KPI가 활성 경보·창 안 발생을 센다 (TASK-3801)
+        count: async (args?: {
+          where?: { status?: string; firstRaisedAt?: { gte: Date } };
+        }) => {
+          let rows = [...alerts.values()];
+          if (args?.where?.status) {
+            rows = rows.filter((row) => row.status === args.where!.status);
+          }
+          const gte = args?.where?.firstRaisedAt?.gte;
+          if (gte) {
+            rows = rows.filter((row) => row.firstRaisedAt.getTime() >= gte.getTime());
+          }
+          return rows.length;
+        },
         findMany: async (args?: {
           where?: { kind?: { in: string[] }; status?: string };
         }) => {
@@ -1056,6 +1077,11 @@ function createPrismaStub() {
             resolvedAt: null,
             cause: null,
             recovery: null,
+            fixKind: null,
+            rootCause: null,
+            temporaryFix: null,
+            permanentFix: null,
+            prevention: null,
             ...args.data,
           } as Record<string, unknown>;
           incidents.push(row);
@@ -1073,7 +1099,77 @@ function createPrismaStub() {
           return { ...row };
         },
       },
+      opsEvent: {
+        findUnique: async (args: { where: { key: string } }) => {
+          const row = opsEvents.find((item) => item.key === args.where.key);
+          return row === undefined ? null : { ...row };
+        },
+        findMany: async (args?: { take?: number }) =>
+          [...opsEvents]
+            .reverse()
+            .slice(0, args?.take ?? opsEvents.length)
+            .map((row) => ({ ...row })),
+        create: async (args: { data: Record<string, unknown> }) => {
+          seq += 1;
+          const row = {
+            id: `evt-${seq}`,
+            createdAt: new Date(),
+            notifiedAt: null,
+            urgent: false,
+            ...args.data,
+          } as Record<string, unknown>;
+          opsEvents.push(row);
+          return { ...row };
+        },
+        update: async (args: {
+          where: { id: string };
+          data: Record<string, unknown>;
+        }) => {
+          const row = opsEvents.find((item) => item.id === args.where.id);
+          if (row === undefined) {
+            throw new Error("no such ops event");
+          }
+          Object.assign(row, args.data);
+          return { ...row };
+        },
+      },
+      opsAuditLog: {
+        findMany: async (args?: { take?: number; where?: { action?: string } }) =>
+          [...opsAudit]
+            .reverse()
+            .filter(
+              (row) =>
+                args?.where?.action === undefined || row.action === args.where.action,
+            )
+            .slice(0, args?.take ?? opsAudit.length)
+            .map((row) => ({ ...row })),
+        create: async (args: { data: Record<string, unknown> }) => {
+          seq += 1;
+          const row = {
+            id: `audit-${seq}`,
+            createdAt: new Date(),
+            target: null,
+            actorId: null,
+            actorEmail: null,
+            statusCode: null,
+            durationMs: null,
+            detail: null,
+            requestId: null,
+            traceId: null,
+            ...args.data,
+          } as Record<string, unknown>;
+          opsAudit.push(row);
+          return { ...row };
+        },
+      },
       checkRun: {
+        // 운영 KPI가 창 안의 점검 실행을 센다 (TASK-3801)
+        findMany: async (args?: { where?: { createdAt?: { gte: Date } } }) => {
+          const gte = args?.where?.createdAt?.gte;
+          return runs
+            .filter((row) => gte === undefined || row.createdAt.getTime() >= gte.getTime())
+            .map((row) => ({ ...row }));
+        },
         create: async (args: { data: Record<string, unknown> }) => {
           seq += 1;
           const row = {
@@ -1084,10 +1180,11 @@ function createPrismaStub() {
           runs.push(row);
           return { ...row };
         },
-        findFirst: async (args: { where: { job: string } }) => {
+        findFirst: async (args?: { where?: { job?: string } }) => {
+          // 운영 KPI는 job 없이 "가장 최근 점검"을 묻는다 (TASK-3801)
           const found = [...runs]
             .reverse()
-            .find((row) => row.job === args.where.job);
+            .find((row) => args?.where?.job === undefined || row.job === args.where.job);
           return found ? { ...found } : null;
         },
       },
@@ -1351,6 +1448,14 @@ async function build(overrides: Overrides = {}) {
       // 없이는 닫히지 않는가"라는 이 기능의 본질이 검증되지 않는다.
       ActivationHistoryService,
       IncidentService,
+      // 운영 이벤트 · KPI · 감사 기록 (TASK-3801, 정책 3801-①③④) — 실제
+      // 서비스를 쓴다. 이 기능들의 본질(두 번 알리지 않는가 · 모르는 것을
+      // 좋음으로 세지 않는가 · 실패한 시도도 남는가)은 스텁으로 검증되지 않는다.
+      OpsEventService,
+      KpiService,
+      OpsAuditService,
+      OpsAuditInterceptor,
+      RequestContextService,
       // 운영 스모크 (TASK-3701, 정책 3701-②) — 서비스는 실제 것을 쓰고,
       // **부르는 상대만** 테스트가 정한다. 실제로 남의 서비스를 부르는
       // 테스트는 돈이 나가고 바깥 세상에 의존한다.
@@ -6575,6 +6680,7 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
           .send({
             resolvedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
             recovery: "만료된 키를 새 키로 교체",
+            fixKind: "permanent",
             cause: "API 키 만료",
           })
           .expect(200);
@@ -6607,6 +6713,231 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
         await request(built.app.getHttpServer() as never)
           .get("/ops/incidents")
           .expect(401);
+      });
+    });
+  });
+  /**
+   * Enterprise Operations Governance Platform (TASK-3801).
+   *
+   * 정책 3801-①~④가 지키려는 것: **경계를 넘을 때만 알린다**,
+   * **임시로 살린 것과 원인을 없앤 것을 가른다**, **모르는 지표를 좋음으로
+   * 세지 않는다**, **실패한 시도도 남긴다**.
+   */
+  describe("Enterprise Operations Governance Platform (TASK-3801)", () => {
+    const admin = (server: unknown, path: string) =>
+      request(server as never).get(path).set("Authorization", "Bearer tok-admin");
+
+    const post = (server: unknown, path: string) =>
+      request(server as never).post(path).set("Authorization", "Bearer tok-admin");
+
+    describe("활성화 이벤트 (정책 3801-①)", () => {
+      it("처음 관측에서는 이벤트가 나지 않는다 — 모르는 것을 사건으로 만들지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        await admin(server, "/ops/activation").expect(200);
+        const events = await admin(server, "/ops/events").expect(200);
+        expect(events.body).toEqual([]);
+      });
+
+      it("경계를 넘으면 이벤트가 나고, 유지되는 동안에는 다시 나지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        // 첫 관측 (조건 0개)
+        await admin(server, "/ops/activation").expect(200);
+        // 네트워크가 열려 조건 하나가 채워진다 — 아직 완료는 아니다
+        egressProbes = [
+          {
+            host: "api.openai.com",
+            status: "reachable",
+            reachable: true,
+            detail: "401 — 길은 열려 있다",
+          },
+        ];
+        await admin(server, "/ops/activation").expect(200);
+
+        // 경계를 넘지 않았으므로 이벤트는 없다 (진행 상황은 이력이 담당한다)
+        const events = await admin(server, "/ops/events").expect(200);
+        expect(events.body).toEqual([]);
+      });
+
+      it("ADMIN 전용이다", async () => {
+        const built = await build();
+        app = built.app;
+        await request(built.app.getHttpServer() as never).get("/ops/events").expect(401);
+      });
+    });
+
+    describe("장애 사후 분석 (정책 3801-②)", () => {
+      const incident = {
+        component: "llm",
+        severity: "MAJOR",
+        summary: "OpenAI 호출 전량 실패",
+        startedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+      };
+
+      const open = (server: unknown) =>
+        post(server, "/ops/incidents").send(incident).expect(201);
+
+      it("임시인지 영구인지 고르지 않으면 닫히지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+        const created = await open(server);
+
+        const rejected = await post(server, `/ops/incidents/${created.body.id}/resolve`)
+          .send({ recovery: "API 서버 재시작" })
+          .expect(400);
+        expect(rejected.body.message).toContain("임시 조치인지 영구 조치인지");
+      });
+
+      it("임시 조치로 닫힌 장애는 '복구됨'이어도 끝난 것이 아니다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+        const created = await open(server);
+
+        const resolved = await post(server, `/ops/incidents/${created.body.id}/resolve`)
+          .send({ recovery: "API 서버 재시작", fixKind: "temporary" })
+          .expect(200);
+        expect(resolved.body.needsFollowUp).toBe(true);
+        expect(resolved.body.temporaryFix).toBe("API 서버 재시작");
+
+        const board = await admin(server, "/ops/incidents").expect(200);
+        expect(board.body.awaitingPermanentFix).toBe(1);
+        expect(board.body.detail).toContain("영구 조치를 기다립니다");
+      });
+
+      it("근본 원인 없이 재발 방지를 적을 수 없다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+        const created = await open(server);
+
+        const rejected = await post(server, `/ops/incidents/${created.body.id}/analysis`)
+          .send({ prevention: "배포 전 키 만료일 확인 단계를 추가" })
+          .expect(400);
+        expect(rejected.body.message).toContain("근본 원인 없이");
+      });
+
+      it("영구 조치가 적히면 후속 대기가 풀린다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+        const created = await open(server);
+        await post(server, `/ops/incidents/${created.body.id}/resolve`)
+          .send({ recovery: "API 서버 재시작", fixKind: "temporary" })
+          .expect(200);
+
+        const analyzed = await post(server, `/ops/incidents/${created.body.id}/analysis`)
+          .send({
+            rootCause: "연결 풀 크기가 1이었다",
+            permanentFix: "풀 기본값을 고치고 테스트를 추가",
+            prevention: "부하 테스트를 배포 전 단계에 넣음",
+          })
+          .expect(200);
+        expect(analyzed.body.needsFollowUp).toBe(false);
+        expect(analyzed.body.rootCause).toContain("연결 풀");
+      });
+
+      it("빈 값이 이미 적힌 조사 결과를 덮어 쓰지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+        const created = await open(server);
+        await post(server, `/ops/incidents/${created.body.id}/analysis`)
+          .send({ rootCause: "연결 풀 크기가 1이었다" })
+          .expect(200);
+
+        const again = await post(server, `/ops/incidents/${created.body.id}/analysis`)
+          .send({ rootCause: "", permanentFix: "풀 기본값을 고침" })
+          .expect(200);
+        expect(again.body.rootCause).toContain("연결 풀");
+      });
+    });
+
+    describe("운영 KPI (정책 3801-③)", () => {
+      it("표본이 없는 지표를 0이 아니라 '낼 수 없음'으로 낸다", async () => {
+        const built = await build();
+        app = built.app;
+
+        const response = await admin(built.app.getHttpServer(), "/ops/kpi").expect(200);
+        const mttr = response.body.kpis.find((kpi: { id: string }) => kpi.id === "mttr");
+        expect(mttr.value).toBeNull();
+        expect(mttr.status).toBe("unknown");
+        expect(response.body.unknown).toBeGreaterThan(0);
+        expect(response.body.detail).toContain("모르는 것을 좋음으로 세지 않습니다");
+      });
+
+      it("관측 창을 밝힌다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await admin(built.app.getHttpServer(), "/ops/kpi").expect(200);
+        expect(response.body.windowDays).toBe(30);
+      });
+
+      it("ADMIN 전용이다", async () => {
+        const built = await build();
+        app = built.app;
+        await request(built.app.getHttpServer() as never).get("/ops/kpi").expect(401);
+      });
+    });
+
+    describe("운영 감사 기록 (정책 3801-④)", () => {
+      it("변경 요청을 남긴다 — 누가 무엇을 눌렀는가", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        await post(server, "/ops/smoke").expect(200);
+
+        const audit = await admin(server, "/ops/audit").expect(200);
+        const entry = audit.body.find(
+          (row: { action: string }) => row.action === "smoke.run",
+        );
+        expect(entry.outcome).toBe("ok");
+        expect(entry.actorEmail).toBe("a@acos.local");
+        expect(entry.title).toContain("과금");
+      });
+
+      it("실패한 시도도 남는다 — 거절된 시도는 그 자체가 신호다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        await post(server, "/ops/incidents")
+          .send({ component: "저기 어딘가", severity: "MAJOR", summary: "무언가", startedAt: new Date().toISOString() })
+          .expect(400);
+
+        const audit = await admin(server, "/ops/audit").expect(200);
+        const entry = audit.body.find(
+          (row: { action: string }) => row.action === "incident.open",
+        );
+        expect(entry.outcome).toBe("failed");
+        expect(entry.statusCode).toBe(400);
+        // 판단의 근거가 되는 짧은 값은 남는다
+        expect(entry.detail).toContain("severity=MAJOR");
+      });
+
+      it("조회는 남기지 않는다 — 소음이 진짜 변경을 묻는다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        await admin(server, "/ops/kpi").expect(200);
+        await admin(server, "/ops/incidents").expect(200);
+
+        const audit = await admin(server, "/ops/audit").expect(200);
+        expect(audit.body).toEqual([]);
+      });
+
+      it("ADMIN 전용이다", async () => {
+        const built = await build();
+        app = built.app;
+        await request(built.app.getHttpServer() as never).get("/ops/audit").expect(401);
       });
     });
   });
