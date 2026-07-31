@@ -12,6 +12,9 @@ import type {
   SmokeReportDto,
   ValidationPlanDto,
   ValidationRunDto,
+  HostVerificationDto,
+  NeglectReportDto,
+  ProjectCostDto,
 } from "@acos/shared";
 import { authFetchInit } from "../../../lib/auth-client";
 
@@ -97,6 +100,10 @@ export default function ActivationDashboardPage() {
   // TASK-4101 — 검증 실행 잠금 · 되살림 이력
   const [runGate, setRunGate] = useState<ValidationRunDto | null>(null);
   const [revivals, setRevivals] = useState<DraftRevivalSummaryDto | null>(null);
+  // TASK-4201 — 호스트 목록 · 방치 지표 · 프로젝트 비용
+  const [hosts, setHosts] = useState<HostVerificationDto | null>(null);
+  const [neglect, setNeglect] = useState<NeglectReportDto | null>(null);
+  const [costs, setCosts] = useState<ProjectCostDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [smokeRunning, setSmokeRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -109,7 +116,20 @@ export default function ActivationDashboardPage() {
         const response = await fetch(`${API_URL}${path}`, authFetchInit());
         return response.ok ? ((await response.json()) as T) : null;
       };
-      const [next, log, probe, board, plan, diag, draft, gate, revival] = await Promise.all([
+      const [
+        next,
+        log,
+        probe,
+        board,
+        plan,
+        diag,
+        draft,
+        gate,
+        revival,
+        hostList,
+        neglectReport,
+        costReport,
+      ] = await Promise.all([
         get<ProductionActivationDto>("/ops/activation"),
         get<ActivationHistoryDto>("/ops/activation/history"),
         get<SmokeReportDto>("/ops/smoke"),
@@ -120,6 +140,9 @@ export default function ActivationDashboardPage() {
         get<DraftLifecycleDto>("/ops/incidents/drafts"),
         get<ValidationRunDto>("/ops/validation-run"),
         get<DraftRevivalSummaryDto>("/ops/incidents/revivals"),
+        get<HostVerificationDto>("/ops/hosts"),
+        get<NeglectReportDto>("/ops/neglect"),
+        get<ProjectCostDto>("/ops/cost/projects"),
       ]);
       setActivation(next);
       setHistory(log);
@@ -130,6 +153,9 @@ export default function ActivationDashboardPage() {
       setDrafts(draft);
       setRunGate(gate);
       setRevivals(revival);
+      setHosts(hostList);
+      setNeglect(neglectReport);
+      setCosts(costReport);
       setError(next === null ? "활성화 판정을 읽지 못했습니다 (ADMIN 로그인이 필요합니다)." : null);
     } catch {
       setError("API 서버에 연결할 수 없습니다.");
@@ -489,6 +515,214 @@ export default function ActivationDashboardPage() {
               </li>
             ))}
           </ol>
+        </section>
+      ) : null}
+
+      {/* 운영 호스트 목록 (TASK-4201, CTO 정책 4201-①) */}
+      {hosts !== null && hosts.required ? (
+        <section
+          data-testid="production-hosts"
+          className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-lg font-medium">운영 호스트 목록</h2>
+            {hosts.declared === 0 ? (
+              <span
+                data-testid="hosts-empty"
+                className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800 dark:bg-red-900/40 dark:text-red-300"
+              >
+                선언 없음 — 보호가 꺼짐
+              </span>
+            ) : (
+              <span className="rounded-full bg-zinc-200 px-2 py-0.5 text-xs text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+                선언 {hosts.declared}개
+              </span>
+            )}
+            {hosts.undeclared > 0 ? (
+              <span
+                data-testid="hosts-undeclared"
+                className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+              >
+                목록에 없는 호스트 {hosts.undeclared}개
+              </span>
+            ) : null}
+          </div>
+          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">{hosts.detail}</p>
+          <ul data-testid="hosts-list" className="mt-3 space-y-1 text-sm">
+            {hosts.findings.map((row) => (
+              <li
+                key={row.host}
+                data-testid={`host-${row.host}`}
+                className="rounded-lg border border-zinc-100 px-3 py-2 dark:border-zinc-900"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <code className="text-xs">{row.host}</code>
+                  <span
+                    data-testid={`host-verdict-${row.host}`}
+                    className={`rounded-full px-2 py-0.5 text-xs ${
+                      row.verdict === "declared"
+                        ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
+                        : row.verdict === "undeclared"
+                          ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                          : "bg-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
+                    }`}
+                  >
+                    {row.verdict === "declared"
+                      ? "선언됨"
+                      : row.verdict === "undeclared"
+                        ? "목록에 없음"
+                        : row.verdict === "not-applicable"
+                          ? "운영일 수 없음"
+                          : "이번에 안 보임"}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+                  {row.detail}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {/* 방치 지표 (TASK-4201, CTO 정책 4201-②) */}
+      {neglect ? (
+        <section
+          data-testid="neglect-section"
+          className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-lg font-medium">방치 지표</h2>
+            {neglect.worst !== null ? (
+              <span
+                data-testid="neglect-worst"
+                className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+              >
+                가장 오래된 것 {neglect.worst.durationLabel}째
+              </span>
+            ) : null}
+            <span className="text-xs text-zinc-500">
+              기준 {neglect.neglectAfterDays}일 · 진단 {neglect.runs}회
+            </span>
+          </div>
+          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+            {neglect.detail}
+          </p>
+          {neglect.streaks.length > 0 ? (
+            <ul data-testid="neglect-streaks" className="mt-3 space-y-1 text-sm">
+              {neglect.streaks.map((row) => (
+                <li
+                  key={row.id}
+                  data-testid={`streak-${row.id}`}
+                  className="rounded-lg border border-zinc-100 px-3 py-2 dark:border-zinc-900"
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-medium">{row.title}</span>
+                    <span className="text-xs text-zinc-500">
+                      {row.runs}회 연속 · {row.durationLabel}째
+                    </span>
+                    {/*
+                      기록이 남은 구간 내내 나빴다면 실제로는 더 오래됐을 수
+                      있다 — 확정된 기간으로 읽으면 방치가 짧게 보인다.
+                    */}
+                    {row.truncated ? (
+                      <span
+                        data-testid={`streak-truncated-${row.id}`}
+                        className="rounded-full bg-zinc-200 px-2 py-0.5 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
+                      >
+                        최소값
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+                    {row.detail}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </section>
+      ) : null}
+
+      {/* 프로젝트별 비용 (TASK-4201, CTO 정책 4201-④) */}
+      {costs ? (
+        <section
+          data-testid="project-cost"
+          className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-lg font-medium">프로젝트별 비용</h2>
+            <span className="text-xs text-zinc-500">최근 {costs.windowDays}일</span>
+            {costs.coverage !== null ? (
+              <span
+                data-testid="cost-coverage"
+                className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                  costs.coverage < 100
+                    ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                    : "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
+                }`}
+              >
+                귀속률 {costs.coverage}%
+              </span>
+            ) : (
+              <span
+                data-testid="cost-coverage-unknown"
+                className="rounded-full bg-zinc-200 px-2 py-0.5 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
+              >
+                낼 수 없음
+              </span>
+            )}
+          </div>
+          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">{costs.detail}</p>
+          {/*
+            이 표를 어떻게 읽어야 하는지는 항상 붙는다 — 귀속률이 100%가
+            아니면 이 표로 청구할 때 실제보다 적게 청구된다.
+          */}
+          <p
+            data-testid="cost-caveat"
+            className="mt-1 text-xs text-amber-700 dark:text-amber-400"
+          >
+            {costs.caveat}
+          </p>
+          <ul data-testid="cost-rows" className="mt-3 space-y-1 text-sm">
+            {costs.rows.map((row) => (
+              <li
+                key={row.projectId}
+                data-testid={`cost-${row.projectId}`}
+                className="flex flex-wrap items-baseline gap-2 rounded-lg border border-zinc-100 px-3 py-2 dark:border-zinc-900"
+              >
+                <span className="font-medium">{row.name}</span>
+                <span className="text-xs text-zinc-500">
+                  ${row.cost.toFixed(6)} · {row.calls}회
+                  {row.share === null ? "" : ` · ${row.share}%`}
+                </span>
+                {/* 금액을 모르는 호출이 섞였으면 이 값은 최소값이다 */}
+                {row.unpricedCalls > 0 ? (
+                  <span
+                    data-testid={`cost-unpriced-${row.projectId}`}
+                    className="rounded-full bg-zinc-200 px-2 py-0.5 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
+                  >
+                    미산정 {row.unpricedCalls}건 — 최소값
+                  </span>
+                ) : null}
+              </li>
+            ))}
+            {/*
+              **미배분을 프로젝트에 나눠 얹지 않는다** — 자기 칸에 그대로 둔다.
+            */}
+            {costs.unattributedCalls > 0 ? (
+              <li
+                data-testid="cost-unattributed"
+                className="flex flex-wrap items-baseline gap-2 rounded-lg border border-amber-200 px-3 py-2 dark:border-amber-900"
+              >
+                <span className="font-medium">귀속되지 않음</span>
+                <span className="text-xs text-zinc-500">
+                  ${costs.unattributed.toFixed(6)} · {costs.unattributedCalls}회 — 어느
+                  프로젝트에도 더하지 않았습니다
+                </span>
+              </li>
+            ) : null}
+          </ul>
         </section>
       ) : null}
 

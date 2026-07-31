@@ -63,6 +63,10 @@ import type {
   DiagnosticRunDto,
   DraftRevivalSummaryDto,
   ValidationRunDto,
+  // TASK-4201 (CTO 정책 4201-①②④)
+  HostVerificationDto,
+  NeglectReportDto,
+  ProjectCostDto,
 } from "@acos/shared";
 import { AuthGuard, RequireRole } from "../auth/auth.guard";
 import type { AuthenticatedRequest } from "../auth/auth.guard";
@@ -93,6 +97,8 @@ import { KpiTrendService } from "./kpi-trend.service";
 import { ValidationPlanService } from "./validation-plan.service";
 import { DraftRevivalService } from "./draft-revival.service";
 import { ValidationRunService } from "./validation-run.service";
+import { NeglectService } from "./neglect.service";
+import { ProjectCostService } from "./project-cost.service";
 
 /**
  * 단가 제안의 단계 전이 경로 (TASK-3101).
@@ -164,6 +170,9 @@ export class OpsController {
     // 만료 초안 되살림 · 검증 실행 잠금 (TASK-4101, CTO 정책 4101-④⑤⑥)
     private readonly revival: DraftRevivalService,
     private readonly validationRun: ValidationRunService,
+    // 방치 지표 · 프로젝트 비용 (TASK-4201, CTO 정책 4201-②④)
+    private readonly neglect: NeglectService,
+    private readonly projectCost: ProjectCostService,
   ) {}
 
   /**
@@ -381,6 +390,56 @@ export class OpsController {
     return this.diagnostics.history(
       Number.isInteger(parsed) && parsed > 0 && parsed <= 200 ? parsed : 30,
       tier?.trim() || undefined,
+    );
+  }
+
+  /**
+   * 운영 호스트 목록 검증 (TASK-4201, CTO 정책 4201-①).
+   *
+   * 검증 대상 보호는 이 목록과 대조해서 동작합니다 — **목록이 낡으면
+   * 보호도 같이 낡습니다.** 자동으로 채우지 않는 이유는 그러면 스테이징까지
+   * 운영으로 올라가 정작 검증 대상이 막히기 때문입니다.
+   */
+  @Get("hosts")
+  productionHosts(): HostVerificationDto {
+    const report = this.diagnostics.hosts();
+    return {
+      findings: report.findings,
+      declared: report.declared,
+      undeclared: report.undeclared.length,
+      unseen: report.unseen.length,
+      required: report.required,
+      detail: report.detail,
+    };
+  }
+
+  /**
+   * 연속 실패 기간과 방치 지표 (TASK-4201, CTO 정책 4201-②).
+   *
+   * 실패 수는 나쁜 일이 몇 개인지 말하고, **방치는 그것을 얼마나 오래
+   * 두었는지** 말합니다. 실패 0건인 팀과 실패 1건을 석 달 둔 팀 중 후자가
+   * 더 나쁜데, 실패 수만 보면 후자가 나아 보입니다.
+   */
+  @Get("neglect")
+  async neglectReport(@Query("stage") stage?: string): Promise<NeglectReportDto> {
+    return this.neglect.report(
+      this.diagnostics.tier(),
+      stage === "startup" ? "startup" : "daily",
+    );
+  }
+
+  /**
+   * 프로젝트별 운영 비용 (TASK-4201, CTO 정책 4201-④).
+   *
+   * **귀속되지 않은 금액을 프로젝트에 나눠 얹지 않습니다** — 배분할 수 없는
+   * 것을 배분하면 그 숫자는 관측이 아니라 만들어낸 것이고, 그걸로 팀에
+   * 비용을 청구하게 됩니다.
+   */
+  @Get("cost/projects")
+  async projectCosts(@Query("days") days?: string): Promise<ProjectCostDto> {
+    const parsed = Number(days);
+    return this.projectCost.report(
+      Number.isInteger(parsed) && parsed > 0 && parsed <= 365 ? parsed : undefined,
     );
   }
 

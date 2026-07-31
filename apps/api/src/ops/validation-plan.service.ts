@@ -61,6 +61,18 @@ export class ValidationPlanService {
         const target = this.diagnostics.validationTarget();
         return { url: target.url, usable: target.usable, detail: target.detail };
       })(),
+      // 운영 호스트 목록 (TASK-4201, 정책 4201-①⑤) — 검증 대상 보호는 이
+      // 목록과 대조해서 동작하므로, 목록이 비어 있으면 보호가 지켜 주는
+      // 것이 아니라 통과시키고 있을 뿐이다
+      hosts: (() => {
+        try {
+          const report = this.diagnostics.hosts();
+          return { declared: report.declared, undeclared: report.undeclared.length };
+        } catch (error) {
+          this.logger.warn(`운영 호스트 목록을 읽지 못했습니다: ${String(error)}`);
+          return null;
+        }
+      })(),
       kpiSnapshots: snapshots,
       lastDrillAt: drill?.createdAt.getTime() ?? null,
       now,

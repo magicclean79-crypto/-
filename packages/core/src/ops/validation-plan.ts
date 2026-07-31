@@ -124,6 +124,19 @@ export const VALIDATION_STEPS: ValidationStep[] = [
     dependsOn: [],
   },
   {
+    id: "host-list",
+    title: "운영 호스트 목록 확인",
+    owner: "operator",
+    why:
+      "검증 대상 보호는 이 목록과 대조해서 동작합니다. 목록이 비어 있거나 " +
+      "운영 도메인이 빠져 있으면, 보호는 위험한 주소를 막는 것이 아니라 " +
+      "그냥 통과시키고 있는 것입니다.",
+    evidence:
+      "GET /ops/diagnostics의 '운영 호스트 목록'이 정상이고, 목록에 없는데 " +
+      "쓰이는 호스트가 0개입니다.",
+    dependsOn: [],
+  },
+  {
     id: "smoke",
     title: "실 호출 스모크 3종 통과",
     owner: "system",
@@ -131,7 +144,7 @@ export const VALIDATION_STEPS: ValidationStep[] = [
       "LLM·OCR·저장소를 실제로 한 번씩 불러 봐야 계약이 맞는지 압니다. " +
       "스텁 통과는 계약 확인이지 연결 확인이 아닙니다.",
     evidence: "POST /ops/smoke가 세 대상 모두 passed이고, stubbed가 0건입니다.",
-    dependsOn: ["credentials", "egress", "staging"],
+    dependsOn: ["credentials", "egress", "staging", "host-list"],
   },
   {
     id: "cutover",
@@ -190,6 +203,14 @@ export interface ValidationPlanInput {
   kpiSnapshots: number;
   /** 최근 복구 리허설 시각 (ms) — 없으면 null */
   lastDrillAt: number | null;
+  /**
+   * 운영 호스트 목록 검증 (TASK-4201, 정책 4201-①⑤).
+   *
+   * 검증 대상 보호는 이 목록이 정확할 때만 동작합니다. 목록이 비어 있거나
+   * 실제로 쓰이는 호스트가 빠져 있으면, 보호가 **통과시키고 있을 뿐**
+   * 지켜 주는 것이 아닙니다. 못 봤으면 null.
+   */
+  hosts: { declared: number; undeclared: number } | null;
   now: number;
 }
 
@@ -491,6 +512,33 @@ function evaluateStep(
             detail:
               `스냅샷이 ${input.kpiSnapshots}점뿐입니다 — 한 점으로는 ` +
               "검증 전후를 비교할 수 없습니다.",
+          };
+    }
+    case "host-list": {
+      if (input.hosts === null) {
+        return {
+          status: "unknown",
+          detail: "운영 호스트 목록을 확인하지 못했습니다 — 비어 있다는 뜻이 아닙니다.",
+        };
+      }
+      if (input.hosts.declared === 0) {
+        return {
+          status: "pending",
+          detail:
+            "운영 호스트가 하나도 선언돼 있지 않습니다 — 검증 대상 보호가 " +
+            "대조할 것이 없어 사실상 꺼져 있습니다.",
+        };
+      }
+      return input.hosts.undeclared === 0
+        ? {
+            status: "done",
+            detail: `운영 호스트 ${input.hosts.declared}개가 선언돼 있고 관측과 일치합니다.`,
+          }
+        : {
+            status: "pending",
+            detail:
+              `목록에 없는데 쓰이는 호스트가 ${input.hosts.undeclared}개 ` +
+              "있습니다 — 그중 운영이 섞여 있으면 보호가 그 주소를 통과시킵니다.",
           };
     }
     case "rollback": {

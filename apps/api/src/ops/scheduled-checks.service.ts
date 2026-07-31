@@ -1,6 +1,8 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import {
   SCHEDULED_JOBS,
+  // 배포 단계별 경보 정책 (TASK-4101, 정책 4101-③)
+  tierPolicy,
   detectBudgetAlerts,
   detectConfigurationAlerts,
   detectForecastAlerts,
@@ -50,6 +52,8 @@ import { RecoveryDrillService } from "./recovery-drill.service";
 import { DiagnosticsService } from "./diagnostics.service";
 import { DraftLifecycleService } from "./draft-lifecycle.service";
 import { KpiTrendService } from "./kpi-trend.service";
+import { NeglectService } from "./neglect.service";
+import { ProjectCostService } from "./project-cost.service";
 
 interface CheckRunRow {
   id: string;
@@ -93,6 +97,8 @@ const JOB_ALERT_KINDS: Record<ScheduledJob, AlertKind[]> = {
   // 가격 감지·예측도 자기 종류만 책임진다 (TASK-3201, 정책 3201-①④).
   // 공지 실패도 같은 점검이 책임진다 (TASK-3301, 정책 3301-①)
   "pricing-detect": ["pricing-drift", "price-source"],
+  // 비용 예측과 **프로젝트 비용 귀속률**이 같은 종류를 쓴다 (TASK-4201,
+  // 정책 4201-④) — 종류를 나누면 이 점검이 자기가 안 만든 경보를 해소한다
   "cost-forecast": ["cost-forecast"],
   // 일일 진단은 자기 종류만 책임진다 (TASK-4001, 정책 4001-④⑤).
   // 초안 방치도 같은 점검이 본다 (정책 4001-①) — 둘 다 "아침에 사람이
@@ -185,6 +191,9 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
     private readonly diagnostics: DiagnosticsService,
     private readonly drafts: DraftLifecycleService,
     private readonly trends: KpiTrendService,
+    // 방치 지표 · 프로젝트 비용 귀속률 (TASK-4201, CTO 정책 4201-②④)
+    private readonly neglect: NeglectService,
+    private readonly projectCost: ProjectCostService,
   ) {}
 
   /** 점검 1건의 잠금 이름 */
@@ -635,11 +644,18 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
       const sweep = await this.drafts.sweep();
       const { report, alerts } = await this.diagnostics.detect("daily");
 
-      // 진단과 초안 경보를 **한 번에** 동기화한다 — 같은 종류를 두 번 부르면
-      // 뒤 호출이 앞의 경보를 "이번에 감지되지 않았다"며 해소한다
+      // 방치 지표 (TASK-4201, 정책 4201-②) — **진단을 남긴 뒤에** 본다.
+      // 오늘 실행이 이력에 들어가야 연속 기간이 오늘까지로 이어진다.
+      const tier = this.diagnostics.tier();
+      const alerting = tierPolicy(tier).alerting;
+      const neglect = await this.neglect.detect(tier, alerting);
+
+      // 진단·초안·방치 경보를 **한 번에** 동기화한다 — 같은 종류를 두 번
+      // 부르면 뒤 호출이 앞의 경보를 "이번에 감지되지 않았다"며 해소한다
       const notified = await this.alerts.sync(JOB_ALERT_KINDS[job], [
         ...alerts,
         ...sweep.alerts,
+        ...neglect,
       ]);
 
       return {
@@ -650,7 +666,8 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
         detail:
           `일일 진단: ${report.detail} ` +
           `초안 수명: ${sweep.detail} (만료 표시 ${sweep.expired}건 — 기각이 아닙니다.) ` +
-          `KPI 스냅샷: ${snapshot.detail}`,
+          `KPI 스냅샷: ${snapshot.detail} ` +
+          `방치 경보 ${neglect.length}건.`,
         notified,
       };
     }
@@ -722,11 +739,22 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
         budget: forecast.budget,
         observedDays: forecast.observedDays,
       });
-      const notified = await this.alerts.sync(JOB_ALERT_KINDS[job], detected);
+      // 프로젝트 비용 귀속률 (TASK-4201, 정책 4201-④) — **금액이 크다고
+      // 부르지 않는다**(그건 예산 경보가 본다). 여기서 알리는 것은
+      // "이 표를 믿을 수 없다"이고, 같은 종류를 쓰므로 **한 번에** 동기화한다
+      const attribution = await this.projectCost.detect(
+        tierPolicy(this.diagnostics.tier()).alerting,
+      );
+      const notified = await this.alerts.sync(JOB_ALERT_KINDS[job], [
+        ...detected,
+        ...attribution,
+      ]);
       return {
         // 예상이 예산을 넘는 것도 장애가 아니다 — 판단 재료다
         ok: true,
-        detail: `${forecast.detail} 경보 ${detected.length}건`,
+        detail:
+          `${forecast.detail} 경보 ${detected.length}건 · ` +
+          `비용 귀속 경보 ${attribution.length}건`,
         notified,
       };
     }

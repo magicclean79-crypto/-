@@ -5,6 +5,9 @@ import {
   VALIDATION_TARGET_ENV,
   compareDiagnostics,
   detectDiagnosticAlerts,
+  hostOf,
+  parseHostList,
+  verifyProductionHosts,
   detectRegressionAlerts,
   judgeValidationTarget,
   resolveDeploymentTier,
@@ -18,6 +21,8 @@ import type {
   DetectedAlert,
   DiagnosticRunRecord,
   DiagnosticStage,
+  HostVerificationReport,
+  ObservedHost,
   ValidationTargetJudgement,
 } from "@acos/core";
 import type {
@@ -87,6 +92,34 @@ export class DiagnosticsService implements OnApplicationBootstrap {
     return resolveDeploymentTier(process.env as Record<string, string | undefined>);
   }
 
+  /**
+   * 운영 호스트 목록 검증 (CTO 정책 4201-①).
+   *
+   * 관측은 **설정값에서** 모읍니다 — 실행 기록의 `baseUrl`까지 넣으면
+   * Provider 도메인(api.openai.com 등)이 "운영 호스트 후보"로 올라오는데,
+   * 그건 우리 운영 도메인이 아니라 남의 서비스 주소입니다. 그것을 목록에
+   * 넣으라고 권하면 검증 대상 보호가 엉뚱한 것을 막게 됩니다.
+   */
+  hosts(): HostVerificationReport {
+    const env = process.env as Record<string, string | undefined>;
+    const observed: ObservedHost[] = [];
+    const add = (raw: string | undefined, source: string): void => {
+      const host = hostOf(raw);
+      if (host !== null) {
+        observed.push({ host, source, fromTraffic: false });
+      }
+    };
+    add(env.PUBLIC_BASE_URL, "PUBLIC_BASE_URL");
+    add(env.NEXT_PUBLIC_API_URL, "NEXT_PUBLIC_API_URL");
+    add(env.S3_PUBLIC_URL, "S3_PUBLIC_URL");
+
+    return verifyProductionHosts({
+      declared: parseHostList(env.PRODUCTION_HOSTS),
+      observed,
+      tier: this.tier(),
+    });
+  }
+
   /** 검증 대상 판정 (CTO 정책 4101-①) */
   validationTarget(): ValidationTargetJudgement {
     const env = process.env as Record<string, string | undefined>;
@@ -138,6 +171,22 @@ export class DiagnosticsService implements OnApplicationBootstrap {
             ack: env[VALIDATION_TARGET_ACK_ENV],
             productionHosts: env[PRODUCTION_HOSTS_ENV],
             selfUrl: env.PUBLIC_BASE_URL ?? null,
+          }
+        : null,
+      // 운영 호스트 목록 (정책 4201-①) — 검증 대상 보호가 대조할 것이
+      // 정확한지 본다. 개발에서는 요구하지 않으므로 판정도 그때만 붙인다.
+      hosts: tierPolicy(tier).requiresOperationalConfig
+        ? {
+            declared: parseHostList(env.PRODUCTION_HOSTS),
+            observed: this.hosts().findings
+              .filter((row) => row.verdict !== "unseen")
+              .flatMap((row) =>
+                row.sources.map((source) => ({
+                  host: row.host,
+                  source,
+                  fromTraffic: false,
+                })),
+              ),
           }
         : null,
       env,

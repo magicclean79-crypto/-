@@ -21,7 +21,12 @@
  * 말하지 못합니다.**
  */
 
-export const RETENTION_TARGETS = ["ops-audit", "ops-events"] as const;
+export const RETENTION_TARGETS = [
+  "ops-audit",
+  "ops-events",
+  // 진단 이력 (TASK-4201, CTO 정책 4201-③)
+  "diagnostics",
+] as const;
 export type RetentionTarget = (typeof RETENTION_TARGETS)[number];
 
 export interface RetentionSpec {
@@ -60,6 +65,27 @@ export const RETENTION_SPECS: RetentionSpec[] = [
     why:
       "이벤트는 활성화가 언제 완료됐고 언제 풀렸는지의 기록입니다. 분기 " +
       "회고에서 다시 보게 되므로 한 분기보다는 길어야 합니다.",
+  },
+  {
+    target: "diagnostics",
+    title: "운영 진단 이력",
+    // 감사보다 짧게 — 진단은 "지금과 어제"를 비교하는 용도이고, 반년 전
+    // 진단을 다시 볼 일은 거의 없다
+    defaultDays: 90,
+    /**
+     * **바닥이 14일인 이유**: 진단 이력의 쓸모는 두 가지입니다 — 어제와의
+     * 비교(정책 4101-②)와 연속 실패 기간(정책 4201-②). 앞은 이틀이면
+     * 되지만 뒤는 다릅니다. 보존을 이틀로 줄이면 **모든 연속 실패가 "2일째"**
+     * 로 보이고, 석 달 방치된 항목이 어제 시작된 것과 똑같아집니다.
+     * 그러면 방치 지표는 있으나 마나입니다 — 그건 보존 설정이 아니라
+     * 방치 지표를 끄는 것입니다.
+     */
+    minDays: 14,
+    maxDays: 3650,
+    why:
+      "진단 이력은 어제와의 비교와 연속 실패 기간에 쓰입니다. 너무 짧게 " +
+      "두면 오래된 방치가 방금 시작된 것처럼 보이고, 그러면 방치 지표가 " +
+      "거짓말합니다.",
   },
 ];
 

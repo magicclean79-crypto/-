@@ -103,6 +103,14 @@ export class OpsSettingsService {
         });
         return result.count;
       }
+      // 진단 이력 (TASK-4201, 정책 4201-③) — 비교와 연속 실패 기간에 쓰이므로
+      // 바닥이 14일이다(그보다 짧으면 오래된 방치가 방금 시작된 것처럼 보인다)
+      if (target === "diagnostics") {
+        const result = await this.prisma.diagnosticRun.deleteMany({
+          where: { ranAt: { lt: cutoff } },
+        });
+        return result.count;
+      }
       const result = await this.prisma.opsEvent.deleteMany({
         where: { createdAt: { lt: cutoff } },
       });

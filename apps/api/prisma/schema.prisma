@@ -146,10 +146,14 @@ model OcrResult {
    */
   requestId     String?
   traceId       String?
+  /// 어느 프로젝트가 쓴 호출인가 (TASK-4201) — null은 "모른다"다
+  projectId     String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
   @@index([imageId])
+  // 프로젝트별 비용 집계 (TASK-4201)
+  @@index([projectId, createdAt])
   @@index([status])
   // 일·월 예산 집계가 기간으로 자른다 (TASK-3001)
   @@index([createdAt])
@@ -552,10 +556,20 @@ model Execution {
    */
   requestId    String?
   traceId      String?
+  /**
+   * 어느 프로젝트가 쓴 호출인가 (TASK-4201, CTO 정책 4201-④).
+   * **null은 "공용"이 아니라 "모른다"** 이다 — 집계는 이것을 미배분 칸에
+   * 그대로 두고 프로젝트별로 나눠 얹지 않는다. 배분할 수 없는 것을
+   * 배분하면 그 숫자는 관측이 아니라 만들어낸 것이 된다.
+   * FK를 걸지 않는 이유: 프로젝트가 지워져도 비용 기록은 남아야 한다.
+   */
+  projectId    String?
   createdAt    DateTime        @default(now())
 
   @@index([feature, createdAt])
   @@index([diagnostic, createdAt])
+  // 프로젝트별 비용 집계 (TASK-4201)
+  @@index([projectId, createdAt])
   // 전환 판정이 "공식 주소로 성공한 기록"을 센다 (TASK-3501)
   @@index([provider, baseUrl, createdAt])
   // 한 요청이 부른 호출을 모아 본다 (TASK-3601)
@@ -1055,6 +1069,7 @@ model Incident {
    * 옛 기록은 전부 null이며 **null은 "영구 조치였다"가 아니라 "모른다"** 이다.
    */
   /**
+   * /**
    * /**
    * /**
    * 초안인가 확인된 장애인가 (TASK-3901, CTO 정책 3901-⑤).

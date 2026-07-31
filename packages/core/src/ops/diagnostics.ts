@@ -26,6 +26,8 @@
 import { configuredUrgentChannels } from "./urgent-routing";
 import type { NotificationChannel } from "./notification";
 import { checkTierConsistency, tierPolicy } from "./tier-policy";
+import { hostVerificationCheck, verifyProductionHosts } from "./host-verification";
+import type { ObservedHost } from "./host-verification";
 import { judgeValidationTarget, validationTargetCheck } from "./validation-target";
 import type { DeploymentTier, ValidationTargetInput } from "./validation-target";
 
@@ -70,6 +72,14 @@ export interface DiagnosticInput {
   tierDeclared: boolean;
   /** 검증 대상 판정 입력 (정책 4101-①) — 볼 필요가 없으면 null */
   validationTarget: Omit<ValidationTargetInput, "tier"> | null;
+  /**
+   * 운영 호스트 목록 검증 입력 (TASK-4201, 정책 4201-①).
+   *
+   * 검증 대상 보호는 이 목록과 대조해서 동작하므로, **목록이 낡으면 보호도
+   * 같이 낡습니다.** 그런데 빠진 호스트는 아무 신호도 내지 않습니다 —
+   * 그래서 진단이 봅니다. 못 봤으면 null.
+   */
+  hosts: { declared: string[]; observed: ObservedHost[] } | null;
   env: Record<string, string | undefined>;
   /** 환경변수 검증 결과 */
   envErrors: { name: string; message: string }[];
@@ -256,6 +266,19 @@ export function runDiagnostics(input: DiagnosticInput): DiagnosticReport {
       anyChannelConfigured: input.anyChannelConfigured,
     }),
   );
+
+  // 운영 호스트 목록 (정책 4201-①) — 보호가 대조할 것이 정확한가
+  if (input.hosts !== null) {
+    checks.push(
+      hostVerificationCheck(
+        verifyProductionHosts({
+          declared: input.hosts.declared,
+          observed: input.hosts.observed,
+          tier: input.tier,
+        }),
+      ),
+    );
+  }
 
   // 검증 대상 주소 (정책 4101-①) — 잘못 적으면 설정 실수가 아니라 사고다
   if (input.validationTarget !== null) {

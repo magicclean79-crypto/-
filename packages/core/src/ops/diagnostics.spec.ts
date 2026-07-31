@@ -10,11 +10,9 @@ function input(overrides: Partial<DiagnosticInput> = {}): DiagnosticInput {
     tier: "production",
     tierDeclared: true,
     validationTarget: null,
-    // 기본 표본은 "긴급 경로까지 갖춰진 운영" — 그래야 각 시험이 자기가
-    // 만든 문제만 보게 된다
-    // 선언(tier)과 구성(NODE_ENV)이 맞는 표본 — 어긋나면 그 자체가 실패
-    // 항목이 되고(정책 4101-③), 그러면 각 시험이 자기가 만들지 않은 문제를
-    // 보게 된다
+    hosts: null,
+    // 기본 표본은 "긴급 경로까지 갖춰졌고 선언(tier)과 구성(NODE_ENV)이
+    // 맞는 운영" — 그래야 각 시험이 자기가 만든 문제만 보게 된다
     env: {
       NODE_ENV: "production",
       ALERT_URGENT_WEBHOOK_URL: "http://127.0.0.1:9400/urgent",
@@ -67,13 +65,7 @@ describe("checkUrgentChannels", () => {
   it("긴급 경로가 있으면 정상이다", () => {
     const check = checkUrgentChannels({
       production: true,
-      // 선언(tier)과 구성(NODE_ENV)이 맞는 표본 — 어긋나면 그 자체가 실패
-    // 항목이 되고(정책 4101-③), 그러면 각 시험이 자기가 만들지 않은 문제를
-    // 보게 된다
-    env: {
-      NODE_ENV: "production",
-      ALERT_URGENT_WEBHOOK_URL: "http://127.0.0.1:9400/urgent",
-    },
+      env: { ALERT_URGENT_WEBHOOK_URL: "http://127.0.0.1:9400/urgent" },
       anyChannelConfigured: true,
     });
     expect(check.status).toBe("ok");

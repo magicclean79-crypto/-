@@ -3027,3 +3027,82 @@ export interface ValidationRunDto {
   detail: string;
   checkedAt: string;
 }
+
+// ── 호스트 검증 · 방치 지표 · 프로젝트 비용 (TASK-4201, Sprint 42) ──
+
+/** 운영 호스트 목록 검증 (CTO 정책 4201-①) */
+export interface HostVerificationDto {
+  findings: { host: string; verdict: string; sources: string[]; detail: string }[];
+  declared: number;
+  undeclared: number;
+  unseen: number;
+  /** 이 배포 단계에서 목록을 요구하는가 */
+  required: boolean;
+  detail: string;
+}
+
+/** 연속 실패 1건 (CTO 정책 4201-②) */
+export interface FailureStreakDto {
+  id: string;
+  title: string;
+  status: string;
+  /** 연속으로 나쁜 실행 횟수 */
+  runs: number;
+  since: string;
+  /** 처음 나빠진 뒤 지난 일수 */
+  durationDays: number;
+  /**
+   * 사람이 읽는 기간 — 하루 미만이면 시간·분으로 적는다.
+   * 일수만 쓰면 한 시간 된 연속이 "0일째"가 되어 설명과 어긋난다.
+   */
+  durationLabel: string;
+  /** 기록이 남은 구간 내내 나빴는가 — 그렇다면 **최소값으로 읽어야 한다** */
+  truncated: boolean;
+  detail: string;
+}
+
+/** 방치 지표 (GET /ops/neglect) */
+export interface NeglectReportDto {
+  streaks: FailureStreakDto[];
+  /** 가장 오래 방치된 항목 — 없으면 null */
+  worst: FailureStreakDto | null;
+  runs: number;
+  /** 관측이 끊긴 가장 긴 구간 (일) — 없으면 null */
+  largestGapDays: number | null;
+  /** 방치로 보는 기준 (일) */
+  neglectAfterDays: number;
+  detail: string;
+}
+
+/** 프로젝트 1건의 비용 (CTO 정책 4201-④) */
+export interface ProjectCostRowDto {
+  projectId: string;
+  name: string;
+  cost: number;
+  calls: number;
+  /** 금액을 모르는 호출 수 — 이 프로젝트의 비용은 **최소값**이다 */
+  unpricedCalls: number;
+  /** 미배분을 포함한 전체 대비 비율 — 전체가 0이면 null */
+  share: number | null;
+}
+
+/** 프로젝트별 비용 (GET /ops/cost/projects) */
+export interface ProjectCostDto {
+  rows: ProjectCostRowDto[];
+  attributed: number;
+  /** 귀속되지 않은 금액 — **프로젝트에 나눠 얹지 않는다** */
+  unattributed: number;
+  /** 진단·스모크 — 애초에 프로젝트 비용이 아니다 */
+  diagnostic: number;
+  total: number;
+  /** 금액을 모르는 호출 수 (미배분과 다른 문제다) */
+  unpricedCalls: number;
+  unattributedCalls: number;
+  /** 귀속률(%) — 표본이 없으면 null */
+  coverage: number | null;
+  windowDays: number;
+  detail: string;
+  /** 이 숫자를 어떻게 읽어야 하는지 — 항상 붙는다 */
+  caveat: string;
+  checkedAt: string;
+}

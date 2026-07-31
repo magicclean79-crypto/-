@@ -19,6 +19,7 @@ const rows: Execution[] = [
     latencyMs: 12,
     error: null,
     diagnostic: false,
+    projectId: null,
     // 호출 대상 (TASK-3501, 정책 3501-④) — 옛 기록은 모른다(null)
     endpoint: null,
     baseUrl: null,
@@ -40,6 +41,7 @@ const rows: Execution[] = [
     latencyMs: 40,
     error: "모델 오류",
     diagnostic: false,
+    projectId: null,
     // 호출 대상 (TASK-3501, 정책 3501-④) — 옛 기록은 모른다(null)
     endpoint: null,
     baseUrl: null,

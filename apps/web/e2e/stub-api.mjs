@@ -3484,6 +3484,155 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  /** 운영 호스트 목록 검증 (TASK-4201, CTO 정책 4201-①) — ADMIN 전용 */
+  if (url.pathname === "/ops/hosts") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify({
+        findings: [
+          {
+            host: "acos.example",
+            verdict: "declared",
+            sources: ["PUBLIC_BASE_URL"],
+            detail: "선언된 운영 호스트이며 실제로 쓰이고 있습니다 (PUBLIC_BASE_URL).",
+          },
+          {
+            host: "cdn.acos.example",
+            verdict: "undeclared",
+            sources: ["S3_PUBLIC_URL"],
+            detail:
+              "cdn.acos.example는 쓰이고 있는데 PRODUCTION_HOSTS에 없습니다 " +
+              "(S3_PUBLIC_URL). 이것이 운영 호스트라면 검증 대상 보호가 이 " +
+              "주소를 통과시킵니다 — 목록에 넣어 주세요.",
+          },
+        ],
+        declared: 1,
+        undeclared: 1,
+        unseen: 0,
+        required: true,
+        detail:
+          "선언된 운영 호스트 1개. 목록에 없는데 쓰이는 호스트 1개: " +
+          "cdn.acos.example. 이것이 운영이라면 검증 대상 보호가 그 주소를 " +
+          "통과시킵니다 — 목록을 고쳐 주세요. 자동으로 넣지 않는 이유는 " +
+          "그러면 스테이징까지 운영으로 올라가 정작 검증 대상이 막히기 " +
+          "때문입니다.",
+      }),
+    );
+    return;
+  }
+
+  /** 방치 지표 (TASK-4201, CTO 정책 4201-②) — ADMIN 전용 */
+  if (url.pathname === "/ops/neglect") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify({
+        streaks: [
+          {
+            id: "storage",
+            title: "오브젝트 저장소",
+            status: "fail",
+            runs: 21,
+            since: "2026-07-08T07:00:00.000Z",
+            durationDays: 23,
+            durationLabel: "23일",
+            truncated: true,
+            detail:
+              "오브젝트 저장소: 21회 연속 · 23일째 기록이 남은 구간 내내 " +
+              "나빴습니다 — 실제로는 더 오래됐을 수 있으니 최소값으로 읽으세요. " +
+              "이 정도면 대응 중인 것이 아니라 대응하지 않기로 한 것에 " +
+              "가깝습니다.",
+          },
+          {
+            id: "urgent-channel",
+            title: "긴급 알림 경로",
+            status: "warn",
+            runs: 2,
+            since: "2026-07-30T07:00:00.000Z",
+            durationDays: 1,
+            durationLabel: "1일",
+            truncated: false,
+            detail: "긴급 알림 경로: 2회 연속 · 1일째",
+          },
+        ],
+        worst: {
+          id: "storage",
+          title: "오브젝트 저장소",
+          status: "fail",
+          runs: 21,
+          since: "2026-07-08T07:00:00.000Z",
+          durationDays: 23,
+          durationLabel: "23일",
+          truncated: true,
+          detail: "오브젝트 저장소: 21회 연속 · 23일째",
+        },
+        runs: 21,
+        largestGapDays: null,
+        neglectAfterDays: 7,
+        detail:
+          "진단 21회를 봤습니다. 나쁜 항목 2개 중 가장 오래된 것은 오브젝트 " +
+          "저장소(23일째)입니다. 7일 넘게 그대로인 항목 1개: 오브젝트 저장소. " +
+          "실패 수가 늘지 않았다고 나아진 것이 아닙니다.",
+      }),
+    );
+    return;
+  }
+
+  /** 프로젝트별 비용 (TASK-4201, CTO 정책 4201-④) — ADMIN 전용 */
+  if (url.pathname === "/ops/cost/projects") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify({
+        rows: [
+          {
+            projectId: "proj-1",
+            name: "상세페이지 프로젝트",
+            cost: 1.2,
+            calls: 40,
+            unpricedCalls: 3,
+            share: 30,
+          },
+        ],
+        attributed: 1.2,
+        // **나누지 않는다** — 자기 칸에 그대로 둔다
+        unattributed: 2.8,
+        diagnostic: 0,
+        total: 4,
+        unpricedCalls: 3,
+        unattributedCalls: 60,
+        coverage: 40,
+        windowDays: 30,
+        detail:
+          "최근 30일 · 프로젝트 1개에 $1.200000 귀속. 귀속되지 않은 호출 " +
+          "60건($2.800000) — 프로젝트를 알 수 없는 기록입니다. 이 금액을 " +
+          "프로젝트별로 나눠 얹지 않았습니다: 배분할 수 없는 것을 배분하면 " +
+          "그 숫자는 관측이 아니라 만들어낸 것이 됩니다. 금액을 낼 수 없는 " +
+          "호출 3건이 있습니다(가격표에 없는 모델) — 위 금액은 모두 " +
+          "최소값입니다. 이것은 주인을 모르는 것과 다른 문제입니다.",
+        caveat:
+          "귀속률 40% — 나머지는 프로젝트를 알 수 없는 기록이고, 그 금액은 " +
+          "어느 프로젝트에도 더해지지 않았습니다. 이 표로 비용을 청구한다면 " +
+          "실제 사용량보다 적게 청구됩니다.",
+        checkedAt: new Date().toISOString(),
+      }),
+    );
+    return;
+  }
+
   /** 만료 초안 되살림 이력 (TASK-4101, CTO 정책 4101-④) — ADMIN 전용 */
   if (url.pathname === "/ops/incidents/revivals") {
     if (req.headers.authorization !== "Bearer stub-token") {

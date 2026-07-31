@@ -28,6 +28,8 @@ import { KpiTrendService } from "./kpi-trend.service";
 import { ValidationPlanService } from "./validation-plan.service";
 import { DraftRevivalService } from "./draft-revival.service";
 import { ValidationRunService } from "./validation-run.service";
+import { NeglectService } from "./neglect.service";
+import { ProjectCostService } from "./project-cost.service";
 import { AdminSettingsService } from "../admin/admin-settings.service";
 import { RequestContextService } from "../common/request-context.service";
 import { PriceSourceService } from "../pricing/price-source.service";
@@ -205,6 +207,9 @@ function createPrismaStub() {
     createdAt: Date;
     /** 호출 대상 (TASK-3501, 정책 3501-④) — 없으면 모른다 */
     baseUrl?: string | null;
+    /** 어느 프로젝트가 썼는가 (TASK-4201) — null은 "모른다"다 */
+    projectId?: string | null;
+    diagnostic?: boolean;
   }[] = [];
   const ocrResults: {
     provider: string;
@@ -212,6 +217,7 @@ function createPrismaStub() {
     cost: number | null;
     createdAt: Date;
     baseUrl?: string | null;
+    projectId?: string | null;
   }[] = [];
   /** 단가 제안 (TASK-3101) — 검토 → 승인 → 적용 절차의 저장소 */
   const pricingProposals: Record<string, unknown>[] = [];
@@ -1010,6 +1016,20 @@ function createPrismaStub() {
           diagnosticRuns.push(row);
           return { ...row };
         },
+        // 보존 정리 (TASK-4201, 정책 4201-③)
+        deleteMany: async (args?: { where?: { ranAt?: { lt?: Date } } }) => {
+          const cutoff = args?.where?.ranAt?.lt;
+          if (cutoff === undefined) {
+            const count = diagnosticRuns.length;
+            diagnosticRuns.length = 0;
+            return { count };
+          }
+          const keep = diagnosticRuns.filter((row) => (row.ranAt as Date) >= cutoff);
+          const count = diagnosticRuns.length - keep.length;
+          diagnosticRuns.length = 0;
+          diagnosticRuns.push(...keep);
+          return { count };
+        },
       },
       // 설정 변경 이력 (TASK-4001, 정책 4001-③)
       adminAuditLog: {
@@ -1703,6 +1723,11 @@ async function build(overrides: Overrides = {}) {
       // (TASK-4101, 정책 4101-①②③④⑤⑥)
       DraftRevivalService,
       ValidationRunService,
+      // 방치 지표 · 프로젝트 비용 (TASK-4201, 정책 4201-②④) — 실제 서비스를
+      // 쓴다. "미배분을 나누지 않는가"·"연속 기간을 최소값으로 읽게 하는가"는
+      // 스텁으로 검증되지 않는다.
+      NeglectService,
+      ProjectCostService,
       {
         // 운영 설정 저장소 — 테스트가 값을 정한다
         provide: AdminSettingsService,
@@ -7994,6 +8019,258 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
         const steps: { order: number; reversible: boolean }[] = response.body.steps;
         const firstIrreversible = steps.findIndex((step) => !step.reversible);
         expect(firstIrreversible).toBeGreaterThan(2);
+      });
+    });
+  });
+
+  describe("Enterprise Cost & Neglect Intelligence Platform (TASK-4201)", () => {
+    const admin = (server: unknown, path: string) =>
+      request(server as never).get(path).set("Authorization", "Bearer tok-admin");
+
+    const post = (server: unknown, path: string) =>
+      request(server as never).post(path).set("Authorization", "Bearer tok-admin");
+
+    describe("운영 호스트 목록 검증 (정책 4201-①)", () => {
+      it("목록이 비어 있으면 보호가 꺼진 것이다", async () => {
+        process.env.DEPLOY_TIER = "staging";
+        process.env.PUBLIC_BASE_URL = "https://api.acos.example";
+        delete process.env.PRODUCTION_HOSTS;
+        const built = await build();
+        app = built.app;
+
+        const response = await admin(built.app.getHttpServer(), "/ops/hosts").expect(200);
+        expect(response.body.declared).toBe(0);
+        expect(response.body.detail).toContain("사실상 꺼져 있습니다");
+      });
+
+      it("목록에 없는데 쓰이는 호스트를 찾아 사람에게 묻는다", async () => {
+        process.env.DEPLOY_TIER = "staging";
+        process.env.PRODUCTION_HOSTS = "acos.example";
+        process.env.PUBLIC_BASE_URL = "https://api.acos.example";
+        const built = await build();
+        app = built.app;
+
+        const response = await admin(built.app.getHttpServer(), "/ops/hosts").expect(200);
+        expect(response.body.undeclared).toBe(1);
+        expect(response.body.detail).toContain("이것이 운영이라면");
+      });
+
+      /**
+       * 자동으로 채우면 이 보호가 스스로 무력해진다 — 그 이유가 화면에
+       * 남아 있어야 다음 사람이 "자동화하면 되잖아"로 되돌리지 않는다.
+       */
+      it("자동으로 목록에 넣지 않는 이유를 말한다", async () => {
+        process.env.DEPLOY_TIER = "staging";
+        process.env.PRODUCTION_HOSTS = "acos.example";
+        process.env.PUBLIC_BASE_URL = "https://api.acos.example";
+        const built = await build();
+        app = built.app;
+
+        const response = await admin(built.app.getHttpServer(), "/ops/hosts").expect(200);
+        expect(response.body.detail).toContain("자동으로 넣지 않는 이유는");
+      });
+
+      it("목록이 비어 있으면 검증 준비도 끝난 것이 아니다", async () => {
+        process.env.DEPLOY_TIER = "staging";
+        delete process.env.PRODUCTION_HOSTS;
+        const built = await build();
+        app = built.app;
+
+        const response = await admin(built.app.getHttpServer(), "/ops/validation-plan")
+          .expect(200);
+        const step = response.body.steps.find(
+          (row: { id: string }) => row.id === "host-list",
+        );
+        expect(step.status).toBe("pending");
+        expect(step.owner).toBe("operator");
+      });
+
+      it("ADMIN 전용이다", async () => {
+        const built = await build();
+        app = built.app;
+        await request(built.app.getHttpServer() as never).get("/ops/hosts").expect(401);
+      });
+    });
+
+    describe("연속 실패와 방치 (정책 4201-②)", () => {
+      it("기록이 없는 것은 '방치가 없다'가 아니다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await admin(built.app.getHttpServer(), "/ops/neglect")
+          .expect(200);
+        expect(response.body.runs).toBe(0);
+        expect(response.body.worst).toBeNull();
+        expect(response.body.detail).toContain("방치를 잴 수 없습니다");
+      });
+
+      it("이력이 쌓이면 연속 실패 기간을 낸다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        await post(server, "/ops/checks/run?job=daily-diagnostics").expect(200);
+        await post(server, "/ops/checks/run?job=daily-diagnostics").expect(200);
+
+        const response = await admin(server, "/ops/neglect").expect(200);
+        expect(response.body.runs).toBe(2);
+        if (response.body.streaks.length > 0) {
+          expect(response.body.streaks[0].runs).toBeGreaterThanOrEqual(1);
+        }
+      });
+
+      it("기록이 남은 구간 내내 나빴으면 최소값이라고 말한다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+        await post(server, "/ops/checks/run?job=daily-diagnostics").expect(200);
+
+        const response = await admin(server, "/ops/neglect").expect(200);
+        for (const streak of response.body.streaks) {
+          expect(streak.truncated).toBe(true);
+          expect(streak.detail).toContain("최소값으로 읽으세요");
+        }
+      });
+    });
+
+    describe("진단 이력 보존 (정책 4201-③)", () => {
+      it("보존 대상에 진단 이력이 들어 있고 바닥이 14일이다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await admin(built.app.getHttpServer(), "/ops/settings")
+          .expect(200);
+        const policy = response.body.retention.find(
+          (row: { target: string }) => row.target === "diagnostics",
+        );
+        expect(policy).toBeDefined();
+        expect(policy.minDays).toBe(14);
+        expect(policy.why).toContain("방치 지표가 거짓말합니다");
+      });
+
+      it("바닥보다 짧은 보존은 받아들이지 않는다 — 그건 방치 지표를 끄는 것이다", async () => {
+        const built = await build();
+        app = built.app;
+        opsSettingsStub["retention.diagnostics.days"] = "2";
+        const response = await admin(built.app.getHttpServer(), "/ops/settings")
+          .expect(200);
+        const policy = response.body.retention.find(
+          (row: { target: string }) => row.target === "diagnostics",
+        );
+        expect(policy.days).toBe(90);
+        expect(response.body.rejected.length).toBeGreaterThan(0);
+      });
+    });
+
+    describe("프로젝트별 비용 (정책 4201-④)", () => {
+      it("표본이 없으면 귀속률을 0%로 적지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await admin(built.app.getHttpServer(), "/ops/cost/projects")
+          .expect(200);
+        expect(response.body.coverage).toBeNull();
+        expect(response.body.caveat).toContain("낼 수 없습니다");
+      });
+
+      /**
+       * 이 검사가 이 기능의 존재 이유다 — 미배분을 프로젝트 비율로 나눠
+       * 얹으면 합계가 맞고 표가 깔끔해지지만, 그 숫자는 만들어낸 것이고
+       * 그걸로 팀에 비용을 청구하게 된다.
+       */
+      it("귀속되지 않은 금액을 프로젝트에 나눠 얹지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+
+        built.prisma.executions.push(
+          {
+            provider: "openai",
+            model: "gpt-4o",
+            status: "SUCCESS",
+            cost: 1,
+            createdAt: new Date(),
+            projectId: "proj-1",
+            diagnostic: false,
+          },
+          {
+            provider: "openai",
+            model: "gpt-4o",
+            status: "SUCCESS",
+            cost: 9,
+            createdAt: new Date(),
+            // 프로젝트를 모르는 기록 — **공용이라는 뜻이 아니다**
+            projectId: null,
+            diagnostic: false,
+          },
+        );
+
+        const response = await admin(built.app.getHttpServer(), "/ops/cost/projects")
+          .expect(200);
+        expect(response.body.attributed).toBe(1);
+        expect(response.body.unattributed).toBe(9);
+        // 미배분을 나눠 얹었다면 이 프로젝트가 10이 됐을 것이다
+        expect(response.body.rows).toHaveLength(1);
+        expect(response.body.rows[0].cost).toBe(1);
+        // 분모는 미배분을 포함한 전체다 — 빼고 나누면 100%가 된다
+        expect(response.body.rows[0].share).toBe(10);
+        expect(response.body.detail).toContain("만들어낸 것이 됩니다");
+      });
+
+      it("진단·스모크는 프로젝트 비용이 아니므로 따로 둔다", async () => {
+        const built = await build();
+        app = built.app;
+
+        built.prisma.executions.push({
+          provider: "openai",
+          model: "gpt-4o",
+          status: "SUCCESS",
+          cost: 5,
+          createdAt: new Date(),
+          projectId: null,
+          diagnostic: true,
+        });
+
+        const response = await admin(built.app.getHttpServer(), "/ops/cost/projects")
+          .expect(200);
+        expect(response.body.diagnostic).toBe(5);
+        expect(response.body.unattributed).toBe(0);
+        expect(response.body.detail).toContain("프로젝트 비용이 아니므로");
+      });
+
+      it("귀속률이 100%가 아니면 적게 청구된다고 말한다", async () => {
+        const built = await build();
+        app = built.app;
+
+        built.prisma.executions.push(
+          {
+            provider: "openai",
+            model: "gpt-4o",
+            status: "SUCCESS",
+            cost: 1,
+            createdAt: new Date(),
+            projectId: "proj-1",
+            diagnostic: false,
+          },
+          {
+            provider: "openai",
+            model: "gpt-4o",
+            status: "SUCCESS",
+            cost: 1,
+            createdAt: new Date(),
+            projectId: null,
+            diagnostic: false,
+          },
+        );
+
+        const response = await admin(built.app.getHttpServer(), "/ops/cost/projects")
+          .expect(200);
+        expect(response.body.coverage).toBe(50);
+        expect(response.body.caveat).toContain("적게 청구됩니다");
+      });
+
+      it("ADMIN 전용이다", async () => {
+        const built = await build();
+        app = built.app;
+        await request(built.app.getHttpServer() as never)
+          .get("/ops/cost/projects")
+          .expect(401);
       });
     });
   });

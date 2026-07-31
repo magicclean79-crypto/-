@@ -20,6 +20,7 @@ function blank(overrides: Partial<ValidationPlanInput> = {}): ValidationPlanInpu
     stagingTarget: { url: null, usable: false, detail: "검증 대상이 아직 정해지지 않았습니다." },
     kpiSnapshots: 0,
     lastDrillAt: null,
+    hosts: { declared: 0, undeclared: 0 },
     now: NOW,
     ...overrides,
   };
@@ -43,6 +44,7 @@ function ready(overrides: Partial<ValidationPlanInput> = {}): ValidationPlanInpu
     },
     kpiSnapshots: 5,
     lastDrillAt: NOW - 10 * DAY,
+    hosts: { declared: 2, undeclared: 0 },
     ...overrides,
   });
 }
@@ -202,6 +204,28 @@ describe("judgeValidationPlan", () => {
     const report = judgeValidationPlan(ready({ stagingTarget: null }));
     expect(report.steps.find((step) => step.id === "staging")?.status).toBe("unknown");
     expect(report.readiness).not.toBe("ready");
+  });
+
+  /**
+   * 검증 대상 보호는 이 목록과 대조해서 동작한다 — 목록이 비어 있으면
+   * 보호가 지켜 주는 것이 아니라 통과시키고 있을 뿐이다 (정책 4201-①⑤).
+   */
+  it("운영 호스트 목록이 비어 있으면 준비가 끝난 것이 아니다", () => {
+    const report = judgeValidationPlan(ready({ hosts: { declared: 0, undeclared: 0 } }));
+    const step = report.steps.find((row) => row.id === "host-list");
+    expect(step?.status).toBe("pending");
+    expect(step?.detail).toContain("사실상 꺼져 있습니다");
+    expect(report.readiness).not.toBe("ready");
+  });
+
+  it("목록에 없는데 쓰이는 호스트가 있으면 통과로 세지 않는다", () => {
+    const report = judgeValidationPlan(ready({ hosts: { declared: 2, undeclared: 1 } }));
+    expect(report.steps.find((row) => row.id === "host-list")?.status).toBe("pending");
+  });
+
+  it("호스트 목록을 못 읽은 것은 '비어 있다'가 아니다", () => {
+    const report = judgeValidationPlan(ready({ hosts: null }));
+    expect(report.steps.find((row) => row.id === "host-list")?.status).toBe("unknown");
   });
 
   it("화면에 실리는 문장에 마크다운 강조를 쓰지 않는다", () => {
