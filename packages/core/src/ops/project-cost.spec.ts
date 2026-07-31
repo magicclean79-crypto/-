@@ -194,6 +194,38 @@ describe("detectAttributionAlerts", () => {
   });
 
   /**
+   * 라이브 검증에서 드러난 결함: 화면은 "표본 부족 — 판정 보류"라고 말하는데
+   * 경보는 같은 7건을 두고 "목표 미달"이라며 사람을 깨웠다. 같은 사실에 두
+   * 개의 답이 생기면, 어긋나는 순간 둘 다 못 믿게 된다.
+   */
+  it("표본이 모자라면 경보하지 않는다 — 화면이 판정 보류라고 말하는 것과 같아야 한다", () => {
+    const alerts = detectAttributionAlerts(low(), {
+      alerting: true,
+      minCoverage: 95,
+      minSample: 20,
+    });
+    expect(alerts).toEqual([]);
+  });
+
+  it("표본이 충분하면 그대로 부른다", () => {
+    const report = summarizeProjectCost({
+      records: [
+        ...Array.from({ length: 21 }, () => record({ projectId: null })),
+        ...Array.from({ length: 9 }, () => record({ projectId: "p1" })),
+      ],
+      names,
+      windowDays: 30,
+      now: NOW,
+    });
+    const alerts = detectAttributionAlerts(report, {
+      alerting: true,
+      minCoverage: 95,
+      minSample: 20,
+    });
+    expect(alerts).toHaveLength(1);
+  });
+
+  /**
    * 배선을 이미 고쳤는데도 옛 기록 때문에 같은 경보가 매일 오면, 그 경보는
    * 곧 아무도 안 읽는다. 지금 들어오는 기록이 멀쩡하면 부르지 않는다.
    */

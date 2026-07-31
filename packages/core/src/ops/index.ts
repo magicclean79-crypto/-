@@ -45,3 +45,7 @@ export * from "./project-cost";
 export * from "./host-discovery";
 export * from "./neglect-ignore";
 export * from "./readiness-board";
+export * from "./trusted-proxy";
+export * from "./attribution-gap";
+export * from "./ignore-escalation";
+export * from "./activation-runbook";

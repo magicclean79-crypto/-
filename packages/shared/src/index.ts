@@ -3038,6 +3038,8 @@ export interface HostVerificationDto {
   unseen: number;
   /** 운영 트래픽 관측 (TASK-4301, 정책 4301-①) */
   discovery: HostDiscoveryDto;
+  /** 신뢰하는 프록시 구성 (TASK-4401, 정책 4401-①) */
+  trustedProxy: TrustedProxyDto;
   /** 이 배포 단계에서 목록을 요구하는가 */
   required: boolean;
   detail: string;
@@ -3127,6 +3129,104 @@ export interface HostDiscoveryDto {
    * "목록에 없는 호스트 0개"라고 말하면 안 된다.
    */
   overflowed: boolean;
+  detail: string;
+}
+
+/** 미귀속 실행 경로 한 줄 (CTO 정책 4401-②) */
+export interface AttributionGapRowDto {
+  key: string;
+  feature: string | null;
+  source: string;
+  total: number;
+  attributed: number;
+  missing: number;
+  coverage: number;
+  detail: string;
+}
+
+/** 미귀속 실행 경로 분석 (GET /ops/cost/attribution) */
+export interface AttributionGapDto {
+  rows: AttributionGapRowDto[];
+  total: number;
+  attributed: number;
+  missing: number;
+  /** 귀속률(%) — 표본이 없으면 null */
+  coverage: number | null;
+  target: number;
+  /** 목표 달성을 말하려면 필요한 최소 표본 */
+  minSample: number;
+  /** met | below | insufficient — **표본이 모자라면 달성도 미달도 아니다** */
+  verdict: string;
+  windowHours: number;
+  detail: string;
+  next: string | null;
+  checkedAt: string;
+}
+
+/** 무시 검토 알림 1건 (CTO 정책 4401-③) */
+export interface IgnoreNoticeDto {
+  checkId: string;
+  tier: string;
+  owner: string;
+  /** due-soon | overdue | escalated */
+  stage: string;
+  /** 운영 채널까지 넓히는가 — **등급을 올리는 것이 아니다** */
+  broadcast: boolean;
+  title: string;
+  message: string;
+}
+
+/** 무시 검토 알림 계획 (GET /ops/neglect/notices) */
+export interface IgnoreNoticePlanDto {
+  notices: IgnoreNoticeDto[];
+  quiet: number;
+  suppressed: number;
+  detail: string;
+  checkedAt: string;
+}
+
+/** 운영 활성화 런북 단계 (CTO 정책 4401-⑤) */
+export interface RunbookStepDto {
+  id: string;
+  title: string;
+  owner: string;
+  why: string;
+  evidence: string;
+  /** 되돌리는 법 — 되돌릴 수 없으면 그렇게 적힌다 */
+  rollback: string;
+  irreversible: boolean;
+  /** 어느 판정에서 상태를 가져왔는가 */
+  source: string;
+  /** done | pending | blocked | unknown */
+  state: string;
+  detail: string;
+}
+
+/** 운영 활성화 런북 (GET /ops/runbook) */
+export interface ActivationRunbookDto {
+  steps: RunbookStepDto[];
+  done: number;
+  total: number;
+  nextStepId: string | null;
+  irreversibleStarted: boolean;
+  waitingOnPeople: string[];
+  detail: string;
+  checkedAt: string;
+}
+
+/** 신뢰하는 프록시 구성 (CTO 정책 4401-①) */
+export interface TrustedProxyDto {
+  /** 선언된 규칙 수 — 0이면 전달 헤더를 보지 않는다 */
+  declared: number;
+  /** 읽을 수 없어 버린 선언 */
+  rejected: string[];
+  /** 신뢰하지 않는 상대가 전달 헤더를 보낸 횟수 */
+  untrusted: number;
+  /** 값이 여러 개라 쓰지 못한 횟수 */
+  ambiguous: number;
+  /** 프록시를 통해 관측한 요청 수 */
+  viaProxy: number;
+  status: string;
   detail: string;
 }
 

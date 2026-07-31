@@ -91,6 +91,8 @@ export function buildReadinessBoard(input: {
     recentCoverage: number | null;
     minCoverage: number;
   } | null;
+  /** 운영 활성화 런북 (`GET /ops/runbook`) */
+  runbook: { done: number; total: number; nextTitle: string | null; detail: string } | null;
   /** 배포 단계 */
   tier: string;
   checkedAt: string;
@@ -269,6 +271,25 @@ export function buildReadinessBoard(input: {
             input.attribution.recentCoverage < input.attribution.minCoverage
               ? "호출 경로에 프로젝트가 전달되는지 확인해 주세요."
               : null,
+        },
+  );
+
+  tiles.push(
+    input.runbook === null
+      ? unknownTile("runbook", "운영 활성화 런북", "GET /ops/runbook")
+      : {
+          id: "runbook",
+          title: "운영 활성화 런북",
+          status:
+            input.runbook.done === input.runbook.total && input.runbook.total > 0
+              ? "ok"
+              : "warn",
+          detail: input.runbook.detail,
+          source: "GET /ops/runbook",
+          next:
+            input.runbook.nextTitle === null
+              ? null
+              : `다음 단계: ${input.runbook.nextTitle}`,
         },
   );
 

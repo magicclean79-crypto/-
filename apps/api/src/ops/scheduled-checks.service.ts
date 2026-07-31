@@ -53,6 +53,7 @@ import { DiagnosticsService } from "./diagnostics.service";
 import { DraftLifecycleService } from "./draft-lifecycle.service";
 import { KpiTrendService } from "./kpi-trend.service";
 import { HostDiscoveryService } from "./host-discovery.service";
+import { IgnoreEscalationService } from "./ignore-escalation.service";
 import { NeglectService } from "./neglect.service";
 import { ProjectCostService } from "./project-cost.service";
 
@@ -195,6 +196,7 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
     // 방치 지표 · 프로젝트 비용 귀속률 (TASK-4201, CTO 정책 4201-②④)
     private readonly neglect: NeglectService,
     private readonly hostDiscovery: HostDiscoveryService,
+    private readonly escalation: IgnoreEscalationService,
     private readonly projectCost: ProjectCostService,
   ) {}
 
@@ -657,12 +659,21 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
       // **저장은 관측일 뿐이며 운영 호스트 목록을 바꾸지 않는다.**
       const savedHosts = await this.hostDiscovery.flush(tier);
 
+      // 무시 검토 알림 (TASK-4401, 정책 4401-③) — 검토일이 다가오거나
+      // 지났으면 **담당자에게** 보낸다. 경보 채널로만 돌려보내면 채널을 보는
+      // 사람과 항목을 맡은 사람이 달라 다시 아무도 안 본다.
+      // 알림은 무시의 상태를 바꾸지 않는다.
+      const escalation = await this.escalation.run(tier, alerting);
+
       // 진단·초안·방치 경보를 **한 번에** 동기화한다 — 같은 종류를 두 번
       // 부르면 뒤 호출이 앞의 경보를 "이번에 감지되지 않았다"며 해소한다
       const notified = await this.alerts.sync(JOB_ALERT_KINDS[job], [
         ...alerts,
         ...sweep.alerts,
         ...neglect,
+        // 담당자에게 두 번 갔는데 응답이 없다는 사실은 운영 채널의 소식이다
+        // (등급은 올리지 않는다 — 정책 4401-③)
+        ...escalation.alerts,
       ]);
 
       return {
@@ -675,7 +686,8 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
           `초안 수명: ${sweep.detail} (만료 표시 ${sweep.expired}건 — 기각이 아닙니다.) ` +
           `KPI 스냅샷: ${snapshot.detail} ` +
           `방치 경보 ${neglect.length}건. ` +
-          `트래픽 호스트 관측 ${savedHosts}건 저장(목록은 바꾸지 않습니다).`,
+          `트래픽 호스트 관측 ${savedHosts}건 저장(목록은 바꾸지 않습니다). ` +
+          `검토 알림 ${escalation.sent}건 발송.`,
         notified,
       };
     }

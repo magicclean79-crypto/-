@@ -7,6 +7,7 @@ import { ProductionCutoverService } from "./production-cutover.service";
 import { ProjectCostService, MIN_ATTRIBUTION_COVERAGE } from "./project-cost.service";
 import { ValidationPlanService } from "./validation-plan.service";
 import { ValidationRunService } from "./validation-run.service";
+import { ActivationRunbookService } from "./activation-runbook.service";
 
 /**
  * Production Readiness Dashboard. (TASK-4301, Sprint 43 — CTO 정책 4301-④)
@@ -29,12 +30,13 @@ export class ReadinessBoardService {
     private readonly cutover: ProductionCutoverService,
     private readonly neglect: NeglectService,
     private readonly cost: ProjectCostService,
+    private readonly runbook: ActivationRunbookService,
   ) {}
 
   async report(now = Date.now()): Promise<ReadinessBoardDto> {
     const tier = this.diagnostics.tier();
 
-    const [plan, runGate, diagnostics, cutover, hosts, neglect, attribution] =
+    const [plan, runGate, diagnostics, cutover, hosts, neglect, attribution, runbook] =
       await Promise.all([
         this.safe("검증 준비 단계", () => this.plan.report(now)),
         this.safe("검증 실행 잠금", () => this.run.gate(now)),
@@ -43,6 +45,7 @@ export class ReadinessBoardService {
         this.safe("운영 호스트 목록", () => this.diagnostics.hosts(now)),
         this.safe("방치", () => this.neglect.report(tier, "daily", now)),
         this.safe("비용 귀속", () => this.cost.report(undefined, now)),
+        this.safe("운영 활성화 런북", () => this.runbook.report(now)),
       ]);
 
     const board = buildReadinessBoard({
@@ -122,6 +125,18 @@ export class ReadinessBoardService {
               coverage: attribution.coverage,
               recentCoverage: attribution.recentCoverage,
               minCoverage: MIN_ATTRIBUTION_COVERAGE,
+            },
+      // 런북은 **인용만** 한다 (정책 4401-⑤) — 여기서 다시 세지 않는다
+      runbook:
+        runbook === null
+          ? null
+          : {
+              done: runbook.done,
+              total: runbook.total,
+              nextTitle:
+                runbook.steps.find((step) => step.id === runbook.nextStepId)?.title ??
+                null,
+              detail: runbook.detail,
             },
       tier,
       checkedAt: new Date(now).toISOString(),

@@ -64,7 +64,10 @@ import type {
   DraftRevivalSummaryDto,
   ValidationRunDto,
   // TASK-4201 (CTO 정책 4201-①②④)
+  ActivationRunbookDto,
+  AttributionGapDto,
   HostVerificationDto,
+  IgnoreNoticePlanDto,
   NeglectDecisionDto,
   NeglectReportDto,
   ReadinessBoardDto,
@@ -101,6 +104,9 @@ import { DraftRevivalService } from "./draft-revival.service";
 import { ValidationRunService } from "./validation-run.service";
 import { NeglectService } from "./neglect.service";
 import { ReadinessBoardService } from "./readiness-board.service";
+import { HostDiscoveryService } from "./host-discovery.service";
+import { ActivationRunbookService } from "./activation-runbook.service";
+import { IgnoreEscalationService } from "./ignore-escalation.service";
 import { ProjectCostService } from "./project-cost.service";
 
 /**
@@ -176,6 +182,9 @@ export class OpsController {
     // 방치 지표 · 프로젝트 비용 (TASK-4201, CTO 정책 4201-②④)
     private readonly neglect: NeglectService,
     private readonly readinessBoard: ReadinessBoardService,
+    private readonly hostDiscovery: HostDiscoveryService,
+    private readonly runbook: ActivationRunbookService,
+    private readonly escalation: IgnoreEscalationService,
     private readonly projectCost: ProjectCostService,
   ) {}
 
@@ -427,6 +436,9 @@ export class OpsController {
         overflowed: discovery.overflowed,
         detail: discovery.detail,
       },
+      // 신뢰하는 프록시 구성 (TASK-4401, 정책 4401-①) — 선언이 없으면
+      // 전달 헤더를 보지 않습니다. 기본값은 언제나 "안 믿는다"입니다.
+      trustedProxy: this.hostDiscovery.trustedProxy(),
     };
   }
 
@@ -495,6 +507,41 @@ export class OpsController {
       revoked,
       detail: "무시를 취소했습니다. 이 항목은 다시 경보 대상입니다.",
     };
+  }
+
+  /**
+   * 미귀속 실행 경로 (TASK-4401, CTO 정책 4401-②).
+   *
+   * 귀속률만 보면 "덜 됐다"까지만 알 수 있습니다 — **어느 경로가
+   * 빠뜨리는지**를 말해야 다음에 무엇을 고칠지 정할 수 있습니다.
+   * 표본이 모자라면 목표 달성 여부를 판정하지 않습니다.
+   */
+  @Get("cost/attribution")
+  async attributionGap(): Promise<AttributionGapDto> {
+    return this.projectCost.gap();
+  }
+
+  /**
+   * 운영 활성화 런북 (TASK-4401, CTO 정책 4401-⑤).
+   *
+   * 각 단계에 **되돌리는 법**이 적혀 있고, 되돌릴 수 없으면 그렇게
+   * 적혀 있습니다. 상태는 이미 있는 판정에서 가져오며 여기서 새로 판정하지
+   * 않습니다.
+   */
+  @Get("runbook")
+  async activationRunbook(): Promise<ActivationRunbookDto> {
+    return this.runbook.report();
+  }
+
+  /**
+   * 무시 검토 알림 계획 (TASK-4401, CTO 정책 4401-③).
+   *
+   * **아무것도 보내지 않고 계획만** 돌려줍니다 — 조회가 알림을 보내면
+   * 화면을 여는 것만으로 담당자에게 연락이 갑니다.
+   */
+  @Get("neglect/notices")
+  async ignoreNotices(): Promise<IgnoreNoticePlanDto> {
+    return this.escalation.plan(this.diagnostics.tier());
   }
 
   /** 무시 이력 — 취소된 것도 보인다 */

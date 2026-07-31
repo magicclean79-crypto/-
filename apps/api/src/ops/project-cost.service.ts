@@ -1,7 +1,13 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { detectAttributionAlerts, summarizeProjectCost } from "@acos/core";
-import type { CostRecord, DetectedAlert } from "@acos/core";
-import type { ProjectCostDto } from "@acos/shared";
+import {
+  ATTRIBUTION_MIN_SAMPLE,
+  analyzeAttributionGap,
+  detectAttributionAlerts,
+  isAttributableFeature,
+  summarizeProjectCost,
+} from "@acos/core";
+import type { AttributionRecord, CostRecord, DetectedAlert } from "@acos/core";
+import type { AttributionGapDto, ProjectCostDto } from "@acos/shared";
 import { PrismaService } from "../prisma/prisma.service";
 
 /** 집계 창 — 지표는 창을 밝히지 않으면 아무 뜻이 없다 */
@@ -13,7 +19,10 @@ export const PROJECT_COST_WINDOW_DAYS = 30;
  * 100%를 요구하지 않는 이유: 옛 기록은 전부 미배분이고, 그것은 우리가
  * 고칠 수 없습니다. 새 호출이 대부분 붙기 시작하면 이 값을 넘습니다.
  */
-export const MIN_ATTRIBUTION_COVERAGE = 80;
+export const MIN_ATTRIBUTION_COVERAGE = 95;
+
+/** 미귀속 경로를 보는 창 (TASK-4401, 정책 4401-②) */
+export const ATTRIBUTION_GAP_WINDOW_HOURS = 24;
 
 /**
  * 프로젝트별 운영 비용. (TASK-4201, Sprint 42 — CTO 정책 4201-④)
@@ -93,12 +102,90 @@ export class ProjectCostService {
     return { ...report, checkedAt: new Date(now).toISOString() };
   }
 
+  /**
+   * 미귀속 실행 경로 분석 (TASK-4401, CTO 정책 4401-②).
+   *
+   * 귀속률만 보면 "덜 됐다"까지만 알 수 있습니다. **어느 경로가 빠뜨리는지**
+   * 를 말해야 다음에 무엇을 고칠지 정할 수 있습니다.
+   *
+   * 무엇이 귀속 대상인지는 여기서 다시 정하지 않습니다 — `@acos/core`의
+   * `isAttributableFeature`가 정합니다(두 곳에서 정하면 어긋나는 날이 옵니다).
+   */
+  async gap(
+    windowHours = ATTRIBUTION_GAP_WINDOW_HOURS,
+    now = Date.now(),
+  ): Promise<AttributionGapDto> {
+    const since = new Date(now - windowHours * 3_600_000);
+
+    const [executions, ocr] = await Promise.all([
+      this.prisma.execution.findMany({
+        where: { createdAt: { gte: since }, diagnostic: false },
+        select: { projectId: true, feature: true },
+      }),
+      this.prisma.ocrResult.findMany({
+        where: { createdAt: { gte: since } },
+        select: { projectId: true },
+      }),
+    ]);
+
+    const records: AttributionRecord[] = [
+      ...executions
+        // 개발용 호출은 프로젝트가 있을 수 없다 — 분모에서 뺀다 (정책 4301-②)
+        .filter((row) => isAttributableFeature(row.feature))
+        .map(
+          (row): AttributionRecord => ({
+            feature: row.feature,
+            source: "llm",
+            attributed: row.projectId !== null,
+          }),
+        ),
+      ...ocr.map(
+        (row): AttributionRecord => ({
+          feature: null,
+          source: "ocr",
+          attributed: row.projectId !== null,
+        }),
+      ),
+    ];
+
+    const report = analyzeAttributionGap({
+      records,
+      target: MIN_ATTRIBUTION_COVERAGE,
+    });
+
+    if (report.verdict === "below") {
+      this.logger.log(`미귀속 경로: ${report.detail}`);
+    }
+
+    return {
+      rows: report.rows,
+      total: report.total,
+      attributed: report.attributed,
+      missing: report.missing,
+      coverage: report.coverage,
+      target: report.target,
+      minSample: report.minSample,
+      verdict: report.verdict,
+      windowHours,
+      detail: report.detail,
+      next: report.next,
+      checkedAt: new Date(now).toISOString(),
+    };
+  }
+
   /** 귀속률이 낮은 것을 경보로 — 보내는 것은 AlertService가 한다 */
   async detect(alerting: boolean, now = Date.now()): Promise<DetectedAlert[]> {
     const report = await this.report(PROJECT_COST_WINDOW_DAYS, now);
     return detectAttributionAlerts(
       { ...report, caveat: report.caveat },
-      { alerting, minCoverage: MIN_ATTRIBUTION_COVERAGE },
+      {
+        alerting,
+        minCoverage: MIN_ATTRIBUTION_COVERAGE,
+        // 화면이 "표본 부족 — 판정 보류"라고 말하는 상태에서 경보가 "목표
+        // 미달"이라고 사람을 깨우면, 같은 사실에 두 개의 답이 생긴다
+        // (라이브 검증에서 고침)
+        minSample: ATTRIBUTION_MIN_SAMPLE,
+      },
     ) as DetectedAlert[];
   }
 }

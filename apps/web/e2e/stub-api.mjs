@@ -3553,6 +3553,152 @@ const server = http.createServer(async (req, res) => {
             "증거이지 허가가 아닙니다 — Host 헤더는 요청하는 쪽이 적는 " +
             "값이므로 이 목록을 운영 호스트로 자동 등록하지 않습니다.",
         },
+        // 신뢰하는 프록시 (TASK-4401, 정책 4401-①)
+        trustedProxy: {
+          declared: 1,
+          rejected: [],
+          untrusted: 2,
+          ambiguous: 0,
+          viaProxy: 812,
+          status: "warn",
+          detail:
+            "신뢰하는 프록시 1개가 선언돼 있습니다. 신뢰하지 않는 상대가 " +
+            "전달 헤더를 보낸 요청 2건을 버렸습니다 — 프록시인 척한 " +
+            "요청이거나 프록시 주소 선언이 빠진 것입니다.",
+        },
+      }),
+    );
+    return;
+  }
+
+  /** 미귀속 실행 경로 (TASK-4401, CTO 정책 4401-②) — ADMIN 전용 */
+  if (url.pathname === "/ops/cost/attribution") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify({
+        rows: [
+          {
+            key: "llm:vision-analysis",
+            feature: "vision-analysis",
+            source: "llm",
+            total: 14,
+            attributed: 2,
+            missing: 12,
+            coverage: 14.3,
+            detail: "vision-analysis: 14건 중 12건에 프로젝트가 붙지 않았습니다.",
+          },
+          {
+            key: "llm:content-generation",
+            feature: "content-generation",
+            source: "llm",
+            total: 30,
+            attributed: 30,
+            missing: 0,
+            coverage: 100,
+            detail: "content-generation: 30건 모두 귀속됐습니다.",
+          },
+        ],
+        total: 44,
+        attributed: 32,
+        missing: 12,
+        coverage: 72.7,
+        target: 95,
+        minSample: 20,
+        verdict: "below",
+        windowHours: 24,
+        detail:
+          "귀속 대상 44건 중 32건 귀속 (72.7%). 목표 95%에 못 미칩니다. " +
+          "가장 많이 빠뜨리는 경로는 vision-analysis입니다 (12건). 귀속률만 " +
+          "보면 \"덜 됐다\"까지만 알 수 있고, 어디를 고쳐야 하는지는 이 목록이 " +
+          "말합니다.",
+        next: "vision-analysis 호출 경로에서 프로젝트가 전달되는지 확인하세요.",
+        checkedAt: new Date().toISOString(),
+      }),
+    );
+    return;
+  }
+
+  /** 운영 활성화 런북 (TASK-4401, CTO 정책 4401-⑤) — ADMIN 전용 */
+  if (url.pathname === "/ops/runbook") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify({
+        steps: [
+          {
+            id: "preflight",
+            title: "사전 점검 통과",
+            owner: "system",
+            why: "무엇이 막고 있는지 모른 채 시작하면 실패의 원인을 가릴 수 없습니다.",
+            evidence: "pnpm validation:preflight가 exit 0입니다.",
+            rollback: "아무것도 바꾸지 않는 단계입니다 — 되돌릴 것이 없습니다.",
+            irreversible: false,
+            source: "GET /ops/readiness-board",
+            state: "pending",
+            detail: "검증 스프린트 준비 2/11 단계 완료.",
+          },
+          {
+            id: "credentials",
+            title: "실 Provider 자격 증명 주입",
+            owner: "operator",
+            why: "실 호출 없이 재는 모든 숫자는 스텁의 숫자입니다.",
+            evidence: "GET /ops/activation의 credentials 조건이 충족입니다.",
+            rollback:
+              "환경변수를 비우고 재기동하면 즉시 스텁으로 돌아갑니다. 이미 " +
+              "나간 호출의 과금은 되돌릴 수 없습니다.",
+            irreversible: false,
+            source: "GET /ops/activation",
+            state: "pending",
+            detail: "실 자격 증명이 아직 없습니다.",
+          },
+          {
+            id: "smoke",
+            title: "실 호출 스모크 3종",
+            owner: "system",
+            why: "스텁 통과는 계약 확인이지 연결 확인이 아닙니다.",
+            evidence: "POST /ops/smoke가 세 대상 모두 passed입니다.",
+            rollback:
+              "되돌릴 수 없습니다 — 이 단계부터 외부에 요청이 나가고 " +
+              "과금됩니다. 중단은 할 수 있지만 이미 나간 호출은 취소되지 " +
+              "않습니다.",
+            irreversible: true,
+            source: "GET /ops/smoke",
+            state: "pending",
+            detail: "실 호출 스모크를 아직 돌린 적이 없습니다.",
+          },
+          {
+            id: "observe",
+            title: "전환 후 관측 창 유지",
+            owner: "system",
+            why: "전환 직후의 정상은 아직 아무것도 안 해 본 정상입니다.",
+            evidence: "KPI 스냅샷이 전환 전후로 각각 있습니다.",
+            rollback: "관측은 아무것도 바꾸지 않습니다.",
+            irreversible: false,
+            source: "GET /ops/kpi/trend",
+            state: "unknown",
+            detail: "이 단계의 상태를 읽지 못했습니다 — 됐다는 뜻이 아닙니다.",
+          },
+        ],
+        done: 0,
+        total: 4,
+        nextStepId: "preflight",
+        irreversibleStarted: false,
+        waitingOnPeople: ["실 Provider 자격 증명 주입"],
+        detail:
+          "운영 활성화 런북 0/4 단계 완료. 다음 단계는 \"사전 점검 통과\"입니다. " +
+          "사람이 줘야 끝나는 단계 1건: 실 Provider 자격 증명 주입. 이 " +
+          "단계들은 코드로 해결되지 않습니다. 상태를 읽지 못한 단계 1건은 " +
+          "통과로 세지 않았습니다: 전환 후 관측 창 유지.",
+        checkedAt: new Date().toISOString(),
       }),
     );
     return;

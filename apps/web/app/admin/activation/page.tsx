@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import type {
   ActivationHistoryDto,
+  AttributionGapDto,
   DiagnosticReportDto,
   DraftLifecycleDto,
   DraftRevivalSummaryDto,
@@ -104,6 +105,8 @@ export default function ActivationDashboardPage() {
   const [hosts, setHosts] = useState<HostVerificationDto | null>(null);
   const [neglect, setNeglect] = useState<NeglectReportDto | null>(null);
   const [costs, setCosts] = useState<ProjectCostDto | null>(null);
+  // TASK-4401 — 미귀속 실행 경로
+  const [gap, setGap] = useState<AttributionGapDto | null>(null);
   // TASK-4301 — 방치 무시 입력 (사유·담당자·검토일)
   const [ignoreTarget, setIgnoreTarget] = useState<string | null>(null);
   const [ignoreReason, setIgnoreReason] = useState("");
@@ -135,6 +138,7 @@ export default function ActivationDashboardPage() {
         hostList,
         neglectReport,
         costReport,
+        gapReport,
       ] = await Promise.all([
         get<ProductionActivationDto>("/ops/activation"),
         get<ActivationHistoryDto>("/ops/activation/history"),
@@ -149,6 +153,7 @@ export default function ActivationDashboardPage() {
         get<HostVerificationDto>("/ops/hosts"),
         get<NeglectReportDto>("/ops/neglect"),
         get<ProjectCostDto>("/ops/cost/projects"),
+        get<AttributionGapDto>("/ops/cost/attribution"),
       ]);
       setActivation(next);
       setHistory(log);
@@ -162,6 +167,7 @@ export default function ActivationDashboardPage() {
       setHosts(hostList);
       setNeglect(neglectReport);
       setCosts(costReport);
+      setGap(gapReport);
       setError(next === null ? "활성화 판정을 읽지 못했습니다 (ADMIN 로그인이 필요합니다)." : null);
     } catch {
       setError("API 서버에 연결할 수 없습니다.");
@@ -670,6 +676,48 @@ export default function ActivationDashboardPage() {
             <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
               {hosts.discovery.detail}
             </p>
+            {/*
+              신뢰하는 프록시 (TASK-4401, CTO 정책 4401-①).
+              선언이 없으면 전달 헤더를 보지 않습니다 — 기본값은 언제나
+              "안 믿는다"입니다.
+            */}
+            <div data-testid="trusted-proxy" className="mt-2 text-xs">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-medium">신뢰하는 프록시</span>
+                {/*
+                  색은 **판정의 상태**를 따릅니다 (라이브 검증에서 고침).
+                  "선언이 있다"만 보고 초록을 칠하면, 선언한 주소가 실제
+                  프록시가 아니어서 한 번도 안 맞는 상태에서도 배지가
+                  초록입니다 — 배지는 괜찮다고 하고 설명은 아니라고 하면
+                  사람은 둘 다 안 믿습니다.
+                */}
+                <span
+                  data-testid="trusted-proxy-declared"
+                  className={`rounded-full px-2 py-0.5 ${
+                    hosts.trustedProxy.status === "warn"
+                      ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                      : hosts.trustedProxy.declared === 0
+                        ? "bg-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
+                        : "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
+                  }`}
+                >
+                  {hosts.trustedProxy.declared === 0
+                    ? "선언 없음 — 전달 헤더를 보지 않음"
+                    : `선언 ${hosts.trustedProxy.declared}개 · 프록시 경유 ${hosts.trustedProxy.viaProxy}건`}
+                </span>
+                {hosts.trustedProxy.untrusted > 0 ? (
+                  <span
+                    data-testid="trusted-proxy-untrusted"
+                    className="rounded-full bg-amber-100 px-2 py-0.5 font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                  >
+                    프록시인 척한 요청 {hosts.trustedProxy.untrusted}건
+                  </span>
+                ) : null}
+              </div>
+              <p className="mt-1 text-zinc-600 dark:text-zinc-400">
+                {hosts.trustedProxy.detail}
+              </p>
+            </div>
             {hosts.discovery.sightings.length > 0 ? (
               <ul data-testid="discovery-list" className="mt-2 space-y-1 text-xs">
                 {hosts.discovery.sightings.map((row) => (
@@ -916,6 +964,59 @@ export default function ActivationDashboardPage() {
           >
             {costs.caveat}
           </p>
+          {/*
+            미귀속 실행 경로 (TASK-4401, CTO 정책 4401-②).
+            귀속률만 보면 "덜 됐다"까지만 알 수 있습니다 — 어느 경로가
+            빠뜨리는지를 말해야 다음에 무엇을 고칠지 정할 수 있습니다.
+          */}
+          {gap !== null ? (
+            <div
+              data-testid="attribution-gap"
+              className="mt-3 rounded-lg border border-zinc-100 p-3 text-xs dark:border-zinc-900"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-medium">미귀속 경로</span>
+                <span className="text-zinc-500">
+                  최근 {gap.windowHours}시간 · 목표 {gap.target}%
+                </span>
+                <span
+                  data-testid="attribution-verdict"
+                  className={`rounded-full px-2 py-0.5 ${
+                    gap.verdict === "met"
+                      ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
+                      : gap.verdict === "below"
+                        ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                        : "border border-zinc-400 text-zinc-700 dark:border-zinc-500 dark:text-zinc-300"
+                  }`}
+                >
+                  {gap.verdict === "met"
+                    ? `목표 달성 (${gap.coverage}%)`
+                    : gap.verdict === "below"
+                      ? `목표 미달 (${gap.coverage}%)`
+                      : `표본 부족 — 판정 보류 (최소 ${gap.minSample}건)`}
+                </span>
+              </div>
+              <p className="mt-1 text-zinc-600 dark:text-zinc-400">{gap.detail}</p>
+              {gap.rows.length > 0 ? (
+                <ul data-testid="attribution-rows" className="mt-2 space-y-1">
+                  {gap.rows.map((row) => (
+                    <li
+                      key={row.key}
+                      data-testid={`attribution-${row.key}`}
+                      className="flex flex-wrap items-baseline gap-2"
+                    >
+                      <span className="font-medium">
+                        {row.feature ?? (row.source === "ocr" ? "OCR" : "기능 모름")}
+                      </span>
+                      <span className="text-zinc-500">
+                        {row.total}건 중 {row.missing}건 미귀속 · {row.coverage}%
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
           <ul data-testid="cost-rows" className="mt-3 space-y-1 text-sm">
             {costs.rows.map((row) => (
               <li

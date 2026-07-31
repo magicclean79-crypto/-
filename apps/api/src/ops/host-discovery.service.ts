@@ -6,8 +6,16 @@ import {
   HostSightingBuffer,
   judgeHostDiscovery,
   mergeSightings,
+  parseTrustedProxies,
+  resolveForwardedHost,
+  trustedProxyCheck,
 } from "@acos/core";
-import type { DeploymentTier, HostDiscoveryReport, HostSighting } from "@acos/core";
+import type {
+  DeploymentTier,
+  HostDiscoveryReport,
+  HostSighting,
+  TrustedProxyReport,
+} from "@acos/core";
 import { PrismaService } from "../prisma/prisma.service";
 
 /**
@@ -33,14 +41,71 @@ export class HostDiscoveryService {
    * 모릅니다 — 조용히 버리는 것과 다르지 않습니다.
    */
   private rejectedTotal = 0;
+  /**
+   * 전달 헤더 계측 (TASK-4401, 정책 4401-①).
+   *
+   * 신뢰하지 않는 상대가 전달 헤더를 보낸 횟수를 셉니다 — 조용히 버리면
+   * "누군가 프록시인 척했다"는 사실까지 함께 사라집니다.
+   */
+  private untrustedForwarded = 0;
+  private ambiguousForwarded = 0;
+  private viaProxy = 0;
+  private observedRequests = 0;
 
   constructor(private readonly prisma: PrismaService) {}
 
-  /** 요청 하나를 담는다 (I/O 없음) */
-  observe(rawHost: unknown, now = Date.now()): void {
-    if (!this.buffer.observe(rawHost, now) && this.buffer.size >= HOST_DISCOVERY_LIMIT) {
+  /** 지금 선언된 신뢰 프록시 (환경변수는 재기동 없이 바뀔 수 있다) */
+  private rules() {
+    return parseTrustedProxies(process.env.TRUSTED_PROXY_IPS);
+  }
+
+  /**
+   * 요청 하나를 담는다 (I/O 없음).
+   *
+   * **기본값은 언제나 `Host`입니다.** 전달 헤더는 신뢰하는 프록시가 보냈고
+   * 값이 하나일 때만 씁니다 (정책 4401-①).
+   */
+  observe(
+    rawHost: unknown,
+    now = Date.now(),
+    forwarded?: { forwardedHost?: string | string[]; peer?: string | null },
+  ): void {
+    this.observedRequests += 1;
+    let host = rawHost;
+
+    if (forwarded !== undefined) {
+      const resolved = resolveForwardedHost({
+        host: typeof rawHost === "string" ? rawHost : null,
+        forwardedHost: forwarded.forwardedHost,
+        peer: forwarded.peer,
+        rules: this.rules().rules,
+      });
+      if (resolved.verdict === "untrusted") {
+        this.untrustedForwarded += 1;
+      } else if (resolved.verdict === "ambiguous") {
+        this.ambiguousForwarded += 1;
+      } else if (resolved.verdict === "trusted") {
+        this.viaProxy += 1;
+      }
+      host = resolved.host ?? rawHost;
+    }
+
+    if (!this.buffer.observe(host, now) && this.buffer.size >= HOST_DISCOVERY_LIMIT) {
       this.sawOverflow = true;
     }
+  }
+
+  /** 신뢰 프록시 구성 판정 (정책 4401-①) — 판정은 core가 한다 */
+  trustedProxy(): TrustedProxyReport {
+    const { rules, rejected } = this.rules();
+    return trustedProxyCheck({
+      declared: rules.length,
+      rejected,
+      untrusted: this.untrustedForwarded,
+      ambiguous: this.ambiguousForwarded,
+      viaProxy: this.viaProxy,
+      observedRequests: this.observedRequests,
+    });
   }
 
   /**
@@ -137,10 +202,15 @@ export class HostObserverMiddleware implements NestMiddleware {
   constructor(private readonly discovery: HostDiscoveryService) {}
 
   use(req: Request, _res: Response, next: NextFunction): void {
-    // `X-Forwarded-Host`를 보지 않는 이유: 앞단이 붙이는 값과 클라이언트가
-    // 붙이는 값을 우리가 구분할 수 없습니다. 구분할 수 없는 출처를 섞으면
-    // 관측이 "누가 적었는지 모르는 이름"으로 채워집니다.
-    this.discovery.observe(req.headers.host);
+    // `X-Forwarded-Host`는 **신뢰하는 프록시가 보냈을 때만** 봅니다
+    // (TASK-4401, 정책 4401-①). 선언이 없으면 4301과 똑같이 `Host`만
+    // 보며, 기본값은 언제나 "안 믿는다"입니다.
+    this.discovery.observe(req.headers.host, Date.now(), {
+      forwardedHost: req.headers["x-forwarded-host"],
+      // 프록시가 여러 겹이면 이 값은 **바로 앞 상대**입니다 — 그 상대가
+      // 우리가 선언한 프록시가 아니면 헤더를 믿지 않습니다.
+      peer: req.socket?.remoteAddress ?? null,
+    });
     next();
   }
 }

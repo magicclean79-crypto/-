@@ -20,6 +20,12 @@ function build(over: Partial<BoardInput> = {}): ReturnType<typeof buildReadiness
     hosts: { declared: 2, undeclared: 1, detail: "선언된 운영 호스트 2개." },
     neglect: { neglected: 2, ignored: 1, overdue: 0, worstLabel: "저장소(23일째)" },
     attribution: { coverage: 12, recentCoverage: 100, minCoverage: 80 },
+    runbook: {
+      done: 1,
+      total: 8,
+      nextTitle: "실 Provider 자격 증명 주입",
+      detail: "운영 활성화 런북 1/8 단계 완료.",
+    },
     tier: "staging",
     checkedAt: CHECKED_AT,
     ...over,

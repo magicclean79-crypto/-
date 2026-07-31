@@ -38,6 +38,8 @@ import { DraftRevivalService } from "./draft-revival.service";
 import { ValidationRunService } from "./validation-run.service";
 // TASK-4201 (CTO 정책 4201-②④)
 import { HostDiscoveryService } from "./host-discovery.service";
+import { ActivationRunbookService } from "./activation-runbook.service";
+import { IgnoreEscalationService } from "./ignore-escalation.service";
 import { NeglectService } from "./neglect.service";
 import { ReadinessBoardService } from "./readiness-board.service";
 import { ProjectCostService } from "./project-cost.service";
@@ -97,6 +99,8 @@ import { ProjectCostService } from "./project-cost.service";
     ProjectCostService,
     HostDiscoveryService,
     ReadinessBoardService,
+    ActivationRunbookService,
+    IgnoreEscalationService,
   ],
   exports: [
     AlertService,
@@ -130,6 +134,8 @@ import { ProjectCostService } from "./project-cost.service";
     ProjectCostService,
     HostDiscoveryService,
     ReadinessBoardService,
+    ActivationRunbookService,
+    IgnoreEscalationService,
   ],
 })
 export class OpsModule {}

@@ -328,7 +328,7 @@ export function summarizeProjectCost(input: {
  */
 export function detectAttributionAlerts(
   report: ProjectCostReport,
-  input: { alerting: boolean; minCoverage: number },
+  input: { alerting: boolean; minCoverage: number; minSample?: number },
 ): {
   kind: "cost-forecast";
   key: string;
@@ -351,6 +351,21 @@ export function detectAttributionAlerts(
    * 말합니다. 모르는 것을 통과로 적지 않되, 모른다고 울리지도 않습니다.
    */
   if (report.recentCoverage === null || report.recentCoverage >= input.minCoverage) {
+    return [];
+  }
+  /**
+   * **표본이 적으면 부르지 않습니다** (TASK-4401, 라이브 검증에서 고침).
+   *
+   * 목표 판정은 최소 표본을 요구하는데(`analyzeAttributionGap`) 경보는 안
+   * 그랬습니다. 그래서 호출 7건짜리 창에서 화면은 "표본 부족 — 판정 보류"
+   * 라고 말하고 경보는 "목표 미달"이라고 사람을 깨웠습니다. **같은 사실에
+   * 두 개의 답**이고, 둘이 어긋나는 순간 사람은 둘 다 안 믿습니다.
+   *
+   * 표본이 모자라 판정하지 않은 것을 경보로 만들지 않습니다 — 다만 보고서는
+   * 계속 "잴 수 없다"고 말합니다(조용해지는 것과 다릅니다).
+   */
+  const minSample = input.minSample ?? 0;
+  if (report.recentCalls < minSample) {
     return [];
   }
   return [

@@ -33,6 +33,8 @@ import { ProjectCostService } from "./project-cost.service";
 import { HostDiscoveryService, HostObserverMiddleware } from "./host-discovery.service";
 import { AppModule } from "../app.module";
 import { ReadinessBoardService } from "./readiness-board.service";
+import { ActivationRunbookService } from "./activation-runbook.service";
+import { IgnoreEscalationService } from "./ignore-escalation.service";
 import { AdminSettingsService } from "../admin/admin-settings.service";
 import { RequestContextService } from "../common/request-context.service";
 import { PriceSourceService } from "../pricing/price-source.service";
@@ -1811,6 +1813,8 @@ async function build(overrides: Overrides = {}) {
       ProjectCostService,
       HostDiscoveryService,
       ReadinessBoardService,
+      ActivationRunbookService,
+      IgnoreEscalationService,
       {
         // 운영 설정 저장소 — 테스트가 값을 정한다
         provide: AdminSettingsService,
@@ -8707,6 +8711,284 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
         const built = await build();
         app = built.app;
         await post(built.app.getHttpServer(), "/ops/validation-run").expect(403);
+      });
+    });
+  });
+
+  describe("Production Activation Platform (TASK-4401)", () => {
+    const admin = (server: unknown, path: string) =>
+      request(server as never).get(path).set("Authorization", "Bearer tok-admin");
+
+    const post = (server: unknown, path: string) =>
+      request(server as never).post(path).set("Authorization", "Bearer tok-admin");
+
+    describe("신뢰하는 프록시 (정책 4401-①)", () => {
+      /**
+       * 프록시가 Host를 바꿔 전달하는 구성에서는 우리가 보는 Host가 내부
+       * 주소이고, 사용자가 실제로 친 도메인은 전달 헤더에 있다.
+       */
+      it("선언된 프록시가 보낸 전달 헤더를 관측에 쓴다", async () => {
+        process.env.DEPLOY_TIER = "staging";
+        process.env.PRODUCTION_HOSTS = "acos.example";
+        process.env.TRUSTED_PROXY_IPS = "10.0.0.5";
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        built.app.get(HostDiscoveryService).observe("api.internal", Date.now(), {
+          forwardedHost: "m.acos.example",
+          peer: "10.0.0.5",
+        });
+        await post(server, "/ops/checks/run?job=daily-diagnostics").expect(200);
+
+        const response = await admin(server, "/ops/hosts").expect(200);
+        const hosts = response.body.findings.map((row: { host: string }) => row.host);
+        expect(hosts).toContain("m.acos.example");
+        expect(response.body.trustedProxy.viaProxy).toBeGreaterThan(0);
+      });
+
+      /**
+       * 기본값은 언제나 "안 믿는다"다 — 선언 없이 전달 헤더를 보면 누가
+       * 적었는지 모르는 이름이 관측에 들어간다.
+       */
+      it("선언이 없으면 전달 헤더를 보지 않는다", async () => {
+        process.env.DEPLOY_TIER = "staging";
+        delete process.env.TRUSTED_PROXY_IPS;
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        built.app.get(HostDiscoveryService).observe("api.internal", Date.now(), {
+          forwardedHost: "spoofed.example",
+          peer: "203.0.113.9",
+        });
+        await post(server, "/ops/checks/run?job=daily-diagnostics").expect(200);
+
+        const response = await admin(server, "/ops/hosts").expect(200);
+        const hosts = response.body.findings.map((row: { host: string }) => row.host);
+        expect(hosts).not.toContain("spoofed.example");
+        expect(response.body.trustedProxy.declared).toBe(0);
+      });
+
+      /**
+       * 조용히 버리면 "누군가 프록시인 척했다"는 사실까지 사라진다.
+       */
+      it("신뢰하지 않는 상대가 보낸 전달 헤더를 세어 화면에 남긴다", async () => {
+        process.env.DEPLOY_TIER = "staging";
+        process.env.TRUSTED_PROXY_IPS = "10.0.0.5";
+        const built = await build();
+        app = built.app;
+
+        built.app.get(HostDiscoveryService).observe("api.internal", Date.now(), {
+          forwardedHost: "spoofed.example",
+          peer: "203.0.113.9",
+        });
+
+        const response = await admin(built.app.getHttpServer(), "/ops/hosts").expect(200);
+        expect(response.body.trustedProxy.untrusted).toBe(1);
+        expect(response.body.trustedProxy.detail).toContain("프록시인 척한");
+      });
+
+      it("값이 여러 개면 추측하지 않고 그 사실을 남긴다", async () => {
+        process.env.DEPLOY_TIER = "staging";
+        process.env.TRUSTED_PROXY_IPS = "10.0.0.5";
+        const built = await build();
+        app = built.app;
+
+        built.app.get(HostDiscoveryService).observe("api.internal", Date.now(), {
+          forwardedHost: "evil.example, acos.example",
+          peer: "10.0.0.5",
+        });
+
+        const response = await admin(built.app.getHttpServer(), "/ops/hosts").expect(200);
+        expect(response.body.trustedProxy.ambiguous).toBe(1);
+        expect(response.body.trustedProxy.detail).toContain("고른 이유가 없는 값");
+      });
+    });
+
+    describe("미귀속 실행 경로 (정책 4401-②)", () => {
+      it("어느 경로가 빠뜨리는지 이름으로 말한다", async () => {
+        const built = await build();
+        app = built.app;
+        for (let index = 0; index < 25; index += 1) {
+          built.prisma.executions.push({
+            provider: "openai",
+            model: "gpt-4o",
+            status: "SUCCESS",
+            cost: 0.1,
+            createdAt: new Date(),
+            projectId: index < 20 ? "proj-1" : null,
+            diagnostic: false,
+            feature: index < 20 ? "content-generation" : "vision-analysis",
+          });
+        }
+
+        const response = await admin(
+          built.app.getHttpServer(),
+          "/ops/cost/attribution",
+        ).expect(200);
+        expect(response.body.total).toBe(25);
+        expect(response.body.missing).toBe(5);
+        expect(response.body.verdict).toBe("below");
+        expect(response.body.next).toContain("vision-analysis");
+      });
+
+      /**
+       * 2건 중 2건으로 "목표 달성"을 적으면 다음 주에 조용히 무너진다.
+       */
+      it("표본이 모자라면 달성이라고 말하지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        built.prisma.executions.push({
+          provider: "openai",
+          model: "gpt-4o",
+          status: "SUCCESS",
+          cost: 0.1,
+          createdAt: new Date(),
+          projectId: "proj-1",
+          diagnostic: false,
+          feature: "content-generation",
+        });
+
+        const response = await admin(
+          built.app.getHttpServer(),
+          "/ops/cost/attribution",
+        ).expect(200);
+        expect(response.body.coverage).toBe(100);
+        expect(response.body.verdict).toBe("insufficient");
+      });
+
+      it("목표는 95%다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await admin(
+          built.app.getHttpServer(),
+          "/ops/cost/attribution",
+        ).expect(200);
+        expect(response.body.target).toBe(95);
+      });
+
+      it("ADMIN 전용이다", async () => {
+        const built = await build();
+        app = built.app;
+        await request(built.app.getHttpServer() as never)
+          .get("/ops/cost/attribution")
+          .expect(401);
+      });
+    });
+
+    describe("무시 검토 알림 (정책 4401-③)", () => {
+      const future = (days: number) =>
+        new Date(Date.now() + days * 86_400_000).toISOString();
+
+      /**
+       * 조회가 알림을 보내면, 화면을 여는 것만으로 담당자에게 연락이 간다.
+       */
+      it("조회는 계획만 내고 아무것도 보내지 않는다", async () => {
+        process.env.DEPLOY_TIER = "staging";
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        await post(server, "/ops/neglect/storage/ignore")
+          .send({
+            reason: "자격 증명이 오기 전에는 고칠 수 없습니다",
+            owner: "김운영",
+            reviewAt: future(1),
+          })
+          .expect(200);
+
+        const before = built.prisma.deliveries.length;
+        const response = await admin(server, "/ops/neglect/notices").expect(200);
+        expect(response.body.notices).toHaveLength(1);
+        expect(response.body.notices[0].stage).toBe("due-soon");
+        expect(built.prisma.deliveries.length).toBe(before);
+      });
+
+      it("검토일이 멀면 아무것도 계획하지 않는다", async () => {
+        process.env.DEPLOY_TIER = "staging";
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        await post(server, "/ops/neglect/storage/ignore")
+          .send({
+            reason: "자격 증명이 오기 전에는 고칠 수 없습니다",
+            owner: "김운영",
+            reviewAt: future(30),
+          })
+          .expect(200);
+
+        const response = await admin(server, "/ops/neglect/notices").expect(200);
+        expect(response.body.notices).toEqual([]);
+        expect(response.body.quiet).toBe(1);
+      });
+
+      it("알림이 무시를 연장하지 않는다는 사실을 적는다", async () => {
+        process.env.DEPLOY_TIER = "staging";
+        const built = await build();
+        app = built.app;
+        const response = await admin(
+          built.app.getHttpServer(),
+          "/ops/neglect/notices",
+        ).expect(200);
+        expect(response.body.detail).toContain("무시가 되살아나지 않습니다");
+      });
+    });
+
+    describe("운영 활성화 런북 (정책 4401-⑤)", () => {
+      it("모든 단계에 되돌리는 법이 적혀 있다", async () => {
+        process.env.DEPLOY_TIER = "staging";
+        const built = await build();
+        app = built.app;
+
+        const response = await admin(built.app.getHttpServer(), "/ops/runbook").expect(200);
+        expect(response.body.steps.length).toBeGreaterThan(5);
+        for (const step of response.body.steps) {
+          expect(String(step.rollback).length).toBeGreaterThan(10);
+          expect(step.source).toMatch(/^GET \/ops\//);
+        }
+      });
+
+      it("되돌릴 수 없는 단계를 표시한다", async () => {
+        process.env.DEPLOY_TIER = "staging";
+        const built = await build();
+        app = built.app;
+
+        const response = await admin(built.app.getHttpServer(), "/ops/runbook").expect(200);
+        const smoke = response.body.steps.find(
+          (row: { id: string }) => row.id === "smoke",
+        );
+        expect(smoke.irreversible).toBe(true);
+        expect(smoke.rollback).toContain("되돌릴 수 없");
+      });
+
+      /**
+       * 준비 화면이 런북을 인용하므로, 런북이 준비 화면을 다시 부르면
+       * 서로를 부르는 고리가 된다 — 두 화면은 같은 원본 판정을 인용한다.
+       */
+      it("운영 준비 화면이 런북을 인용한다", async () => {
+        process.env.DEPLOY_TIER = "staging";
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        const [board, runbook] = await Promise.all([
+          admin(server, "/ops/readiness-board").expect(200),
+          admin(server, "/ops/runbook").expect(200),
+        ]);
+        const tile = board.body.tiles.find(
+          (row: { id: string }) => row.id === "runbook",
+        );
+        expect(tile).toBeDefined();
+        expect(tile.source).toBe("GET /ops/runbook");
+        expect(tile.detail).toContain(`${runbook.body.done}/${runbook.body.total}`);
+      });
+
+      it("ADMIN 전용이다", async () => {
+        const built = await build();
+        app = built.app;
+        await request(built.app.getHttpServer() as never).get("/ops/runbook").expect(401);
       });
     });
   });
