@@ -26,3 +26,7 @@ export * from "./incident";
 export * from "./activation-event";
 export * from "./kpi";
 export * from "./audit";
+export * from "./kpi-thresholds";
+export * from "./retention";
+export * from "./urgent-routing";
+export * from "./incident-promotion";

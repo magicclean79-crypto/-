@@ -19,6 +19,10 @@ import { ProductionSmokeService } from "./production-smoke.service";
 import { KpiService } from "./kpi.service";
 import { OpsAuditInterceptor, OpsAuditService } from "./ops-audit.interceptor";
 import { OpsEventService } from "./ops-event.service";
+import { judgeAuditAction } from "@acos/core";
+import { OpsSettingsService } from "./ops-settings.service";
+import { IncidentPromotionService } from "./incident-promotion.service";
+import { AdminSettingsService } from "../admin/admin-settings.service";
 import { RequestContextService } from "../common/request-context.service";
 import { PriceSourceService } from "../pricing/price-source.service";
 import { CiStatusService } from "./ci-status.service";
@@ -381,6 +385,28 @@ function createPrismaStub() {
   let seq = 0;
 
   return {
+    /**
+     * 경보를 직접 심는다 (TASK-3901) — 초안 승격은 "오래 살아 있은 경보"를
+     * 조건으로 하므로, 점검을 돌려 만드는 방식으로는 시간을 만들 수 없다.
+     */
+    seedAlert(row: Partial<AlertRow> & { key: string }) {
+      const now = new Date();
+      alerts.set(row.key, {
+        id: `alert-${alerts.size + 1}`,
+        kind: "provider-failure",
+        level: "CRITICAL",
+        title: "경보",
+        message: "",
+        status: "ACTIVE",
+        occurrences: 1,
+        firstRaisedAt: now,
+        lastRaisedAt: now,
+        notifiedAt: null,
+        resolvedAt: null,
+        archivedAt: null,
+        ...row,
+      } as AlertRow);
+    },
     alerts,
     migrations,
     governanceChecks,
@@ -415,7 +441,7 @@ function createPrismaStub() {
           return rows.length;
         },
         findMany: async (args?: {
-          where?: { kind?: { in: string[] }; status?: string };
+          where?: { kind?: { in: string[] }; status?: string; level?: string };
         }) => {
           let rows = [...alerts.values()];
           const kinds = args?.where?.kind?.in;
@@ -424,6 +450,10 @@ function createPrismaStub() {
           }
           if (args?.where?.status) {
             rows = rows.filter((row) => row.status === args.where!.status);
+          }
+          // 초안 승격이 CRITICAL만 읽는다 (TASK-3901)
+          if (args?.where?.level) {
+            rows = rows.filter((row) => row.level === args.where!.level);
           }
           // Prisma처럼 복사본을 돌려준다 — 호출자가 저장소를 직접 바꾸면 안 된다
           return rows.map((row) => ({ ...row }));
@@ -1055,8 +1085,17 @@ function createPrismaStub() {
         },
       },
       incident: {
-        findMany: async (args?: { take?: number }) =>
+        findMany: async (args?: {
+          take?: number;
+          where?: { sourceAlertKey?: { not: null } };
+          select?: Record<string, boolean>;
+        }) =>
           [...incidents]
+            .filter(
+              (row) =>
+                args?.where?.sourceAlertKey === undefined ||
+                row.sourceAlertKey !== null,
+            )
             .sort(
               (left, right) =>
                 (right.startedAt as Date).getTime() - (left.startedAt as Date).getTime(),
@@ -1082,6 +1121,12 @@ function createPrismaStub() {
             temporaryFix: null,
             permanentFix: null,
             prevention: null,
+            // 사람이 연 장애는 확인된 상태다 (TASK-3901) — 기본을 DRAFT로
+            // 두면 옛 장애가 전부 "확인 대기"가 되어 목록이 거짓말한다
+            status: "CONFIRMED",
+            sourceAlertKey: null,
+            dismissedAt: null,
+            dismissReason: null,
             ...args.data,
           } as Record<string, unknown>;
           incidents.push(row);
@@ -1267,6 +1312,14 @@ const smokeStub: {
   ocrProvider: string;
 } = { llm: null, ocr: null, ocrProvider: "mock" };
 
+/**
+ * 운영 설정 스텁 (TASK-3901, 정책 3901-②③⑤).
+ *
+ * 임계값·보존·승격은 전부 운영 설정에서 온다. 테스트가 여기에 값을 넣어
+ * "느슨하게 바꾼 임계값이 드러나는가"·"초안이 평균에서 빠지는가"를 본다.
+ */
+const opsSettingsStub: Record<string, string> = {};
+
 /** 저장소 스텁 상태 (TASK-1701) — 테스트마다 바꿔 쓴다 */
 const storageProtection = {
   versioning: "unknown" as "enabled" | "disabled" | "unknown",
@@ -1313,6 +1366,9 @@ async function build(overrides: Overrides = {}) {
   smokeStub.llm = null;
   smokeStub.ocr = null;
   smokeStub.ocrProvider = "mock";
+  for (const key of Object.keys(opsSettingsStub)) {
+    delete opsSettingsStub[key];
+  }
   offsiteUploads.length = 0;
   const prisma = createPrismaStub();
 
@@ -1456,6 +1512,19 @@ async function build(overrides: Overrides = {}) {
       OpsAuditService,
       OpsAuditInterceptor,
       RequestContextService,
+      // 운영 설정 · 초안 승격 (TASK-3901, 정책 3901-②③⑤) — 실제 서비스를
+      // 쓴다. 임계값이 실제로 판정에 쓰이는지, 초안이 평균에서 빠지는지는
+      // 스텁으로 검증되지 않는다.
+      OpsSettingsService,
+      IncidentPromotionService,
+      {
+        // 운영 설정 저장소 — 테스트가 값을 정한다
+        provide: AdminSettingsService,
+        useValue: {
+          all: () => ({ ...opsSettingsStub }),
+          get: (key: string) => opsSettingsStub[key] ?? null,
+        },
+      },
       // 운영 스모크 (TASK-3701, 정책 3701-②) — 서비스는 실제 것을 쓰고,
       // **부르는 상대만** 테스트가 정한다. 실제로 남의 서비스를 부르는
       // 테스트는 돈이 나가고 바깥 세상에 의존한다.
@@ -6938,6 +7007,271 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
         const built = await build();
         app = built.app;
         await request(built.app.getHttpServer() as never).get("/ops/audit").expect(401);
+      });
+    });
+  });
+  /**
+   * Enterprise Operations Control Platform (TASK-3901).
+   *
+   * 정책 3901-①~⑤가 지키려는 것: **되살아난 것도 알린다**, **느슨하게 바꾼
+   * 임계값이 드러난다**, **초안은 장애가 아니다**, **미구성을 침묵으로
+   * 바꾸지 않는다**.
+   */
+  describe("Enterprise Operations Control Platform (TASK-3901)", () => {
+    const admin = (server: unknown, path: string) =>
+      request(server as never).get(path).set("Authorization", "Bearer tok-admin");
+
+    const post = (server: unknown, path: string) =>
+      request(server as never).post(path).set("Authorization", "Bearer tok-admin");
+
+    describe("KPI 임계값 (정책 3901-②)", () => {
+      it("운영자가 바꾼 임계값이 판정에 실제로 쓰인다", async () => {
+        const built = await build();
+        app = built.app;
+        // 진행 중인 장애 1건은 기본 임계에서 "주의"다
+        await post(built.app.getHttpServer(), "/ops/incidents")
+          .send({
+            component: "llm",
+            severity: "MAJOR",
+            summary: "진행 중인 장애 하나",
+            startedAt: new Date(Date.now() - 3600_000).toISOString(),
+          })
+          .expect(201);
+
+        const before = await admin(built.app.getHttpServer(), "/ops/kpi").expect(200);
+        expect(
+          before.body.kpis.find((row: { id: string }) => row.id === "incidents-open")
+            .status,
+        ).toBe("watch");
+
+        // 임계를 느슨하게 바꾸면 초록이 된다 — 그리고 그 사실이 드러나야 한다
+        opsSettingsStub["kpi.threshold.incidents-open.good"] = "3";
+        const after = await admin(built.app.getHttpServer(), "/ops/kpi").expect(200);
+        const card = after.body.kpis.find(
+          (row: { id: string }) => row.id === "incidents-open",
+        );
+        expect(card.status).toBe("good");
+        expect(card.threshold).toContain("상태가 좋아진 것이 아닙니다");
+        expect(after.body.relaxed).toBe(1);
+        expect(after.body.detail).toContain("기준을 내린 것이지");
+      });
+
+      it("범위 밖 값은 기본값으로 되돌리고 사유를 남긴다 — 조용히 버리지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        opsSettingsStub["kpi.threshold.mttr.watch"] = "99999";
+
+        const response = await admin(built.app.getHttpServer(), "/ops/kpi").expect(200);
+        expect(response.body.rejected).toHaveLength(1);
+        expect(response.body.rejected[0].reason).toContain("임계값을 없앤 것");
+      });
+
+      it("기본값이면 카드에 아무 말도 붙이지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await admin(built.app.getHttpServer(), "/ops/kpi").expect(200);
+        expect(
+          response.body.kpis.find((row: { id: string }) => row.id === "mttr").threshold,
+        ).toBeNull();
+        expect(response.body.adjusted).toBe(0);
+      });
+    });
+
+    describe("운영 설정 현황 (정책 3901-②③④)", () => {
+      it("임계값·보존·긴급 경로·승격을 한 곳에서 보여준다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await admin(built.app.getHttpServer(), "/ops/settings").expect(
+          200,
+        );
+        expect(response.body.thresholds.length).toBeGreaterThan(0);
+        // 감사 기록이 이벤트보다 오래 남는다 — 사고는 몇 달 뒤에 드러난다
+        const audit = response.body.retention.find(
+          (row: { target: string }) => row.target === "ops-audit",
+        );
+        const events = response.body.retention.find(
+          (row: { target: string }) => row.target === "ops-events",
+        );
+        expect(audit.days).toBeGreaterThan(events.days);
+        // 긴급 경로는 미구성이 기본이고, 그 사실이 보인다
+        expect(response.body.urgentChannels.every((row: { configured: boolean }) => !row.configured)).toBe(
+          true,
+        );
+        // 자동 승격은 기본 꺼짐
+        expect(response.body.promotion.enabled).toBe(false);
+      });
+
+      it("ADMIN 전용이다", async () => {
+        const built = await build();
+        app = built.app;
+        await request(built.app.getHttpServer() as never).get("/ops/settings").expect(401);
+      });
+    });
+
+    describe("감사 이름 누락 방지 (라이브 결함)", () => {
+      it("`/ops/*`의 모든 변경 경로에 이름이 붙어 있다", async () => {
+        const built = await build();
+        app = built.app;
+
+        // Nest가 실제로 등록한 경로를 읽는다 — 손으로 적은 목록과 대조하면
+        // 그 목록이 낡는 순간 검사도 함께 낡는다.
+        const server = built.app.getHttpAdapter().getInstance() as {
+          router?: { stack: { route?: { path: string; methods: Record<string, boolean> } }[] };
+          _router?: { stack: { route?: { path: string; methods: Record<string, boolean> } }[] };
+        };
+        const stack = (server.router ?? server._router)?.stack ?? [];
+
+        const unnamed: string[] = [];
+        for (const layer of stack) {
+          const route = layer.route;
+          if (route === undefined || !route.path.startsWith("/ops")) {
+            continue;
+          }
+          for (const method of Object.keys(route.methods)) {
+            const verb = method.toUpperCase();
+            if (verb === "GET" || verb === "HEAD") {
+              continue;
+            }
+            // Nest의 `:id`를 우리 판정이 쓰는 모양으로 바꿔 본다
+            const probe = route.path.replace(/:[a-zA-Z]+/g, "1");
+            const action = judgeAuditAction(verb, probe);
+            if (action !== null && action.title.includes(route.path.split("/:")[0])) {
+              // 제목이 경로 원문이면 이름이 없는 것이다
+              unnamed.push(`${verb} ${route.path}`);
+            }
+          }
+        }
+
+        // **이름 없는 경로가 있으면 감사 목록이 원시 경로로 뒤덮인다.**
+        // TASK-3801에서 고쳤는데 TASK-3901의 새 경로 넷이 다시 그렇게 됐다 —
+        // 사람의 기억에 기대는 규칙은 반드시 다시 어긋난다.
+        expect(unnamed).toEqual([]);
+      });
+    });
+
+    describe("초안 승격 (정책 3901-⑤)", () => {
+      it("기본은 꺼져 있어 아무것도 만들지 않는다 — 장애는 사람이 연다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await post(built.app.getHttpServer(), "/ops/incidents/promote")
+          .expect(200);
+        expect(response.body.created).toBe(0);
+        expect(response.body.detail).toContain("장애는 사람이 엽니다");
+      });
+
+      it("켜면 오래 산 CRITICAL 경보를 초안으로 만들고, 초안은 평균에서 빠진다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+        opsSettingsStub["incident.promotion.enabled"] = "true";
+
+        // 45분 전에 난 CRITICAL 경보를 심는다
+        built.prisma.seedAlert({
+          key: "provider-failure:openai",
+          kind: "provider-failure",
+          level: "CRITICAL",
+          status: "ACTIVE",
+          title: "openai 호출 실패율 급증",
+          message: "최근 60분 실패율 82%",
+          firstRaisedAt: new Date(Date.now() - 45 * 60 * 1000),
+        });
+
+        const promoted = await post(server, "/ops/incidents/promote").expect(200);
+        expect(promoted.body.created).toBe(1);
+
+        const board = await admin(server, "/ops/incidents").expect(200);
+        expect(board.body.drafts).toBe(1);
+        // **초안은 진행 중인 장애로 세지 않는다** — 사람이 아직 확인 안 했다
+        expect(board.body.open).toBe(0);
+        expect(board.body.detail).toContain("초안은 아직");
+      });
+
+      it("같은 경보로 두 번 만들지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+        opsSettingsStub["incident.promotion.enabled"] = "true";
+        built.prisma.seedAlert({
+          key: "provider-failure:openai",
+          kind: "provider-failure",
+          level: "CRITICAL",
+          status: "ACTIVE",
+          title: "openai 호출 실패율 급증",
+          message: "실패율 82%",
+          firstRaisedAt: new Date(Date.now() - 45 * 60 * 1000),
+        });
+
+        await post(server, "/ops/incidents/promote").expect(200);
+        const again = await post(server, "/ops/incidents/promote").expect(200);
+        expect(again.body.created).toBe(0);
+        expect(again.body.detail).toContain("건너뛰었습니다");
+      });
+
+      it("사유 없이 기각하지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+        opsSettingsStub["incident.promotion.enabled"] = "true";
+        built.prisma.seedAlert({
+          key: "provider-failure:openai",
+          kind: "provider-failure",
+          level: "CRITICAL",
+          status: "ACTIVE",
+          title: "openai 호출 실패율 급증",
+          message: "실패율 82%",
+          firstRaisedAt: new Date(Date.now() - 45 * 60 * 1000),
+        });
+        await post(server, "/ops/incidents/promote").expect(200);
+        const board = await admin(server, "/ops/incidents").expect(200);
+        const draft = board.body.incidents.find(
+          (row: { status: string }) => row.status === "DRAFT",
+        );
+
+        const rejected = await post(server, `/ops/incidents/${draft.id}/dismiss`)
+          .send({ reason: "" })
+          .expect(400);
+        expect(rejected.body.message).toContain("기각 사유를 적어 주세요");
+
+        const dismissed = await post(server, `/ops/incidents/${draft.id}/dismiss`)
+          .send({ reason: "Provider 측 일시 점검 공지 확인" })
+          .expect(200);
+        expect(dismissed.body.status).toBe("DISMISSED");
+        expect(dismissed.body.dismissReason).toContain("일시 점검");
+      });
+
+      it("확인할 때 경보 제목 그대로는 받지 않는다 — 그건 경보의 이름이지 장애의 설명이 아니다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+        opsSettingsStub["incident.promotion.enabled"] = "true";
+        built.prisma.seedAlert({
+          key: "provider-failure:openai",
+          kind: "provider-failure",
+          level: "CRITICAL",
+          status: "ACTIVE",
+          title: "openai 호출 실패율 급증",
+          message: "실패율 82%",
+          firstRaisedAt: new Date(Date.now() - 45 * 60 * 1000),
+        });
+        await post(server, "/ops/incidents/promote").expect(200);
+        const board = await admin(server, "/ops/incidents").expect(200);
+        const draft = board.body.incidents.find(
+          (row: { status: string }) => row.status === "DRAFT",
+        );
+
+        await post(server, `/ops/incidents/${draft.id}/confirm`)
+          .send({ summary: "경보" })
+          .expect(400);
+
+        const confirmed = await post(server, `/ops/incidents/${draft.id}/confirm`)
+          .send({ summary: "OpenAI 장애로 상세페이지 생성이 40분간 멈춤" })
+          .expect(200);
+        expect(confirmed.body.status).toBe("CONFIRMED");
+
+        // 확인되면 이제 진행 중인 장애로 센다
+        const after = await admin(server, "/ops/incidents").expect(200);
+        expect(after.body.open).toBe(1);
+        expect(after.body.drafts).toBe(0);
       });
     });
   });

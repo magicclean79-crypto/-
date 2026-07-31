@@ -126,8 +126,30 @@ export default function OperationsKpiPage() {
                 나쁨 {kpi.bad}개
               </span>
             ) : null}
+            {/* 느슨하게 바꾼 임계값은 위쪽에서 먼저 말한다 */}
+            {kpi.relaxed > 0 ? (
+              <span
+                data-testid="kpi-relaxed-count"
+                className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+              >
+                느슨해진 임계값 {kpi.relaxed}개
+              </span>
+            ) : null}
           </div>
           <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">{kpi.detail}</p>
+          {/* 받아들이지 않은 설정은 조용히 버리지 않는다 */}
+          {kpi.rejected.length > 0 ? (
+            <ul
+              data-testid="kpi-rejected"
+              className="mt-2 space-y-1 rounded-lg border border-amber-200 p-2 text-xs text-amber-800 dark:border-amber-900 dark:text-amber-300"
+            >
+              {kpi.rejected.map((row) => (
+                <li key={row.key}>
+                  받아들이지 않은 설정 <code>{row.key}</code> — {row.reason}
+                </li>
+              ))}
+            </ul>
+          ) : null}
 
           <ul data-testid="kpi-cards" className="mt-3 grid gap-2 sm:grid-cols-3">
             {kpi.kpis.map((card) => (
@@ -172,6 +194,19 @@ export default function OperationsKpiPage() {
                     className="mt-1 text-xs text-amber-700 dark:text-amber-400"
                   >
                     {card.caveat}
+                  </p>
+                ) : null}
+                {/*
+                  임계값을 바꿔 초록이 된 것과 실제로 좋아진 것은 다르다
+                  (TASK-3901, 정책 3901-②). 숫자만으로는 보이지 않으므로
+                  카드가 직접 말한다.
+                */}
+                {card.threshold !== null ? (
+                  <p
+                    data-testid={`kpi-threshold-${card.id}`}
+                    className="mt-1 text-xs text-zinc-500"
+                  >
+                    {card.threshold}
                   </p>
                 ) : null}
               </li>

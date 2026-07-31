@@ -31,6 +31,11 @@ describe("운영 장애 이력 (TASK-3701)", () => {
     temporaryFix: null,
     permanentFix: null,
     prevention: null,
+    // 사람이 연 장애는 확인된 상태다 (TASK-3901, 정책 3901-⑤)
+    status: "CONFIRMED",
+    sourceAlertKey: null,
+    dismissedAt: null,
+    dismissReason: null,
     ...overrides,
   });
 

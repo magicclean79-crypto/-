@@ -14,7 +14,10 @@ import { ActivationHistoryService } from "./activation-history.service";
 import { IncidentService } from "./incident.service";
 import { ProductionCutoverService } from "./production-cutover.service";
 import { ProductionSmokeService } from "./production-smoke.service";
+import { AdminSettingsModule } from "../admin/admin-settings.module";
+import { IncidentPromotionService } from "./incident-promotion.service";
 import { KpiService } from "./kpi.service";
+import { OpsSettingsService } from "./ops-settings.service";
 import { OpsAuditInterceptor, OpsAuditService } from "./ops-audit.interceptor";
 import { OpsEventService } from "./ops-event.service";
 import { MigrationGovernanceService } from "./migration-governance.service";
@@ -44,6 +47,8 @@ import { ScheduledChecksService } from "./scheduled-checks.service";
     StorageModule,
     ContentGovernanceModule,
     PricingModule,
+    // 운영 설정(임계값·보존·승격)은 관리자 설정 저장소를 쓴다 (TASK-3901)
+    AdminSettingsModule,
   ],
   controllers: [OpsController],
   providers: [
@@ -67,6 +72,8 @@ import { ScheduledChecksService } from "./scheduled-checks.service";
     KpiService,
     OpsAuditService,
     OpsAuditInterceptor,
+    OpsSettingsService,
+    IncidentPromotionService,
   ],
   exports: [
     AlertService,
@@ -88,6 +95,8 @@ import { ScheduledChecksService } from "./scheduled-checks.service";
     OpsEventService,
     KpiService,
     OpsAuditService,
+    OpsSettingsService,
+    IncidentPromotionService,
   ],
 })
 export class OpsModule {}

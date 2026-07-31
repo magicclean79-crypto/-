@@ -61,9 +61,25 @@ describe("활성화 이벤트 (TASK-3801)", () => {
     ).toBeNull();
   });
 
-  it("같은 전이는 같은 키를 갖는다 — 두 번 알리지 않기 위해", () => {
+  it("같은 순번의 전이는 같은 키를 갖는다 — 두 인스턴스가 동시에 판정해도 한 번만 나간다", () => {
     const first = judgeActivationEvent(snap({ met: ["credentials", "network"] }), done);
     const second = judgeActivationEvent(snap({ met: ["network", "cutover"] }), done);
     expect(first?.key).toBe(second?.key);
+  });
+
+  it("풀렸다가 다시 완료되면 또 알린다 — 되살아난 것은 처음 된 것만큼 중요하다", () => {
+    // TASK-3901에서 고친 것: 키에 조건 집합만 넣으면 두 번째 완료가 첫
+    // 번째와 같은 키가 되어 **조용히 버려졌다**.
+    const first = judgeActivationEvent(snap({ met: ["credentials", "network"] }), done, {
+      sequence: 0,
+    });
+    const lost = judgeActivationEvent(done, snap({ met: ["network"] }), { sequence: 1 });
+    const again = judgeActivationEvent(snap({ met: ["network"] }), done, { sequence: 2 });
+
+    expect(first?.kind).toBe("activation-completed");
+    expect(lost?.kind).toBe("activation-lost");
+    expect(again?.kind).toBe("activation-completed");
+    // 세 키가 모두 다르다 — 셋 다 알림이 나간다
+    expect(new Set([first!.key, lost!.key, again!.key]).size).toBe(3);
   });
 });

@@ -33,16 +33,33 @@ export class IncidentService {
 
   constructor(private readonly prisma: PrismaService) {}
 
+  /** 장애 1건 */
+  async get(id: string): Promise<IncidentDto> {
+    const row = await this.prisma.incident.findUnique({ where: { id } });
+    if (row === null) {
+      throw new NotFoundException("그런 장애 기록이 없습니다.");
+    }
+    return toDto(toRecord(row));
+  }
+
   async board(limit = 50): Promise<IncidentBoardDto> {
     const rows = await this.prisma.incident.findMany({
       orderBy: { startedAt: "desc" },
       take: Math.min(Math.max(limit, 1), 200),
     });
     const incidents = rows.map(toRecord);
-    const summary = summarizeIncidents(incidents);
+    // **확인된 장애만 판정에 넣는다** (TASK-3901, 정책 3901-⑤).
+    // 초안은 아직 사람이 장애라고 말한 적이 없고, 기각된 것은 장애가
+    // 아니었다 — 둘을 MTTR에 넣으면 자동 승격을 켜는 순간 지표가 흔들린다.
+    const summary = summarizeIncidents(
+      incidents.filter((incident) => incident.status === "CONFIRMED"),
+    );
+    const drafts = incidents.filter((incident) => incident.status === "DRAFT");
 
     return {
       incidents: incidents.map(toDto),
+      drafts: drafts.length,
+      dismissed: incidents.filter((incident) => incident.status === "DISMISSED").length,
       open: summary.open.length,
       resolved: summary.resolvedCount,
       mttrMs: summary.mttrMs,
@@ -53,7 +70,11 @@ export class IncidentService {
       withoutRootCause: summary.withoutRootCause,
       withPrevention: summary.withPrevention,
       longestId: summary.longest?.incident.id ?? null,
-      detail: summary.detail,
+      detail:
+        drafts.length > 0
+          ? `${summary.detail} 확인 대기 초안 ${drafts.length}건 — 초안은 아직 ` +
+            "장애가 아닙니다(사람이 확인해야 장애가 됩니다). 평균에도 넣지 않았습니다."
+          : summary.detail,
       checkedAt: new Date().toISOString(),
     };
   }
@@ -224,6 +245,10 @@ function toRecord(row: {
   temporaryFix: string | null;
   permanentFix: string | null;
   prevention: string | null;
+  status: string;
+  sourceAlertKey: string | null;
+  dismissedAt: Date | null;
+  dismissReason: string | null;
 }): IncidentRecord {
   return {
     id: row.id,
@@ -240,6 +265,10 @@ function toRecord(row: {
     temporaryFix: row.temporaryFix,
     permanentFix: row.permanentFix,
     prevention: row.prevention,
+    status: row.status as IncidentRecord["status"],
+    sourceAlertKey: row.sourceAlertKey,
+    dismissedAt: row.dismissedAt,
+    dismissReason: row.dismissReason,
   };
 }
 
@@ -260,6 +289,10 @@ function toDto(incident: IncidentRecord): IncidentDto {
     temporaryFix: incident.temporaryFix,
     permanentFix: incident.permanentFix,
     prevention: incident.prevention,
+    status: incident.status,
+    sourceAlertKey: incident.sourceAlertKey,
+    dismissedAt: incident.dismissedAt?.toISOString() ?? null,
+    dismissReason: incident.dismissReason,
     // 임시 조치로 닫힌 장애는 끝난 것이 아니다 (CTO 정책 3801-②)
     needsFollowUp: needsFollowUp(incident),
     durationMs: duration.ms,

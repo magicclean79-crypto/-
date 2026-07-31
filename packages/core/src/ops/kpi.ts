@@ -27,6 +27,9 @@
  * 모든 지표에 창을 답니다.
  */
 
+import { describeThreshold, judgeAgainstThreshold } from "./kpi-thresholds";
+import type { ResolvedThreshold, ThresholdKpiId } from "./kpi-thresholds";
+
 export const KPI_IDS = [
   "activation",
   "smoke",
@@ -55,6 +58,12 @@ export interface Kpi {
   basis: string;
   /** 이 숫자가 거짓말할 수 있는 지점 — 없으면 null */
   caveat: string | null;
+  /**
+   * 이 지표를 판정한 임계값 설명 (TASK-3901, 정책 3901-②).
+   * 기본값이면 `null`, 운영자가 바꿨으면 그 사실과 방향을 말합니다 —
+   * **느슨하게 바꾼 것은 "초록을 산 것"이고 숫자만으로는 보이지 않습니다.**
+   */
+  threshold: string | null;
 }
 
 export interface KpiInput {
@@ -103,6 +112,8 @@ export interface KpiInput {
   };
   /** 지금 시각 (ms) */
   now: number;
+  /** 운영 설정으로 해석된 임계값 (CTO 정책 3901-②) */
+  thresholds: Record<ThresholdKpiId, ResolvedThreshold>;
 }
 
 export interface KpiReport {
@@ -112,6 +123,10 @@ export interface KpiReport {
   unknown: number;
   /** 나쁜 지표 수 */
   bad: number;
+  /** 기본값이 아닌 임계값으로 판정한 지표 수 */
+  adjusted: number;
+  /** **느슨하게** 바꾼 임계값으로 판정한 지표 수 — 초록을 산 것이다 */
+  relaxed: number;
   detail: string;
   checkedAt: string;
 }
@@ -122,6 +137,9 @@ const DAY_MS = 24 * HOUR_MS;
 function percent(part: number, whole: number): number {
   return Math.round((part / whole) * 1000) / 10;
 }
+
+/** 임계값이 없는 지표의 카드 (활성화) */
+const NO_THRESHOLD = null;
 
 /** 활성화 지표 — 개발 환경에서는 판정 자체가 대상이 아니다 */
 function activationKpi(input: KpiInput): Kpi {
@@ -135,6 +153,7 @@ function activationKpi(input: KpiInput): Kpi {
       status: "unknown",
       basis: "이 환경은 활성화 대상이 아닙니다 (CTO 정책 3501-①).",
       caveat: "개발 환경의 값을 운영 건강도로 읽지 마세요.",
+      threshold: NO_THRESHOLD,
     };
   }
   if (activation.activated === null) {
@@ -146,6 +165,7 @@ function activationKpi(input: KpiInput): Kpi {
       status: "unknown",
       basis: "활성화 이력이 없습니다.",
       caveat: "이력이 없는 것은 '활성화 안 됨'이 아니라 '모른다'입니다.",
+      threshold: NO_THRESHOLD,
     };
   }
   return {
@@ -161,6 +181,8 @@ function activationKpi(input: KpiInput): Kpi {
       activation.regressions > 0
         ? `되돌아간 적 ${activation.regressions}회 — 조용히 풀리는 조건이 있습니다.`
         : null,
+    // 활성화는 셋이 모두 충족될 때만 완료다 (정책 3601-①) — 임계값이 없다
+    threshold: NO_THRESHOLD,
   };
 }
 
@@ -176,6 +198,7 @@ function smokeKpi(input: KpiInput): Kpi {
       status: "unknown",
       basis: "창 안에 스모크 실행이 없습니다.",
       caveat: "한 번도 부르지 않은 것을 '문제 없음'으로 읽지 마세요.",
+      threshold: describeThreshold(input.thresholds.smoke),
     };
   }
   const passed = results.filter((row) => row.status === "passed").length;
@@ -188,7 +211,7 @@ function smokeKpi(input: KpiInput): Kpi {
     title: "실 호출 스모크",
     value: ratio,
     unit: "%",
-    status: ratio === 100 ? "good" : ratio >= 50 ? "watch" : "bad",
+    status: judgeAgainstThreshold(ratio, input.thresholds.smoke),
     basis: `실행 ${results.length}건 중 공식 주소로 통과 ${passed}건.`,
     caveat:
       stubbed > 0
@@ -196,6 +219,7 @@ function smokeKpi(input: KpiInput): Kpi {
         : stale
           ? "마지막 실행이 7일을 넘었습니다 — 지금도 되는지는 모릅니다."
           : null,
+    threshold: describeThreshold(input.thresholds.smoke),
   };
 }
 
@@ -206,12 +230,13 @@ function openIncidentsKpi(input: KpiInput): Kpi {
     title: "진행 중인 장애",
     value: incidents.open,
     unit: "건",
-    status: incidents.open === 0 ? "good" : incidents.open === 1 ? "watch" : "bad",
+    status: judgeAgainstThreshold(incidents.open, input.thresholds["incidents-open"]),
     basis: `지금 열려 있는 장애 ${incidents.open}건.`,
     caveat:
       incidents.open === 0 && incidents.resolved === 0
         ? "기록된 장애가 하나도 없습니다 — 장애가 없었다는 뜻일 수도, 아무도 적지 않았다는 뜻일 수도 있습니다."
         : null,
+    threshold: describeThreshold(input.thresholds["incidents-open"]),
   };
 }
 
@@ -221,7 +246,7 @@ function durationKpi(
   ms: number | null,
   basisWhenKnown: string,
   caveat: string | null,
-  thresholds: { good: number; watch: number },
+  threshold: ResolvedThreshold,
 ): Kpi {
   if (ms === null) {
     return {
@@ -233,6 +258,7 @@ function durationKpi(
       // 표본이 없으면 0분이 아니라 "낼 수 없음"이다 — 0분은 "빨랐다"로 읽힌다
       basis: "표본이 없어 평균을 낼 수 없습니다.",
       caveat: "0분이 아니라 '모른다'입니다.",
+      threshold: describeThreshold(threshold),
     };
   }
   const minutes = Math.round(ms / 60000);
@@ -241,10 +267,10 @@ function durationKpi(
     title,
     value: minutes,
     unit: "분",
-    status:
-      minutes <= thresholds.good ? "good" : minutes <= thresholds.watch ? "watch" : "bad",
+    status: judgeAgainstThreshold(minutes, threshold),
     basis: basisWhenKnown,
     caveat,
+    threshold: describeThreshold(threshold),
   };
 }
 
@@ -255,12 +281,13 @@ function followUpKpi(input: KpiInput): Kpi {
     title: "영구 조치 대기",
     value: count,
     unit: "건",
-    status: count === 0 ? "good" : count <= 2 ? "watch" : "bad",
+    status: judgeAgainstThreshold(count, input.thresholds["follow-up"]),
     basis: `임시 조치로 닫힌 뒤 영구 조치를 기다리는 장애 ${count}건.`,
     caveat:
       count > 0
         ? "목록에서는 '복구됨'으로 보이지만 원인은 그대로 있습니다."
         : null,
+    threshold: describeThreshold(input.thresholds["follow-up"]),
   };
 }
 
@@ -286,6 +313,7 @@ function alertsKpi(input: KpiInput): Kpi {
             "아니라 아무도 보고 있지 않아서일 수 있습니다."
           : "예약 점검이 돌고 있지 않아 이 목록이 갱신되지 않습니다 — 이미 " +
             "풀린 문제가 남아 있을 수도, 새 문제가 아직 안 잡혔을 수도 있습니다.",
+      threshold: describeThreshold(input.thresholds.alerts),
     };
   }
   return {
@@ -293,9 +321,10 @@ function alertsKpi(input: KpiInput): Kpi {
     title: "활성 경보",
     value: alerts.active,
     unit: "건",
-    status: alerts.active === 0 ? "good" : alerts.active <= 3 ? "watch" : "bad",
+    status: judgeAgainstThreshold(alerts.active, input.thresholds.alerts),
     basis: `지금 ${alerts.active}건 · 창 안에서 새로 난 것 ${alerts.raised}건.`,
     caveat: null,
+    threshold: describeThreshold(input.thresholds.alerts),
   };
 }
 
@@ -306,6 +335,7 @@ function ratioKpi(
   total: number,
   emptyBasis: string,
   emptyCaveat: string,
+  threshold: ResolvedThreshold,
 ): Kpi {
   if (total === 0) {
     return {
@@ -316,6 +346,7 @@ function ratioKpi(
       status: "unknown",
       basis: emptyBasis,
       caveat: emptyCaveat,
+      threshold: describeThreshold(threshold),
     };
   }
   const ratio = percent(ok, total);
@@ -324,9 +355,10 @@ function ratioKpi(
     title,
     value: ratio,
     unit: "%",
-    status: ratio >= 95 ? "good" : ratio >= 80 ? "watch" : "bad",
+    status: judgeAgainstThreshold(ratio, threshold),
     basis: `${total}회 중 ${ok}회 통과.`,
     caveat: null,
+    threshold: describeThreshold(threshold),
   };
 }
 
@@ -348,7 +380,7 @@ export function summarizeOperationsKpi(input: KpiInput): KpiReport {
       input.incidents.mttrMs,
       `복구된 장애 ${input.incidents.resolved}건의 평균입니다 (진행 중인 것은 넣지 않습니다).`,
       null,
-      { good: 60, watch: 240 },
+      input.thresholds.mttr,
     ),
     durationKpi(
       "mttd",
@@ -356,7 +388,7 @@ export function summarizeOperationsKpi(input: KpiInput): KpiReport {
       input.incidents.mttdMs,
       "알아챈 시각이 적힌 장애의 평균입니다.",
       "이 값이 크면 고칠 곳은 복구 절차가 아니라 감시입니다.",
-      { good: 15, watch: 60 },
+      input.thresholds.mttd,
     ),
     followUpKpi(input),
     alertsKpi(input),
@@ -367,6 +399,7 @@ export function summarizeOperationsKpi(input: KpiInput): KpiReport {
       input.checks.total,
       "창 안에 예약 점검 실행이 없습니다.",
       "점검이 꺼져 있거나 인스턴스가 뜬 지 얼마 안 된 것입니다.",
+      input.thresholds.checks,
     ),
     ratioKpi(
       "ci",
@@ -375,11 +408,15 @@ export function summarizeOperationsKpi(input: KpiInput): KpiReport {
       input.ci.total,
       "실행 이력을 읽지 못했습니다.",
       "이력을 못 읽은 것은 '한 번도 안 깨졌다'가 아닙니다.",
+      input.thresholds.ci,
     ),
   ];
 
   const unknown = kpis.filter((kpi) => kpi.status === "unknown").length;
   const bad = kpis.filter((kpi) => kpi.status === "bad").length;
+  const thresholdRows = Object.values(input.thresholds);
+  const adjusted = thresholdRows.filter((row) => !row.isDefault).length;
+  const relaxed = thresholdRows.filter((row) => row.relaxed).length;
 
   const parts: string[] = [`최근 ${input.windowDays}일 기준.`];
   if (bad > 0) {
@@ -401,12 +438,25 @@ export function summarizeOperationsKpi(input: KpiInput): KpiReport {
   if (bad === 0 && unknown === 0) {
     parts.push("모든 지표가 정상 범위입니다.");
   }
+  // **느슨하게 바꾼 임계값은 요약에서 먼저 말한다** (정책 3901-②).
+  // 초록이 늘어난 이유가 운영이 나아져서인지 기준이 내려가서인지를
+  // 화면이 구분해 주지 않으면, 대시보드는 스스로를 속이는 도구가 된다.
+  if (relaxed > 0) {
+    parts.push(
+      `임계값을 **느슨하게** 바꾼 지표 ${relaxed}개 — 기준을 내린 것이지 ` +
+        "상태가 좋아진 것이 아닙니다.",
+    );
+  } else if (adjusted > 0) {
+    parts.push(`운영자가 조정한 임계값 ${adjusted}개 (기본값보다 엄격합니다).`);
+  }
 
   return {
     kpis,
     windowDays: input.windowDays,
     unknown,
     bad,
+    adjusted,
+    relaxed,
     detail: parts.join(" "),
     checkedAt: new Date(input.now).toISOString(),
   };

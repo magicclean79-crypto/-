@@ -67,8 +67,20 @@ export class AdminSettingsService implements OnModuleInit {
       });
   }
 
-  /** 현재 오버라이드 전체 (콘솔 표시용) */
+  /**
+   * 현재 오버라이드 전체.
+   *
+   * **`get`과 같은 갱신 규칙을 쓴다** (TASK-3901 라이브 검증에서 고침).
+   * 그전에는 `all()`만 갱신을 예약하지 않아서, 이 맵을 읽는 쪽
+   * (KPI 임계값·보존 정책·자동 승격 — 전부 TASK-3901에서 추가됐다)은
+   * **다른 인스턴스가 바꾼 설정도, 이 인스턴스가 뜬 뒤에 바뀐 설정도**
+   * 재시작 전까지 보지 못했습니다. 운영자는 값을 바꾸고 화면이 안 바뀌는
+   * 것을 보게 되고, 그때 의심하는 것은 자기가 입력한 값입니다.
+   */
   all(): Record<string, string> {
+    if (this.ttlMs > 0 && Date.now() - this.loadedAt > this.ttlMs) {
+      this.scheduleRefresh();
+    }
     return Object.fromEntries(this.cache);
   }
 

@@ -1,5 +1,6 @@
 import { summarizeOperationsKpi } from "./kpi";
 import type { Kpi, KpiId, KpiInput } from "./kpi";
+import { resolveKpiThresholds } from "./kpi-thresholds";
 
 /**
  * 운영 KPI 검증. (TASK-3801 — CTO 정책 3801-③)
@@ -24,6 +25,7 @@ describe("운영 KPI (TASK-3801)", () => {
     checks: { total: 0, ok: 0 },
     ci: { total: 0, success: 0 },
     now: Date.parse("2026-07-31T00:00:00Z"),
+    thresholds: resolveKpiThresholds({}).thresholds,
   };
 
   const pick = (input: KpiInput, id: KpiId): Kpi => {

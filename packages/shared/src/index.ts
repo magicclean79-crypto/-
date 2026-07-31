@@ -2477,13 +2477,62 @@ export interface OperationsKpiDto {
     basis: string;
     /** 이 숫자가 거짓말할 수 있는 지점 */
     caveat: string | null;
+    /** 임계값 설명 — 기본값이면 null (TASK-3901) */
+    threshold: string | null;
   }[];
   windowDays: number;
   /** 값을 낼 수 없었던 지표 수 — 많으면 대시보드를 믿을 수 없다 */
   unknown: number;
   bad: number;
+  /** 기본값이 아닌 임계값으로 판정한 지표 수 (TASK-3901) */
+  adjusted: number;
+  /** **느슨하게** 바꾼 임계값 수 — 기준을 내린 것이지 좋아진 것이 아니다 */
+  relaxed: number;
+  /** 받아들이지 않은 임계값 설정 — 조용히 버리지 않는다 */
+  rejected: { key: string; reason: string }[];
   detail: string;
   checkedAt: string;
+}
+
+/** 지표 카드에 붙는 임계값 설명 — 기본값이면 null */
+export interface KpiThresholdDto {
+  id: string;
+  title: string;
+  unit: string;
+  /** lower-is-better | higher-is-better */
+  direction: string;
+  good: number;
+  watch: number;
+  defaultGood: number;
+  defaultWatch: number;
+  isDefault: boolean;
+  /** 기본값보다 느슨한가 — **초록을 산 것**이다 */
+  relaxed: boolean;
+  min: number;
+  max: number;
+}
+
+/** 운영 기록 보존 정책 (TASK-3901 — CTO 정책 3901-③) */
+export interface RetentionPolicyDto {
+  target: string;
+  title: string;
+  days: number;
+  defaultDays: number;
+  isDefault: boolean;
+  /** 이보다 짧게는 둘 수 없다 — 짧은 보존은 기능을 끄는 것이다 */
+  minDays: number;
+  maxDays: number;
+  why: string;
+}
+
+/** 운영 설정 현황 (TASK-3901 — 정책 3901-②③④⑤) */
+export interface OpsSettingsDto {
+  thresholds: KpiThresholdDto[];
+  retention: RetentionPolicyDto[];
+  /** 긴급 알림 경로 — 미구성이면 일반 채널로 되돌아간다 */
+  urgentChannels: { channel: string; env: string; configured: boolean }[];
+  promotion: { enabled: boolean; afterMinutes: number };
+  rejected: { key: string; reason: string }[];
 }
 
 /** 운영 장애 1건 (TASK-3701 — CTO 정책 3701-④) */
@@ -2507,6 +2556,16 @@ export interface IncidentDto {
   temporaryFix: string | null;
   permanentFix: string | null;
   prevention: string | null;
+  /**
+   * DRAFT | CONFIRMED | DISMISSED (TASK-3901 — CTO 정책 3901-⑤).
+   * **초안은 장애가 아니다** — 사람이 확인해야 장애가 되고, 평균에도
+   * 들어가지 않는다.
+   */
+  status: string;
+  /** 어느 경보에서 왔는가 — 사람이 연 장애는 null */
+  sourceAlertKey: string | null;
+  dismissedAt: string | null;
+  dismissReason: string | null;
   /** 임시 조치로 닫혀 **영구 조치를 기다리는가** — 목록에서는 '복구됨'이다 */
   needsFollowUp: boolean;
   /** 시작 → 복구(또는 지금). `ongoing`이면 최종값이 아니다 */
@@ -2520,6 +2579,9 @@ export interface IncidentDto {
 
 export interface IncidentBoardDto {
   incidents: IncidentDto[];
+  /** 확인 대기 초안 수 (TASK-3901) — 평균에는 들어가지 않는다 */
+  drafts: number;
+  dismissed: number;
   open: number;
   resolved: number;
   /** 복구된 장애만으로 낸 평균 — 하나도 없으면 null (0은 '빨랐다'가 아니다) */

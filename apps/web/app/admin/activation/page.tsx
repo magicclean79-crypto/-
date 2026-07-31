@@ -452,8 +452,18 @@ function IncidentSection({
     >
       <h2 className="text-lg font-medium">운영 장애 이력</h2>
       <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">{board.detail}</p>
+      {board.drafts > 0 ? (
+        <p
+          data-testid="incident-drafts"
+          className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300"
+        >
+          확인 대기 초안 {board.drafts}건 — 경보에서 자동으로 만든 것이며,
+          <strong> 아직 장애가 아닙니다.</strong> 사람이 확인해야 장애가 되고,
+          평균에도 넣지 않았습니다.
+        </p>
+      ) : null}
       <p className="mt-1 text-xs text-zinc-500">
-        진행 중 {board.open}건 · 복구 {board.resolved}건 ·{" "}
+        진행 중 {board.open}건 · 초안 {board.drafts}건 · 복구 {board.resolved}건 ·{" "}
         {/* 복구된 것이 없으면 0분이 아니라 "낼 수 없음"이다 */}
         평균 복구 {board.mttrMs === null ? "낼 수 없음" : duration(board.mttrMs)} ·
         평균 감지 {board.mttdMs === null ? "기록 없음" : duration(board.mttdMs)}
@@ -541,11 +551,24 @@ function IncidentSection({
                 >
                   {incident.severity}
                 </span>
+                {incident.status === "DRAFT" ? (
+                  <span
+                    data-testid="incident-draft-badge"
+                    className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                  >
+                    초안
+                  </span>
+                ) : null}
+                {incident.status === "DISMISSED" ? (
+                  <span className="rounded-full bg-zinc-200 px-2 py-0.5 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+                    기각됨
+                  </span>
+                ) : null}
                 <span className="font-medium">{incident.summary}</span>
                 <span className="text-xs text-zinc-500">
                   {incident.component} · {incident.durationLabel}
                 </span>
-                {incident.ongoing ? (
+                {incident.ongoing && incident.status === "CONFIRMED" ? (
                   <button
                     type="button"
                     data-testid={`resolve-${incident.id}`}

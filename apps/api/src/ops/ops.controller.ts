@@ -28,6 +28,7 @@ import type {
   OperationsKpiDto,
   OpsAuditDto,
   OpsEventDto,
+  OpsSettingsDto,
   AdvancePricingRequest,
   AlertArchiveResultDto,
   AlertBoardDto,
@@ -63,7 +64,9 @@ import { BackupService } from "./backup.service";
 import { CostIntelligenceService } from "./cost-intelligence.service";
 import { ActivationHistoryService } from "./activation-history.service";
 import { IncidentService } from "./incident.service";
+import { IncidentPromotionService } from "./incident-promotion.service";
 import { KpiService } from "./kpi.service";
+import { OpsSettingsService } from "./ops-settings.service";
 import { OpsAuditInterceptor, OpsAuditService } from "./ops-audit.interceptor";
 import { OpsEventService } from "./ops-event.service";
 import { ProductionCutoverService } from "./production-cutover.service";
@@ -133,6 +136,9 @@ export class OpsController {
     private readonly events: OpsEventService,
     private readonly kpis: KpiService,
     private readonly audit: OpsAuditService,
+    // 운영 설정 · 초안 승격 (TASK-3901, CTO 정책 3901-②③④⑤)
+    private readonly opsSettings: OpsSettingsService,
+    private readonly promotion: IncidentPromotionService,
   ) {}
 
   /**
@@ -284,6 +290,63 @@ export class OpsController {
     return this.audit.recent({
       limit: Number.isInteger(parsed) && parsed > 0 ? parsed : 50,
       action: action?.trim() || undefined,
+    });
+  }
+
+  /**
+   * 운영 설정 현황 (TASK-3901, CTO 정책 3901-②③④⑤).
+   *
+   * 임계값·보존 기간·긴급 경로·자동 승격은 각자 다른 곳에서 판정되지만
+   * 운영자에게는 하나의 질문이다 — **"지금 이 시스템은 어떤 기준으로 돌고
+   * 있는가."**
+   */
+  @Get("settings")
+  opsSettingsStatus(): OpsSettingsDto {
+    return this.opsSettings.status();
+  }
+
+  /**
+   * 초안 승격을 지금 돌린다 (TASK-3901, CTO 정책 3901-⑤).
+   *
+   * 예약으로도 돌지만, 설정을 켠 직후 확인할 수 있어야 한다.
+   */
+  @Post("incidents/promote")
+  @HttpCode(200)
+  async promoteIncidents(): Promise<{ created: number; detail: string }> {
+    return this.promotion.promote();
+  }
+
+  /**
+   * 초안을 장애로 확인한다 (TASK-3901, CTO 정책 3901-⑤).
+   *
+   * 경보 제목을 그대로 두지 못하게 한다 — 그것은 **경보의 이름**이지 장애의
+   * 설명이 아니다.
+   */
+  @Post("incidents/:id/confirm")
+  @HttpCode(200)
+  async confirmIncident(
+    @Param("id") id: string,
+    @Req() request: AuthenticatedRequest,
+    @Body() body: { summary?: string; component?: string },
+  ): Promise<IncidentDto> {
+    return this.promotion.confirm(id, {
+      summary: body.summary ?? "",
+      component: body.component,
+      actorId: request.user?.id,
+    });
+  }
+
+  /** 초안 기각 — **사유 없이 기각하지 않는다** */
+  @Post("incidents/:id/dismiss")
+  @HttpCode(200)
+  async dismissIncident(
+    @Param("id") id: string,
+    @Req() request: AuthenticatedRequest,
+    @Body() body: { reason?: string },
+  ): Promise<IncidentDto> {
+    return this.promotion.dismiss(id, {
+      reason: body.reason ?? "",
+      actorId: request.user?.id,
     });
   }
 
@@ -744,12 +807,25 @@ export class OpsController {
    */
   @Post("notifications/test")
   @HttpCode(200)
-  async testNotification(): Promise<{
+  async testNotification(
+    @Body() body: { level?: string } = {},
+  ): Promise<{
     sent: number;
+    /** 어느 경로로 나갔는가 (TASK-3901, 정책 3901-④) */
+    routing: string;
     results: { ok: boolean; attempts: number; status: number | null; error: string | null }[];
   }> {
-    const results = await this.notifications.test("warning");
-    return { sent: results.length, results };
+    // **긴급 경로를 시험할 수 있어야 한다** (TASK-3901): 등급을 못 고르면
+    // 경로가 실제로 갈리는지 확인할 방법이 없고, 확인할 수 없는 분리는
+    // 분리됐다고 믿기만 하는 것이다.
+    const level =
+      body.level === "critical" || body.level === "resolved" ? body.level : "warning";
+    const results = await this.notifications.test(level);
+    return {
+      sent: results.length,
+      routing: this.notifications.describeRouting(level),
+      results,
+    };
   }
 
   /**

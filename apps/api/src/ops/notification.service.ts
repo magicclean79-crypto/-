@@ -3,12 +3,15 @@ import { createTransport } from "nodemailer";
 import type { Transporter } from "nodemailer";
 import {
   CHANNEL_ENV,
+  configuredUrgentChannels,
   decideRetry,
   DEFAULT_RETRY_POLICY,
   emailBody,
   NOTIFICATION_CHANNELS,
   resolveChannelPolicy,
-  selectChannels,
+  routeNotification,
+  URGENT_CHANNEL_ENV,
+  urgentChannelStatus,
   slackBody,
   webhookBody,
 } from "@acos/core";
@@ -93,6 +96,22 @@ export class NotificationService {
     });
   }
 
+  /** 이 등급이 어느 경로로 나가는가 (TASK-3901, 정책 3901-④) */
+  describeRouting(level: NotificationLevel): string {
+    return routeNotification({
+      level,
+      configs: this.channelConfigs(),
+      urgentConfigured: configuredUrgentChannels(
+        process.env as Record<string, string | undefined>,
+      ),
+    }).detail;
+  }
+
+  /** 긴급 경로 현황 (TASK-3901, 정책 3901-④) — 주소는 노출하지 않는다 */
+  urgentStatus(): { channel: string; env: string; configured: boolean }[] {
+    return urgentChannelStatus(process.env as Record<string, string | undefined>);
+  }
+
   /** 채널 현황 (주소는 노출하지 않는다) */
   status(): NotificationChannelStatusDto[] {
     return this.channelConfigs().map((config) => ({
@@ -110,7 +129,21 @@ export class NotificationService {
    */
   async notify(payload: NotificationPayload): Promise<SendResult[]> {
     const configs = this.channelConfigs();
-    const targets = selectChannels(configs, payload.level);
+    // 긴급과 일반을 가른다 (TASK-3901, CTO 정책 3901-④).
+    // **미구성이면 일반 채널로 되돌리고 그 사실을 남긴다** — 경로를 나눈
+    // 순간 "긴급만 아무 데도 안 가는" 침묵이 새 실패 방식으로 생긴다.
+    const route = routeNotification({
+      level: payload.level,
+      configs,
+      urgentConfigured: configuredUrgentChannels(
+        process.env as Record<string, string | undefined>,
+      ),
+    });
+    const targets = route.channels;
+
+    if (route.usedFallback) {
+      this.logger.warn(`긴급 알림 경로 폴백: ${route.detail}`);
+    }
 
     if (targets.length === 0) {
       // 채널이 하나도 없으면 로그가 유일한 흔적이다 — 그 사실을 남긴다
@@ -122,7 +155,7 @@ export class NotificationService {
 
     const results: SendResult[] = [];
     for (const channel of targets) {
-      const result = await this.sendWithRetry(channel, payload);
+      const result = await this.sendWithRetry(channel, payload, route.urgent && !route.usedFallback);
       results.push(result);
       await this.record(channel, payload, result);
     }
@@ -133,6 +166,8 @@ export class NotificationService {
   private async sendWithRetry(
     channel: NotificationChannel,
     payload: NotificationPayload,
+    /** 긴급 경로로 보내는가 — 주소가 달라진다 (TASK-3901, 정책 3901-④) */
+    urgent = false,
   ): Promise<SendResult> {
     const policy = this.policy;
     let attempt = 0;
@@ -142,7 +177,7 @@ export class NotificationService {
     while (attempt < policy.maxAttempts) {
       attempt += 1;
       try {
-        const status = await this.send(channel, payload);
+        const status = await this.send(channel, payload, urgent);
         if (status === null || (status >= 200 && status < 300)) {
           return { ok: true, attempts: attempt, status, error: null };
         }
@@ -174,8 +209,19 @@ export class NotificationService {
     channel: NotificationChannel,
     payload: NotificationPayload,
   ): Promise<{ ok: boolean; status: number | null; error: string | null }> {
+    // 큐 워커도 같은 경로 판정을 쓴다 (TASK-3901, 정책 3901-④) — 여기서
+    // 빠뜨리면 **큐를 거친 긴급 알림만** 일반 주소로 간다. 경로가 두 곳에서
+    // 갈리면 언젠가 한쪽이 뒤처진다.
+    const route = routeNotification({
+      level: payload.level,
+      configs: this.channelConfigs(),
+      urgentConfigured: configuredUrgentChannels(
+        process.env as Record<string, string | undefined>,
+      ),
+    });
+    const urgent = route.urgent && !route.usedFallback;
     try {
-      const status = await this.send(channel, payload);
+      const status = await this.send(channel, payload, urgent);
       if (status === null || (status >= 200 && status < 300)) {
         return { ok: true, status, error: null };
       }
@@ -189,13 +235,36 @@ export class NotificationService {
     }
   }
 
+  /**
+   * 채널의 **실제 주소** — 긴급이면 긴급 주소를 쓴다.
+   *
+   * 라이브 검증에서 잡은 것: 경로 분리를 "어느 채널로 보낼까"로만 구현했더니
+   * 채널은 갈렸는데 **주소가 그대로**여서 긴급 알림이 일반 주소로 갔습니다.
+   * 화면은 "분리됐다"고 말하는데 실제로는 분리되지 않은 상태 — 우리가 가장
+   * 경계해 온 형태의 거짓말입니다.
+   *
+   * 긴급 주소가 없으면 일반 주소로 되돌립니다(그 사실은 `routeNotification`이
+   * 이미 말했습니다) — **미구성을 침묵으로 바꾸지 않습니다.**
+   */
+  private address(channel: NotificationChannel, urgent: boolean): string | undefined {
+    const urgentEnv = URGENT_CHANNEL_ENV[channel];
+    if (urgent) {
+      const value = process.env[urgentEnv]?.trim();
+      if (value) {
+        return value;
+      }
+    }
+    return process.env[CHANNEL_ENV[channel].target]?.trim();
+  }
+
   /** 실제 전송 — 성공 시 상태 코드(메일은 null) */
   private async send(
     channel: NotificationChannel,
     payload: NotificationPayload,
+    urgent = false,
   ): Promise<number | null> {
     if (channel === "slack") {
-      const url = process.env.ALERT_SLACK_WEBHOOK_URL!.trim();
+      const url = this.address("slack", urgent)!;
       const response = await fetch(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -205,7 +274,7 @@ export class NotificationService {
     }
 
     if (channel === "webhook") {
-      const url = process.env.ALERT_WEBHOOK_URL!.trim();
+      const url = this.address("webhook", urgent)!;
       const response = await fetch(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -217,7 +286,7 @@ export class NotificationService {
     const body = emailBody(payload);
     await this.transporter().sendMail({
       from: process.env.ALERT_EMAIL_FROM ?? "acos@localhost",
-      to: process.env.ALERT_EMAIL_TO!.trim(),
+      to: this.address("email", urgent)!,
       subject: body.subject,
       text: body.text,
     });

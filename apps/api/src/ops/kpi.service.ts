@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import {
   isSchedulerStopped,
+  resolveKpiThresholds,
   resolveSchedules,
   summarizeIncidents,
   summarizeOperationsKpi,
@@ -10,6 +11,7 @@ import type { OperationsKpiDto } from "@acos/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { ActivationHistoryService } from "./activation-history.service";
 import { CiStatusService } from "./ci-status.service";
+import { AdminSettingsService } from "../admin/admin-settings.service";
 import { ProductionCutoverService } from "./production-cutover.service";
 
 /** 관측 창 — 지표는 창을 밝히지 않으면 아무 뜻이 없다 */
@@ -31,6 +33,8 @@ export class KpiService {
     private readonly history: ActivationHistoryService,
     private readonly cutover: ProductionCutoverService,
     private readonly ci: CiStatusService,
+    // 임계값은 운영 설정이다 (TASK-3901, CTO 정책 3901-②)
+    private readonly settings: AdminSettingsService,
   ) {}
 
   async report(branch?: string): Promise<OperationsKpiDto> {
@@ -55,7 +59,24 @@ export class KpiService {
         this.ci.runs(branch).catch(() => null),
       ]);
 
-    const incidents = summarizeIncidents(incidentRows.map(toIncidentRecord), new Date(now));
+    // 임계값을 먼저 해석한다 — 잘못된 설정은 기본값으로 되돌아가되
+    // 그 사실이 `rejected`에 남는다 (조용히 버리지 않는다)
+    const resolved = resolveKpiThresholds(this.settings.all());
+    const thresholds = resolved.thresholds;
+    if (resolved.rejected.length > 0) {
+      this.logger.warn(
+        `받아들이지 않은 KPI 임계값 ${resolved.rejected.length}건: ` +
+          resolved.rejected.map((row) => `${row.key}(${row.reason})`).join(" · "),
+      );
+    }
+
+    // **확인된 장애만 센다** (TASK-3901, 정책 3901-⑤) — 초안은 아직 사람이
+    // 장애라고 말한 적이 없고, 기각된 것은 장애가 아니었다. 초안을 MTTR에
+    // 넣으면 자동 승격을 켜는 순간 지표가 흔들린다.
+    const incidents = summarizeIncidents(
+      incidentRows.filter((row) => row.status === "CONFIRMED").map(toIncidentRecord),
+      new Date(now),
+    );
 
     // 감시가 돌고 있는가 — 멈춰 있으면 "경보 0건"은 조용함이 아니다.
     // 예약이 꺼져 있어도 "멈춘 것"은 아니지만(결정 1401-①), KPI에서는
@@ -103,6 +124,7 @@ export class KpiService {
       // CI 이력을 못 읽었으면 0/0으로 넘긴다 — 판정이 "낼 수 없음"이라고 말한다
       ci: { total: ciRuns?.total ?? 0, success: ciRuns?.passed ?? 0 },
       now,
+      thresholds,
     });
 
     return {
@@ -110,6 +132,9 @@ export class KpiService {
       windowDays: report.windowDays,
       unknown: report.unknown,
       bad: report.bad,
+      adjusted: report.adjusted,
+      relaxed: report.relaxed,
+      rejected: resolved.rejected,
       detail: report.detail,
       checkedAt: report.checkedAt,
     };
@@ -131,6 +156,10 @@ function toIncidentRecord(row: {
   temporaryFix: string | null;
   permanentFix: string | null;
   prevention: string | null;
+  status: string;
+  sourceAlertKey: string | null;
+  dismissedAt: Date | null;
+  dismissReason: string | null;
 }): IncidentRecord {
   return {
     id: row.id,
@@ -147,5 +176,9 @@ function toIncidentRecord(row: {
     temporaryFix: row.temporaryFix,
     permanentFix: row.permanentFix,
     prevention: row.prevention,
+    status: row.status as IncidentRecord["status"],
+    sourceAlertKey: row.sourceAlertKey,
+    dismissedAt: row.dismissedAt,
+    dismissReason: row.dismissReason,
   };
 }

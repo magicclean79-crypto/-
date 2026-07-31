@@ -1,4 +1,11 @@
 import { LLM_FEATURE_EXPERIMENT_ENV, parseExperiment } from "../llm/experiment";
+import {
+  PROMOTION_ENABLED_KEY,
+  PROMOTION_SETTING_KEY,
+  resolvePromotionSettings,
+} from "../ops/incident-promotion";
+import { validateThreshold } from "../ops/kpi-thresholds";
+import { validateRetention } from "../ops/retention";
 import { LLM_PROVIDER_REGISTRY } from "../llm/provider-registry";
 import { LLM_FEATURE_MODEL_ENV } from "../llm/provider-registry";
 
@@ -131,8 +138,43 @@ export function validateSetting(key: string, value: string | null): void {
     return;
   }
 
+  // 운영 설정 (TASK-3901, CTO 정책 3901-②③⑤) — 판정 규칙은 ops 쪽에 있고
+  // 여기서는 그 판정을 그대로 쓴다. 검증을 두 곳에 두면 언젠가 갈라진다.
+  if (key.startsWith("kpi.threshold.")) {
+    const check = validateThreshold(key, value);
+    if (!check.ok) {
+      throw new SettingValidationError(check.reason);
+    }
+    return;
+  }
+  if (key.startsWith("retention.")) {
+    const check = validateRetention(key, value);
+    if (!check.ok) {
+      throw new SettingValidationError(check.reason);
+    }
+    return;
+  }
+  if (key === PROMOTION_ENABLED_KEY) {
+    if (value !== null && value !== "true" && value !== "false") {
+      throw new SettingValidationError(
+        `자동 승격 값은 "true" 또는 "false"여야 합니다 (받은 값: ${value}).`,
+      );
+    }
+    return;
+  }
+  if (key === PROMOTION_SETTING_KEY) {
+    if (value === null) {
+      return;
+    }
+    const rejected = resolvePromotionSettings({ [key]: value }).rejected;
+    if (rejected.length > 0) {
+      throw new SettingValidationError(rejected[0].reason);
+    }
+    return;
+  }
+
   throw new SettingValidationError(
-    `지원하지 않는 설정 키입니다: ${key} (provider.<name>.enabled / model.<feature> / budget.daily|monthly|alertRatio / experiment.<feature>)`,
+    `지원하지 않는 설정 키입니다: ${key} (provider.<name>.enabled / model.<feature> / budget.daily|monthly|alertRatio / experiment.<feature> / kpi.threshold.<id>.<good|watch> / retention.<target>.days / incident.promotion.*)`,
   );
 }
 

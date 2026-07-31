@@ -1,5 +1,9 @@
 /**
- * 운영 활성화 이벤트. (TASK-3801, Sprint 38 — CTO 정책 3801-①)
+ * 운영 활성화 이벤트. (TASK-3801 · TASK-3901 — CTO 정책 3801-① · 3901-①)
+ *
+ * **CTO 정책 3901-①로 `activation-lost`가 공식 운영 이벤트로 채택됐습니다.**
+ * TASK-3801에서는 "완료만 알리면 풀린 것이 조용히 지나간다"는 판단으로 함께
+ * 냈고, 이제 그것이 정식 계약입니다 — 두 종류 모두 지워지지 않습니다.
  *
  * TASK-3701은 활성화 **상태**와 **이력**을 만들었습니다. 그런데 이력은
  * **보러 가야 보입니다.** 전환은 몇 주에 걸쳐 조건이 하나씩 채워지는
@@ -45,7 +49,17 @@ export type ActivationEventKind = (typeof ACTIVATION_EVENT_KINDS)[number];
 
 export interface ActivationEvent {
   kind: ActivationEventKind;
-  /** 같은 전이를 두 번 알리지 않기 위한 키 */
+  /**
+   * 같은 전이를 두 번 알리지 않기 위한 키.
+   *
+   * **`sequence`를 넣는 이유** (TASK-3901에서 고침): 처음에는 충족된 조건
+   * 집합을 키에 넣었습니다. 그러면 `완료 → 풀림 → 다시 완료`가 났을 때 두
+   * 번째 완료의 키가 첫 번째와 **똑같아져 조용히 버려집니다.** 되살아난
+   * 것은 처음 된 것만큼 중요한 소식인데, 그것만 못 듣게 되는 구조였습니다.
+   *
+   * 순번을 넣으면 각 전이가 서로 다른 키를 갖고, **같은 순번에서 두
+   * 인스턴스가 동시에 판정하는 경우**는 표의 유니크 제약이 그대로 막습니다.
+   */
   key: string;
   title: string;
   message: string;
@@ -90,7 +104,15 @@ function names(ids: ActivationConditionId[]): string {
 export function judgeActivationEvent(
   previous: ActivationSnapshot | null,
   current: ActivationSnapshot,
+  options: {
+    /**
+     * 지금까지 기록된 전이 수 — 키를 서로 다르게 만드는 순번.
+     * 넘기지 않으면 0으로 봅니다(첫 전이).
+     */
+    sequence?: number;
+  } = {},
 ): ActivationEvent | null {
+  const sequence = options.sequence ?? 0;
   if (previous === null) {
     return null;
   }
@@ -104,7 +126,7 @@ export function judgeActivationEvent(
   if (!previous.activated && current.activated) {
     return {
       kind: "activation-completed",
-      key: `activation-completed:${current.environment}:${[...current.met].sort().join(",")}`,
+      key: `activation-completed:${current.environment}:${sequence}`,
       title: "운영 활성화 완료",
       message:
         `자격 증명 · 네트워크 · 전환 판정 세 조건이 모두 충족됐습니다 ` +
@@ -120,7 +142,7 @@ export function judgeActivationEvent(
   if (previous.activated && !current.activated) {
     return {
       kind: "activation-lost",
-      key: `activation-lost:${current.environment}:${[...lost].sort().join(",")}`,
+      key: `activation-lost:${current.environment}:${sequence}`,
       title: "운영 활성화가 풀렸습니다",
       message:
         `충족돼 있던 조건이 빠졌습니다: ${names(lost)} (${current.environment}). ` +

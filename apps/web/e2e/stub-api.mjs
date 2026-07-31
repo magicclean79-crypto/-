@@ -2904,6 +2904,8 @@ const server = http.createServer((req, res) => {
       res.end(
         JSON.stringify({
           incidents: [],
+          drafts: 0,
+          dismissed: 0,
           open: 0,
           resolved: 0,
           mttrMs: null,
@@ -2938,6 +2940,43 @@ const server = http.createServer((req, res) => {
             detectionMs: null,
             recoveryMs: null,
             durationLabel: "3시간 0분째 진행 중",
+            status: "CONFIRMED",
+            sourceAlertKey: null,
+            dismissedAt: null,
+            dismissReason: null,
+            fixKind: null,
+            rootCause: null,
+            temporaryFix: null,
+            permanentFix: null,
+            prevention: null,
+            needsFollowUp: false,
+          },
+          {
+            // 경보에서 자동으로 만든 **초안** (TASK-3901, 정책 3901-⑤)
+            id: "inc-draft",
+            component: "llm",
+            severity: "CRITICAL",
+            summary: "openai 호출 실패율 급증",
+            startedAt: new Date(now - 5 * hour).toISOString(),
+            detectedAt: new Date(now - 5 * hour).toISOString(),
+            resolvedAt: null,
+            cause: "CRITICAL 경보가 45분째 이어져 자동으로 만든 초안입니다.",
+            recovery: null,
+            durationMs: 5 * hour,
+            ongoing: true,
+            detectionMs: 0,
+            recoveryMs: null,
+            durationLabel: "5시간 0분째 진행 중",
+            status: "DRAFT",
+            sourceAlertKey: "provider-failure:openai",
+            dismissedAt: null,
+            dismissReason: null,
+            fixKind: null,
+            rootCause: null,
+            temporaryFix: null,
+            permanentFix: null,
+            prevention: null,
+            needsFollowUp: false,
           },
           {
             id: "inc-done",
@@ -2954,8 +2993,20 @@ const server = http.createServer((req, res) => {
             detectionMs: hour,
             recoveryMs: hour,
             durationLabel: "2시간 0분",
+            status: "CONFIRMED",
+            sourceAlertKey: null,
+            fixKind: "permanent",
+            rootCause: "버킷 정책 오설정",
+            temporaryFix: null,
+            permanentFix: "정책을 되돌리고 재배포",
+            prevention: null,
+            dismissedAt: null,
+            dismissReason: null,
+            needsFollowUp: false,
           },
         ],
+        drafts: 1,
+        dismissed: 0,
         open: 1,
         resolved: 1,
         mttrMs: 2 * hour,
@@ -2992,6 +3043,7 @@ const server = http.createServer((req, res) => {
             status: "bad",
             basis: "충족 1/3 — 아직 전환되지 않았습니다.",
             caveat: "되돌아간 적 1회 — 조용히 풀리는 조건이 있습니다.",
+            threshold: null,
           },
           {
             id: "smoke",
@@ -3001,6 +3053,7 @@ const server = http.createServer((req, res) => {
             status: "bad",
             basis: "실행 3건 중 공식 주소로 통과 1건.",
             caveat: "1건은 스텁 응답이라 통과로 세지 않았습니다.",
+            threshold: null,
           },
           {
             id: "incidents-open",
@@ -3011,6 +3064,9 @@ const server = http.createServer((req, res) => {
             basis: "지금 열려 있는 장애 0건.",
             caveat:
               "기록된 장애가 하나도 없습니다 — 장애가 없었다는 뜻일 수도, 아무도 적지 않았다는 뜻일 수도 있습니다.",
+            // 운영자가 **느슨하게** 바꾼 임계값 (TASK-3901, 정책 3901-②)
+            threshold:
+              "운영자 조정값 (기본 0/1건 → 3/5건) — **기준을 느슨하게 바꾼 것이며, 상태가 좋아진 것이 아닙니다.**",
           },
           {
             id: "mttr",
@@ -3020,6 +3076,7 @@ const server = http.createServer((req, res) => {
             status: "unknown",
             basis: "표본이 없어 평균을 낼 수 없습니다.",
             caveat: "0분이 아니라 '모른다'입니다.",
+            threshold: null,
           },
           {
             id: "mttd",
@@ -3029,6 +3086,7 @@ const server = http.createServer((req, res) => {
             status: "unknown",
             basis: "표본이 없어 평균을 낼 수 없습니다.",
             caveat: "0분이 아니라 '모른다'입니다.",
+            threshold: null,
           },
           {
             id: "follow-up",
@@ -3038,6 +3096,7 @@ const server = http.createServer((req, res) => {
             status: "watch",
             basis: "임시 조치로 닫힌 뒤 영구 조치를 기다리는 장애 2건.",
             caveat: "목록에서는 '복구됨'으로 보이지만 원인은 그대로 있습니다.",
+            threshold: null,
           },
           {
             id: "alerts",
@@ -3047,7 +3106,10 @@ const server = http.createServer((req, res) => {
             status: "unknown",
             basis: "지금 살아 있는 경보 0건.",
             caveat:
-              "예약 점검이 돌고 있지 않습니다 — 이 숫자가 낮은 것은 조용해서가 아니라 아무도 보고 있지 않아서일 수 있습니다.",
+              // 값이 0일 때의 문구다 — 값과 어긋나는 주석은 주석 전체를
+              // 무시하게 만든다 (TASK-3801 라이브 결함)
+              "예약 점검이 돌고 있지 않습니다 — 이 숫자가 0인 것은 조용해서가 아니라 아무도 보고 있지 않아서일 수 있습니다.",
+            threshold: null,
           },
           {
             id: "checks",
@@ -3057,6 +3119,7 @@ const server = http.createServer((req, res) => {
             status: "good",
             basis: "12회 중 12회 통과.",
             caveat: null,
+            threshold: null,
           },
           {
             id: "ci",
@@ -3066,14 +3129,98 @@ const server = http.createServer((req, res) => {
             status: "watch",
             basis: "12회 중 11회 통과.",
             caveat: null,
+            threshold: null,
           },
         ],
         windowDays: 30,
         unknown: 3,
         bad: 2,
+        adjusted: 1,
+        relaxed: 1,
+        rejected: [
+          {
+            key: "kpi.threshold.mttr.watch",
+            reason:
+              "평균 복구 시간 임계값은 5~1440분 사이여야 합니다 (받은 값: 99999분). 범위 밖의 값은 임계값이 아니라 **임계값을 없앤 것**이고, 그건 설정이 아니라 우회입니다.",
+          },
+        ],
         detail:
-          "최근 30일 기준. 나쁨 2개: 운영 활성화 · 실 호출 스모크. 값을 낼 수 없는 지표 3개: 평균 복구 시간 · 평균 감지 시간 · 활성 경보 — 모르는 것을 좋음으로 세지 않습니다.",
+          "최근 30일 기준. 나쁨 2개: 운영 활성화 · 실 호출 스모크. 값을 낼 수 없는 지표 3개: 평균 복구 시간 · 평균 감지 시간 · 활성 경보 — 모르는 것을 좋음으로 세지 않습니다. 임계값을 **느슨하게** 바꾼 지표 1개 — 기준을 내린 것이지 상태가 좋아진 것이 아닙니다.",
         checkedAt: new Date().toISOString(),
+      }),
+    );
+    return;
+  }
+
+  /** 운영 설정 현황 (TASK-3901, CTO 정책 3901-②③④⑤) — ADMIN 전용 */
+  if (url.pathname === "/ops/settings") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify({
+        thresholds: [
+          {
+            id: "incidents-open",
+            title: "진행 중인 장애",
+            unit: "건",
+            direction: "lower-is-better",
+            good: 3,
+            watch: 5,
+            defaultGood: 0,
+            defaultWatch: 1,
+            isDefault: false,
+            relaxed: true,
+            min: 0,
+            max: 20,
+          },
+          {
+            id: "mttr",
+            title: "평균 복구 시간",
+            unit: "분",
+            direction: "lower-is-better",
+            good: 60,
+            watch: 240,
+            defaultGood: 60,
+            defaultWatch: 240,
+            isDefault: true,
+            relaxed: false,
+            min: 5,
+            max: 1440,
+          },
+        ],
+        retention: [
+          {
+            target: "ops-audit",
+            title: "운영 감사 기록",
+            days: 365,
+            defaultDays: 365,
+            isDefault: true,
+            minDays: 180,
+            maxDays: 3650,
+            why: "감사 기록은 사고가 난 뒤에 거슬러 올라가는 용도입니다. 반년보다 짧게 두는 것은 보존 정책이 아니라 감사를 끄는 것입니다.",
+          },
+          {
+            target: "ops-events",
+            title: "운영 이벤트",
+            days: 180,
+            defaultDays: 180,
+            isDefault: true,
+            minDays: 90,
+            maxDays: 3650,
+            why: "이벤트는 활성화가 언제 완료됐고 언제 풀렸는지의 기록입니다.",
+          },
+        ],
+        urgentChannels: [
+          { channel: "slack", env: "ALERT_URGENT_SLACK_WEBHOOK_URL", configured: false },
+          { channel: "webhook", env: "ALERT_URGENT_WEBHOOK_URL", configured: true },
+          { channel: "email", env: "ALERT_URGENT_EMAIL_TO", configured: false },
+        ],
+        promotion: { enabled: true, afterMinutes: 30 },
+        rejected: [],
       }),
     );
     return;

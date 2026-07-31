@@ -72,7 +72,22 @@ export interface IncidentRecord {
   permanentFix: string | null;
   /** 재발 방지 — 절차·감시·설계에 남긴 것 */
   prevention: string | null;
+  /**
+   * 초안인가 확인된 장애인가 (TASK-3901, CTO 정책 3901-⑤).
+   *
+   * 경보에서 자동으로 만든 것은 **초안**이고, 초안은 아직 사람이 장애라고
+   * 말한 적이 없습니다. 그래서 평균에 넣지 않습니다.
+   */
+  status: IncidentStatus;
+  /** 어느 경보에서 왔는가 — 사람이 연 장애는 null */
+  sourceAlertKey: string | null;
+  dismissedAt: Date | null;
+  dismissReason: string | null;
 }
+
+/** 장애 기록의 상태 (CTO 정책 3901-⑤) */
+export const INCIDENT_STATUSES = ["DRAFT", "CONFIRMED", "DISMISSED"] as const;
+export type IncidentStatus = (typeof INCIDENT_STATUSES)[number];
 
 /**
  * 복구의 성격 (CTO 정책 3801-②).

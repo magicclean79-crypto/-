@@ -35,6 +35,8 @@ import { LlmBudgetService } from "../llm/llm-budget.service";
 import { PricingService } from "../pricing/pricing.service";
 import { ProviderProductionService } from "../llm/provider-production.service";
 import { ProductionSmokeService } from "./production-smoke.service";
+import { IncidentPromotionService } from "./incident-promotion.service";
+import { OpsSettingsService } from "./ops-settings.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { AlertService } from "./alert.service";
 import { CostIntelligenceService } from "./cost-intelligence.service";
@@ -169,6 +171,9 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
     // 운영 스모크 (TASK-3701, CTO 정책 3701-②) — 예약과 수동이 **같은 검사**를
     // 돈다. 이름이 같은 검사가 둘이면 더 느슨한 쪽이 근거로 쓰인다.
     private readonly smoke: ProductionSmokeService,
+    // 보존 정리 · 초안 승격 (TASK-3901, CTO 정책 3901-③⑤)
+    private readonly opsSettings: OpsSettingsService,
+    private readonly promotion: IncidentPromotionService,
   ) {}
 
   /** 점검 1건의 잠금 이름 */
@@ -585,6 +590,15 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
         // 발행 판정 기록도 90일 후 보관 (CTO 결정 2501-⑤ — 삭제 아님)
         this.governance.archive(),
       ]);
+      // 운영 기록 보존 정리 (TASK-3901, 정책 3901-③) — 같은 성격의 정리를
+      // 새 예약으로 나누지 않는다(결정 1401-③과 같은 판단: 같은 성격의
+      // 정리가 서로 다른 시각에 돌면 무엇이 남았는지 흐려진다).
+      const retention = await this.opsSettings.sweep();
+
+      // 경보 → 장애 초안 승격 (TASK-3901, 정책 3901-⑤) — 기본은 꺼짐이고,
+      // 켜져 있어도 만드는 것은 **초안**이다.
+      const promoted = await this.promotion.promote();
+
       return {
         ok: true,
         detail:
@@ -593,7 +607,9 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
           `경보 보관 ${alerts.archived}건 · Dead Letter 보관 ${queue.archived}건 ` +
           `(해소 후 ${alerts.afterDays}일 경과) · ` +
           `발행 판정 기록 보관 ${governance.archived}건 ` +
-          `(작성 후 ${governance.afterDays}일 경과) — 삭제하지 않습니다`,
+          `(작성 후 ${governance.afterDays}일 경과) — 삭제하지 않습니다. ` +
+          // 보존 정리는 **삭제**다 — 위 보관과 성격이 다르므로 문장을 나눈다
+          `보존 정리: ${retention.detail} ${promoted.detail}`,
         notified: [],
       };
     }
