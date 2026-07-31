@@ -3369,10 +3369,154 @@ const server = http.createServer((req, res) => {
         fail: 0,
         unknown: 1,
         blocked: false,
+        // TASK-4101 (정책 4101-②③)
+        tier: "staging",
+        comparison: {
+          regressed: [
+            { id: "urgent-channel", title: "긴급 알림 경로", from: "ok", to: "warn" },
+          ],
+          recovered: [],
+          persisting: [],
+          // **복구와 절대 섞지 않는다** — 없어진 검사는 실패하지 않는다
+          disappeared: [
+            { id: "activation", title: "운영 활성화", from: "warn", to: null },
+          ],
+          appeared: [],
+          comparable: true,
+          comparedTo: "2026-07-30T07:00:00.000Z",
+          detail:
+            "새로 나빠진 항목 1건: 긴급 알림 경로(정상 → 주의). 지난 진단 " +
+            "이후에 바뀐 것이 있다는 뜻입니다. 이번 진단에 없는 항목 1건: " +
+            "운영 활성화. 고쳐진 것이 아니라 검사 자체가 없어진 것입니다 — " +
+            "없어진 검사는 실패하지 않습니다.",
+        },
         detail:
-          "일일 진단. 주의 1건. 모르는 것 1건 — 통과로 세지 않았습니다. " +
+          "[스테이징] 일일 진단. 주의 1건. 모르는 것 1건 — 통과로 세지 않았습니다. " +
           "진단 결과와 무관하게 서비스는 계속 뜹니다 (경보와 차단은 다릅니다).",
         ranAt: new Date().toISOString(),
+      }),
+    );
+    return;
+  }
+
+  /**
+   * 검증 실행 잠금 (TASK-4101, CTO 정책 4101-⑤⑥) — ADMIN 전용.
+   *
+   * 화면이 검증해야 하는 것: **막힌 이유를 그대로 보여 주는가**,
+   * 그리고 **되돌릴 수 없는 단계를 표시하는가**.
+   */
+  if (url.pathname === "/ops/validation-run") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify({
+        verdict: "blocked",
+        blockers: [
+          {
+            id: "target",
+            reason:
+              "검증 대상 판정이 'unacknowledged'입니다 — 대상이 성립하지 않으면 " +
+              "실 호출을 돌리지 않습니다.",
+          },
+          {
+            id: "people",
+            reason:
+              "사람이 줘야 끝나는 단계가 1건 남았습니다: 실 Provider 자격 증명 " +
+              "주입. 이 단계들은 코드로 해결되지 않습니다.",
+          },
+        ],
+        steps: [
+          {
+            order: 1,
+            id: "preflight",
+            title: "준비 상태 재확인",
+            command: "GET /ops/validation-plan",
+            onFailure: "여기서 멈춥니다.",
+            reversible: true,
+          },
+          {
+            order: 2,
+            id: "diagnostics",
+            title: "대상 환경 진단",
+            command: "GET /ops/diagnostics?stage=startup",
+            onFailure: "실패 항목을 고친 뒤 다시 시작합니다.",
+            reversible: true,
+          },
+          {
+            order: 3,
+            id: "baseline",
+            title: "검증 전 KPI 스냅샷",
+            command: "POST /ops/kpi/snapshot",
+            onFailure: "기준선 없이 시작하면 비교할 대상이 없습니다.",
+            reversible: true,
+          },
+          {
+            order: 4,
+            id: "smoke",
+            title: "실 호출 스모크 3종",
+            command: "POST /ops/smoke",
+            onFailure: "스텁으로 되돌려 통과시키지 않습니다.",
+            reversible: false,
+          },
+        ],
+        tier: "staging",
+        target: {
+          verdict: "unacknowledged",
+          url: "https://staging.acos.example",
+          host: "staging.acos.example",
+          usable: false,
+          detail:
+            "주소는 성립하지만 VALIDATION_TARGET_ACK가 없습니다 — 주소를 적는 " +
+            "것과 그곳에 돈이 나가는 호출을 돌려도 된다고 말하는 것은 다른 " +
+            "행동입니다.",
+          next: "VALIDATION_TARGET_ACK=staging.acos.example을 설정하세요.",
+        },
+        detail:
+          "검증을 시작할 수 없습니다 (2건). 강제로 여는 방법은 없습니다 — 막는 " +
+          "조건을 없애는 것이 유일한 길입니다.",
+        checkedAt: new Date().toISOString(),
+      }),
+    );
+    return;
+  }
+
+  /** 만료 초안 되살림 이력 (TASK-4101, CTO 정책 4101-④) — ADMIN 전용 */
+  if (url.pathname === "/ops/incidents/revivals") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify({
+        revivals: [
+          {
+            id: "inc-draft-0",
+            summary: "경보에서 만든 초안: 저장소 응답 지연",
+            action: "confirm",
+            reason: "비슷한 사고가 다시 나서 되짚어 보니 같은 원인이었습니다",
+            latenessDays: 23,
+            actor: "admin@acos.local",
+            revivedAt: "2026-07-24T02:00:00.000Z",
+            detail:
+              "만료 23일 뒤 확인 (초안 → 장애) — 비슷한 사고가 다시 나서 " +
+              "되짚어 보니 같은 원인이었습니다",
+          },
+        ],
+        total: 1,
+        confirmed: 1,
+        dismissed: 0,
+        reopened: 0,
+        averageLatenessDays: 23,
+        detail:
+          "만료 뒤 손댄 초안 1건 (확인 1 · 기각 0 · 만료 취소 0). 평균 23일 늦게 " +
+          "봤습니다. 만료된 초안 중 1건이 실제 장애였습니다 — 이것은 잘 처리한 " +
+          "기록이 아니라 그만큼 늦게 알았다는 기록입니다.",
       }),
     );
     return;

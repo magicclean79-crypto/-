@@ -6,10 +6,19 @@ const NOW = Date.parse("2026-07-31T00:00:00Z");
 function input(overrides: Partial<DiagnosticInput> = {}): DiagnosticInput {
   return {
     stage: "daily",
-    production: true,
+    // TASK-4101: `production` 불리언이 배포 단계로 바뀌었다 (정책 4101-③)
+    tier: "production",
+    tierDeclared: true,
+    validationTarget: null,
     // 기본 표본은 "긴급 경로까지 갖춰진 운영" — 그래야 각 시험이 자기가
     // 만든 문제만 보게 된다
-    env: { ALERT_URGENT_WEBHOOK_URL: "http://127.0.0.1:9400/urgent" },
+    // 선언(tier)과 구성(NODE_ENV)이 맞는 표본 — 어긋나면 그 자체가 실패
+    // 항목이 되고(정책 4101-③), 그러면 각 시험이 자기가 만들지 않은 문제를
+    // 보게 된다
+    env: {
+      NODE_ENV: "production",
+      ALERT_URGENT_WEBHOOK_URL: "http://127.0.0.1:9400/urgent",
+    },
     envErrors: [],
     database: true,
     storage: true,
@@ -58,7 +67,13 @@ describe("checkUrgentChannels", () => {
   it("긴급 경로가 있으면 정상이다", () => {
     const check = checkUrgentChannels({
       production: true,
-      env: { ALERT_URGENT_WEBHOOK_URL: "http://127.0.0.1:9400/urgent" },
+      // 선언(tier)과 구성(NODE_ENV)이 맞는 표본 — 어긋나면 그 자체가 실패
+    // 항목이 되고(정책 4101-③), 그러면 각 시험이 자기가 만들지 않은 문제를
+    // 보게 된다
+    env: {
+      NODE_ENV: "production",
+      ALERT_URGENT_WEBHOOK_URL: "http://127.0.0.1:9400/urgent",
+    },
       anyChannelConfigured: true,
     });
     expect(check.status).toBe("ok");
@@ -92,7 +107,8 @@ describe("runDiagnostics", () => {
       input({ database: null, storage: null, pendingMigrations: null }),
     );
     expect(report.unknown).toBe(3);
-    expect(report.ok).toBe(3); // 환경변수·예약 점검·긴급 경로만 정상
+    // 환경변수 · 예약 점검 · 배포 단계 선언 · 긴급 경로만 정상
+    expect(report.ok).toBe(4);
 
     expect(report.detail).toContain("통과로 세지 않았습니다");
   });
@@ -104,7 +120,11 @@ describe("runDiagnostics", () => {
    */
   it("긴급 경로 점검이 목록과 요약에 같이 들어간다", () => {
     const report = runDiagnostics(
-      input({ production: true, env: {}, anyChannelConfigured: true }),
+      input({
+        tier: "production",
+        env: { NODE_ENV: "production" },
+        anyChannelConfigured: true,
+      }),
     );
     const urgent = report.checks.find((check) => check.id === "urgent-channel");
     expect(urgent?.status).toBe("warn");
@@ -116,7 +136,11 @@ describe("runDiagnostics", () => {
 
   it("긴급 경로 실패도 요약의 실패 수에 들어간다", () => {
     const report = runDiagnostics(
-      input({ production: true, env: {}, anyChannelConfigured: false }),
+      input({
+        tier: "production",
+        env: { NODE_ENV: "production" },
+        anyChannelConfigured: false,
+      }),
     );
     expect(report.fail).toBe(1);
     expect(report.detail).toContain("긴급 알림 경로");
@@ -132,12 +156,12 @@ describe("runDiagnostics", () => {
   it("환경변수 문제는 개발에서는 주의, 운영에서는 실패다", () => {
     const errors = [{ name: "S3_BUCKET", message: "필수" }];
     expect(
-      runDiagnostics(input({ production: false, envErrors: errors })).checks.find(
+      runDiagnostics(input({ tier: "development", envErrors: errors })).checks.find(
         (check) => check.id === "env",
       )?.status,
     ).toBe("warn");
     expect(
-      runDiagnostics(input({ production: true, envErrors: errors })).checks.find(
+      runDiagnostics(input({ tier: "production", envErrors: errors })).checks.find(
         (check) => check.id === "env",
       )?.status,
     ).toBe("fail");
@@ -167,26 +191,26 @@ describe("runDiagnostics", () => {
 
 describe("detectDiagnosticAlerts", () => {
   it("개발의 빨간불은 운영 알림이 되지 않는다", () => {
-    const report = runDiagnostics(input({ production: false, database: false }));
-    expect(detectDiagnosticAlerts(report, false)).toEqual([]);
+    const report = runDiagnostics(input({ tier: "development", database: false }));
+    expect(detectDiagnosticAlerts(report, "development")).toEqual([]);
   });
 
   it("문제가 없으면 경보도 없다", () => {
-    expect(detectDiagnosticAlerts(runDiagnostics(input()), true)).toEqual([]);
+    expect(detectDiagnosticAlerts(runDiagnostics(input()), "production")).toEqual([]);
   });
 
   it("실패가 있으면 critical, 주의만 있으면 warning", () => {
     const failing = runDiagnostics(input({ database: false }));
-    expect(detectDiagnosticAlerts(failing, true)[0].level).toBe("critical");
+    expect(detectDiagnosticAlerts(failing, "production")[0].level).toBe("critical");
 
     const warning = runDiagnostics(input({ scheduledChecksEnabled: false }));
-    const alerts = detectDiagnosticAlerts(warning, true);
+    const alerts = detectDiagnosticAlerts(warning, "production");
     expect(alerts[0].level).toBe("warning");
-    expect(alerts[0].key).toBe("diagnostics:daily");
+    expect(alerts[0].key).toBe("diagnostics:production:daily");
   });
 
   it("단계별로 경보 키를 나눈다 — 기동과 일일은 다른 사안이다", () => {
     const startup = runDiagnostics(input({ stage: "startup", database: false }));
-    expect(detectDiagnosticAlerts(startup, true)[0].key).toBe("diagnostics:startup");
+    expect(detectDiagnosticAlerts(startup, "production")[0].key).toBe("diagnostics:production:startup");
   });
 });

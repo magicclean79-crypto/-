@@ -17,7 +17,7 @@ function blank(overrides: Partial<ValidationPlanInput> = {}): ValidationPlanInpu
     diagnostics: { fail: 0, unknown: 0 },
     pendingMigrations: 0,
     urgentChannelConfigured: false,
-    stagingUrl: null,
+    stagingTarget: { url: null, usable: false, detail: "검증 대상이 아직 정해지지 않았습니다." },
     kpiSnapshots: 0,
     lastDrillAt: null,
     now: NOW,
@@ -36,7 +36,11 @@ function ready(overrides: Partial<ValidationPlanInput> = {}): ValidationPlanInpu
     cutover: { verified: 3, total: 3, notProduction: 0 },
     smoke: { passed: 3, total: 3, stubbed: 0 },
     urgentChannelConfigured: true,
-    stagingUrl: "https://staging.acos.example",
+    stagingTarget: {
+      url: "https://staging.acos.example",
+      usable: true,
+      detail: "검증 대상: https://staging.acos.example (확인됨).",
+    },
     kpiSnapshots: 5,
     lastDrillAt: NOW - 10 * DAY,
     ...overrides,
@@ -73,7 +77,15 @@ describe("judgeValidationPlan", () => {
    * 것이고, 검증 대상의 것이 아니다.
    */
   it("검증 대상 환경이 없으면 그 환경을 근거로 하는 단계를 통과로 세지 않는다", () => {
-    const report = judgeValidationPlan(ready({ stagingUrl: null }));
+    const report = judgeValidationPlan(
+      ready({
+        stagingTarget: {
+          url: null,
+          usable: false,
+          detail: "검증 대상이 아직 정해지지 않았습니다.",
+        },
+      }),
+    );
     const migrations = report.steps.find((step) => step.id === "migrations");
     expect(migrations?.status).toBe("blocked");
     expect(migrations?.detail).toContain("검증 대상 환경의 것이 아닙니다");
@@ -159,6 +171,37 @@ describe("judgeValidationPlan", () => {
       expect(step.evidence.length).toBeGreaterThan(0);
       expect(["system", "operator"]).toContain(step.owner);
     }
+  });
+
+  /**
+   * 라이브 검증에서 드러난 결함 3: 주소가 비어 있지 않다는 것만 보고
+   * "검증용 환경 확보 완료"로 세었다. 그래서 **운영 주소를 적어 둔
+   * 상태에서도** 그 단계가 초록이 되고 뒤 단계까지 줄줄이 열렸다.
+   * 같은 값을 두 곳에서 서로 다르게 판정하고 있었다.
+   */
+  it("주소가 있어도 검증용 환경이 아니면 통과로 세지 않는다", () => {
+    const report = judgeValidationPlan(
+      ready({
+        stagingTarget: {
+          url: "https://acos.example",
+          usable: false,
+          detail: "acos.example는 운영 호스트로 선언돼 있습니다.",
+        },
+      }),
+    );
+    const staging = report.steps.find((step) => step.id === "staging");
+    expect(staging?.status).toBe("pending");
+    expect(staging?.detail).toContain("운영 호스트");
+    // 뒤 단계가 열리지 않는다
+    expect(report.steps.find((step) => step.id === "migrations")?.status).toBe(
+      "blocked",
+    );
+  });
+
+  it("검증 대상 판정을 못 읽은 것은 '정해졌다'가 아니다", () => {
+    const report = judgeValidationPlan(ready({ stagingTarget: null }));
+    expect(report.steps.find((step) => step.id === "staging")?.status).toBe("unknown");
+    expect(report.readiness).not.toBe("ready");
   });
 
   it("화면에 실리는 문장에 마크다운 강조를 쓰지 않는다", () => {

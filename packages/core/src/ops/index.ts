@@ -34,3 +34,8 @@ export * from "./draft-lifecycle";
 export * from "./kpi-trend";
 export * from "./diagnostics";
 export * from "./validation-plan";
+export * from "./validation-target";
+export * from "./tier-policy";
+export * from "./diagnostic-history";
+export * from "./draft-revival";
+export * from "./validation-run";

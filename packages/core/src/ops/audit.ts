@@ -92,6 +92,9 @@ const ROUTE_ACTIONS: {
   // 같이 적었다** — 지난번에는 나중에 라이브 화면에서 원시 경로를 보고 나서
   // 고쳤고, 그 사이의 감사 기록은 읽기 어려운 채로 남았다.
   { method: "POST", pattern: /^\/ops\/kpi\/snapshot$/, action: "kpi.snapshot", title: "KPI 스냅샷 기록" },
+  // TASK-4101에서 더한 경로 (정책 4101-④⑥)
+  { method: "POST", pattern: /^\/ops\/incidents\/:id\/revive$/, action: "incident.revive", title: "만료 초안 되살림" },
+  { method: "POST", pattern: /^\/ops\/validation-run$/, action: "validation.run-start", title: "검증 실행 시작 (준비 확인)" },
 ];
 
 /**

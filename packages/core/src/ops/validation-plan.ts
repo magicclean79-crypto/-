@@ -176,8 +176,16 @@ export interface ValidationPlanInput {
   pendingMigrations: number | null;
   /** 긴급 경로가 설정돼 있는가 */
   urgentChannelConfigured: boolean;
-  /** 검증 대상 환경 주소 — 없으면 아직 정해지지 않은 것 */
-  stagingUrl: string | null;
+  /**
+   * 검증 대상 판정 (TASK-4101, 정책 4101-① 배선).
+   *
+   * 예전에는 주소 문자열만 받았고, **비어 있지 않으면 통과**로 봤습니다.
+   * 그러면 운영 주소를 적어 둔 상태에서도 "검증용 환경 확보 완료"가 되고,
+   * 그 뒤 단계까지 줄줄이 열립니다 — 같은 값을 두 곳에서 서로 다르게
+   * 판정하던 것입니다(라이브 검증에서 드러남). 이제 **보호 판정을 그대로
+   * 받습니다.**
+   */
+  stagingTarget: { url: string | null; usable: boolean; detail: string } | null;
   /** 쌓인 KPI 스냅샷 수 */
   kpiSnapshots: number;
   /** 최근 복구 리허설 시각 (ms) — 없으면 null */
@@ -370,12 +378,23 @@ function evaluateStep(
           };
     }
     case "staging": {
-      return input.stagingUrl === null
-        ? {
-            status: "pending",
-            detail: "검증 대상 환경이 아직 정해지지 않았습니다.",
-          }
-        : { status: "done", detail: `검증 대상: ${input.stagingUrl}` };
+      if (input.stagingTarget === null) {
+        return {
+          status: "unknown",
+          detail: "검증 대상 판정을 읽지 못했습니다 — 정해졌다는 뜻이 아닙니다.",
+        };
+      }
+      if (input.stagingTarget.url === null) {
+        return {
+          status: "pending",
+          detail: "검증 대상 환경이 아직 정해지지 않았습니다.",
+        };
+      }
+      // **주소가 있다고 통과가 아니다** — 운영을 가리키거나, 자기 자신을
+      // 가리키거나, 확인이 없으면 그것은 검증용 환경이 아니다
+      return input.stagingTarget.usable
+        ? { status: "done", detail: input.stagingTarget.detail }
+        : { status: "pending", detail: input.stagingTarget.detail };
     }
     case "migrations": {
       if (input.pendingMigrations === null) {

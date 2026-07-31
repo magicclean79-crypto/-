@@ -26,6 +26,8 @@ import { DiagnosticsService } from "./diagnostics.service";
 import { DraftLifecycleService } from "./draft-lifecycle.service";
 import { KpiTrendService } from "./kpi-trend.service";
 import { ValidationPlanService } from "./validation-plan.service";
+import { DraftRevivalService } from "./draft-revival.service";
+import { ValidationRunService } from "./validation-run.service";
 import { AdminSettingsService } from "../admin/admin-settings.service";
 import { RequestContextService } from "../common/request-context.service";
 import { PriceSourceService } from "../pricing/price-source.service";
@@ -116,6 +118,8 @@ function createPrismaStub() {
   // TASK-4001 — KPI 스냅샷 · 설정 변경 이력
   const kpiSnapshots: Record<string, unknown>[] = [];
   const adminAudit: Record<string, unknown>[] = [];
+  // TASK-4101 — 진단 이력
+  const diagnosticRuns: Record<string, unknown>[] = [];
   const opsAudit: Record<string, unknown>[] = [];
   const deliveries: {
     id: string;
@@ -974,6 +978,39 @@ function createPrismaStub() {
           return [...stamps].map((takenAt) => ({ takenAt: new Date(takenAt) }));
         },
       },
+      // 진단 이력 (TASK-4101, 정책 4101-②) — **같은 tier·stage끼리만 비교한다**
+      diagnosticRun: {
+        findFirst: async (args?: { where?: { tier?: string; stage?: string } }) => {
+          const rows = [...diagnosticRuns]
+            .filter(
+              (row) =>
+                (args?.where?.tier === undefined || row.tier === args.where.tier) &&
+                (args?.where?.stage === undefined || row.stage === args.where.stage),
+            )
+            .sort(
+              (left, right) =>
+                (right.ranAt as Date).getTime() - (left.ranAt as Date).getTime(),
+            );
+          return rows[0] === undefined ? null : { ...rows[0] };
+        },
+        findMany: async (args?: { where?: { tier?: string }; take?: number }) =>
+          [...diagnosticRuns]
+            .filter(
+              (row) => args?.where?.tier === undefined || row.tier === args.where.tier,
+            )
+            .sort(
+              (left, right) =>
+                (right.ranAt as Date).getTime() - (left.ranAt as Date).getTime(),
+            )
+            .slice(0, args?.take ?? diagnosticRuns.length)
+            .map((row) => ({ ...row })),
+        create: async (args: { data: Record<string, unknown> }) => {
+          seq += 1;
+          const row = { id: `diag-${seq}`, ranAt: new Date(), ...args.data };
+          diagnosticRuns.push(row);
+          return { ...row };
+        },
+      },
       // 설정 변경 이력 (TASK-4001, 정책 4001-③)
       adminAuditLog: {
         findMany: async (args?: {
@@ -1183,6 +1220,7 @@ function createPrismaStub() {
             sourceAlertKey?: { not: null };
             status?: string;
             expiredAt?: null | { not: null };
+            revivedAt?: { not: null };
           };
           select?: Record<string, boolean>;
         }) =>
@@ -1205,6 +1243,10 @@ function createPrismaStub() {
                 ? row.expiredAt === null
                 : row.expiredAt !== null;
             })
+            // 되살림 이력 (TASK-4101)
+            .filter(
+              (row) => args?.where?.revivedAt === undefined || row.revivedAt !== null,
+            )
             .sort(
               (left, right) =>
                 (right.startedAt as Date).getTime() - (left.startedAt as Date).getTime(),
@@ -1238,6 +1280,12 @@ function createPrismaStub() {
             dismissReason: null,
             // 만료는 기각이 아니다 (TASK-4001, 정책 4001-①)
             expiredAt: null,
+            // 되살림 기록 (TASK-4101, 정책 4101-④)
+            revivedAt: null,
+            revivedById: null,
+            revivalAction: null,
+            revivalReason: null,
+            revivalLatenessMs: null,
             ...args.data,
           } as Record<string, unknown>;
           incidents.push(row);
@@ -1651,6 +1699,10 @@ async function build(overrides: Overrides = {}) {
       DraftLifecycleService,
       DiagnosticsService,
       ValidationPlanService,
+      // 검증 대상 보호 · 진단 이력 · 초안 되살림 · 실행 잠금
+      // (TASK-4101, 정책 4101-①②③④⑤⑥)
+      DraftRevivalService,
+      ValidationRunService,
       {
         // 운영 설정 저장소 — 테스트가 값을 정한다
         provide: AdminSettingsService,
@@ -7695,4 +7747,282 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
       });
     });
   });
+
+  describe("Enterprise Validation Governance Platform (TASK-4101)", () => {
+    const admin = (server: unknown, path: string) =>
+      request(server as never).get(path).set("Authorization", "Bearer tok-admin");
+
+    const post = (server: unknown, path: string) =>
+      request(server as never).post(path).set("Authorization", "Bearer tok-admin");
+
+    describe("검증 대상 보호 (정책 4101-①)", () => {
+      it("미설정은 실패가 아니다 — 아직 정하지 않은 것이다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await admin(built.app.getHttpServer(), "/ops/validation-run")
+          .expect(200);
+        expect(response.body.target.verdict).toBe("unset");
+        expect(response.body.target.usable).toBe(false);
+      });
+
+      it("운영 호스트를 가리키면 검증 실행을 막는다", async () => {
+        process.env.VALIDATION_TARGET_URL = "https://acos.example";
+        process.env.VALIDATION_TARGET_ACK = "acos.example";
+        process.env.PRODUCTION_HOSTS = "acos.example";
+        const built = await build();
+        app = built.app;
+        const response = await admin(built.app.getHttpServer(), "/ops/validation-run")
+          .expect(200);
+        expect(response.body.target.verdict).toBe("production");
+        expect(response.body.verdict).toBe("blocked");
+      });
+
+      it("확인이 없으면 아직 쓸 수 없다 — 적는 것과 돌려도 된다고 말하는 것은 다르다", async () => {
+        process.env.VALIDATION_TARGET_URL = "https://staging.acos.example";
+        delete process.env.VALIDATION_TARGET_ACK;
+        const built = await build();
+        app = built.app;
+        const response = await admin(built.app.getHttpServer(), "/ops/validation-run")
+          .expect(200);
+        expect(response.body.target.verdict).toBe("unacknowledged");
+      });
+    });
+
+    describe("진단 이력과 비교 (정책 4101-②)", () => {
+      it("첫 진단은 '변화 없음'이 아니라 기준선이다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await admin(built.app.getHttpServer(), "/ops/diagnostics")
+          .expect(200);
+        expect(response.body.comparison.comparable).toBe(false);
+        expect(response.body.comparison.detail).toContain("이번이 기준선입니다");
+      });
+
+      it("이력이 쌓이면 지난 진단과 비교한다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        // 예약 점검이 진단을 돌리며 이력을 남긴다
+        await post(server, "/ops/checks/run?job=daily-diagnostics").expect(200);
+
+        const response = await admin(server, "/ops/diagnostics").expect(200);
+        expect(response.body.comparison.comparable).toBe(true);
+        expect(response.body.comparison.comparedTo).not.toBeNull();
+      });
+
+      it("이력 목록을 돌려준다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+        await post(server, "/ops/checks/run?job=daily-diagnostics").expect(200);
+
+        const response = await admin(server, "/ops/diagnostics/history").expect(200);
+        expect(response.body.length).toBeGreaterThan(0);
+        expect(response.body[0].tier).toBeDefined();
+      });
+
+      it("ADMIN 전용이다", async () => {
+        const built = await build();
+        app = built.app;
+        await request(built.app.getHttpServer() as never)
+          .get("/ops/diagnostics/history")
+          .expect(401);
+      });
+    });
+
+    describe("배포 단계별 진단 (정책 4101-③)", () => {
+      it("단계를 보고서에 함께 적는다 — 스테이징의 실패 2건과 운영의 실패 2건은 다른 소식이다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await admin(built.app.getHttpServer(), "/ops/diagnostics")
+          .expect(200);
+        expect(["development", "staging", "production"]).toContain(response.body.tier);
+        expect(response.body.detail).toContain(`[`);
+      });
+
+      it("선언과 구성이 어긋나면 실패로 잡는다", async () => {
+        process.env.DEPLOY_TIER = "staging";
+        process.env.NODE_ENV = "test";
+        const built = await build();
+        app = built.app;
+        const response = await admin(built.app.getHttpServer(), "/ops/diagnostics")
+          .expect(200);
+        const check = response.body.checks.find(
+          (row: { id: string }) => row.id === "deploy-tier",
+        );
+        expect(check.status).toBe("fail");
+        expect(check.detail).toContain("운영의 값이 아닙니다");
+      });
+    });
+
+    describe("만료 초안 되살림 (정책 4101-④)", () => {
+      it("만료되지 않은 초안에는 쓸 수 없다 — 두 경로가 같은 일을 하면 기록이 흐려진다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+        const id = await seedExpiredDraft(built, { expired: false });
+
+        const response = await post(server, `/ops/incidents/${id}/revive`)
+          .send({ action: "reopen", reason: "다시 보겠습니다" })
+          .expect(400);
+        expect(response.body.message).toContain("만료되지 않은");
+      });
+
+      it("이미 판단이 끝난 기록에는 쓸 수 없다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        const created = await post(server, "/ops/incidents")
+          .send({
+            component: "llm",
+            severity: "MAJOR",
+            summary: "사람이 연 장애",
+            startedAt: new Date().toISOString(),
+          })
+          .expect(201);
+
+        const response = await post(server, `/ops/incidents/${created.body.id}/revive`)
+          .send({ action: "reopen", reason: "다시 보겠습니다" })
+          .expect(400);
+        expect(response.body.message).toContain("이미 판단이 끝난");
+      });
+
+      it("사유 없이 되살릴 수 없다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+        const id = await seedExpiredDraft(built);
+
+        const response = await post(server, `/ops/incidents/${id}/revive`)
+          .send({ action: "reopen", reason: "음" })
+          .expect(400);
+        expect(response.body.message).toContain("앞사람의 판단을 참고할 수 없습니다");
+      });
+
+      it("만료 뒤 확인해도 만료됐던 사실을 지우지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+        const id = await seedExpiredDraft(built);
+
+        await post(server, `/ops/incidents/${id}/revive`)
+          .send({
+            action: "confirm",
+            reason: "비슷한 사고가 다시 나서 되짚어 보니 같은 원인이었습니다",
+            summary: "OpenAI 장애로 상세페이지 생성이 40분 멈춤",
+          })
+          .expect(200);
+
+        const drafts = await admin(server, "/ops/incidents/drafts").expect(200);
+        // 확인됐으므로 초안 목록에서는 빠지지만, 만료 표시는 지워지지 않았다
+        const row = built.prisma.stub as never as {
+          incident: { findUnique: (a: unknown) => Promise<Record<string, unknown>> };
+        };
+        const saved = await row.incident.findUnique({ where: { id } });
+        expect(saved.expiredAt).not.toBeNull();
+        expect(saved.status).toBe("CONFIRMED");
+        expect(drafts.body.expired.some((item: { id: string }) => item.id === id)).toBe(
+          false,
+        );
+      });
+
+      it("만료 취소만 만료 표시를 비우고, 그때도 되살린 기록은 남는다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+        const id = await seedExpiredDraft(built);
+
+        await post(server, `/ops/incidents/${id}/revive`)
+          .send({ action: "reopen", reason: "휴가 중이어서 아무도 못 봤습니다" })
+          .expect(200);
+
+        const stub = built.prisma.stub as never as {
+          incident: { findUnique: (a: unknown) => Promise<Record<string, unknown>> };
+        };
+        const saved = await stub.incident.findUnique({ where: { id } });
+        expect(saved.expiredAt).toBeNull();
+        expect(saved.status).toBe("DRAFT");
+        expect(saved.revivedAt).not.toBeNull();
+      });
+
+      it("되살림 이력을 성과로 적지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+        const id = await seedExpiredDraft(built);
+
+        await post(server, `/ops/incidents/${id}/revive`)
+          .send({
+            action: "confirm",
+            reason: "뒤늦게 진짜 장애였음이 드러났습니다",
+            summary: "OpenAI 장애로 생성이 멈춤",
+          })
+          .expect(200);
+
+        const response = await admin(server, "/ops/incidents/revivals").expect(200);
+        expect(response.body.total).toBe(1);
+        expect(response.body.confirmed).toBe(1);
+        expect(response.body.detail).toContain("잘 처리한 기록이 아니라");
+      });
+    });
+
+    describe("검증 실행 잠금 (정책 4101-⑤⑥)", () => {
+      it("준비되지 않았으면 403으로 거절하고 이유를 말한다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await post(built.app.getHttpServer(), "/ops/validation-run")
+          .expect(403);
+        expect(response.body.message).toContain("강제로 여는 방법은 없습니다");
+      });
+
+      it("막힌 이유를 단계별로 돌려준다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await admin(built.app.getHttpServer(), "/ops/validation-run")
+          .expect(200);
+        expect(response.body.verdict).toBe("blocked");
+        expect(response.body.blockers.length).toBeGreaterThan(0);
+      });
+
+      it("실행 순서에서 되돌릴 수 없는 단계가 앞에 오지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await admin(built.app.getHttpServer(), "/ops/validation-run")
+          .expect(200);
+        const steps: { order: number; reversible: boolean }[] = response.body.steps;
+        const firstIrreversible = steps.findIndex((step) => !step.reversible);
+        expect(firstIrreversible).toBeGreaterThan(2);
+      });
+    });
+  });
 });
+
+/**
+ * 만료된 초안을 심는다 — 승격은 지금 만들어지므로 만료 시각은 직접 넣는다.
+ */
+async function seedExpiredDraft(
+  built: Awaited<ReturnType<typeof build>>,
+  options: { expired?: boolean } = {},
+): Promise<string> {
+  const stub = built.prisma.stub as never as {
+    incident: {
+      create: (a: { data: Record<string, unknown> }) => Promise<{ id: string }>;
+    };
+  };
+  const created = await stub.incident.create({
+    data: {
+      component: "llm",
+      severity: "CRITICAL",
+      summary: "경보에서 만든 초안: OpenAI 호출 실패",
+      startedAt: new Date(Date.now() - 53 * 86_400_000),
+      status: "DRAFT",
+      sourceAlertKey: `provider-failure:seed-${Math.floor(Date.now() % 100000)}`,
+      expiredAt:
+        options.expired === false ? null : new Date(Date.now() - 23 * 86_400_000),
+      createdAt: new Date(Date.now() - 53 * 86_400_000),
+    },
+  });
+  return created.id;
+}

@@ -2810,6 +2810,10 @@ export interface DiagnosticReportDto {
   unknown: number;
   /** 진단이 서비스를 막았는가 — **언제나 false다** (경보와 차단은 다르다) */
   blocked: boolean;
+  /** development | staging | production (TASK-4101, 정책 4101-③) */
+  tier: string;
+  /** 지난 진단과의 비교 — 이력을 못 읽었으면 null */
+  comparison: DiagnosticComparisonDto | null;
   detail: string;
   ranAt: string;
 }
@@ -2914,6 +2918,112 @@ export interface ValidationPlanDto {
    * 않고, 사람이 직접 할 수 있는 일도 아니다.
    */
   blocked: number;
+  detail: string;
+  checkedAt: string;
+}
+
+// ── 검증 대상 보호 · 진단 이력 · 단계별 진단 · 초안 되살림 (TASK-4101, Sprint 41) ──
+
+/** 검증 대상 판정 (CTO 정책 4101-①) */
+export interface ValidationTargetDto {
+  /** unset | invalid | production | self | local | unacknowledged | accepted */
+  verdict: string;
+  url: string | null;
+  host: string | null;
+  /** 실 호출을 돌려도 되는가 — `accepted`일 때만 true */
+  usable: boolean;
+  detail: string;
+  next: string | null;
+}
+
+/** 진단 항목 하나의 변화 (CTO 정책 4101-②) */
+export interface DiagnosticChangeDto {
+  id: string;
+  title: string;
+  from: string | null;
+  to: string | null;
+}
+
+/** 지난 진단과의 비교 */
+export interface DiagnosticComparisonDto {
+  /** 정상이었다가 나빠진 항목 — 지난 진단 이후에 바뀐 것이 있다는 뜻 */
+  regressed: DiagnosticChangeDto[];
+  recovered: DiagnosticChangeDto[];
+  /** 나빴고 지금도 나쁜 항목 — 새 사건이 아니다 */
+  persisting: DiagnosticChangeDto[];
+  /**
+   * 이번 진단에 **없는** 항목. `recovered`와 절대 섞지 않는다 —
+   * 없어진 검사는 실패하지 않는다.
+   */
+  disappeared: DiagnosticChangeDto[];
+  appeared: DiagnosticChangeDto[];
+  /** 비교 대상이 있었는가 — 첫 실행은 비교가 아니다 */
+  comparable: boolean;
+  comparedTo: string | null;
+  detail: string;
+}
+
+/** 저장된 진단 실행 1건 */
+export interface DiagnosticRunDto {
+  id: string;
+  stage: string;
+  /** development | staging | production */
+  tier: string;
+  ok: number;
+  warn: number;
+  fail: number;
+  unknown: number;
+  detail: string;
+  ranAt: string;
+}
+
+/** 만료 초안 되살림 1건 (CTO 정책 4101-④) */
+export interface DraftRevivalDto {
+  id: string;
+  summary: string;
+  /** confirm | dismiss | reopen */
+  action: string;
+  reason: string;
+  /** 만료된 지 얼마나 지나서 손댔는가 (일) */
+  latenessDays: number;
+  actor: string | null;
+  revivedAt: string;
+  /** 목록에 실리는 한 줄 */
+  detail: string;
+}
+
+/** 되살림 이력 요약 */
+export interface DraftRevivalSummaryDto {
+  revivals: DraftRevivalDto[];
+  total: number;
+  confirmed: number;
+  dismissed: number;
+  reopened: number;
+  /** 평균 지각 (일) — 표본이 없으면 null (0이 아니다) */
+  averageLatenessDays: number | null;
+  detail: string;
+}
+
+/** 검증 실행 순서 1단계 (CTO 정책 4101-⑤) */
+export interface ValidationRunStepDto {
+  order: number;
+  id: string;
+  title: string;
+  command: string;
+  onFailure: string;
+  /** 되돌릴 수 있는가 — 없으면 그 사실을 적는다 */
+  reversible: boolean;
+}
+
+/** 검증 실행 잠금 (GET /ops/validation-run, CTO 정책 4101-⑤⑥) */
+export interface ValidationRunDto {
+  /** allowed | blocked — **강제로 여는 방법은 없다** */
+  verdict: string;
+  blockers: { id: string; reason: string }[];
+  steps: ValidationRunStepDto[];
+  /** 지금 이 인스턴스의 배포 단계 */
+  tier: string;
+  target: ValidationTargetDto;
   detail: string;
   checkedAt: string;
 }

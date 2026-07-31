@@ -25,6 +25,9 @@
 
 import { configuredUrgentChannels } from "./urgent-routing";
 import type { NotificationChannel } from "./notification";
+import { checkTierConsistency, tierPolicy } from "./tier-policy";
+import { judgeValidationTarget, validationTargetCheck } from "./validation-target";
+import type { DeploymentTier, ValidationTargetInput } from "./validation-target";
 
 export const DIAGNOSTIC_STAGES = ["startup", "daily"] as const;
 export type DiagnosticStage = (typeof DIAGNOSTIC_STAGES)[number];
@@ -55,7 +58,18 @@ export interface DiagnosticReport {
 
 export interface DiagnosticInput {
   stage: DiagnosticStage;
-  production: boolean;
+  /**
+   * 배포 단계 (TASK-4101, 정책 4101-③).
+   *
+   * 이전에는 `production` 불리언 하나였습니다. 그러면 **스테이징이 개발과
+   * 같은 칸**에 들어가고, 스테이징의 빨간불이 아무 데도 안 갑니다 — 그러면
+   * 스테이징은 검증 환경이 아니라 또 하나의 개발 환경입니다.
+   */
+  tier: DeploymentTier;
+  /** `DEPLOY_TIER`가 실제로 선언돼 있었는가 (추론한 것과 구분한다) */
+  tierDeclared: boolean;
+  /** 검증 대상 판정 입력 (정책 4101-①) — 볼 필요가 없으면 null */
+  validationTarget: Omit<ValidationTargetInput, "tier"> | null;
   env: Record<string, string | undefined>;
   /** 환경변수 검증 결과 */
   envErrors: { name: string; message: string }[];
@@ -96,6 +110,11 @@ export interface DiagnosticInput {
  * 정작 운영의 경고도 안 읽힙니다.
  */
 export function checkUrgentChannels(input: {
+  /**
+   * 운영 구성을 요구하는 단계인가 (스테이징·운영). 이름이 `production`인
+   * 이유는 이 판정이 원래 운영 전용이었기 때문이고, TASK-4101에서
+   * **스테이징도 요구 대상**이 됐습니다 (정책 4101-③).
+   */
   production: boolean;
   env: Record<string, string | undefined>;
   /** 일반 채널이 하나라도 설정돼 있는가 */
@@ -157,7 +176,13 @@ export function runDiagnostics(input: DiagnosticInput): DiagnosticReport {
   checks.push({
     id: "env",
     title: "환경변수",
-    status: input.envErrors.length === 0 ? "ok" : input.production ? "fail" : "warn",
+    // 운영 구성을 요구하는 단계(스테이징·운영)에서는 실패다 (정책 4101-③)
+    status:
+      input.envErrors.length === 0
+        ? "ok"
+        : tierPolicy(input.tier).requiresOperationalConfig
+          ? "fail"
+          : "warn",
     detail:
       input.envErrors.length === 0
         ? "필수 환경변수가 모두 설정돼 있습니다."
@@ -200,22 +225,46 @@ export function runDiagnostics(input: DiagnosticInput): DiagnosticReport {
   checks.push({
     id: "scheduler",
     title: "예약 점검",
-    status: input.scheduledChecksEnabled ? "ok" : input.production ? "warn" : "ok",
+    status: input.scheduledChecksEnabled
+      ? "ok"
+      : tierPolicy(input.tier).requiresOperationalConfig
+        ? "warn"
+        : "ok",
     detail: input.scheduledChecksEnabled
       ? "예약 점검이 켜져 있습니다."
       : "예약 점검이 꺼져 있습니다 — 경보가 자동으로 나지 않습니다.",
     next: input.scheduledChecksEnabled ? null : "OPS_SCHEDULED_CHECKS를 켜세요.",
   });
 
+  // 배포 단계 선언 (정책 4101-③) — 선언과 실제 구성이 어긋나면 그 환경에서
+  // 잰 값은 운영의 값이 아니다
+  checks.push(
+    checkTierConsistency({
+      tier: input.tier,
+      nodeEnv: input.env.NODE_ENV,
+      tierDeclared: input.tierDeclared,
+    }),
+  );
+
   // 긴급 알림 경로 (정책 4001-④) — 다른 항목과 **같은 목록·같은 요약**에
-  // 들어가야 한다
+  // 들어가야 한다. 요구 여부는 배포 단계가 정한다 (정책 4101-③): 개발에
+  // 요구하면 그 경고가 배경 소음이 된다.
   checks.push(
     checkUrgentChannels({
-      production: input.production,
+      production: tierPolicy(input.tier).requiresOperationalConfig,
       env: input.env,
       anyChannelConfigured: input.anyChannelConfigured,
     }),
   );
+
+  // 검증 대상 주소 (정책 4101-①) — 잘못 적으면 설정 실수가 아니라 사고다
+  if (input.validationTarget !== null) {
+    checks.push(
+      validationTargetCheck(
+        judgeValidationTarget({ ...input.validationTarget, tier: input.tier }),
+      ),
+    );
+  }
 
   if (input.activation !== null && input.activation.applicable) {
     const { met, total } = input.activation;
@@ -253,7 +302,9 @@ export function runDiagnostics(input: DiagnosticInput): DiagnosticReport {
   const unknown = count("unknown");
 
   const parts: string[] = [
-    input.stage === "startup" ? "기동 진단." : "일일 진단.",
+    // **어느 단계의 진단인지 먼저 말한다** — 스테이징의 "실패 2건"과 운영의
+    // "실패 2건"은 같은 문장이지만 전혀 다른 소식이다
+    `[${tierPolicy(input.tier).title}] ${input.stage === "startup" ? "기동 진단." : "일일 진단."}`,
   ];
   if (fail > 0) {
     parts.push(
@@ -313,15 +364,26 @@ function reachability(
   };
 }
 
-/** 진단 실패를 경보로 (순수 함수) — **운영에서만** */
-export function detectDiagnosticAlerts(report: DiagnosticReport, production: boolean): {
+/**
+ * 진단 실패를 경보로 (순수 함수).
+ *
+ * **배포 단계가 등급을 정합니다** (TASK-4101, 정책 4101-③). 개발은 내지
+ * 않고, 스테이징은 내되 `warning`까지이며, 운영만 `critical`입니다 —
+ * 스테이징의 빨간불이 운영 장애와 같은 등급으로 울리면 진짜 장애가 그
+ * 속에 묻힙니다.
+ */
+export function detectDiagnosticAlerts(
+  report: DiagnosticReport,
+  tier: DeploymentTier,
+): {
   kind: "diagnostics";
   key: string;
   level: "warning" | "critical";
   title: string;
   message: string;
 }[] {
-  if (!production) {
+  const policy = tierPolicy(tier);
+  if (!policy.alerting) {
     // 개발의 빨간불이 운영 알림이 되면 그다음부터 아무도 안 본다
     return [];
   }
@@ -333,9 +395,13 @@ export function detectDiagnosticAlerts(report: DiagnosticReport, production: boo
   return [
     {
       kind: "diagnostics",
-      key: `diagnostics:${report.stage}`,
-      level: failing.length > 0 ? "critical" : "warning",
-      title: `${report.stage === "startup" ? "기동" : "일일"} 진단 — 실패 ${failing.length}건 · 주의 ${warning.length}건`,
+      // **단계별로 키를 나눈다** — 스테이징의 진단 경보가 운영의 것을
+      // 해소시키면 운영 문제가 조용히 사라진다
+      key: `diagnostics:${tier}:${report.stage}`,
+      level: failing.length > 0 ? policy.failLevel : "warning",
+      title:
+        `[${policy.title}] ${report.stage === "startup" ? "기동" : "일일"} 진단 — ` +
+        `실패 ${failing.length}건 · 주의 ${warning.length}건`,
       message: [...failing, ...warning]
         .map((check) => `${check.title}: ${check.detail}`)
         .join(" / "),

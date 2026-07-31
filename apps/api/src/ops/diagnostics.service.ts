@@ -1,12 +1,30 @@
 import { Injectable, Logger, OnApplicationBootstrap } from "@nestjs/common";
 import {
+  PRODUCTION_HOSTS_ENV,
+  VALIDATION_TARGET_ACK_ENV,
+  VALIDATION_TARGET_ENV,
+  compareDiagnostics,
   detectDiagnosticAlerts,
+  detectRegressionAlerts,
+  judgeValidationTarget,
+  resolveDeploymentTier,
   resolveSchedules,
   runDiagnostics,
+  tierPolicy,
   validateEnvironment,
 } from "@acos/core";
-import type { DetectedAlert, DiagnosticStage } from "@acos/core";
-import type { DiagnosticReportDto } from "@acos/shared";
+import type {
+  DeploymentTier,
+  DetectedAlert,
+  DiagnosticRunRecord,
+  DiagnosticStage,
+  ValidationTargetJudgement,
+} from "@acos/core";
+import type {
+  DiagnosticComparisonDto,
+  DiagnosticReportDto,
+  DiagnosticRunDto,
+} from "@acos/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
 import { MigrationGovernanceService } from "./migration-governance.service";
@@ -49,7 +67,7 @@ export class DiagnosticsService implements OnApplicationBootstrap {
       return;
     }
     try {
-      const report = await this.run("startup");
+      const report = await this.run("startup", Date.now(), { persist: true });
       const line = `기동 진단: ${report.detail}`;
       if (report.fail > 0) {
         this.logger.error(line);
@@ -64,15 +82,43 @@ export class DiagnosticsService implements OnApplicationBootstrap {
     }
   }
 
-  /** 진단을 돌린다 — 아무것도 바꾸지 않는다 */
-  async run(stage: DiagnosticStage, now = Date.now()): Promise<DiagnosticReportDto> {
+  /** 지금 이 인스턴스의 배포 단계 (CTO 정책 4101-③) */
+  tier(): DeploymentTier {
+    return resolveDeploymentTier(process.env as Record<string, string | undefined>);
+  }
+
+  /** 검증 대상 판정 (CTO 정책 4101-①) */
+  validationTarget(): ValidationTargetJudgement {
     const env = process.env as Record<string, string | undefined>;
-    const production = (env.NODE_ENV ?? "").trim().toLowerCase() === "production";
+    return judgeValidationTarget({
+      raw: env[VALIDATION_TARGET_ENV],
+      ack: env[VALIDATION_TARGET_ACK_ENV],
+      productionHosts: env[PRODUCTION_HOSTS_ENV],
+      selfUrl: env.PUBLIC_BASE_URL ?? null,
+      tier: this.tier(),
+    });
+  }
+
+  /**
+   * 진단을 돌린다.
+   *
+   * `persist: true`면 결과를 남기고 **지난 실행과 비교합니다**
+   * (CTO 정책 4101-②). 화면을 열 때마다 남기면 이력이 조회 기록으로
+   * 뒤덮여 "어제와 오늘"을 찾을 수 없으므로, 남기는 것은 예약 점검과
+   * 기동 진단만 합니다.
+   */
+  async run(
+    stage: DiagnosticStage,
+    now = Date.now(),
+    options: { persist?: boolean } = {},
+  ): Promise<DiagnosticReportDto> {
+    const env = process.env as Record<string, string | undefined>;
+    const tier = this.tier();
 
     const [database, storage, pendingMigrations, activation] = await Promise.all([
       this.reachable(() => this.prisma.$queryRaw`SELECT 1`),
       this.reachable(() => this.storage.check()),
-      this.pendingMigrations(production),
+      this.pendingMigrations(tierPolicy(tier).requiresOperationalConfig),
       this.activation(),
     ]);
 
@@ -82,7 +128,18 @@ export class DiagnosticsService implements OnApplicationBootstrap {
 
     const report = runDiagnostics({
       stage,
-      production,
+      tier,
+      tierDeclared: (env.DEPLOY_TIER ?? "").trim().length > 0,
+      // 검증 대상은 **검증을 준비하는 단계에서만** 봅니다 — 개발자 노트북에
+      // 이 값을 두라고 요구하면 그 경고가 배경 소음이 됩니다
+      validationTarget: tierPolicy(tier).requiresOperationalConfig
+        ? {
+            raw: env[VALIDATION_TARGET_ENV],
+            ack: env[VALIDATION_TARGET_ACK_ENV],
+            productionHosts: env[PRODUCTION_HOSTS_ENV],
+            selfUrl: env.PUBLIC_BASE_URL ?? null,
+          }
+        : null,
       env,
       envErrors: validateEnvironment(env).errors.map((issue) => ({
         name: issue.name,
@@ -102,6 +159,29 @@ export class DiagnosticsService implements OnApplicationBootstrap {
       now,
     });
 
+    // 지난 실행과 비교한다 (정책 4101-②) — **같은 단계·같은 배포 단계끼리만**
+    const previous = await this.previousRun(tier, stage);
+    const current: DiagnosticRunRecord = {
+      id: "current",
+      stage,
+      tier,
+      ranAt: now,
+      checks: report.checks.map((check) => ({
+        id: check.id,
+        title: check.title,
+        status: check.status,
+      })),
+      ok: report.ok,
+      warn: report.warn,
+      fail: report.fail,
+      unknown: report.unknown,
+    };
+    const comparison = compareDiagnostics(previous, current);
+
+    if (options.persist === true) {
+      await this.persist(current, report.detail);
+    }
+
     return {
       stage: report.stage,
       checks: report.checks,
@@ -110,18 +190,108 @@ export class DiagnosticsService implements OnApplicationBootstrap {
       fail: report.fail,
       unknown: report.unknown,
       blocked: false,
+      tier,
+      comparison: toComparisonDto(comparison),
       detail: report.detail,
       ranAt: report.ranAt,
     };
   }
 
-  /** 진단 결과를 경보로 (운영에서만) — 보내는 것은 AlertService가 한다 */
+  /** 저장된 진단 이력 (CTO 정책 4101-②) */
+  async history(limit = 30, tier?: string): Promise<DiagnosticRunDto[]> {
+    const rows = await this.prisma.diagnosticRun.findMany({
+      where: tier === undefined ? {} : { tier },
+      orderBy: { ranAt: "desc" },
+      take: limit,
+    });
+    return rows.map((row) => ({
+      id: row.id,
+      stage: row.stage,
+      tier: row.tier,
+      ok: row.ok,
+      warn: row.warn,
+      fail: row.fail,
+      unknown: row.unknown,
+      detail: row.detail,
+      ranAt: row.ranAt.toISOString(),
+    }));
+  }
+
+  /**
+   * 같은 단계·같은 배포 단계의 직전 실행.
+   *
+   * **섞어서 비교하지 않습니다** — 기동 진단과 일일 진단은 항목 구성이
+   * 다르고(기동에만 관측 이력 항목이 있습니다), 스테이징과 운영은 판정
+   * 기준이 다릅니다. 섞으면 "어제 정상이던 것이 오늘 실패"가 사실은 다른
+   * 환경의 이야기가 됩니다.
+   */
+  private async previousRun(
+    tier: DeploymentTier,
+    stage: DiagnosticStage,
+  ): Promise<DiagnosticRunRecord | null> {
+    try {
+      const row = await this.prisma.diagnosticRun.findFirst({
+        where: { tier, stage },
+        orderBy: { ranAt: "desc" },
+      });
+      if (row === null) {
+        return null;
+      }
+      return {
+        id: row.id,
+        stage: row.stage,
+        tier: row.tier,
+        ranAt: row.ranAt.getTime(),
+        checks: row.checks as DiagnosticRunRecord["checks"],
+        ok: row.ok,
+        warn: row.warn,
+        fail: row.fail,
+        unknown: row.unknown,
+      };
+    } catch (error) {
+      // 이력을 못 읽은 것은 "변화가 없다"가 아니다 — 비교를 포기하고 그렇게 말한다
+      this.logger.warn(`진단 이력을 읽지 못했습니다: ${String(error)}`);
+      return null;
+    }
+  }
+
+  private async persist(record: DiagnosticRunRecord, detail: string): Promise<void> {
+    try {
+      await this.prisma.diagnosticRun.create({
+        data: {
+          stage: record.stage,
+          tier: record.tier,
+          ok: record.ok,
+          warn: record.warn,
+          fail: record.fail,
+          unknown: record.unknown,
+          checks: record.checks,
+          detail,
+          ranAt: new Date(record.ranAt),
+        },
+      });
+    } catch (error) {
+      // 기록 실패가 진단을 막지 않는다 — 다만 조용하지도 않다
+      this.logger.warn(`진단 이력을 남기지 못했습니다: ${String(error)}`);
+    }
+  }
+
+  /**
+   * 진단 결과를 경보로 — 보내는 것은 AlertService가 한다.
+   *
+   * 두 종류를 냅니다: **지금 나쁜 것**(정책 4001-⑤)과 **지난 진단 이후
+   * 나빠진 것**(정책 4101-②). 후자가 훨씬 행동을 만드는 소식입니다 —
+   * 어제 무언가를 바꿨다는 뜻이고 지금이라면 무엇을 바꿨는지 기억할 수
+   * 있으니까요.
+   */
   async detect(stage: DiagnosticStage, now = Date.now()): Promise<{
     report: DiagnosticReportDto;
     alerts: DetectedAlert[];
   }> {
-    const report = await this.run(stage, now);
-    const production = (process.env.NODE_ENV ?? "").trim().toLowerCase() === "production";
+    const report = await this.run(stage, now, { persist: true });
+    const tier = this.tier();
+    const policy = tierPolicy(tier);
+
     const alerts = detectDiagnosticAlerts(
       {
         stage: report.stage as DiagnosticStage,
@@ -134,9 +304,27 @@ export class DiagnosticsService implements OnApplicationBootstrap {
         detail: report.detail,
         ranAt: report.ranAt,
       },
-      production,
+      tier,
     ) as DetectedAlert[];
-    return { report, alerts };
+
+    const regressions =
+      report.comparison === null
+        ? []
+        : (detectRegressionAlerts(
+            {
+              regressed: report.comparison.regressed as never,
+              recovered: report.comparison.recovered as never,
+              persisting: report.comparison.persisting as never,
+              disappeared: report.comparison.disappeared as never,
+              appeared: report.comparison.appeared as never,
+              comparable: report.comparison.comparable,
+              comparedTo: null,
+              detail: report.comparison.detail,
+            },
+            { tier, stage, alerting: policy.alerting },
+          ) as DetectedAlert[]);
+
+    return { report, alerts: [...alerts, ...regressions] };
   }
 
   /** 닿는가 — **못 본 것은 `null`이다**(닿는다가 아니다) */
@@ -178,4 +366,25 @@ export class DiagnosticsService implements OnApplicationBootstrap {
       return null;
     }
   }
+}
+
+/** core 판정을 DTO로 (값을 바꾸지 않는다) */
+function toComparisonDto(
+  comparison: ReturnType<typeof compareDiagnostics>,
+): DiagnosticComparisonDto {
+  const map = (rows: { id: string; title: string; from: string | null; to: string | null }[]) =>
+    rows.map((row) => ({ id: row.id, title: row.title, from: row.from, to: row.to }));
+  return {
+    regressed: map(comparison.regressed),
+    recovered: map(comparison.recovered),
+    persisting: map(comparison.persisting),
+    disappeared: map(comparison.disappeared),
+    appeared: map(comparison.appeared),
+    comparable: comparison.comparable,
+    comparedTo:
+      comparison.comparedTo === null
+        ? null
+        : new Date(comparison.comparedTo).toISOString(),
+    detail: comparison.detail,
+  };
 }

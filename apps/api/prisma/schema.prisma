@@ -1033,20 +1033,20 @@ model SmokeRun {
  * 않은 종료 기록은 다음 장애 때 아무 도움이 되지 않는다.
  */
 model Incident {
-  id             String    @id @default(cuid())
+  id                String    @id @default(cuid())
   /// llm | ocr | storage | database | queue | web | api | other
-  component      String
+  component         String
   /// MINOR | MAJOR | CRITICAL
-  severity       String
-  summary        String
+  severity          String
+  summary           String
   /// 장애가 시작된 시각 — 우리가 알아챈 시각이 아니다
-  startedAt      DateTime
+  startedAt         DateTime
   /// 우리가 알아챈 시각 — 모르면 null. 이 간격이 크면 고칠 곳은 감시다
-  detectedAt     DateTime?
+  detectedAt        DateTime?
   /// 복구 시각 — null이면 진행 중
-  resolvedAt     DateTime?
-  cause          String?
-  recovery       String?
+  resolvedAt        DateTime?
+  cause             String?
+  recovery          String?
   /**
    * 사후 분석 (TASK-3801, CTO 정책 3801-②).
    * 재시작으로 살린 것과 원인을 없앤 것이 목록에서 똑같이 "복구됨"으로
@@ -1056,35 +1056,50 @@ model Incident {
    */
   /**
    * /**
+   * /**
    * 초안인가 확인된 장애인가 (TASK-3901, CTO 정책 3901-⑤).
    * 경보에서 자동으로 만드는 것은 **초안**이지 장애가 아니다 — "이건
    * 장애였을 수 있습니다, 봐 주세요"라는 질문이다. 초안은 MTTR에 들어가지
    * 않고, 사람이 확인하면 장애가 되고 기각하면 **사유와 함께** 남는다.
    */
   /// DRAFT | CONFIRMED | DISMISSED
-  status         String    @default("CONFIRMED")
+  status            String    @default("CONFIRMED")
   /// 어느 경보에서 왔는가 — 같은 경보로 두 번 만들지 않는다 (표가 막는다)
-  sourceAlertKey String?   @unique
-  dismissedAt    DateTime?
-  dismissReason  String?
-  dismissedById  String?
+  sourceAlertKey    String?   @unique
+  dismissedAt       DateTime?
+  dismissReason     String?
+  dismissedById     String?
   /**
    * 아무도 판단하지 않은 채 수명을 넘긴 시각 (TASK-4001, CTO 정책 4001-①).
    * **기각이 아니다.** 기각은 "아무것도 아니었다"는 사람의 판단이고, 이것은
    * "아무도 판단하지 않았다"는 사실이다. 둘을 같은 칸에 넣으면 나중에
    * 이력을 읽는 사람이 "우리 팀은 초안을 잘 기각한다"고 잘못 읽는다.
    */
-  expiredAt      DateTime?
+  expiredAt         DateTime?
+  /**
+   * 만료된 초안을 되살린 기록 (TASK-4101, CTO 정책 4101-④).
+   * **`expiredAt`을 지우지 않는다** — 만료됐던 사실을 지우면 목록은
+   * 깨끗해지고 이력은 "확인된 장애 1건"이 된다. 그러면 나중에 이력을 읽는
+   * 사람이 "우리 팀은 초안을 잘 처리한다"고 읽는다. 실제로는 늦게 본
+   * 것인데도. 예외는 `reopen`(만료 취소)이며, 그때도 되살린 기록은 남는다.
+   */
+  revivedAt         DateTime?
+  revivedById       String?
+  /// confirm | dismiss | reopen
+  revivalAction     String?
+  revivalReason     String?
+  /// 만료 뒤 얼마나 지나서 손댔는가 (ms) — 하루와 석 달을 구분한다
+  revivalLatenessMs Int?
   /// temporary | permanent — 닫을 때 반드시 고른다
-  fixKind        String?
-  rootCause      String?
-  temporaryFix   String?
-  permanentFix   String?
-  prevention     String?
-  openedById     String?
-  resolvedById   String?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  fixKind           String?
+  rootCause         String?
+  temporaryFix      String?
+  permanentFix      String?
+  prevention        String?
+  openedById        String?
+  resolvedById      String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   @@index([resolvedAt, startedAt])
   @@index([component, startedAt])
@@ -1092,6 +1107,10 @@ model Incident {
   @@index([fixKind, resolvedAt])
   // 확인 대기 초안을 먼저 찾는다 (TASK-3901)
   @@index([status, startedAt])
+  // 수명 질의는 만들어진 시각 순이다 (TASK-4001)
+  @@index([status, createdAt])
+  // 되살림 이력 (TASK-4101)
+  @@index([revivedAt])
   @@map("incidents")
 }
 
@@ -1165,11 +1184,9 @@ model OpsAuditLog {
  * TASK-3801의 KPI는 **현재값만** 말한다. "MTTR 180분"은 그 자체로 아무
  * 행동도 만들지 않고, 사람이 알아야 하는 것은 "나아지는 중인가"인데 그건
  * 두 번 재야 안다.
- *
  * 그때 쓰인 임계값을 함께 적는 이유: 임계값이 바뀐 구간에서는 **값은
  * 비교할 수 있어도 상태(정상/주의/나쁨)는 비교할 수 없다.** 그 사실을
  * 나중에 복원할 수 없으면 "watch → good"을 개선으로 잘못 읽는다.
- *
  * `value`가 null인 이유: 표본이 없어 값을 낼 수 없었던 시점이 있고, 그것을
  * 0으로 적으면 "완벽한 날"로 보인다 (정책 3801-③에서 세운 원칙).
  */
@@ -1189,4 +1206,37 @@ model KpiSnapshot {
   @@index([kpiId, takenAt])
   @@index([takenAt])
   @@map("kpi_snapshots")
+}
+
+// ── 진단 이력 (TASK-4101, Sprint 41) ──────────────────────────
+
+/**
+ * 진단 실행 1건 (CTO 정책 4101-②).
+ * TASK-4001의 진단은 부를 때마다 새로 냈다. 그래서 화면이 "실패 2건"이라고
+ * 말해도 그것이 **오늘 새로 생긴 것**인지 **지난주부터 계속 그랬던 것**인지
+ * 알 수 없었다. 그 둘은 완전히 다른 소식이다 — 새로 생긴 것은 어제 무언가를
+ * 바꿨다는 뜻이고 지금 되돌릴 수 있다.
+ * `tier`를 함께 적는 이유(정책 4101-③): 스테이징과 운영은 판정 기준이
+ * 다르므로 **같은 단계끼리만 비교**해야 한다.
+ * `checks`에 항목 전체를 남기는 이유: 개수만 남기면 "무엇이" 나빠졌는지
+ * 비교할 수 없고, 그러면 이력이 있어도 쓸 수 없다.
+ */
+model DiagnosticRun {
+  id      String   @id @default(cuid())
+  /// startup | daily | manual
+  stage   String
+  /// development | staging | production
+  tier    String
+  ok      Int
+  warn    Int
+  fail    Int
+  unknown Int
+  /// [{ id, title, status }] — 무엇이 나빠졌는지 비교하려면 항목이 필요하다
+  checks  Json
+  detail  String
+  ranAt   DateTime @default(now())
+
+  @@index([tier, stage, ranAt])
+  @@index([ranAt])
+  @@map("diagnostic_runs")
 }

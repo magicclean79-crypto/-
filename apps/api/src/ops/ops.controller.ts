@@ -59,6 +59,10 @@ import type {
   KpiSettingChangeDto,
   KpiTrendReportDto,
   ValidationPlanDto,
+  // TASK-4101 (CTO 정책 4101-①~⑥)
+  DiagnosticRunDto,
+  DraftRevivalSummaryDto,
+  ValidationRunDto,
 } from "@acos/shared";
 import { AuthGuard, RequireRole } from "../auth/auth.guard";
 import type { AuthenticatedRequest } from "../auth/auth.guard";
@@ -87,6 +91,8 @@ import { DiagnosticsService } from "./diagnostics.service";
 import { DraftLifecycleService } from "./draft-lifecycle.service";
 import { KpiTrendService } from "./kpi-trend.service";
 import { ValidationPlanService } from "./validation-plan.service";
+import { DraftRevivalService } from "./draft-revival.service";
+import { ValidationRunService } from "./validation-run.service";
 
 /**
  * 단가 제안의 단계 전이 경로 (TASK-3101).
@@ -155,6 +161,9 @@ export class OpsController {
     private readonly drafts: DraftLifecycleService,
     private readonly diagnostics: DiagnosticsService,
     private readonly validation: ValidationPlanService,
+    // 만료 초안 되살림 · 검증 실행 잠금 (TASK-4101, CTO 정책 4101-④⑤⑥)
+    private readonly revival: DraftRevivalService,
+    private readonly validationRun: ValidationRunService,
   ) {}
 
   /**
@@ -355,6 +364,87 @@ export class OpsController {
   @Get("validation-plan")
   async validationPlan(): Promise<ValidationPlanDto> {
     return this.validation.report();
+  }
+
+  /**
+   * 진단 이력 (TASK-4101, CTO 정책 4101-②).
+   *
+   * 이력이 없으면 "오늘 실패 2건"이 **새로 생긴 것인지 계속 그랬던
+   * 것인지** 알 수 없습니다. 그 둘은 완전히 다른 소식입니다.
+   */
+  @Get("diagnostics/history")
+  async diagnosticHistory(
+    @Query("limit") limit?: string,
+    @Query("tier") tier?: string,
+  ): Promise<DiagnosticRunDto[]> {
+    const parsed = Number(limit);
+    return this.diagnostics.history(
+      Number.isInteger(parsed) && parsed > 0 && parsed <= 200 ? parsed : 30,
+      tier?.trim() || undefined,
+    );
+  }
+
+  /**
+   * 만료 초안 되살림 (TASK-4101, CTO 정책 4101-④).
+   *
+   * **만료됐던 사실을 지우지 않습니다** — 지우면 목록은 깨끗해지지만
+   * 나중에 이력을 읽는 사람이 "우리 팀은 초안을 잘 처리한다"고 읽습니다.
+   * `action`은 `confirm` | `dismiss` | `reopen`이고, 셋 다 **사유가
+   * 필요합니다.**
+   */
+  @Post("incidents/:id/revive")
+  @HttpCode(200)
+  async reviveDraft(
+    @Param("id") id: string,
+    @Body() body: { action?: string; reason?: string; summary?: string },
+    @Req() request: AuthenticatedRequest,
+  ): Promise<IncidentDto> {
+    if (typeof body?.action !== "string" || typeof body?.reason !== "string") {
+      throw new BadRequestException("action과 reason을 담아 주세요.");
+    }
+    return this.revival.revive(id, {
+      action: body.action,
+      reason: body.reason,
+      summary: body.summary,
+      actorId: request.user?.id,
+    });
+  }
+
+  /** 되살림 이력 (TASK-4101, CTO 정책 4101-④) */
+  @Get("incidents/revivals")
+  async draftRevivals(@Query("limit") limit?: string): Promise<DraftRevivalSummaryDto> {
+    const parsed = Number(limit);
+    return this.revival.history(
+      Number.isInteger(parsed) && parsed > 0 && parsed <= 200 ? parsed : 50,
+    );
+  }
+
+  /**
+   * 검증 실행 잠금과 순서 (TASK-4101, CTO 정책 4101-⑤⑥).
+   *
+   * 준비되지 않았으면 **막고 이유를 말합니다.** 강제로 여는 방법은
+   * 없습니다 — 막는 조건을 없애는 것이 유일한 길입니다.
+   */
+  @Get("validation-run")
+  async validationRunGate(): Promise<ValidationRunDto> {
+    return this.validationRun.gate();
+  }
+
+  /**
+   * 검증 실행을 시작한다 (TASK-4101, CTO 정책 4101-⑥).
+   *
+   * **준비되지 않았으면 403으로 거절합니다.** 이것이 정책 ⑥을 문서가
+   * 아니라 코드로 만드는 지점입니다 — 준비되지 않은 채 돌리면 스텁을
+   * 상대로 한 성공 기록이 남고, 그 기록은 나중에 실연결의 증거로 읽힙니다.
+   *
+   * 이 호출 자체는 아무것도 실행하지 않습니다. **순서를 돌려줄 뿐**이고,
+   * 각 단계는 사람이 확인하며 진행합니다 — 되돌릴 수 없는 단계가 섞여
+   * 있는 절차를 한 번의 버튼으로 돌리지 않습니다.
+   */
+  @Post("validation-run")
+  @HttpCode(200)
+  async startValidationRun(): Promise<ValidationRunDto> {
+    return this.validationRun.assertRunnable();
   }
 
   /**

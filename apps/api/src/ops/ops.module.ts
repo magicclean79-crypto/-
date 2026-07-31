@@ -33,6 +33,9 @@ import { DiagnosticsService } from "./diagnostics.service";
 import { DraftLifecycleService } from "./draft-lifecycle.service";
 import { KpiTrendService } from "./kpi-trend.service";
 import { ValidationPlanService } from "./validation-plan.service";
+// TASK-4101 (CTO 정책 4101-①~⑥)
+import { DraftRevivalService } from "./draft-revival.service";
+import { ValidationRunService } from "./validation-run.service";
 
 /**
  * 운영 자동화·경보 모듈. (TASK-1302, Sprint 13)
@@ -83,6 +86,8 @@ import { ValidationPlanService } from "./validation-plan.service";
     DraftLifecycleService,
     DiagnosticsService,
     ValidationPlanService,
+    DraftRevivalService,
+    ValidationRunService,
   ],
   exports: [
     AlertService,
@@ -110,6 +115,8 @@ import { ValidationPlanService } from "./validation-plan.service";
     DraftLifecycleService,
     DiagnosticsService,
     ValidationPlanService,
+    DraftRevivalService,
+    ValidationRunService,
   ],
 })
 export class OpsModule {}

@@ -6,10 +6,12 @@ import type {
   ActivationHistoryDto,
   DiagnosticReportDto,
   DraftLifecycleDto,
+  DraftRevivalSummaryDto,
   IncidentBoardDto,
   ProductionActivationDto,
   SmokeReportDto,
   ValidationPlanDto,
+  ValidationRunDto,
 } from "@acos/shared";
 import { authFetchInit } from "../../../lib/auth-client";
 
@@ -92,6 +94,9 @@ export default function ActivationDashboardPage() {
   const [plan, setPlan] = useState<ValidationPlanDto | null>(null);
   const [diagnostics, setDiagnostics] = useState<DiagnosticReportDto | null>(null);
   const [drafts, setDrafts] = useState<DraftLifecycleDto | null>(null);
+  // TASK-4101 — 검증 실행 잠금 · 되살림 이력
+  const [runGate, setRunGate] = useState<ValidationRunDto | null>(null);
+  const [revivals, setRevivals] = useState<DraftRevivalSummaryDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [smokeRunning, setSmokeRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -104,7 +109,7 @@ export default function ActivationDashboardPage() {
         const response = await fetch(`${API_URL}${path}`, authFetchInit());
         return response.ok ? ((await response.json()) as T) : null;
       };
-      const [next, log, probe, board, plan, diag, draft] = await Promise.all([
+      const [next, log, probe, board, plan, diag, draft, gate, revival] = await Promise.all([
         get<ProductionActivationDto>("/ops/activation"),
         get<ActivationHistoryDto>("/ops/activation/history"),
         get<SmokeReportDto>("/ops/smoke"),
@@ -113,6 +118,8 @@ export default function ActivationDashboardPage() {
         get<ValidationPlanDto>("/ops/validation-plan"),
         get<DiagnosticReportDto>("/ops/diagnostics"),
         get<DraftLifecycleDto>("/ops/incidents/drafts"),
+        get<ValidationRunDto>("/ops/validation-run"),
+        get<DraftRevivalSummaryDto>("/ops/incidents/revivals"),
       ]);
       setActivation(next);
       setHistory(log);
@@ -121,6 +128,8 @@ export default function ActivationDashboardPage() {
       setPlan(plan);
       setDiagnostics(diag);
       setDrafts(draft);
+      setRunGate(gate);
+      setRevivals(revival);
       setError(next === null ? "활성화 판정을 읽지 못했습니다 (ADMIN 로그인이 필요합니다)." : null);
     } catch {
       setError("API 서버에 연결할 수 없습니다.");
@@ -416,6 +425,73 @@ export default function ActivationDashboardPage() {
         </section>
       ) : null}
 
+      {/* 검증 실행 잠금 (TASK-4101, CTO 정책 4101-⑤⑥) */}
+      {runGate ? (
+        <section
+          data-testid="validation-run"
+          className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-lg font-medium">검증 실행</h2>
+            <span
+              data-testid="run-verdict"
+              className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                runGate.verdict === "allowed"
+                  ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
+                  : "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+              }`}
+            >
+              {runGate.verdict === "allowed" ? "시작할 수 있습니다" : "막혀 있습니다"}
+            </span>
+            <span
+              data-testid="run-target-verdict"
+              className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"
+            >
+              대상: {runGate.target.host ?? "미설정"}
+            </span>
+          </div>
+          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+            {runGate.detail}
+          </p>
+          <p className="mt-1 text-xs text-zinc-500">{runGate.target.detail}</p>
+          {runGate.blockers.length > 0 ? (
+            <ul
+              data-testid="run-blockers"
+              className="mt-2 space-y-1 rounded-lg border border-amber-200 p-2 text-xs text-amber-800 dark:border-amber-900 dark:text-amber-300"
+            >
+              {runGate.blockers.map((row) => (
+                <li key={row.id}>{row.reason}</li>
+              ))}
+            </ul>
+          ) : null}
+          <ol data-testid="run-steps" className="mt-3 space-y-1 text-sm">
+            {runGate.steps.map((step) => (
+              <li
+                key={step.id}
+                data-testid={`run-step-${step.id}`}
+                className="flex flex-wrap items-baseline gap-2 rounded-lg border border-zinc-100 px-3 py-2 dark:border-zinc-900"
+              >
+                <span className="text-xs text-zinc-500">{step.order}.</span>
+                <span className="font-medium">{step.title}</span>
+                <code className="text-xs text-zinc-500">{step.command}</code>
+                {/*
+                  되돌릴 수 없는 단계를 표시한다 — 여기서부터 외부에 흔적이
+                  남고 돈이 나간다.
+                */}
+                {!step.reversible ? (
+                  <span
+                    data-testid={`run-irreversible-${step.id}`}
+                    className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800 dark:bg-red-900/40 dark:text-red-300"
+                  >
+                    되돌릴 수 없음
+                  </span>
+                ) : null}
+              </li>
+            ))}
+          </ol>
+        </section>
+      ) : null}
+
       {/* 운영 진단 (TASK-4001, CTO 정책 4001-④⑤) */}
       {diagnostics ? (
         <section
@@ -424,6 +500,27 @@ export default function ActivationDashboardPage() {
         >
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-lg font-medium">운영 진단</h2>
+            {/*
+              어느 단계의 진단인지 먼저 보인다 (TASK-4101, 정책 4101-③) —
+              스테이징의 "실패 2건"과 운영의 "실패 2건"은 같은 문장이지만
+              전혀 다른 소식이다.
+            */}
+            <span
+              data-testid="diagnostics-tier"
+              className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                diagnostics.tier === "production"
+                  ? "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"
+                  : diagnostics.tier === "staging"
+                    ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                    : "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+              }`}
+            >
+              {diagnostics.tier === "production"
+                ? "운영"
+                : diagnostics.tier === "staging"
+                  ? "스테이징"
+                  : "개발"}
+            </span>
             {diagnostics.fail > 0 ? (
               <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800 dark:bg-red-900/40 dark:text-red-300">
                 실패 {diagnostics.fail}건
@@ -441,6 +538,47 @@ export default function ActivationDashboardPage() {
           <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
             {diagnostics.detail}
           </p>
+          {/*
+            지난 진단과의 비교 (TASK-4101, 정책 4101-②). "오늘 실패 2건"이
+            새로 생긴 것인지 계속 그랬던 것인지는 완전히 다른 소식이다.
+          */}
+          {diagnostics.comparison !== null ? (
+            <div
+              data-testid="diagnostics-comparison"
+              className={`mt-2 rounded-lg border p-3 text-xs ${
+                diagnostics.comparison.regressed.length > 0
+                  ? "border-red-300 dark:border-red-900"
+                  : "border-zinc-100 dark:border-zinc-900"
+              }`}
+            >
+              <p className="text-zinc-600 dark:text-zinc-400">
+                {diagnostics.comparison.detail}
+              </p>
+              {diagnostics.comparison.regressed.length > 0 ? (
+                <p
+                  data-testid="diagnostics-regressed"
+                  className="mt-1 font-medium text-red-700 dark:text-red-400"
+                >
+                  새로 나빠진 항목 {diagnostics.comparison.regressed.length}건 — 지난
+                  진단 이후에 바뀐 것이 있습니다. 지금이라면 무엇을 바꿨는지 기억할
+                  수 있습니다.
+                </p>
+              ) : null}
+              {/*
+                사라진 항목을 "복구됨"과 절대 섞지 않는다 —
+                없어진 검사는 실패하지 않는다.
+              */}
+              {diagnostics.comparison.disappeared.length > 0 ? (
+                <p
+                  data-testid="diagnostics-disappeared"
+                  className="mt-1 text-amber-700 dark:text-amber-400"
+                >
+                  이번 진단에 없는 항목 {diagnostics.comparison.disappeared.length}건 —
+                  고쳐진 것이 아니라 검사 자체가 없어진 것입니다.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
           <ul data-testid="diagnostics-checks" className="mt-3 space-y-1 text-sm">
             {diagnostics.checks.map((check) => (
               <li
@@ -526,6 +664,23 @@ export default function ActivationDashboardPage() {
                 </li>
               ))}
             </ul>
+          ) : null}
+          {/* 되살림 이력 (TASK-4101, 정책 4101-④) */}
+          {revivals !== null && revivals.total > 0 ? (
+            <div
+              data-testid="draft-revivals"
+              className="mt-3 rounded-lg border border-zinc-100 p-3 text-xs dark:border-zinc-900"
+            >
+              <p className="text-zinc-600 dark:text-zinc-400">{revivals.detail}</p>
+              <ul className="mt-2 space-y-1">
+                {revivals.revivals.map((row) => (
+                  <li key={row.id} data-testid="revival-item">
+                    <span className="font-medium">{row.summary}</span>
+                    <span className="ml-2 text-zinc-500">{row.detail}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           ) : null}
           {drafts.expired.length > 0 ? (
             <ul data-testid="draft-expired" className="mt-3 space-y-1 text-sm">

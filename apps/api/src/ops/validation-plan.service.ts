@@ -54,7 +54,13 @@ export class ValidationPlanService {
       urgentChannelConfigured: this.notifications
         .urgentStatus()
         .some((row) => row.configured),
-      stagingUrl: readStagingUrl(),
+      // **보호 판정을 그대로 쓴다** (TASK-4101, 정책 4101-①). 주소가 비어
+      // 있지 않다는 것만 보면, 운영을 가리키는 주소도 "검증용 환경 확보
+      // 완료"가 된다 — 같은 값을 두 곳에서 다르게 판정하던 결함이다.
+      stagingTarget: (() => {
+        const target = this.diagnostics.validationTarget();
+        return { url: target.url, usable: target.usable, detail: target.detail };
+      })(),
       kpiSnapshots: snapshots,
       lastDrillAt: drill?.createdAt.getTime() ?? null,
       now,
@@ -167,16 +173,4 @@ export class ValidationPlanService {
       return null;
     }
   }
-}
-
-/**
- * 검증 대상 환경 주소.
- *
- * 환경변수로 받는 이유: 이 값은 **사람이 정하는 사실**입니다. 우리가
- * 추론할 수 있는 것이 아니고, 추론하면 "개발자 노트북"이 검증 환경으로
- * 적히게 됩니다.
- */
-function readStagingUrl(): string | null {
-  const raw = (process.env.VALIDATION_TARGET_URL ?? "").trim();
-  return raw.length === 0 ? null : raw;
 }
