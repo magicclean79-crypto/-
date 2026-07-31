@@ -105,6 +105,9 @@ const ROUTE_ACTIONS: {
   // TASK-4501에서 더한 경로 (정책 4501-④). 실 호출이 나가고 과금되는
   // 행동이므로 **누가 눌렀는지**가 반드시 남아야 한다.
   { method: "POST", pattern: /^\/ops\/validation-run\/execute$/, action: "validation.run-execute", title: "실 Production Validation 수행 (실 호출·과금)" },
+  // TASK-4601에서 더한 경로 (정책 4601-④). 재전송은 바깥으로 나가는
+  // 행동이므로 **누가 눌렀는지**가 남아야 한다.
+  { method: "POST", pattern: /^\/ops\/notifications\/resend$/, action: "notifications.resend", title: "전달 실패 알림 재전송" },
 ];
 
 /**

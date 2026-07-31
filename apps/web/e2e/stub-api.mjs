@@ -3728,6 +3728,137 @@ const server = http.createServer(async (req, res) => {
   }
 
   /**
+   * 통합 운영 대시보드 (TASK-4601, CTO 정책 4601-⑤) — ADMIN 전용.
+   *
+   * 못 읽은 갈래가 하나 있는 상태를 그대로 보여 준다 — 요약 문장이 그
+   * 사실을 **먼저** 말해야 한다.
+   */
+  if (url.pathname === "/ops/overview") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify({
+        tiles: [
+          {
+            id: "validation",
+            title: "Validation",
+            question: "실 Provider를 상대로 확인한 것이 있는가",
+            source: "GET /ops/go-live",
+            status: "fail",
+            detail:
+              "실 Production Validation이 아직 성공하지 않았습니다 — 아직 시작도 안 했다는 뜻입니다.",
+            next: "남은 조건: 실 Production Validation 성공",
+            read: true,
+          },
+          {
+            id: "attribution",
+            title: "Attribution",
+            question: "이 비용이 누구 것인지 아는가",
+            source: "GET /ops/cost/attribution",
+            status: "unknown",
+            detail: "표본이 20건에 못 미쳐 달성 여부를 판정하지 않았습니다.",
+            next: null,
+            read: true,
+          },
+          {
+            id: "notification",
+            title: "Notification",
+            question: "장애가 나면 사람에게 닿는가",
+            source: "GET /ops/notifications/health",
+            status: "warn",
+            detail:
+              "켜진 채널 2개 중 1개가 최근 도달했습니다. 확인되지 않은 채널 1개: teams.",
+            next: "POST /ops/notifications/test로 지금 닿는지 확인하세요.",
+            read: true,
+          },
+          {
+            id: "recovery",
+            title: "Recovery",
+            question: "잘못됐을 때 되돌릴 수 있는가",
+            source: "GET /ops/drills",
+            status: "unknown",
+            detail: "이 갈래를 읽지 못했습니다 — 괜찮다는 뜻이 아닙니다.",
+            next: null,
+            read: false,
+          },
+        ],
+        status: "fail",
+        unknown: 2,
+        unread: 1,
+        undecided: 1,
+        detail:
+          "1개 갈래를 읽지 못했습니다(Recovery) — 이 화면의 요약은 그만큼 덜 본 " +
+          "것입니다. 1개 갈래는 읽었지만 판정을 유보했습니다(Attribution) — " +
+          "정상이라는 뜻이 아니라 아직 판단할 근거가 모자라다는 뜻입니다. " +
+          "운영 상태 실패 — 실패 1 · 주의 1 · 확실하지 않음 2. " +
+          "먼저 할 일: Validation — 남은 조건: 실 Production Validation 성공",
+        nextAction: "남은 조건: 실 Production Validation 성공",
+        checkedAt: new Date().toISOString(),
+      }),
+    );
+    return;
+  }
+
+  /** 알림 건강도 (TASK-4601, CTO 정책 4601-④) — ADMIN 전용 */
+  if (url.pathname === "/ops/notifications/health") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify({
+        channels: [
+          {
+            channel: "webhook",
+            verdict: "reached",
+            attempts: 3,
+            successes: 3,
+            lastSuccessAt: new Date().toISOString(),
+            detail: "최근 24시간 안에 3건 도달했습니다.",
+            next: null,
+          },
+          {
+            channel: "teams",
+            verdict: "silent",
+            attempts: 0,
+            successes: 0,
+            lastSuccessAt: new Date(Date.now() - 3 * 86400000).toISOString(),
+            detail:
+              "최근 24시간 안에 보낸 것이 없습니다. 마지막 도달은 3일 전입니다. " +
+              "보낼 일이 없어 조용한 것인지 주소가 죽은 것인지 가릴 수 없습니다.",
+            next: "POST /ops/notifications/test로 지금 닿는지 확인하세요.",
+          },
+        ],
+        reached: 1,
+        active: 2,
+        status: "warn",
+        windowHours: 24,
+        owners: [{ owner: "김운영", channel: "email" }],
+        ownersRejected: ["이름만"],
+        ownersDetail:
+          "담당자 1명의 직접 경로가 설정돼 있습니다. 읽을 수 없는 선언 1개를 " +
+          "버렸습니다 (이름만) — 오타 하나로 담당자 한 명이 조용히 빠지지 " +
+          "않도록 그대로 적습니다.",
+        teamsFormat: "message-card",
+        teamsFormatDetail:
+          "Teams 본문은 MessageCard입니다(기본값). Adaptive Card로 바꾸려면 " +
+          "TEAMS_CARD_FORMAT=adaptive 한 줄이며, 되돌리는 것도 같은 한 줄입니다.",
+        detail:
+          "켜진 채널 2개 중 1개가 최근 도달했습니다. 확인되지 않은 채널 1개: teams — " +
+          "보낼 일이 없어 조용한 것인지 죽은 것인지 가릴 수 없습니다.",
+        checkedAt: new Date().toISOString(),
+      }),
+    );
+    return;
+  }
+
+  /**
    * 최종 Go-Live 체크리스트 (TASK-4501, CTO 정책 4501-⑤) — ADMIN 전용.
    *
    * 검증이 성공하지 않은 상태를 그대로 보여 준다: 나머지가 초록이어도

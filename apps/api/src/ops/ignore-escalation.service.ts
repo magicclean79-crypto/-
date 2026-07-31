@@ -44,6 +44,9 @@ export class IgnoreEscalationService {
         owner: notice.owner,
         stage: notice.stage,
         broadcast: notice.broadcast,
+        // 이 담당자에게 직접 갈 수 있는가 (TASK-4601, 정책 4601-④).
+        // **조회는 아무것도 보내지 않습니다** — 경로만 미리 보여 줍니다.
+        directRoute: this.notifications.ownerRoute(notice.owner).verdict,
         title: notice.title,
         message: notice.message,
       })),
@@ -65,24 +68,38 @@ export class IgnoreEscalationService {
     tier: DeploymentTier,
     alerting: boolean,
     now = Date.now(),
-  ): Promise<{ sent: number; alerts: DetectedAlert[]; detail: string }> {
+  ): Promise<{ sent: number; direct: number; alerts: DetectedAlert[]; detail: string }> {
     const ignores = await this.ignores(tier);
     const report = planIgnoreNotices({ ignores, now });
 
     let sent = 0;
+    let direct = 0;
     for (const notice of report.notices) {
+      // 담당자에게 직접 보낼 수 있으면 직접도 보냅니다 (TASK-4601, 정책
+      // 4601-④). **공용 채널을 대신하지 않고 더합니다** — 직접 경로가
+      // 생겼다고 공용을 끄면 담당자가 휴가 중일 때 그 항목은 아무도 모르는
+      // 채로 지나갑니다.
+      const route = this.notifications.ownerRoute(notice.owner);
+      const payload = {
+        // 담당자에게 가는 소식이지 장애가 아니다 — 등급을 올리지 않는다
+        level: "warning" as const,
+        kind: "diagnostics",
+        key: `ignore-review:${notice.tier}:${notice.checkId}:${notice.stage}`,
+        title: notice.title,
+        // 담당자를 못 찾았다는 사실을 본문에 붙입니다 — 연락처가 없다고
+        // 조용히 삼키면, 담당자를 적어 둔 것이 오히려 알림을 없앱니다.
+        message: route.note === null ? notice.message : `${notice.message}\n\n${route.note}`,
+        at: new Date(now).toISOString(),
+        environment: tier,
+        url: null,
+      };
+
       try {
-        await this.notifications.notify({
-          // 담당자에게 가는 소식이지 장애가 아니다 — 등급을 올리지 않는다
-          level: "warning",
-          kind: "diagnostics",
-          key: `ignore-review:${notice.tier}:${notice.checkId}:${notice.stage}`,
-          title: notice.title,
-          message: notice.message,
-          at: new Date(now).toISOString(),
-          environment: tier,
-          url: null,
-        });
+        if (route.contact !== null) {
+          await this.notifications.notifyOwner(notice.owner, payload);
+          direct += 1;
+        }
+        await this.notifications.notify(payload);
         sent += 1;
       } catch (error) {
         // 보내기 실패가 판정을 되돌리지는 않는다 — 다음 주기에 다시 시도한다
@@ -94,8 +111,12 @@ export class IgnoreEscalationService {
 
     return {
       sent,
+      direct,
       alerts: detectEscalationAlerts(report, { alerting }) as DetectedAlert[],
-      detail: report.detail,
+      detail:
+        direct > 0
+          ? `${report.detail} 이 중 ${direct}건은 담당자에게 직접도 보냈습니다.`
+          : report.detail,
     };
   }
 

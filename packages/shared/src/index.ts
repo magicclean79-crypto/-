@@ -3178,6 +3178,11 @@ export interface IgnoreNoticeDto {
   stage: string;
   /** 운영 채널까지 넓히는가 — **등급을 올리는 것이 아니다** */
   broadcast: boolean;
+  /**
+   * 이 담당자에게 직접 갈 수 있는가 (TASK-4601, 정책 4601-④).
+   * direct | unknown-owner | not-configured — 뒤의 둘은 공용 채널로만 갑니다.
+   */
+  directRoute: string;
   title: string;
   message: string;
 }
@@ -3265,6 +3270,111 @@ export interface GoLiveChecklistDto {
   /** 마지막 검증 실행 — 없으면 null */
   lastValidation: ValidationExecutionDto | null;
   detail: string;
+  checkedAt: string;
+}
+
+// ── 알림 건강도 · 재전송 · 통합 대시보드 (TASK-4601, Sprint 46) ──
+
+/** 채널 1개의 최근 도달 상태 (CTO 정책 4601-④) */
+export interface ChannelReachabilityDto {
+  channel: string;
+  /** reached | failing | silent | never | disabled — silent는 통과가 아니다 */
+  verdict: string;
+  attempts: number;
+  successes: number;
+  /** 마지막 도달 시각 (ISO) — 없으면 null */
+  lastSuccessAt: string | null;
+  detail: string;
+  next: string | null;
+}
+
+/** 알림 건강도 (GET /ops/notifications/health) */
+export interface NotificationHealthDto {
+  channels: ChannelReachabilityDto[];
+  reached: number;
+  active: number;
+  /** ok | warn | fail */
+  status: string;
+  /** 도달을 보는 창 (시간) */
+  windowHours: number;
+  /** 담당자 직접 알림 경로 — **주소는 담지 않는다** */
+  owners: { owner: string; channel: string }[];
+  /** 읽을 수 없어 버린 담당자 선언 */
+  ownersRejected: string[];
+  ownersDetail: string;
+  /** Teams 본문 형식 (CTO 정책 4601-③) */
+  teamsFormat: string;
+  teamsFormatDetail: string;
+  detail: string;
+  checkedAt: string;
+}
+
+/** 재전송 계획 1건 (CTO 정책 4601-④) */
+export interface ResendItemDto {
+  id: string;
+  alertKey: string;
+  channel: string;
+  level: string;
+  /** resend | wait | permanent | exhausted | stale | resolved */
+  decision: string;
+  /** 몇 번째 재전송인가 — 아니면 null */
+  round: number | null;
+  /** 언제 다시 볼 것인가 (ISO) — 아니면 null */
+  dueAt: string | null;
+  detail: string;
+}
+
+/** 재전송 계획 (GET /ops/notifications/resend) */
+export interface ResendPlanDto {
+  items: ResendItemDto[];
+  /** 지금 보낼 건수 */
+  pending: number;
+  /** 더 보내지 않는 건수 — **사라진 것이 아니다** */
+  givenUp: number;
+  detail: string;
+  checkedAt: string;
+}
+
+/** 재전송 실행 결과 (POST /ops/notifications/resend) */
+export interface ResendRunDto extends ResendPlanDto {
+  /** 실제로 보낸 건수 */
+  sent: number;
+  /** 다시 실패한 건수 */
+  failed: number;
+}
+
+/** 통합 운영 대시보드 칸 (CTO 정책 4601-⑤) */
+export interface OpsOverviewTileDto {
+  id: string;
+  title: string;
+  /** 이 갈래가 답하는 질문 */
+  question: string;
+  /** 어느 판정에서 인용했는가 */
+  source: string;
+  /** ok | warn | fail | unknown */
+  status: string;
+  detail: string;
+  next: string | null;
+  /**
+   * 이 갈래를 읽기는 했는가. `status`가 `unknown`인 이유가 "못 읽음"인지
+   * "판정 유보"인지 가릅니다 — 둘 다 통과가 아니지만 할 일이 다릅니다.
+   */
+  read: boolean;
+}
+
+/** 통합 운영 대시보드 (GET /ops/overview) */
+export interface OpsOverviewDto {
+  tiles: OpsOverviewTileDto[];
+  /** 네 갈래의 최악값 */
+  status: string;
+  /** 확실하지 않은 갈래 수 (못 읽음 + 판정 유보) */
+  unknown: number;
+  /** 판정 자체를 못 읽은 갈래 수 — 고칠 버그다 */
+  unread: number;
+  /** 읽었지만 판정을 유보한 갈래 수 — 근거가 더 필요한 일이다 */
+  undecided: number;
+  detail: string;
+  nextAction: string | null;
   checkedAt: string;
 }
 

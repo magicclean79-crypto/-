@@ -103,7 +103,7 @@ export class GoLiveService {
       );
     }
 
-    const delivery = await this.safe("알림 도달", () => this.deliveryEvidence());
+    const delivery = await this.safe("알림 도달", () => this.deliveryEvidence(now));
     if (delivery !== null) {
       set("alerts", delivery.ok ? "met" : "unmet", delivery.detail);
     }
@@ -174,37 +174,19 @@ export class GoLiveService {
   }
 
   /**
-   * 경보가 실제로 도달하는가.
+   * 경보가 실제로 도달하는가 — **최근 24시간 기준** (TASK-4601, 정책 4601-④).
    *
-   * **채널이 설정돼 있다는 것과 실제로 도달한다는 것은 다른 사실입니다.**
-   * 설정만 보고 통과시키면, 주소가 살아 있는지는 첫 장애 때 알게 됩니다.
+   * TASK-4501은 "한 번이라도 성공한 기록이 있는가"를 물었습니다. 그건 너무
+   * 약한 질문이었습니다 — 3주 전에 한 번 닿은 채널과 지금 닿는 채널이 같은
+   * 초록으로 보였습니다.
+   *
+   * **여기서 다시 판정하지 않습니다** — `GET /ops/notifications/health`와
+   * 같은 판정을 인용합니다. 두 화면이 같은 사실에 다른 답을 하면 사람은
+   * 둘 다 안 믿습니다.
    */
-  private async deliveryEvidence(): Promise<{ ok: boolean; detail: string }> {
-    const configs = this.notifications.channelConfigs();
-    const enabled = configs.filter((row) => row.enabled).map((row) => row.channel);
-    if (enabled.length === 0) {
-      return {
-        ok: false,
-        detail:
-          "켜진 알림 채널이 없습니다 — 장애를 감지해도 아무도 못 받으면 " +
-          "감지하지 않은 것과 같습니다.",
-      };
-    }
-    const succeeded = await this.notifications.recentSuccessChannels();
-    const never = enabled.filter((channel) => !succeeded.includes(channel));
-    if (never.length > 0) {
-      return {
-        ok: false,
-        detail:
-          `켜진 채널 ${enabled.join(" · ")} 중 ${never.join(" · ")}은(는) ` +
-          "한 번도 도달에 성공한 기록이 없습니다. 설정돼 있다는 것과 " +
-          "실제로 닿는다는 것은 다른 사실입니다.",
-      };
-    }
-    return {
-      ok: true,
-      detail: `켜진 채널 ${enabled.join(" · ")} 모두 최근 도달 기록이 있습니다.`,
-    };
+  private async deliveryEvidence(now: number): Promise<{ ok: boolean; detail: string }> {
+    const health = await this.notifications.health(now);
+    return { ok: health.status === "ok", detail: health.detail };
   }
 
   /** 하나가 죽어도 화면은 뜬다 — 대신 그 항목은 "못 봤다"로 남는다 */

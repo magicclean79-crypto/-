@@ -657,10 +657,24 @@ model NotificationDelivery {
    */
   status    Int?
   error     String?
+  /// 지금까지의 재전송 횟수 (TASK-4601, 정책 4601-④).
+  /// 재시도(초 단위)와 다르다 — 전송이 완전히 끝난 뒤 분·시간 단위로 다시
+  /// 보낸 횟수다. **같은 alertKey로 보낸다** — 새 키를 만들면 한 장애가
+  /// 여러 장애로 보인다.
+  rounds    Int      @default(0)
+  /// 마지막 재전송 시각 — 다음 대기를 여기서부터 잰다
+  lastResendAt DateTime?
+  /// 이 채널로 더 보내지 않기로 한 시각. **조용히 그만두지 않기 위해
+  /// 남긴다** — 아무도 못 받은 알림이 없는 일이 되면 안 된다.
+  gaveUpAt  DateTime?
+  /// 담당자에게 직접 보낸 것인가 (TASK-4601, 정책 4601-④)
+  direct    Boolean  @default(false)
   createdAt DateTime @default(now())
 
   @@index([alertKey, createdAt])
   @@index([channel, createdAt])
+  // 재전송 대상(실패했고 아직 포기하지 않은 것)을 고른다
+  @@index([ok, gaveUpAt, createdAt])
   @@map("notification_deliveries")
 }
 

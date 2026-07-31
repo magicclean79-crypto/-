@@ -41,6 +41,8 @@ import { HostDiscoveryService } from "./host-discovery.service";
 import { ActivationRunbookService } from "./activation-runbook.service";
 import { IgnoreEscalationService } from "./ignore-escalation.service";
 import { GoLiveService } from "./go-live.service";
+import { NotificationResendService } from "./notification-resend.service";
+import { OpsOverviewService } from "./ops-overview.service";
 import { NeglectService } from "./neglect.service";
 import { ReadinessBoardService } from "./readiness-board.service";
 import { ProjectCostService } from "./project-cost.service";
@@ -103,6 +105,8 @@ import { ProjectCostService } from "./project-cost.service";
     ActivationRunbookService,
     IgnoreEscalationService,
     GoLiveService,
+    NotificationResendService,
+    OpsOverviewService,
   ],
   exports: [
     AlertService,
@@ -139,6 +143,8 @@ import { ProjectCostService } from "./project-cost.service";
     ActivationRunbookService,
     IgnoreEscalationService,
     GoLiveService,
+    NotificationResendService,
+    OpsOverviewService,
   ],
 })
 export class OpsModule {}

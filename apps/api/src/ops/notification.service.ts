@@ -14,16 +14,29 @@ import {
   urgentChannelStatus,
   slackBody,
   teamsBody,
+  teamsAdaptiveBody,
+  resolveTeamsFormat,
+  judgeChannelReachability,
+  summarizeReachability,
+  REACHABILITY_WINDOW_MS,
+  parseOwnerContacts,
+  resolveOwnerRoute,
+  ownerContactStatus,
   webhookBody,
 } from "@acos/core";
 import type {
   ChannelConfig,
+  DeliveryRecord,
   NotificationChannel,
   NotificationLevel,
   NotificationPayload,
+  OwnerRoute,
   RetryPolicy,
 } from "@acos/core";
-import type { NotificationChannelStatusDto } from "@acos/shared";
+import type {
+  NotificationChannelStatusDto,
+  NotificationHealthDto,
+} from "@acos/shared";
 
 import { PrismaService } from "../prisma/prisma.service";
 
@@ -170,6 +183,8 @@ export class NotificationService {
     payload: NotificationPayload,
     /** 긴급 경로로 보내는가 — 주소가 달라진다 (TASK-3901, 정책 3901-④) */
     urgent = false,
+    /** 담당자 직접 알림 등, 환경변수가 아닌 주소로 보낼 때 (TASK-4601) */
+    override?: { address: string },
   ): Promise<SendResult> {
     const policy = this.policy;
     let attempt = 0;
@@ -179,7 +194,7 @@ export class NotificationService {
     while (attempt < policy.maxAttempts) {
       attempt += 1;
       try {
-        const status = await this.send(channel, payload, urgent);
+        const status = await this.send(channel, payload, urgent, override);
         if (status === null || (status >= 200 && status < 300)) {
           return { ok: true, attempts: attempt, status, error: null };
         }
@@ -264,9 +279,16 @@ export class NotificationService {
     channel: NotificationChannel,
     payload: NotificationPayload,
     urgent = false,
+    override?: { address: string },
   ): Promise<number | null> {
+    // 담당자 직접 알림은 표에 적힌 주소로 갑니다 (TASK-4601, 정책 4601-④).
+    // 환경변수 주소로 되돌리지 않습니다 — 그러면 "직접 보냈다"는 기록이
+    // 남는데 실제로는 공용 주소로 간 것이 됩니다.
+    const pick = (target: NotificationChannel): string =>
+      override?.address ?? this.address(target, urgent)!;
+
     if (channel === "slack") {
-      const url = this.address("slack", urgent)!;
+      const url = pick("slack");
       const response = await fetch(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -276,7 +298,7 @@ export class NotificationService {
     }
 
     if (channel === "webhook") {
-      const url = this.address("webhook", urgent)!;
+      const url = pick("webhook");
       const response = await fetch(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -289,11 +311,22 @@ export class NotificationService {
     // 모양(MessageCard)으로 담을 뿐, **판단은 하나도 다르지 않다** —
     // 채널마다 다른 사실이 나가면 같은 장애에 두 개의 답이 생긴다.
     if (channel === "teams") {
-      const url = this.address("teams", urgent)!;
+      const url = pick("teams");
+      // 형식은 선언으로 고릅니다 (TASK-4601, 정책 4601-③). 기본값은 아직
+      // MessageCard입니다 — 실제 Teams 워크스페이스에서 확인하기 전에
+      // 기본값을 바꾸면, 그 형식이 틀렸다는 사실을 첫 장애 때 알게 됩니다.
+      const choice = resolveTeamsFormat(
+        process.env as Record<string, string | undefined>,
+      );
+      if (choice.rejected !== null) {
+        this.logger.warn(choice.detail);
+      }
+      const body =
+        choice.format === "adaptive" ? teamsAdaptiveBody(payload) : teamsBody(payload);
       const response = await fetch(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(teamsBody(payload)),
+        body: JSON.stringify(body),
       });
       return response.status;
     }
@@ -301,7 +334,7 @@ export class NotificationService {
     const body = emailBody(payload);
     await this.transporter().sendMail({
       from: process.env.ALERT_EMAIL_FROM ?? "acos@localhost",
-      to: this.address("email", urgent)!,
+      to: pick("email"),
       subject: body.subject,
       text: body.text,
     });
@@ -332,6 +365,8 @@ export class NotificationService {
     channel: NotificationChannel,
     payload: NotificationPayload,
     result: SendResult,
+    /** 담당자에게 직접 보낸 것인가 (TASK-4601, 정책 4601-④) */
+    direct = false,
   ): Promise<void> {
     try {
       await this.prisma.notificationDelivery.create({
@@ -343,6 +378,7 @@ export class NotificationService {
           attempts: result.attempts,
           status: result.status,
           error: result.error,
+          direct,
         },
       });
     } catch (error) {
@@ -398,6 +434,117 @@ export class NotificationService {
       select: { channel: true },
     });
     return [...new Set(rows.map((row) => row.channel))];
+  }
+
+  /** 담당자 연락처 표 (TASK-4601, 정책 4601-④) — 주소는 여기서만 본다 */
+  private ownerBook() {
+    return parseOwnerContacts(process.env.ALERT_OWNER_CONTACTS);
+  }
+
+  /**
+   * 이 담당자에게 어떻게 보낼 것인가 (TASK-4601, CTO 정책 4601-④).
+   *
+   * 판정은 core가 합니다 — 여기서는 표만 읽어다 줍니다.
+   */
+  ownerRoute(owner: string | null | undefined): OwnerRoute {
+    return resolveOwnerRoute(owner, this.ownerBook());
+  }
+
+  /**
+   * 담당자에게 **직접** 보낸다 (TASK-4601, CTO 정책 4601-④).
+   *
+   * 공용 채널 전송(`notify`)을 대신하지 않습니다 — 더하는 것입니다.
+   * 직접 경로가 생겼다고 공용을 끄면 담당자가 휴가 중일 때 그 항목은
+   * 아무도 모르는 채로 지나갑니다.
+   *
+   * 연락처를 못 찾으면 **아무것도 보내지 않고 그 사실을 돌려줍니다** —
+   * 부르는 쪽이 그 문장을 공용 알림 본문에 붙입니다.
+   */
+  async notifyOwner(
+    owner: string | null | undefined,
+    payload: NotificationPayload,
+  ): Promise<OwnerRoute> {
+    const route = this.ownerRoute(owner);
+    if (route.contact === null) {
+      return route;
+    }
+    const contact = route.contact;
+    const result = await this.sendWithRetry(contact.channel, payload, false, {
+      address: contact.address,
+    });
+    if (!result.ok) {
+      this.logger.warn(
+        `담당자 ${contact.owner}에게 직접 보내지 못했습니다: ${result.error ?? "원인 미상"}`,
+      );
+    }
+    await this.record(contact.channel, payload, result, true);
+    return route;
+  }
+
+  /**
+   * 알림 건강도 (TASK-4601, CTO 정책 4601-④).
+   *
+   * "한 번이라도 닿았는가"가 아니라 **"최근 24시간 안에 닿았는가"** 를
+   * 묻습니다. 3주 전에 한 번 닿은 채널과 지금 닿는 채널이 같은 초록으로
+   * 보이면, 만료된 주소를 다음 장애 때 알게 됩니다.
+   */
+  async health(now = Date.now()): Promise<NotificationHealthDto> {
+    const configs = this.channelConfigs();
+    const since = new Date(now - REACHABILITY_WINDOW_MS * 3);
+    const rows = await this.prisma.notificationDelivery
+      .findMany({
+        where: { createdAt: { gte: since } },
+        orderBy: { createdAt: "desc" },
+        take: 1000,
+        select: { channel: true, ok: true, createdAt: true },
+      })
+      .catch((error: unknown) => {
+        this.logger.warn(`전송 이력을 읽지 못했습니다: ${String(error)}`);
+        return [] as { channel: string; ok: boolean; createdAt: Date }[];
+      });
+    const deliveries: DeliveryRecord[] = rows.map((row) => ({
+      channel: row.channel,
+      ok: row.ok,
+      at: row.createdAt.getTime(),
+    }));
+
+    const summary = summarizeReachability(
+      configs.map((config) =>
+        judgeChannelReachability({
+          channel: config.channel,
+          enabled: config.enabled,
+          deliveries,
+          now,
+        }),
+      ),
+    );
+
+    const owners = ownerContactStatus(this.ownerBook());
+    const teams = resolveTeamsFormat(process.env as Record<string, string | undefined>);
+
+    return {
+      channels: summary.rows.map((row) => ({
+        channel: row.channel,
+        verdict: row.verdict,
+        attempts: row.attempts,
+        successes: row.successes,
+        lastSuccessAt:
+          row.lastSuccessAt === null ? null : new Date(row.lastSuccessAt).toISOString(),
+        detail: row.detail,
+        next: row.next,
+      })),
+      reached: summary.reached,
+      active: summary.active,
+      status: summary.status,
+      windowHours: Math.round(REACHABILITY_WINDOW_MS / 3_600_000),
+      owners: owners.owners,
+      ownersRejected: owners.rejected,
+      ownersDetail: owners.detail,
+      teamsFormat: teams.format,
+      teamsFormatDetail: teams.detail,
+      detail: summary.detail,
+      checkedAt: new Date(now).toISOString(),
+    };
   }
 
   /** 채널 연결 시험 — 운영자가 설정 직후 확인용 (실제 전송) */

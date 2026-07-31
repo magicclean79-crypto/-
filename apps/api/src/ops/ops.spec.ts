@@ -36,6 +36,8 @@ import { ReadinessBoardService } from "./readiness-board.service";
 import { ActivationRunbookService } from "./activation-runbook.service";
 import { IgnoreEscalationService } from "./ignore-escalation.service";
 import { GoLiveService } from "./go-live.service";
+import { NotificationResendService } from "./notification-resend.service";
+import { OpsOverviewService } from "./ops-overview.service";
 import { AdminSettingsService } from "../admin/admin-settings.service";
 import { RequestContextService } from "../common/request-context.service";
 import { PriceSourceService } from "../pricing/price-source.service";
@@ -851,11 +853,49 @@ function createPrismaStub() {
       notificationDelivery: {
         create: async (args: { data: Record<string, unknown> }) => {
           seq += 1;
-          const row = { id: `nd-${seq}`, createdAt: new Date(), ...args.data };
+          const row = {
+            id: `nd-${seq}`,
+            createdAt: new Date(),
+            // 재전송·직접 알림 칸 (TASK-4601, 정책 4601-④) — 실제 스키마와
+            // 같은 모양이어야 "포기한 것이 남는가"가 구조적으로 검증된다
+            rounds: 0,
+            lastResendAt: null,
+            gaveUpAt: null,
+            direct: false,
+            ...args.data,
+          };
           deliveries.push(row as never);
           return { ...row };
         },
-        findMany: async () => deliveries.map((row) => ({ ...row })),
+        findMany: async (args?: {
+          where?: { ok?: boolean; level?: string; gaveUpAt?: null };
+        }) =>
+          deliveries
+            .filter((row) => {
+              const entry = row as unknown as Record<string, unknown>;
+              if (args?.where?.ok !== undefined && entry.ok !== args.where.ok) {
+                return false;
+              }
+              if (args?.where?.level !== undefined && entry.level !== args.where.level) {
+                return false;
+              }
+              if (args?.where?.gaveUpAt === null && entry.gaveUpAt !== null) {
+                return false;
+              }
+              return true;
+            })
+            .map((row) => ({ ...row })),
+        update: async (args: {
+          where: { id: string };
+          data: Record<string, unknown>;
+        }) => {
+          const found = deliveries.find(
+            (row) => (row as unknown as { id: string }).id === args.where.id,
+          );
+          if (found === undefined) throw new Error("no delivery");
+          Object.assign(found, args.data);
+          return { ...found };
+        },
       },
       notificationQueue: {
         createMany: async (args: { data: Record<string, unknown>[] }) => {
@@ -1850,6 +1890,8 @@ async function build(overrides: Overrides = {}) {
       ActivationRunbookService,
       IgnoreEscalationService,
       GoLiveService,
+      NotificationResendService,
+      OpsOverviewService,
       {
         // 운영 설정 저장소 — 테스트가 값을 정한다
         provide: AdminSettingsService,
@@ -9111,6 +9153,177 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
         const built = await build();
         app = built.app;
         await request(built.app.getHttpServer() as never).get("/ops/go-live").expect(401);
+      });
+    });
+  });
+
+  describe("Operations Intelligence (TASK-4601)", () => {
+    const admin = (server: unknown, path: string) =>
+      request(server as never).get(path).set("Authorization", "Bearer tok-admin");
+
+    describe("알림 건강도 (정책 4601-④)", () => {
+      /**
+       * "한 번이라도 닿았는가"는 너무 약한 질문이다 — 3주 전에 한 번 닿은
+       * 채널과 지금 닿는 채널이 같은 초록으로 보인다.
+       */
+      it("최근 24시간을 기준으로 본다", async () => {
+        process.env.ALERT_WEBHOOK_URL = "http://127.0.0.1:9/none";
+        const built = await build();
+        app = built.app;
+        const response = await admin(
+          built.app.getHttpServer(),
+          "/ops/notifications/health",
+        ).expect(200);
+        expect(response.body.windowHours).toBe(24);
+      });
+
+      /**
+       * 보낼 일이 없어 조용한 것을 실패로 칠하면 그 경고가 배경 소음이 되고,
+       * 통과로 세면 만료된 주소를 다음 장애 때 알게 된다.
+       */
+      it("한 번도 닿은 적 없는 채널을 통과로 세지 않는다", async () => {
+        process.env.ALERT_WEBHOOK_URL = "http://127.0.0.1:9/none";
+        const built = await build();
+        app = built.app;
+        const response = await admin(
+          built.app.getHttpServer(),
+          "/ops/notifications/health",
+        ).expect(200);
+        const webhook = response.body.channels.find(
+          (row: { channel: string }) => row.channel === "webhook",
+        );
+        expect(webhook.verdict).toBe("never");
+        expect(webhook.next).toContain("/ops/notifications/test");
+        expect(response.body.status).not.toBe("ok");
+      });
+
+      /**
+       * 주소는 어떤 응답에도 담지 않는다 (1401부터의 규칙).
+       */
+      it("담당자 경로를 보여 주되 주소는 담지 않는다", async () => {
+        process.env.ALERT_OWNER_CONTACTS = "김운영=ops-kim@acos.local, 이름만";
+        const built = await build();
+        app = built.app;
+        const response = await admin(
+          built.app.getHttpServer(),
+          "/ops/notifications/health",
+        ).expect(200);
+        expect(response.body.owners).toEqual([{ owner: "김운영", channel: "email" }]);
+        expect(response.body.ownersRejected).toEqual(["이름만"]);
+        expect(JSON.stringify(response.body)).not.toContain("ops-kim@acos.local");
+      });
+
+      /**
+       * 실제 Teams 워크스페이스에서 확인하기 전에 기본값을 바꾸면, 그 형식이
+       * 틀렸다는 사실을 첫 장애 때 알게 된다.
+       */
+      it("Teams 본문 형식의 기본값이 MessageCard임을 밝힌다 (정책 4601-③)", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await admin(
+          built.app.getHttpServer(),
+          "/ops/notifications/health",
+        ).expect(200);
+        expect(response.body.teamsFormat).toBe("message-card");
+        expect(response.body.teamsFormatDetail).toContain("되돌리는 것도 같은 한 줄");
+      });
+
+      it("ADMIN 전용이다", async () => {
+        const built = await build();
+        app = built.app;
+        await request(built.app.getHttpServer() as never)
+          .get("/ops/notifications/health")
+          .expect(401);
+      });
+    });
+
+    describe("재전송 (정책 4601-④)", () => {
+      /**
+       * 계획을 보는 것과 보내는 것은 다른 행동이다 — 화면을 열었다고 알림이
+       * 나가면 화면을 못 연다.
+       */
+      it("조회는 아무것도 보내지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+        const before = (await admin(server, "/ops/notifications").expect(200)).body
+          .length;
+        await admin(server, "/ops/notifications/resend").expect(200);
+        const after = (await admin(server, "/ops/notifications").expect(200)).body.length;
+        expect(after).toBe(before);
+      });
+
+      it("보낼 것이 없으면 없다고 말한다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await admin(
+          built.app.getHttpServer(),
+          "/ops/notifications/resend",
+        ).expect(200);
+        expect(response.body.pending).toBe(0);
+        expect(String(response.body.detail)).toContain("없습니다");
+      });
+
+      it("ADMIN 전용이다", async () => {
+        const built = await build();
+        app = built.app;
+        await request(built.app.getHttpServer() as never)
+          .post("/ops/notifications/resend")
+          .expect(401);
+      });
+    });
+
+    describe("통합 운영 대시보드 (정책 4601-⑤)", () => {
+      it("네 갈래를 모으고 각 칸이 출처와 질문을 달고 있다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await admin(built.app.getHttpServer(), "/ops/overview").expect(
+          200,
+        );
+        expect(
+          response.body.tiles.map((tile: { id: string }) => tile.id),
+        ).toEqual(["validation", "attribution", "notification", "recovery"]);
+        for (const tile of response.body.tiles) {
+          expect(String(tile.source)).toMatch(/^GET \//);
+          expect(String(tile.question).length).toBeGreaterThan(0);
+          expect(String(tile.detail)).not.toContain("**");
+        }
+      });
+
+      /**
+       * 실 Provider를 상대로 확인한 것이 하나도 없는 상태는 주의가 아니다.
+       */
+      it("검증을 한 적이 없으면 정상으로 요약하지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await admin(built.app.getHttpServer(), "/ops/overview").expect(
+          200,
+        );
+        expect(response.body.status).not.toBe("ok");
+        const validation = response.body.tiles.find(
+          (tile: { id: string }) => tile.id === "validation",
+        );
+        expect(validation.status).toBe("fail");
+      });
+
+      /**
+       * 네 개를 나란히 보여 주면 어디부터 손대야 하는지는 여전히 사람이
+       * 골라야 한다.
+       */
+      it("먼저 할 일을 하나 고른다", async () => {
+        const built = await build();
+        app = built.app;
+        const response = await admin(built.app.getHttpServer(), "/ops/overview").expect(
+          200,
+        );
+        expect(response.body.nextAction).not.toBeNull();
+        expect(String(response.body.detail)).toContain("먼저 할 일");
+      });
+
+      it("ADMIN 전용이다", async () => {
+        const built = await build();
+        app = built.app;
+        await request(built.app.getHttpServer() as never).get("/ops/overview").expect(401);
       });
     });
   });

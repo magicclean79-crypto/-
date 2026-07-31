@@ -65,6 +65,11 @@ import type {
   ValidationRunDto,
   ValidationExecutionDto,
   GoLiveChecklistDto,
+  // TASK-4601 (CTO 정책 4601-④⑤)
+  NotificationHealthDto,
+  ResendPlanDto,
+  ResendRunDto,
+  OpsOverviewDto,
   // TASK-4201 (CTO 정책 4201-①②④)
   ActivationRunbookDto,
   AttributionGapDto,
@@ -110,6 +115,8 @@ import { HostDiscoveryService } from "./host-discovery.service";
 import { ActivationRunbookService } from "./activation-runbook.service";
 import { IgnoreEscalationService } from "./ignore-escalation.service";
 import { GoLiveService } from "./go-live.service";
+import { NotificationResendService } from "./notification-resend.service";
+import { OpsOverviewService } from "./ops-overview.service";
 import { ProjectCostService } from "./project-cost.service";
 
 /**
@@ -183,6 +190,9 @@ export class OpsController {
     private readonly revival: DraftRevivalService,
     private readonly validationRun: ValidationRunService,
     private readonly goLiveService: GoLiveService,
+    // 알림 재전송 · 통합 대시보드 (TASK-4601, CTO 정책 4601-④⑤)
+    private readonly resend: NotificationResendService,
+    private readonly overviewService: OpsOverviewService,
     // 방치 지표 · 프로젝트 비용 (TASK-4201, CTO 정책 4201-②④)
     private readonly neglect: NeglectService,
     private readonly readinessBoard: ReadinessBoardService,
@@ -675,6 +685,56 @@ export class OpsController {
   @Get("go-live")
   async goLive(): Promise<GoLiveChecklistDto> {
     return this.goLiveService.report();
+  }
+
+  /**
+   * 알림 건강도 (TASK-4601, CTO 정책 4601-④).
+   *
+   * "한 번이라도 닿았는가"가 아니라 **"최근 24시간 안에 닿았는가"** 를
+   * 묻습니다. 다만 24시간 동안 보낼 일이 없었다면 그건 채널이 죽어서가
+   * 아니라 **조용한 것**일 수 있습니다 — 그 상태를 실패로도 통과로도 세지
+   * 않고, 확인하는 방법을 함께 적습니다.
+   *
+   * 주소(웹훅 URL·수신자)는 어떤 응답에도 담지 않습니다.
+   */
+  @Get("notifications/health")
+  async notificationHealth(): Promise<NotificationHealthDto> {
+    return this.notifications.health();
+  }
+
+  /**
+   * 재전송 계획 (TASK-4601, CTO 정책 4601-④).
+   *
+   * **조회는 아무것도 보내지 않습니다** — 계획을 보는 것과 보내는 것은 다른
+   * 행동이고, 화면을 열었다고 알림이 나가면 화면을 못 엽니다.
+   */
+  @Get("notifications/resend")
+  async resendPlan(): Promise<ResendPlanDto> {
+    return this.resend.plan();
+  }
+
+  /**
+   * 재전송 실행 (TASK-4601, CTO 정책 4601-④).
+   *
+   * 같은 `alertKey`로 다시 보냅니다 — 새 키를 만들면 한 장애가 여러 장애로
+   * 보입니다. 본문에는 **몇 번째 재전송인지** 붙습니다.
+   */
+  @Post("notifications/resend")
+  @HttpCode(200)
+  async runResend(): Promise<ResendRunDto> {
+    return this.resend.run();
+  }
+
+  /**
+   * 통합 운영 대시보드 (TASK-4601, CTO 정책 4601-⑤).
+   *
+   * Validation · Attribution · Notification · Recovery를 한 화면에 모읍니다.
+   * **여기서 새로 판정하지 않습니다** — 원본 판정을 인용하고, 못 읽은 갈래는
+   * `unknown`이며 요약 문장이 **그 사실을 먼저** 말합니다.
+   */
+  @Get("overview")
+  async overview(): Promise<OpsOverviewDto> {
+    return this.overviewService.report();
   }
 
   /**
