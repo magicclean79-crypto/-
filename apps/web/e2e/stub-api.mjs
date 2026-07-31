@@ -3727,6 +3727,117 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  /** 작업 목록 (TASK-4603) — ADMIN 전용 */
+  if (url.pathname === "/jobs") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify({
+        jobs: [
+          {
+            id: "job-timeout",
+            kind: "ocr-batch",
+            status: "failed",
+            attempts: 1,
+            completedStages: ["ocr:1:img-a", "ocr:2:img-b"],
+            totalStages: 5,
+            failureKind: "timeout",
+            userMessage:
+              "처리 시간이 예상보다 길어져 중단했습니다. 잠시 후 다시 시도해 주세요.",
+            resumable: true,
+            totalMs: 61234,
+            requestId: "req-abcdef12",
+            startedAt: new Date().toISOString(),
+            completedAt: new Date().toISOString(),
+            detail:
+              "2/5단계에서 멈췄습니다. 끝난 단계는 체크포인트에 남아 있어 이어할 수 있습니다.",
+          },
+          {
+            id: "job-blocked",
+            kind: "ocr-batch",
+            status: "failed",
+            attempts: 1,
+            completedStages: [],
+            totalStages: 3,
+            failureKind: "blocked",
+            userMessage:
+              "지금은 이 작업을 실행할 수 없습니다. 화면에 적힌 이유를 확인해 주세요.",
+            resumable: false,
+            totalMs: 120,
+            requestId: null,
+            startedAt: new Date().toISOString(),
+            completedAt: new Date().toISOString(),
+            detail:
+              "0/3단계에서 멈췄습니다. 이어해도 같은 결과가 나오는 실패입니다 — 원인을 먼저 고쳐 주세요.",
+          },
+          {
+            id: "job-ok",
+            kind: "ocr-batch",
+            status: "succeeded",
+            attempts: 2,
+            completedStages: ["ocr:1:img-a", "ocr:2:img-b"],
+            totalStages: 2,
+            failureKind: null,
+            userMessage: null,
+            resumable: false,
+            totalMs: 2400,
+            requestId: "req-99887766",
+            startedAt: new Date().toISOString(),
+            completedAt: new Date().toISOString(),
+            detail: "2/2단계를 끝냈습니다.",
+          },
+        ],
+      }),
+    );
+    return;
+  }
+
+  /** 단계별 성능 추세 (TASK-4603) — ADMIN 전용 */
+  if (url.pathname === "/jobs/metrics/stages") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify({
+        trends: [
+          {
+            kind: "ocr-batch",
+            stage: "ocr:*",
+            samples: 12,
+            medianMs: 8200,
+            p95Ms: 15400,
+            verdict: "slow",
+            detail: "중앙값 8.2초로 기준(5.0초)을 넘습니다. 95%는 15.4초 안에 끝납니다.",
+          },
+          {
+            kind: "ocr-batch",
+            stage: "fetch:*",
+            samples: 2,
+            medianMs: 90,
+            p95Ms: 120,
+            verdict: "insufficient",
+            detail:
+              "표본이 2건으로 5건에 못 미쳐 느린지 판정하지 않았습니다 — 빠르다는 뜻도 느리다는 뜻도 아닙니다.",
+          },
+        ],
+        undecided: 1,
+        windowHours: 168,
+        detail:
+          "최근 7일 · 단계 2종. 기준(5000ms)을 넘는 단계 1종: ocr:*. " +
+          "표본이 모자라 판정하지 않은 단계 1종 — 빠르다는 뜻이 아닙니다.",
+        checkedAt: new Date().toISOString(),
+      }),
+    );
+    return;
+  }
+
   /**
    * 통합 운영 대시보드 (TASK-4601, CTO 정책 4601-⑤) — ADMIN 전용.
    *

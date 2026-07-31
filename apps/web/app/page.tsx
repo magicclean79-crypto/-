@@ -91,6 +91,12 @@ export default function Home() {
             📖 운영 활성화 런북
           </Link>
           <Link
+            href="/admin/jobs"
+            className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+          >
+            🧵 작업 현황
+          </Link>
+          <Link
             href="/admin/overview"
             className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
           >

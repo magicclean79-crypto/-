@@ -19,6 +19,8 @@ import { LlmModule } from "./llm/llm.module";
 import { MemoryModule } from "./memory/memory.module";
 import { ProjectMemoriesModule } from "./project-memories/project-memories.module";
 import { OcrModule } from "./ocr/ocr.module";
+// 작업 신뢰성 (TASK-4603) — 예외 분류·로그·체크포인트·계측. 더하기만 한다.
+import { ReliabilityModule } from "./reliability/reliability.module";
 import { PrismaModule } from "./prisma/prisma.module";
 import { ProductObjectModule } from "./product-object/product-object.module";
 import { ProductsModule } from "./products/products.module";
@@ -36,6 +38,7 @@ import { UploadsModule } from "./uploads/uploads.module";
     StorageModule,
     UploadsModule,
     OcrModule,
+    ReliabilityModule,
     ProjectsModule,
     ProductsModule,
     AnalysisModule,

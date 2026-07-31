@@ -3,6 +3,7 @@ import { NestFactory } from "@nestjs/core";
 import { Logger } from "@nestjs/common";
 import { AppModule } from "./app.module";
 import { ReadinessService } from "./health/readiness.service";
+import { AllExceptionsFilter } from "./reliability/all-exceptions.filter";
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -12,6 +13,12 @@ async function bootstrap() {
     // httpOnly 세션 쿠키(TASK-0803)를 교차 출처 요청에도 실어 보낼 수 있게 허용
     credentials: true,
   });
+
+  // 전역 예외 필터 (TASK-4603) — **HttpException은 그대로 통과합니다.**
+  // 지금까지 만든 400·403·404 응답의 본문과 상태 코드가 한 글자도
+  // 달라지지 않습니다. 달라지는 것은 분류되지 않은 오류 하나뿐이며,
+  // 그때 원문 대신 사람이 할 수 있는 일과 요청 id를 돌려줍니다.
+  app.useGlobalFilters(app.get(AllExceptionsFilter));
 
   // Startup Validation (TASK-1202) — 환경을 먼저 검증한다.
   // 운영에서 오류가 있으면 **기동하지 않는다**: 잘못된 설정으로 뜬 서버는

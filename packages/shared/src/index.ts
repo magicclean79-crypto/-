@@ -3273,6 +3273,101 @@ export interface GoLiveChecklistDto {
   checkedAt: string;
 }
 
+// ── 작업 신뢰성 (TASK-4603, Sprint 46 — 프로덕션 품질) ──
+
+/** 작업 실행 1건 (GET /jobs/:id) */
+export interface JobRunDto {
+  id: string;
+  kind: string;
+  /** running | succeeded | failed */
+  status: string;
+  /** 지금까지의 시도 횟수 */
+  attempts: number;
+  /** 끝난 단계 이름 */
+  completedStages: string[];
+  /** 전체 단계 수 */
+  totalStages: number;
+  /** 마지막 실패의 분류 — 없으면 null */
+  failureKind: string | null;
+  /**
+   * 사용자에게 보여 줄 문장. **원문이 아닙니다** — 원문에 무엇이 들어
+   * 있는지 미리 알 수 없습니다.
+   */
+  userMessage: string | null;
+  /** 이어할 수 있는가 */
+  resumable: boolean;
+  /** 처음부터 끝까지 (ms) — 아직 도는 중이면 null */
+  totalMs: number | null;
+  /** 이 작업을 시작한 요청 (TASK-3601) */
+  requestId: string | null;
+  startedAt: string;
+  completedAt: string | null;
+  detail: string;
+}
+
+/** 작업 로그 한 줄 (GET /jobs/:id/events) */
+export interface JobEventDto {
+  id: string;
+  /** debug | info | warn | error */
+  level: string;
+  stage: string;
+  message: string;
+  /** 비밀은 가려진 상태로 저장된다 */
+  data: Record<string, unknown>;
+  at: string;
+}
+
+/** 단계 1개의 계측 (GET /jobs/:id) */
+export interface JobStageMetricDto {
+  stage: string;
+  durationMs: number;
+  ok: boolean;
+  /** 모르면 null — 0이 아니다 */
+  inputTokens: number | null;
+  outputTokens: number | null;
+  /** **이 단계가 쓴 메모리가 아니다** — 프로세스 전체 값이다 */
+  processHeapDeltaBytes: number | null;
+}
+
+/** 작업 상세 */
+export interface JobDetailDto {
+  job: JobRunDto;
+  metrics: JobStageMetricDto[];
+  events: JobEventDto[];
+  /** 성능 요약 — 안 잰 시간까지 그대로 말한다 */
+  perf: {
+    totalMs: number;
+    measuredMs: number;
+    unmeasuredMs: number;
+    slowestStage: string | null;
+    inputTokens: number | null;
+    outputTokens: number | null;
+    detail: string;
+  };
+}
+
+/** 단계별 추세 (GET /jobs/metrics) */
+export interface JobStageTrendDto {
+  kind: string;
+  stage: string;
+  samples: number;
+  medianMs: number;
+  p95Ms: number;
+  /** ok | slow | insufficient — insufficient는 빠르다는 뜻이 아니다 */
+  verdict: string;
+  detail: string;
+}
+
+/** 작업 성능 현황 */
+export interface JobMetricsDto {
+  trends: JobStageTrendDto[];
+  /** 표본이 모자라 판정하지 않은 단계 수 */
+  undecided: number;
+  windowHours: number;
+  detail: string;
+  checkedAt: string;
+}
+
 // ── 알림 건강도 · 재전송 · 통합 대시보드 (TASK-4601, Sprint 46) ──
 
 /** 채널 1개의 최근 도달 상태 (CTO 정책 4601-④) */
