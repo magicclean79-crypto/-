@@ -11,6 +11,11 @@ import { Prisma } from "@prisma/client";
 import { AuthService } from "../auth/auth.service";
 import { WriteProtectionGuard } from "../auth/write-protection.guard";
 import { LlmBudgetService } from "../llm/llm-budget.service";
+import { LlmService } from "../llm/llm.service";
+import { OCR_PROVIDER } from "../ocr/ocr.constants";
+import { ActivationHistoryService } from "./activation-history.service";
+import { IncidentService } from "./incident.service";
+import { ProductionSmokeService } from "./production-smoke.service";
 import { PriceSourceService } from "../pricing/price-source.service";
 import { CiStatusService } from "./ci-status.service";
 import { EgressService } from "./egress.service";
@@ -90,6 +95,10 @@ const MIGRATION_DIRS = readdirSync(
 function createPrismaStub() {
   const alerts = new Map<string, AlertRow>();
   const runs: CheckRunRow[] = [];
+  // 활성화 이력 · 스모크 · 장애 이력 (TASK-3701)
+  const activationEvents: Record<string, unknown>[] = [];
+  const smokeRuns: Record<string, unknown>[] = [];
+  const incidents: Record<string, unknown>[] = [];
   const deliveries: {
     id: string;
     alertKey: string;
@@ -958,6 +967,112 @@ function createPrismaStub() {
         sql.includes("pg_database_size")
           ? [{ size: BigInt(2 * 1024 ** 3) }]
           : [],
+      // 활성화 이력 · 스모크 · 장애 이력 (TASK-3701, 정책 3701-①②④).
+      // 인메모리로 두되 **판정에 쓰이는 동작은 실제와 같게** 둔다 —
+      // 여기서 검증하려는 것이 "같은 상태면 줄이 안 늘어나는가"이기 때문이다.
+      activationEvent: {
+        findFirst: async () =>
+          activationEvents.length === 0
+            ? null
+            : { ...activationEvents[activationEvents.length - 1] },
+        findMany: async (args?: { take?: number }) =>
+          [...activationEvents]
+            .reverse()
+            .slice(0, args?.take ?? activationEvents.length)
+            .map((row) => ({ ...row })),
+        create: async (args: { data: Record<string, unknown> }) => {
+          seq += 1;
+          const now = new Date();
+          const row = {
+            id: `act-${seq}`,
+            recordedAt: now,
+            lastSeenAt: now,
+            observations: 1,
+            met: [],
+            ...args.data,
+          } as Record<string, unknown>;
+          activationEvents.push(row);
+          return { ...row };
+        },
+        update: async (args: {
+          where: { id: string };
+          data: Record<string, unknown>;
+        }) => {
+          const row = activationEvents.find((item) => item.id === args.where.id);
+          if (row === undefined) {
+            throw new Error("no such activation event");
+          }
+          const increment = (args.data.observations as { increment?: number } | undefined)
+            ?.increment;
+          if (increment !== undefined) {
+            row.observations = (row.observations as number) + increment;
+          }
+          if (args.data.lastSeenAt !== undefined) {
+            row.lastSeenAt = args.data.lastSeenAt;
+          }
+          if (args.data.detail !== undefined) {
+            row.detail = args.data.detail;
+          }
+          return { ...row };
+        },
+      },
+      smokeRun: {
+        findMany: async (args?: { take?: number }) =>
+          [...smokeRuns]
+            .reverse()
+            .slice(0, args?.take ?? smokeRuns.length)
+            .map((row) => ({ ...row })),
+        create: async (args: { data: Record<string, unknown> }) => {
+          seq += 1;
+          const row = {
+            id: `smoke-${seq}`,
+            createdAt: new Date(),
+            ...args.data,
+          } as Record<string, unknown>;
+          smokeRuns.push(row);
+          return { ...row };
+        },
+      },
+      incident: {
+        findMany: async (args?: { take?: number }) =>
+          [...incidents]
+            .sort(
+              (left, right) =>
+                (right.startedAt as Date).getTime() - (left.startedAt as Date).getTime(),
+            )
+            .slice(0, args?.take ?? incidents.length)
+            .map((row) => ({ ...row })),
+        findUnique: async (args: { where: { id: string } }) => {
+          const row = incidents.find((item) => item.id === args.where.id);
+          return row === undefined ? null : { ...row };
+        },
+        create: async (args: { data: Record<string, unknown> }) => {
+          seq += 1;
+          const row = {
+            id: `inc-${seq}`,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            detectedAt: null,
+            resolvedAt: null,
+            cause: null,
+            recovery: null,
+            ...args.data,
+          } as Record<string, unknown>;
+          incidents.push(row);
+          return { ...row };
+        },
+        update: async (args: {
+          where: { id: string };
+          data: Record<string, unknown>;
+        }) => {
+          const row = incidents.find((item) => item.id === args.where.id);
+          if (row === undefined) {
+            throw new Error("no such incident");
+          }
+          Object.assign(row, args.data, { updatedAt: new Date() });
+          return { ...row };
+        },
+      },
       checkRun: {
         create: async (args: { data: Record<string, unknown> }) => {
           seq += 1;
@@ -1043,6 +1158,18 @@ let egressProbes: {
   detail: string;
 }[] = [];
 
+/**
+ * 운영 스모크 스텁 상태 (TASK-3701, 정책 3701-②).
+ *
+ * **부르는 상대만** 여기서 정한다 — 판정(성공을 통과로 셀 것인가)은 실제
+ * 서비스와 core가 그대로 한다.
+ */
+const smokeStub: {
+  llm: Error | null;
+  ocr: Error | null;
+  ocrProvider: string;
+} = { llm: null, ocr: null, ocrProvider: "mock" };
+
 /** 저장소 스텁 상태 (TASK-1701) — 테스트마다 바꿔 쓴다 */
 const storageProtection = {
   versioning: "unknown" as "enabled" | "disabled" | "unknown",
@@ -1050,7 +1177,12 @@ const storageProtection = {
   uploadFails: false,
   /** 원격 사본이 사라진 상태 (TASK-2201) */
   remoteMissing: false,
+  /** 쓴 것과 읽은 것이 다른 상태 (TASK-3701) — 200과 정합은 다르다 */
+  smokeReadDiffers: false,
 };
+
+/** 스모크가 쓴 오브젝트 — 실제로 담아 뒀다가 돌려준다 (TASK-3701) */
+const smokeObjects = new Map<string, Buffer>();
 
 /**
  * 원격 사본으로 돌려줄 내용과 그 체크섬 (TASK-2101·2201).
@@ -1079,6 +1211,11 @@ async function build(overrides: Overrides = {}) {
   storageProtection.remoteMissing = false;
   storageProtection.replication = "unknown";
   storageProtection.uploadFails = false;
+  storageProtection.smokeReadDiffers = false;
+  smokeObjects.clear();
+  smokeStub.llm = null;
+  smokeStub.ocr = null;
+  smokeStub.ocrProvider = "mock";
   offsiteUploads.length = 0;
   const prisma = createPrismaStub();
 
@@ -1209,6 +1346,40 @@ async function build(overrides: Overrides = {}) {
       // 검증되지 않는다.
       ProductionCutoverService,
       CiStatusService,
+      // 활성화 이력 · 장애 이력 (TASK-3701, 정책 3701-①④) — 실제 서비스를
+      // 쓴다. 스텁을 끼우면 "같은 상태면 줄이 안 늘어나는가"·"복구 방법
+      // 없이는 닫히지 않는가"라는 이 기능의 본질이 검증되지 않는다.
+      ActivationHistoryService,
+      IncidentService,
+      // 운영 스모크 (TASK-3701, 정책 3701-②) — 서비스는 실제 것을 쓰고,
+      // **부르는 상대만** 테스트가 정한다. 실제로 남의 서비스를 부르는
+      // 테스트는 돈이 나가고 바깥 세상에 의존한다.
+      ProductionSmokeService,
+      {
+        provide: LlmService,
+        useValue: {
+          complete: async () => {
+            if (smokeStub.llm instanceof Error) {
+              throw smokeStub.llm;
+            }
+            return { provider: "openai", model: "gpt-4o-mini" };
+          },
+        },
+      },
+      {
+        provide: OCR_PROVIDER,
+        useValue: {
+          get name() {
+            return smokeStub.ocrProvider;
+          },
+          recognize: async () => {
+            if (smokeStub.ocr instanceof Error) {
+              throw smokeStub.ocr;
+            }
+            return { text: "", confidence: null, raw: {} };
+          },
+        },
+      },
       {
         // 도달 점검 (TASK-3501) — 테스트가 상태를 정한다. 실제 네트워크를
         // 두드리면 테스트가 바깥 세상에 의존하게 되고, 그 순간 결정적이지
@@ -1306,6 +1477,34 @@ async function build(overrides: Overrides = {}) {
               throw new Error(`객체를 찾을 수 없습니다: ${key}`);
             }
             return REMOTE_OBJECT;
+          },
+          /**
+           * 운영 스모크의 쓰기·읽기·삭제 (TASK-3701, 정책 3701-②).
+           *
+           * **읽은 것이 쓴 것과 같아야** 성공이다 — 200을 받았다는 것과
+           * 저장된 것이 우리가 쓴 것이라는 사실은 다르다. 그래서 스텁도
+           * 실제로 담아 뒀다가 돌려준다.
+           */
+          putObject: async (key: string, buffer: Buffer) => {
+            if (storageProtection.uploadFails) {
+              throw new Error("저장소 연결 실패");
+            }
+            smokeObjects.set(key, Buffer.from(buffer));
+            return `acos/${key}`;
+          },
+          getObject: async (key: string) => {
+            const found = smokeObjects.get(key);
+            if (found === undefined) {
+              throw new Error(`객체를 찾을 수 없습니다: ${key}`);
+            }
+            return storageProtection.smokeReadDiffers
+              ? Buffer.from("전혀 다른 내용")
+              : found;
+          },
+          removeObjects: async (keys: string[]) => {
+            for (const key of keys) {
+              smokeObjects.delete(key);
+            }
           },
         },
       },
@@ -6147,6 +6346,267 @@ describe("Production Automation & Alerting (TASK-1302)", () => {
         const ci = view(response.body, "ci");
         expect(ci.status).toBe("unverified");
         expect(ci.detail).toContain("한 번도 돌지 않은 것은");
+      });
+    });
+  });
+  /**
+   * Enterprise Production Activation Platform (TASK-3701).
+   *
+   * 정책 3701-①②④가 지키려는 것은 하나로 모인다 — **본 것만 세고, 안 본
+   * 것은 안 본 것으로 둔다.** 이력은 변화를 담고, 스모크는 스텁의 200을
+   * 통과로 세지 않으며, 장애는 복구 방법 없이 닫히지 않는다.
+   */
+  describe("Enterprise Production Activation Platform (TASK-3701)", () => {
+    const admin = (server: unknown, path: string) =>
+      request(server as never).get(path).set("Authorization", "Bearer tok-admin");
+
+    describe("활성화 이력 (정책 3701-①)", () => {
+      it("판정할 때마다 같은 줄이 늘어나지 않는다 — 변화만 남는다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        await admin(server, "/ops/activation").expect(200);
+        await admin(server, "/ops/activation").expect(200);
+        await admin(server, "/ops/activation").expect(200);
+
+        const response = await admin(server, "/ops/activation/history").expect(200);
+        expect(response.body.timeline).toHaveLength(1);
+        expect(response.body.timeline[0].observations).toBe(3);
+        expect(response.body.timeline[0].activated).toBe(false);
+        expect(response.body.changes).toBe(0);
+      });
+
+      it("한 번도 판정하지 않았으면 activated는 null이다 — '안 됨'이 아니라 '모른다'", async () => {
+        const built = await build();
+        app = built.app;
+
+        const response = await admin(
+          built.app.getHttpServer(),
+          "/ops/activation/history",
+        ).expect(200);
+        expect(response.body.activated).toBeNull();
+        expect(response.body.timeline).toEqual([]);
+      });
+
+      it("조건이 바뀌면 새 줄이 생기고 무엇이 늘었는지 말한다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        await admin(server, "/ops/activation").expect(200);
+        // 네트워크 점검 결과가 생기면 조건 하나가 충족된다
+        egressProbes = [
+          {
+            host: "api.openai.com",
+            status: "reachable",
+            reachable: true,
+            detail: "401 — 길은 열려 있다",
+          },
+        ];
+        await admin(server, "/ops/activation").expect(200);
+
+        const response = await admin(server, "/ops/activation/history").expect(200);
+        expect(response.body.timeline).toHaveLength(2);
+        // 최신이 위 — 새로 충족된 조건이 network다
+        expect(response.body.timeline[0].gained).toEqual(["network"]);
+        expect(response.body.changes).toBe(1);
+      });
+
+      it("ADMIN 전용이다", async () => {
+        const built = await build();
+        app = built.app;
+        await request(built.app.getHttpServer() as never)
+          .get("/ops/activation/history")
+          .expect(401);
+      });
+    });
+
+    describe("운영 스모크 (정책 3701-②)", () => {
+      const run = (server: unknown) =>
+        request(server as never)
+          .post("/ops/smoke")
+          .set("Authorization", "Bearer tok-admin");
+
+      it("mock 구성에서는 부르지 않고, 부르지 않은 것은 통과가 아니다", async () => {
+        const built = await build();
+        app = built.app;
+
+        const response = await run(built.app.getHttpServer()).expect(200);
+        const llm = response.body.results.find(
+          (row: { target: string }) => row.target === "llm",
+        );
+        expect(llm.status).toBe("skipped");
+        expect(response.body.ok).toBe(false);
+        expect(response.body.passed).toBe(0);
+      });
+
+      it("스텁을 상대로 성공한 것은 통과로 세지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        process.env.LLM_PROVIDER = "openai";
+        // 공식 주소가 아닌 곳을 부르도록 재정의한다
+        process.env.OPENAI_BASE_URL = "http://127.0.0.1:9101";
+
+        const response = await run(built.app.getHttpServer()).expect(200);
+        const llm = response.body.results.find(
+          (row: { target: string }) => row.target === "llm",
+        );
+        expect(llm.status).toBe("stubbed");
+        expect(llm.detail).toContain("공식 주소가 아닙니다");
+        expect(response.body.ok).toBe(false);
+      });
+
+      it("실패는 실패로 남는다 — 실패 사유를 그대로 적는다", async () => {
+        const built = await build();
+        app = built.app;
+        process.env.LLM_PROVIDER = "openai";
+        smokeStub.llm = new Error("401 invalid_api_key");
+
+        const response = await run(built.app.getHttpServer()).expect(200);
+        const llm = response.body.results.find(
+          (row: { target: string }) => row.target === "llm",
+        );
+        expect(llm.status).toBe("failed");
+        expect(llm.detail).toContain("401 invalid_api_key");
+      });
+
+      it("저장소는 쓴 것과 읽은 것이 다르면 성공이 아니다 — 200과 정합은 다르다", async () => {
+        const built = await build();
+        app = built.app;
+        storageProtection.smokeReadDiffers = true;
+
+        const response = await run(built.app.getHttpServer()).expect(200);
+        const storage = response.body.results.find(
+          (row: { target: string }) => row.target === "storage",
+        );
+        expect(storage.status).toBe("failed");
+        expect(storage.detail).toContain("쓴 내용과 읽은 내용이 다릅니다");
+      });
+
+      it("한 번도 안 돌린 대상도 자리를 차지한다 — 둘만 돌린 것이 2/2가 되면 안 된다", async () => {
+        const built = await build();
+        app = built.app;
+
+        const response = await admin(built.app.getHttpServer(), "/ops/smoke").expect(200);
+        expect(response.body.total).toBe(3);
+        expect(response.body.ok).toBe(false);
+        expect(response.body.ranAt).toBeNull();
+      });
+
+      it("예약 스모크와 수동 스모크가 같은 검사를 돈다", async () => {
+        const built = await build();
+        app = built.app;
+        const checks = built.app.get(ScheduledChecksService) as unknown as {
+          run: (job: string, trigger: string) => Promise<{ detail: string }>;
+        };
+
+        // 예약이 돌아도 기록은 같은 곳(smoke_runs)에 남고, 판정 문구도 같다
+        const result = await checks.run("provider-smoke", "manual");
+        expect(result.detail).toContain("실 호출 0/3 통과");
+
+        const report = await admin(built.app.getHttpServer(), "/ops/smoke").expect(200);
+        expect(report.body.ranAt).not.toBeNull();
+        expect(report.body.total).toBe(3);
+      });
+
+      it("ADMIN 전용이다 — 실 호출은 돈이 나간다", async () => {
+        const built = await build();
+        app = built.app;
+        await request(built.app.getHttpServer() as never)
+          .post("/ops/smoke")
+          .expect(401);
+      });
+    });
+
+    describe("운영 장애 이력 (정책 3701-④)", () => {
+      const open = (server: unknown, body: Record<string, unknown>) =>
+        request(server as never)
+          .post("/ops/incidents")
+          .set("Authorization", "Bearer tok-admin")
+          .send(body);
+
+      const incident = {
+        component: "llm",
+        severity: "MAJOR",
+        summary: "OpenAI 호출 전량 실패",
+        startedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+      };
+
+      it("장애는 자동으로 생기지 않는다 — 경보와 장애는 다르다", async () => {
+        const built = await build();
+        app = built.app;
+
+        const response = await admin(built.app.getHttpServer(), "/ops/incidents").expect(
+          200,
+        );
+        expect(response.body.incidents).toEqual([]);
+        expect(response.body.mttrMs).toBeNull();
+        expect(response.body.detail).toContain("아무도 적지");
+      });
+
+      it("복구 방법 없이는 닫히지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        const created = await open(server, incident).expect(201);
+        const rejected = await request(server as never)
+          .post(`/ops/incidents/${created.body.id}/resolve`)
+          .set("Authorization", "Bearer tok-admin")
+          .send({ recovery: "" })
+          .expect(400);
+        expect(rejected.body.message).toContain("무엇으로 살렸는지");
+      });
+
+      it("진행 중인 장애는 평균에 넣지 않고 먼저 보여 준다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        // 하나는 30분 만에 복구, 하나는 진행 중
+        const resolved = await open(server, {
+          ...incident,
+          startedAt: new Date(Date.now() - 90 * 60 * 1000).toISOString(),
+        }).expect(201);
+        await request(server as never)
+          .post(`/ops/incidents/${resolved.body.id}/resolve`)
+          .set("Authorization", "Bearer tok-admin")
+          .send({
+            resolvedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+            recovery: "만료된 키를 새 키로 교체",
+            cause: "API 키 만료",
+          })
+          .expect(200);
+        await open(server, incident).expect(201);
+
+        const board = await admin(server, "/ops/incidents").expect(200);
+        expect(board.body.open).toBe(1);
+        expect(board.body.resolved).toBe(1);
+        // 진행 중 2시간이 섞였다면 30분이 나올 수 없다
+        expect(Math.round(board.body.mttrMs / 60000)).toBe(30);
+        expect(board.body.detail).toContain("진행 중인 장애 1건");
+      });
+
+      it("성립하지 않는 기록은 만들지 않는다", async () => {
+        const built = await build();
+        app = built.app;
+        const server = built.app.getHttpServer();
+
+        await open(server, { ...incident, component: "저기 어딘가" }).expect(400);
+        await open(server, {
+          ...incident,
+          startedAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        }).expect(400);
+        await open(server, { component: "llm", severity: "MAJOR" }).expect(400);
+      });
+
+      it("ADMIN 전용이다", async () => {
+        const built = await build();
+        app = built.app;
+        await request(built.app.getHttpServer() as never)
+          .get("/ops/incidents")
+          .expect(401);
       });
     });
   });

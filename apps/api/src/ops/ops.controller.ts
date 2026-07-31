@@ -23,6 +23,7 @@ import type {
   ScheduledJob,
 } from "@acos/core";
 import type {
+  ActivationHistoryDto,
   AdvancePricingRequest,
   AlertArchiveResultDto,
   AlertBoardDto,
@@ -37,12 +38,15 @@ import type {
   NotificationDeliveryDto,
   NotificationQueueStatusDto,
   DrillRequirementDto,
+  IncidentBoardDto,
+  IncidentDto,
   OperationsReadinessDto,
   ProductionActivationDto,
   ProductionCutoverDto,
   ProviderRolloutDto,
   RecoveryDrillDto,
   RemoteVerifyResultDto,
+  SmokeReportDto,
   SmtpValidationDto,
 } from "@acos/shared";
 import { AuthGuard, RequireRole } from "../auth/auth.guard";
@@ -53,7 +57,10 @@ import { StorageService } from "../storage/storage.service";
 import { AlertService } from "./alert.service";
 import { BackupService } from "./backup.service";
 import { CostIntelligenceService } from "./cost-intelligence.service";
+import { ActivationHistoryService } from "./activation-history.service";
+import { IncidentService } from "./incident.service";
 import { ProductionCutoverService } from "./production-cutover.service";
+import { ProductionSmokeService } from "./production-smoke.service";
 import { DistributedLockService } from "./distributed-lock.service";
 import { NotificationQueueService } from "./notification-queue.service";
 import { NotificationService } from "./notification.service";
@@ -107,6 +114,10 @@ export class OpsController {
     private readonly costs: CostIntelligenceService,
     // 운영 전환 검증 (TASK-3401, CTO 지시 4·5·6)
     private readonly cutover: ProductionCutoverService,
+    // 활성화 이력 · 스모크 · 장애 이력 (TASK-3701, CTO 정책 3701-①②④)
+    private readonly activationHistoryService: ActivationHistoryService,
+    private readonly smoke: ProductionSmokeService,
+    private readonly incidents: IncidentService,
   ) {}
 
   /**
@@ -144,6 +155,97 @@ export class OpsController {
     @Query("branch") branch?: string,
   ): Promise<ProductionActivationDto> {
     return this.cutover.activation(branch?.trim() || undefined);
+  }
+
+  /**
+   * 활성화 이력 (TASK-3701, CTO 정책 3701-①).
+   *
+   * `/ops/activation`이 **지금**에 답한다면, 이쪽은 **과정**에 답한다 —
+   * 언제부터 이 상태인지, 되던 것이 되돌아간 적이 있는지, 그리고 이 상태가
+   * 오래된 것이 확인해서인지 아무도 안 봐서인지.
+   */
+  @Get("activation/history")
+  async activationHistory(@Query("limit") limit?: string): Promise<ActivationHistoryDto> {
+    const parsed = Number(limit);
+    return this.activationHistoryService.history(
+      Number.isInteger(parsed) && parsed > 0 ? parsed : 50,
+    );
+  }
+
+  /** 마지막 스모크 결과 (TASK-3701, CTO 정책 3701-②) — 호출하지 않는다 */
+  @Get("smoke")
+  async smokeReport(): Promise<SmokeReportDto> {
+    return this.smoke.latest();
+  }
+
+  /**
+   * 운영 스모크 실행 (TASK-3701, CTO 정책 3701-②).
+   *
+   * **실제 호출이 발생하고 과금될 수 있다.** 그래서 예약이 아니라 사람이
+   * 누를 때만 돌고, 누가 눌렀는지 기록에 남는다 (결정 1301-①과 같은 판단).
+   */
+  @Post("smoke")
+  @HttpCode(200)
+  async runSmoke(@Req() request: AuthenticatedRequest): Promise<SmokeReportDto> {
+    return this.smoke.run(request.user?.id);
+  }
+
+  /**
+   * 운영 장애 이력 (TASK-3701, CTO 정책 3701-④).
+   *
+   * 경보와 장애는 다르다 — 경보는 자동으로 뜨는 신호이고, 장애는 사람이
+   * 여는 사건이다. 그래서 이 목록은 자동으로 채워지지 않는다.
+   */
+  @Get("incidents")
+  async incidentBoard(@Query("limit") limit?: string): Promise<IncidentBoardDto> {
+    const parsed = Number(limit);
+    return this.incidents.board(Number.isInteger(parsed) && parsed > 0 ? parsed : 50);
+  }
+
+  @Post("incidents")
+  @HttpCode(201)
+  async openIncident(
+    @Req() request: AuthenticatedRequest,
+    @Body()
+    body: {
+      component?: string;
+      severity?: string;
+      summary?: string;
+      startedAt?: string;
+      detectedAt?: string | null;
+      cause?: string | null;
+    },
+  ): Promise<IncidentDto> {
+    if (!body.component || !body.severity || !body.summary || !body.startedAt) {
+      throw new BadRequestException(
+        "구성 요소 · 등급 · 한 줄 설명 · 시작 시각은 반드시 있어야 합니다.",
+      );
+    }
+    return this.incidents.open({
+      component: body.component,
+      severity: body.severity,
+      summary: body.summary,
+      startedAt: body.startedAt,
+      detectedAt: body.detectedAt,
+      cause: body.cause,
+      actorId: request.user?.id,
+    });
+  }
+
+  /** 복구 기록 — **무엇으로 살렸는지 없이는 닫히지 않는다** */
+  @Post("incidents/:id/resolve")
+  @HttpCode(200)
+  async resolveIncident(
+    @Param("id") id: string,
+    @Req() request: AuthenticatedRequest,
+    @Body() body: { resolvedAt?: string; recovery?: string; cause?: string | null },
+  ): Promise<IncidentDto> {
+    return this.incidents.resolve(id, {
+      resolvedAt: body.resolvedAt,
+      recovery: body.recovery ?? "",
+      cause: body.cause,
+      actorId: request.user?.id,
+    });
   }
 
   @Get("cutover")

@@ -9,6 +9,7 @@ import type { SuccessCount } from "@acos/core";
 import type { ProductionActivationDto, ProductionCutoverDto } from "@acos/shared";
 import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
+import { ActivationHistoryService } from "./activation-history.service";
 import { CiStatusService } from "./ci-status.service";
 import { EgressService } from "./egress.service";
 
@@ -36,6 +37,8 @@ export class ProductionCutoverService {
     private readonly ci: CiStatusService,
     // 자격 증명 이전의 조건 (TASK-3501, CTO 지시 2·3)
     private readonly egress: EgressService,
+    // 활성화 **과정**을 시간순으로 남긴다 (TASK-3701, CTO 정책 3701-①)
+    private readonly history: ActivationHistoryService,
   ) {}
 
   async report(branch?: string): Promise<ProductionCutoverDto> {
@@ -104,7 +107,7 @@ export class ProductionCutoverService {
    */
   async activation(branch?: string): Promise<ProductionActivationDto> {
     const cutover = await this.report(branch);
-    const judged = judgeActivation({
+    const report = judgeActivation({
       env: process.env as Record<string, string | undefined>,
       egress: cutover.egress as never,
       cutover: {
@@ -114,12 +117,19 @@ export class ProductionCutoverService {
         detail: cutover.detail,
       },
     });
+
+    // 판정할 때마다 **이력에 반영**한다 (TASK-3701, CTO 정책 3701-①).
+    // 상태가 바뀌었을 때만 새 줄이 생기고, 같은 상태면 "언제 마지막으로
+    // 확인했는가"만 갱신된다 — 그래야 "3주째 그대로"와 "3주 동안 아무도 안
+    // 봤다"를 나중에 가를 수 있다.
+    await this.history.record(report);
+
     return {
-      conditions: judged.conditions,
-      activated: judged.activated,
-      applicable: judged.applicable,
-      environment: judged.environment,
-      detail: judged.detail,
+      conditions: report.conditions,
+      activated: report.activated,
+      applicable: report.applicable,
+      environment: report.environment,
+      detail: report.detail,
       checkedAt: new Date().toISOString(),
     };
   }

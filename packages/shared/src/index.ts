@@ -2343,6 +2343,114 @@ export interface ProductionActivationDto {
   checkedAt: string;
 }
 
+/**
+ * 활성화 이력 (TASK-3701 — CTO 정책 3701-①).
+ *
+ * 한 칸 = 하나의 **상태 구간**이다. 화면을 열 때마다 한 줄씩 쌓으면 같은
+ * 문장 수천 줄이 되고 그 안에서 변화가 보이지 않는다.
+ */
+export interface ActivationHistoryDto {
+  /** 최신이 위 */
+  timeline: {
+    recordedAt: string;
+    /** 이 상태를 마지막으로 관측한 시각 */
+    lastSeenAt: string;
+    observations: number;
+    activated: boolean;
+    met: ("credentials" | "network" | "cutover")[];
+    environment: string;
+    detail: string;
+    /** 이 상태로 있었던 시간 — `ongoing`이면 최종값이 아니라 지금까지다 */
+    heldMs: number;
+    ongoing: boolean;
+    /** 마지막 관측 이후 흐른 시간 — 아무도 보지 않은 구간 */
+    unobservedMs: number;
+    gained: ("credentials" | "network" | "cutover")[];
+    /** 빠진 조건 — 되돌아간 것이다 */
+    lost: ("credentials" | "network" | "cutover")[];
+  }[];
+  /** 기록이 없으면 null — '활성화 안 됨'이 아니라 '모른다' */
+  activated: boolean | null;
+  currentSince: string | null;
+  firstActivatedAt: string | null;
+  changes: number;
+  regressions: number;
+  detail: string;
+  /** 최근 N건만 읽었는가 — 그렇다면 이것은 전체 이력이 아니다 */
+  truncated: boolean;
+}
+
+/**
+ * 운영 스모크 (TASK-3701 — CTO 정책 3701-②).
+ *
+ * **스텁을 상대로 받은 200은 통과가 아니다** — `stubbed`가 따로 있는 이유다.
+ */
+export interface SmokeReportDto {
+  results: {
+    target: "llm" | "ocr" | "storage";
+    title: string;
+    /** passed | failed | stubbed | skipped */
+    status: string;
+    provider: string;
+    baseUrl: string | null;
+    latencyMs: number | null;
+    detail: string;
+    next: string;
+  }[];
+  passed: number;
+  total: number;
+  /** 셋 다 공식 주소로 통과했는가 — 부분 점수는 없다 */
+  ok: boolean;
+  detail: string;
+  history: {
+    id: string;
+    target: string;
+    status: string;
+    provider: string;
+    baseUrl: string | null;
+    latencyMs: number | null;
+    detail: string;
+    createdAt: string;
+  }[];
+  /** 마지막으로 돌린 시각 — 한 번도 안 돌렸으면 null */
+  ranAt: string | null;
+}
+
+/** 운영 장애 1건 (TASK-3701 — CTO 정책 3701-④) */
+export interface IncidentDto {
+  id: string;
+  component: string;
+  severity: string;
+  summary: string;
+  startedAt: string;
+  detectedAt: string | null;
+  /** null이면 진행 중 */
+  resolvedAt: string | null;
+  cause: string | null;
+  recovery: string | null;
+  /** 시작 → 복구(또는 지금). `ongoing`이면 최종값이 아니다 */
+  durationMs: number;
+  ongoing: boolean;
+  /** 시작 → 알아챔. 모르면 null — 0분이 아니다 */
+  detectionMs: number | null;
+  recoveryMs: number | null;
+  durationLabel: string;
+}
+
+export interface IncidentBoardDto {
+  incidents: IncidentDto[];
+  open: number;
+  resolved: number;
+  /** 복구된 장애만으로 낸 평균 — 하나도 없으면 null (0은 '빨랐다'가 아니다) */
+  mttrMs: number | null;
+  mttdMs: number | null;
+  totalDowntimeMs: number;
+  withoutCause: number;
+  longestId: string | null;
+  detail: string;
+  checkedAt: string;
+}
+
 /** Provider별 감지 현황 (TASK-3301, CTO 정책 3301-④) */
 export interface PricingDetectionStatusDto {
   /** Provider별 주기 — **프로젝트별 설정은 없다** */

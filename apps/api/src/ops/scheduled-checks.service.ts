@@ -34,6 +34,7 @@ import type {
 import { LlmBudgetService } from "../llm/llm-budget.service";
 import { PricingService } from "../pricing/pricing.service";
 import { ProviderProductionService } from "../llm/provider-production.service";
+import { ProductionSmokeService } from "./production-smoke.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { AlertService } from "./alert.service";
 import { CostIntelligenceService } from "./cost-intelligence.service";
@@ -165,6 +166,9 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
     private readonly pricing: PricingService,
     // 월말 비용 예측 경보 (TASK-3201, CTO 정책 3201-④) — 경보만, 차단 없음
     private readonly costs: CostIntelligenceService,
+    // 운영 스모크 (TASK-3701, CTO 정책 3701-②) — 예약과 수동이 **같은 검사**를
+    // 돈다. 이름이 같은 검사가 둘이면 더 느슨한 쪽이 근거로 쓰인다.
+    private readonly smoke: ProductionSmokeService,
   ) {}
 
   /** 점검 1건의 잠금 이름 */
@@ -556,18 +560,16 @@ export class ScheduledChecksService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (job === "provider-smoke") {
-      // 실 Provider를 호출한다 = 과금 (기본이 꺼짐인 이유)
-      const validation = await this.production2.validateProviders({ live: true });
-      const failed = validation.providers.filter(
-        (entry) => entry.live !== null && entry.live.status === "error",
-      );
+      // 실 Provider를 호출한다 = 과금 (기본이 꺼짐인 이유).
+      //
+      // TASK-3701(정책 3701-②)에서 **하나로 합쳤다.** 그전에는 이 예약이
+      // LLM Live Check만 돌고, `POST /ops/smoke`는 LLM·OCR·S3를 돌았다 —
+      // 이름이 같은 검사가 둘이면 사람은 어느 쪽이 "스모크가 통과했다"의
+      // 근거인지 모르고, 결국 더 느슨한 쪽이 근거로 쓰인다.
+      const report = await this.smoke.run();
       return {
-        ok: failed.length === 0,
-        detail:
-          `Live Check ${validation.providers.filter((entry) => entry.live !== null).length}개 · ` +
-          (failed.length === 0
-            ? "전부 정상"
-            : `실패 ${failed.map((entry) => entry.provider).join(", ")}`),
+        ok: report.ok,
+        detail: report.detail,
         notified: [],
       };
     }

@@ -141,7 +141,9 @@ model OcrResult {
   endpoint      String?
   baseUrl       String?
   calledAt      DateTime?
-  /** 요청 추적 (TASK-3601, CTO 정책 3601-②) — Execution과 같은 이유다 */
+  /**
+   * 요청 추적 (TASK-3601, CTO 정책 3601-②) — Execution과 같은 이유다
+   */
   requestId     String?
   traceId       String?
   createdAt     DateTime  @default(now())
@@ -544,7 +546,6 @@ model Execution {
   calledAt     DateTime?
   /**
    * 요청 추적 (TASK-3601, CTO 정책 3601-②).
-   *
    * 한 번의 사용자 요청이 부른 호출들을 묶는 끈이다. 없으면 "이 요청이
    * 얼마를 썼는가"·"이 실패가 그 요청의 것인가"에 답할 수 없다.
    * 모르면 null — 지어내지 않는다.
@@ -964,4 +965,94 @@ model AdminAuditLog {
 
   @@index([createdAt])
   @@map("admin_audit_log")
+}
+
+// ── 운영 활성화 이력 · 스모크 · 장애 이력 (TASK-3701, Sprint 37) ──
+
+/**
+ * 활성화 상태 구간 (CTO 정책 3701-①).
+ * 한 줄 = 하나의 상태 구간이다. `/ops/activation`은 화면을 열 때마다 불리므로
+ * 매번 적으면 같은 문장 수천 줄이 되고 그 안에서 **변화**가 보이지 않는다.
+ * 그래서 지문(`signature`)이 바뀔 때만 새 줄을 만들고, 같은 상태를 다시 보면
+ * `lastSeenAt`·`observations`만 갱신한다.
+ * `lastSeenAt`이 따로 있는 이유: 그것이 없으면 "3주째 그대로"가 3주 내내
+ * 확인한 결과인지 3주 동안 아무도 안 본 결과인지 구분할 수 없다.
+ */
+model ActivationEvent {
+  id           String   @id @default(cuid())
+  /// activated + 충족 조건 집합 — 같으면 같은 구간
+  signature    String
+  activated    Boolean
+  /// 그때 충족돼 있던 조건 (credentials · network · cutover)
+  met          String[] @default([])
+  environment  String
+  detail       String
+  recordedAt   DateTime @default(now())
+  lastSeenAt   DateTime @default(now())
+  observations Int      @default(1)
+
+  @@index([recordedAt])
+  @@map("activation_events")
+}
+
+/**
+ * 운영 스모크 1회 (CTO 정책 3701-②).
+ * 실 Provider·실 저장소를 **실제로 불러 본** 기록이다. 키 형식·주소·도달·
+ * 성공 기록이 다 통과해도 "지금 부르면 되는가"에는 답하지 못한다.
+ * `baseUrl`을 함께 적는 이유는 TASK-3401에서 겪은 것 때문이다 — 스텁을
+ * 상대로 받은 200은 우리 스텁이 살아 있다는 증거이지 Provider가 붙었다는
+ * 증거가 아니다.
+ */
+model SmokeRun {
+  id        String   @id @default(cuid())
+  /// llm | ocr | storage
+  target    String
+  /// passed | failed | stubbed | skipped
+  status    String
+  provider  String
+  /// 실제로 부른 주소의 기준점 — 모르면 null (null은 "공식이었다"가 아니다)
+  baseUrl   String?
+  latencyMs Int?
+  detail    String
+  /// 누가 눌렀는가 — 실 호출은 돈이 나가므로 책임자가 남아야 한다
+  actorId   String?
+  requestId String?
+  createdAt DateTime @default(now())
+
+  @@index([target, createdAt])
+  @@map("smoke_runs")
+}
+
+/**
+ * 운영 장애 (CTO 정책 3701-④).
+ * 경보(`Alert`)는 자동으로 뜨는 **신호**이고, 장애는 사람이 여는 **사건**이다.
+ * 경보에서 장애를 자동으로 뽑으려는 시도는 늘 둘 중 하나로 끝난다 — 아무것도
+ * 아닌 것이 장애가 되거나, 조용히 지나간 진짜 장애가 빠지거나.
+ * `resolvedAt`이 null이면 진행 중이고, 그 지속 시간은 최종값이 아니라
+ * **지금까지**다. `recovery` 없이는 닫지 않는다 — 무엇으로 살렸는지 적히지
+ * 않은 종료 기록은 다음 장애 때 아무 도움이 되지 않는다.
+ */
+model Incident {
+  id           String    @id @default(cuid())
+  /// llm | ocr | storage | database | queue | web | api | other
+  component    String
+  /// MINOR | MAJOR | CRITICAL
+  severity     String
+  summary      String
+  /// 장애가 시작된 시각 — 우리가 알아챈 시각이 아니다
+  startedAt    DateTime
+  /// 우리가 알아챈 시각 — 모르면 null. 이 간격이 크면 고칠 곳은 감시다
+  detectedAt   DateTime?
+  /// 복구 시각 — null이면 진행 중
+  resolvedAt   DateTime?
+  cause        String?
+  recovery     String?
+  openedById   String?
+  resolvedById String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([resolvedAt, startedAt])
+  @@index([component, startedAt])
+  @@map("incidents")
 }

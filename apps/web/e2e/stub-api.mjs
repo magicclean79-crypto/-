@@ -2714,6 +2714,263 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  /**
+   * 활성화 이력 (TASK-3701, CTO 정책 3701-①) — ADMIN 전용.
+   *
+   * 화면이 검증해야 하는 것: **되돌아간 것을 붉게 말하는가**, 그리고
+   * **아무도 안 본 구간을 '유지됐다'로 보여 주지 않는가**.
+   */
+  if (url.pathname === "/ops/activation/history") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    if (mode === "empty") {
+      res.end(
+        JSON.stringify({
+          timeline: [],
+          activated: null,
+          currentSince: null,
+          firstActivatedAt: null,
+          changes: 0,
+          regressions: 0,
+          detail:
+            "활성화 이력이 없습니다 — 아직 한 번도 판정하지 않았거나 기록이 지워진 것입니다. 이력이 없는 것을 '활성화되지 않았다'로 읽지 않습니다.",
+          truncated: false,
+        }),
+      );
+      return;
+    }
+    const hour = 60 * 60 * 1000;
+    const now = Date.now();
+    res.end(
+      JSON.stringify({
+        // 최신이 위 — 지금은 조건 하나가 **빠진** 상태다
+        timeline: [
+          {
+            recordedAt: new Date(now - 5 * hour).toISOString(),
+            lastSeenAt: new Date(now - 4 * hour).toISOString(),
+            observations: 12,
+            activated: false,
+            met: ["cutover"],
+            environment: "production",
+            detail: "운영 활성화 1/3 조건 충족",
+            heldMs: 5 * hour,
+            ongoing: true,
+            unobservedMs: 4 * hour,
+            gained: [],
+            lost: ["credentials", "network"],
+          },
+          {
+            recordedAt: new Date(now - 30 * hour).toISOString(),
+            lastSeenAt: new Date(now - 5 * hour).toISOString(),
+            observations: 88,
+            activated: false,
+            met: ["credentials", "network", "cutover"],
+            environment: "production",
+            detail: "운영 활성화 3/3 조건 충족",
+            heldMs: 25 * hour,
+            ongoing: false,
+            unobservedMs: 0,
+            gained: ["credentials", "network"],
+            lost: [],
+          },
+        ],
+        activated: false,
+        currentSince: new Date(now - 5 * hour).toISOString(),
+        firstActivatedAt: null,
+        changes: 1,
+        regressions: 1,
+        detail:
+          "비활성 상태로 5시간째입니다 (충족 1/3). 되돌아간 적 1회 — 한 번 충족된 조건이 다시 빠졌습니다. 만료된 키·닫힌 방화벽처럼 조용히 풀리는 조건이 있다는 뜻입니다. 마지막 확인 이후 4시간 동안 아무도 보지 않았습니다 — 그 구간은 '그대로였다'가 아니라 '모른다'입니다.",
+        truncated: false,
+      }),
+    );
+    return;
+  }
+
+  /** 운영 스모크 (TASK-3701, CTO 정책 3701-②) — ADMIN 전용 */
+  if (url.pathname === "/ops/smoke") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    if (mode === "empty") {
+      res.end(
+        JSON.stringify({
+          results: [
+            {
+              target: "llm",
+              title: "LLM 실제 호출",
+              status: "skipped",
+              provider: "-",
+              baseUrl: null,
+              latencyMs: null,
+              detail: "한 번도 돌린 적이 없습니다.",
+              next: "POST /ops/smoke로 실제 호출을 한 번 돌리세요.",
+            },
+            {
+              target: "ocr",
+              title: "OCR(Vision) 실제 호출",
+              status: "skipped",
+              provider: "-",
+              baseUrl: null,
+              latencyMs: null,
+              detail: "한 번도 돌린 적이 없습니다.",
+              next: "POST /ops/smoke로 실제 호출을 한 번 돌리세요.",
+            },
+            {
+              target: "storage",
+              title: "S3 실제 쓰기·읽기",
+              status: "skipped",
+              provider: "-",
+              baseUrl: null,
+              latencyMs: null,
+              detail: "한 번도 돌린 적이 없습니다.",
+              next: "POST /ops/smoke로 실제 호출을 한 번 돌리세요.",
+            },
+          ],
+          passed: 0,
+          total: 3,
+          ok: false,
+          detail: "실 호출 0/3 통과. 구성이 실 Provider가 아니어서 부르지 않음: LLM 실제 호출 · OCR(Vision) 실제 호출 · S3 실제 쓰기·읽기.",
+          history: [],
+          ranAt: null,
+        }),
+      );
+      return;
+    }
+    // 스텁 상대 성공은 **통과가 아니다** — 이 화면의 핵심이다
+    res.end(
+      JSON.stringify({
+        results: [
+          {
+            target: "llm",
+            title: "LLM 실제 호출",
+            status: "stubbed",
+            provider: "openai",
+            baseUrl: "http://127.0.0.1:9101",
+            latencyMs: 42,
+            detail:
+              "openai/gpt-4o-mini 응답 수신 — 다만 상대가 공식 주소가 아닙니다(http://127.0.0.1:9101). 우리 스텁이 살아 있다는 증거이지 Provider가 붙었다는 증거가 아닙니다.",
+            next: "엔드포인트 재정의를 걷어내고 공식 주소로 다시 돌리세요.",
+          },
+          {
+            target: "ocr",
+            title: "OCR(Vision) 실제 호출",
+            status: "failed",
+            provider: "google-vision",
+            baseUrl: "https://vision.googleapis.com",
+            latencyMs: 310,
+            detail: "HTTP 403 API key not valid",
+            next: "실패 사유를 그대로 읽으세요 — 형식·도달 점검을 통과하고도 여기서 깨지는 것은 결제·권한·모델 접근처럼 실제로 불러야만 보이는 문제입니다.",
+          },
+          {
+            target: "storage",
+            title: "S3 실제 쓰기·읽기",
+            status: "passed",
+            provider: "s3",
+            baseUrl: "https://s3.ap-northeast-2.amazonaws.com",
+            latencyMs: 88,
+            detail: "버킷 acos에 쓰기·읽기·삭제 성공",
+            next: "추가 조치가 없습니다.",
+          },
+        ],
+        passed: 1,
+        total: 3,
+        ok: false,
+        detail:
+          "실 호출 1/3 통과. 실패: OCR(Vision) 실제 호출. 스텁 응답이라 통과로 세지 않음: LLM 실제 호출 (성공했지만 상대가 공식 주소가 아닙니다).",
+        history: [],
+        ranAt: new Date().toISOString(),
+      }),
+    );
+    return;
+  }
+
+  /** 운영 장애 이력 (TASK-3701, CTO 정책 3701-④) — ADMIN 전용 */
+  if (url.pathname === "/ops/incidents") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    if (mode === "empty") {
+      res.end(
+        JSON.stringify({
+          incidents: [],
+          open: 0,
+          resolved: 0,
+          mttrMs: null,
+          mttdMs: null,
+          totalDowntimeMs: 0,
+          withoutCause: 0,
+          longestId: null,
+          detail:
+            "기록된 장애가 없습니다 — 장애가 없었다는 뜻일 수도, 아무도 적지 않았다는 뜻일 수도 있습니다. 장애는 자동으로 열리지 않습니다.",
+          checkedAt: new Date().toISOString(),
+        }),
+      );
+      return;
+    }
+    const hour = 60 * 60 * 1000;
+    const now = Date.now();
+    res.end(
+      JSON.stringify({
+        incidents: [
+          {
+            id: "inc-open",
+            component: "llm",
+            severity: "CRITICAL",
+            summary: "OpenAI 호출 전량 실패",
+            startedAt: new Date(now - 3 * hour).toISOString(),
+            detectedAt: null,
+            resolvedAt: null,
+            cause: null,
+            recovery: null,
+            durationMs: 3 * hour,
+            ongoing: true,
+            detectionMs: null,
+            recoveryMs: null,
+            durationLabel: "3시간 0분째 진행 중",
+          },
+          {
+            id: "inc-done",
+            component: "storage",
+            severity: "MAJOR",
+            summary: "S3 업로드 실패",
+            startedAt: new Date(now - 50 * hour).toISOString(),
+            detectedAt: new Date(now - 49 * hour).toISOString(),
+            resolvedAt: new Date(now - 48 * hour).toISOString(),
+            cause: "버킷 정책 오설정",
+            recovery: "정책을 되돌리고 재배포",
+            durationMs: 2 * hour,
+            ongoing: false,
+            detectionMs: hour,
+            recoveryMs: hour,
+            durationLabel: "2시간 0분",
+          },
+        ],
+        open: 1,
+        resolved: 1,
+        mttrMs: 2 * hour,
+        mttdMs: hour,
+        totalDowntimeMs: 2 * hour,
+        withoutCause: 0,
+        longestId: "inc-open",
+        detail:
+          "진행 중인 장애 1건 — 가장 오래된 것이 3시간 0분째입니다(OpenAI 호출 전량 실패). 진행 중인 시간은 최종값이 아니며 평균에도 넣지 않습니다. 복구 1건의 평균 지속 시간 2시간 0분. 평균 감지 시간 1시간 0분.",
+        checkedAt: new Date().toISOString(),
+      }),
+    );
+    return;
+  }
+
   // ── Provider 연결 순서 (TASK-2901, CTO 결정 2801-⑤) ── ADMIN 전용
   if (url.pathname === "/ops/providers") {
     if (req.headers.authorization !== "Bearer stub-token") {

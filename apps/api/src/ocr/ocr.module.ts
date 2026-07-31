@@ -102,7 +102,10 @@ export function createOcrProvider(
       useFactory: () => createOcrProvider(),
     },
   ],
-  exports: [OcrService],
+  // 운영 스모크(TASK-3701, 정책 3701-②)가 **운영이 실제로 쓰는 그 어댑터**를
+  // 부를 수 있도록 토큰까지 내보낸다 — 따로 만들어 부르면 "검증한 것"과
+  // "운영이 쓰는 것"이 달라지고, 그러면 스모크는 스모크가 아니다.
+  exports: [OcrService, OCR_PROVIDER],
 })
 export class OcrModule implements OnModuleDestroy {
   constructor(private readonly moduleRef: ModuleRef) {}

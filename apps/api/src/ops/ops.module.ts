@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { AuthModule } from "../auth/auth.module";
 import { ContentGovernanceModule } from "../content-governance/content-governance.module";
 import { LlmModule } from "../llm/llm.module";
+import { OcrModule } from "../ocr/ocr.module";
 import { PricingModule } from "../pricing/pricing.module";
 import { StorageModule } from "../storage/storage.module";
 import { AlertService } from "./alert.service";
@@ -9,7 +10,10 @@ import { BackupService } from "./backup.service";
 import { CostIntelligenceService } from "./cost-intelligence.service";
 import { CiStatusService } from "./ci-status.service";
 import { EgressService } from "./egress.service";
+import { ActivationHistoryService } from "./activation-history.service";
+import { IncidentService } from "./incident.service";
 import { ProductionCutoverService } from "./production-cutover.service";
+import { ProductionSmokeService } from "./production-smoke.service";
 import { MigrationGovernanceService } from "./migration-governance.service";
 import { RecoveryDrillService } from "./recovery-drill.service";
 import { RecoveryEvaluationService } from "./recovery-evaluation.service";
@@ -31,6 +35,9 @@ import { ScheduledChecksService } from "./scheduled-checks.service";
   imports: [
     AuthModule,
     LlmModule,
+    // 스모크가 **실제로 쓰는 그 어댑터**를 부른다 (TASK-3701, 정책 3701-②) —
+    // 따로 만들어 부르면 검증한 것과 운영이 쓰는 것이 달라진다
+    OcrModule,
     StorageModule,
     ContentGovernanceModule,
     PricingModule,
@@ -50,6 +57,9 @@ import { ScheduledChecksService } from "./scheduled-checks.service";
     CiStatusService,
     EgressService,
     ProductionCutoverService,
+    ActivationHistoryService,
+    ProductionSmokeService,
+    IncidentService,
   ],
   exports: [
     AlertService,
@@ -65,6 +75,9 @@ import { ScheduledChecksService } from "./scheduled-checks.service";
     CiStatusService,
     EgressService,
     ProductionCutoverService,
+    ActivationHistoryService,
+    ProductionSmokeService,
+    IncidentService,
   ],
 })
 export class OpsModule {}

@@ -20,3 +20,6 @@ export * from "./price-source";
 export * from "./ci-workflow";
 export * from "./production-cutover";
 export * from "./activation";
+export * from "./activation-history";
+export * from "./smoke";
+export * from "./incident";
