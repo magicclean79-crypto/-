@@ -1,7 +1,11 @@
 # AI Product Content OS
 
-> **v1.0 Release Candidate** — 버전 1.0.0. 출시 판단은
+> **`v1.0.0-rc.1`** — CTO 승인으로 Release Candidate 태그를 붙였습니다
+> (정식 v1.0은 **미승인**). 출시 판단은
 > [`reports/CTO_RELEASE_REPORT.md`](reports/CTO_RELEASE_REPORT.md)에 있습니다.
+>
+> 정식 `v1.0.0`은 **실 Provider 검증이 통과한 뒤에만** 붙입니다. 남은
+> 준비 상태는 [`RELEASE_READINESS.md`](RELEASE_READINESS.md)에서 봅니다.
 >
 > 처음이면 [`USER_GUIDE.md`](USER_GUIDE.md) · 세우려면
 > [`MIGRATION_GUIDE.md`](MIGRATION_GUIDE.md) · 당직 중이면

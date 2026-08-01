@@ -8,7 +8,11 @@
 
 ## 미완료 (스펙 확정, 구현 대기)
 
-- (없음 — TASK-4801 완료. **Code Freeze 상태**이며 CTO 승인 전 다음 TASK를 시작하지 않는다)
+- (없음 — TASK-4901 완료. **Code Freeze 유지**이며 CTO 승인 전 다음 TASK를 시작하지 않는다)
+
+## 완료 — Sprint 49 (Release 준비)
+
+- [x] **TASK-4901 — `v1.0.0-rc.1` 태그 · Release 준비 5항목** (`RELEASE_READINESS.md`): 새 기능 없음. API/DB 구조 변경 없음. CTO 지시 5항목 중 **우리가 할 수 있는 둘을 실제로 끝냈고, 나머지 셋이 왜 막혔는지 증거로 남겼습니다.** **④ Backup Restore Test** — 백업(265KB·269항목·체크섬)에서 별도 DB로 49테이블을 복원하고, **API 응답을 믿지 않고 대상 DB를 직접 조회**해 `users` 9=9와 마이그레이션 57건 up to date를 확인했습니다. **⑤ Recovery Drill** — recovery-guide 2절을 끝까지 밟은 뒤 **복원본으로 애플리케이션을 실제로 띄웠습니다**(`/health` 200 · 같은 ADMIN 로그인 · `/projects` 조회). 복원은 "파일이 돌아왔다"가 아니라 **"서비스가 돌아왔다"** 여야 하기 때문입니다. `db-major-change` 리허설 요구가 해소되고 readiness가 pass 10→13 · fail 3→2가 됐습니다. **①②③은 막혔습니다** — preflight 4/11, `validation-run/execute`는 403(`validation_runs` 여전히 0건), S3는 환경의 AWS 자격 증명이 `InvalidClientTokenId`로 **유효한 계정이 아니었습니다**(읽기 전용 확인, 아무것도 만들지 않음). **라이브 결함 1건** — `OPERATIONS_RUNBOOK.md`에 적은 경로 **4개가 존재하지 않았습니다**(`/ops/backup`·`/ops/recovery`·`/ops/schedule`·`/ops/lock`). 당직 문서가 없는 주소를 가리키면 **장애 한가운데서 "서버가 죽었나"를 먼저 의심하게 됩니다.** 경로를 고치고, 런북의 주소를 실제 라우트 표와 대조하는 검사(`runbook-routes.spec.ts`)를 넣어 **일부러 틀린 주소를 넣었을 때 실제로 실패하는 것까지 확인**했습니다. **부수 확인** — `DATABASE_URL`을 복원 대상과 같게 두자 기동이 거부됐습니다(결정 1601-② 안전장치가 문서가 아니라 코드에서 막습니다).
 
 ## 완료 — Sprint 48 (v1.0 Release)
 

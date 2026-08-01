@@ -99,7 +99,8 @@ curl -s -X POST $API/ops/notifications/test -b jar  # 시험 발송
 감시(`OPS_SCHEDULER_WATCHDOG`)가 경보를 냅니다. 껐다면 아무도 모릅니다.
 
 ```bash
-curl -s $API/ops/schedule -b jar
+curl -s $API/ops/diagnostics -b jar   # checks[] 의 scheduler 항목
+curl -s -X POST $API/ops/checks/run -b jar   # 지금 한 번 돌리기
 ```
 
 ---
@@ -109,9 +110,14 @@ curl -s $API/ops/schedule -b jar
 ### 지금 안전한가
 
 ```bash
-curl -s $API/ops/backup -b jar        # 최근 백업·신선도·원격 사본
-curl -s $API/ops/recovery -b jar      # RPO/RTO·리허설
+curl -s $API/ops/readiness -b jar     # backup·restore·enterprise 블록에 다 있습니다
+curl -s $API/ops/drills    -b jar     # 복구 리허설 이력
+curl -s $API/ops/drills/requirements -b jar   # 아직 안 한 리허설 요구
 ```
+
+> `readiness`의 `backup`은 마지막 백업과 신선도, `restore`는 복원 검증
+> 결과, `enterprise.objectives`가 RPO/RTO입니다. **한 응답 안에 있습니다** —
+> 백업만 따로 보는 주소는 없습니다.
 
 - **복원해 보지 않은 백업은 백업이 아닙니다** — `BACKUP_RESTORE_DB_URL`이
   설정돼 있어야 복원 검증이 돕니다.
@@ -156,7 +162,8 @@ curl -s $API/ops/runbook -b jar
 
 - `REDIS_URL`을 **반드시** 설정하세요. 없으면 단일 인스턴스 모드이고,
   인스턴스가 둘이면 예약 점검이 **중복 실행**됩니다.
-- 지금 어느 모드인지는 `GET /ops/lock`에 나옵니다.
+- 지금 어느 모드인지는 `GET /ops/readiness`의 `redis` 블록에 나옵니다
+  (`configured: false`면 단일 인스턴스 모드입니다).
 - **주의**: 다중 인스턴스 동작은 v1.0에서 **실제로 확인되지 않았습니다**
   (`KNOWN_LIMITATIONS.md` H-2). 늘리기 전에 확인하세요.
 
