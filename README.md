@@ -1,7 +1,9 @@
 # AI Product Content OS
 
-> **`v1.0.0-rc.1`** — CTO 승인으로 Release Candidate 태그를 붙였습니다
-> (정식 v1.0은 **미승인**). 출시 판단은
+> **`v1.0.0-rc.1`** — CTO 승인. 정식 v1.0은 **미승인**입니다.
+> 태그는 만들었으나 **원격에 올리지 못했습니다** — 이 환경의 git
+> 게이트웨이가 태그 ref 푸시를 **403**으로 막습니다
+> ([`RELEASE_READINESS.md`](RELEASE_READINESS.md) 참고). 출시 판단은
 > [`reports/CTO_RELEASE_REPORT.md`](reports/CTO_RELEASE_REPORT.md)에 있습니다.
 >
 > 정식 `v1.0.0`은 **실 Provider 검증이 통과한 뒤에만** 붙입니다. 남은

@@ -9,6 +9,33 @@
 
 ---
 
+## 먼저 — `v1.0.0-rc.1` 태그는 원격에 없습니다
+
+태그는 커밋 `d97eaf6` 위에 **주석 태그로 만들었지만, 푸시하지 못했습니다.**
+이 환경의 git 게이트웨이가 **태그 ref 푸시를 403으로 거절**합니다(브랜치
+푸시는 정상입니다). 네 번 재시도했고 네 번 같은 응답이었습니다:
+
+```
+error: RPC failed; HTTP 403 curl 22 The requested URL returned error: 403
+```
+
+GitHub API 쪽에도 이 세션에는 **태그를 만드는 도구가 없습니다**(읽기 전용인
+`get_tag`·`get_release_by_tag`만 있습니다).
+
+**그래서 사람이 한 번 만들어 주셔야 합니다:**
+
+```bash
+git fetch origin claude/ai-product-content-os-setup-jb5oai
+git tag -a v1.0.0-rc.1 d97eaf6 -m "AI Product Content OS v1.0.0-rc.1 — Release Candidate"
+git push origin v1.0.0-rc.1
+```
+
+**우회하지 않았습니다.** 태그 대신 브랜치를 만들어 올리는 방법이 있지만,
+그건 태그가 아니면서 태그처럼 보이는 것을 남기는 일이고, 지정된 브랜치
+외에는 푸시하지 않기로 되어 있습니다.
+
+---
+
 ## 한 줄 요약
 
 **다섯 중 둘이 끝났습니다.** 끝난 둘은 우리가 할 수 있는 것이었고, 남은
