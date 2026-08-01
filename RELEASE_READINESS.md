@@ -11,7 +11,7 @@
 
 ## 먼저 — `v1.0.0-rc.1` 태그는 원격에 없습니다
 
-태그는 커밋 `d97eaf6` 위에 **주석 태그로 만들었지만, 푸시하지 못했습니다.**
+태그는 **이 브랜치의 끝(HEAD)에 주석 태그로 만들었지만, 푸시하지 못했습니다.**
 이 환경의 git 게이트웨이가 **태그 ref 푸시를 403으로 거절**합니다(브랜치
 푸시는 정상입니다). 네 번 재시도했고 네 번 같은 응답이었습니다:
 
@@ -26,7 +26,8 @@ GitHub API 쪽에도 이 세션에는 **태그를 만드는 도구가 없습니�
 
 ```bash
 git fetch origin claude/ai-product-content-os-setup-jb5oai
-git tag -a v1.0.0-rc.1 d97eaf6 -m "AI Product Content OS v1.0.0-rc.1 — Release Candidate"
+git tag -a v1.0.0-rc.1 origin/claude/ai-product-content-os-setup-jb5oai \
+  -m "AI Product Content OS v1.0.0-rc.1 — Release Candidate"
 git push origin v1.0.0-rc.1
 ```
 
