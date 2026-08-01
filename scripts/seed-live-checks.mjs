@@ -61,7 +61,17 @@ async function putObject(key) {
 try {
   // 버킷이 없으면 만듭니다. 운영에서는 애플리케이션이 버킷을 만들지
   // 않습니다 — 여기는 검사용 저장소이고, 그 차이를 이 주석으로 남깁니다.
-  await fetch(`${S3_ENDPOINT}/${S3_BUCKET}`, { method: "PUT" }).catch(() => null);
+  //
+  // **실패를 삼키지 않습니다**: 버킷을 못 만들면 그 뒤의 객체 올리기가
+  // 전부 실패하고, 그때 나오는 오류는 원인을 가립니다. 이미 있으면
+  // 409가 오는데 그건 실패가 아닙니다.
+  const bucket = await fetch(`${S3_ENDPOINT}/${S3_BUCKET}`, { method: "PUT" });
+  if (!bucket.ok && bucket.status !== 409) {
+    throw new Error(
+      `버킷 "${S3_BUCKET}"을 만들지 못했습니다 (HTTP ${bucket.status}) — ` +
+        `저장소가 아직 안 떴을 수 있습니다.`,
+    );
+  }
 
   const existing = await prisma.image.count();
   if (existing >= WANT_IMAGES) {
