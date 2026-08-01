@@ -40,7 +40,7 @@
 | 라이브 검증 CI 범위 | `pnpm check:live-coverage` | ✅ 15건 중 11건(73%) CI 가능 — 4건은 사람 몫 |
 | **Live Verification** | `pnpm live:checks` + 실 PostgreSQL·Redis·S3 + 제어 가능 스텁 | ✅ **11/11 통과** (§4-6) |
 | **Release 준비 라이브** | 실제 백업·복원·리허설 (§4-2·4-3) | ✅ **복원본으로 서비스 기동까지 확인** |
-| **GitHub Actions** | 실제 워크플로 실행 (병렬 3 Job) | ✅ **§4-7에 실행 번호와 결과** |
+| **GitHub Actions** | 실제 워크플로 실행 (병렬 3 Job) | ✅ **run 30682367752 통과 — 3분 55초** (세 Job 모두 `success`) |
 | **`/ops/readiness`** | `GET /ops/readiness` | ⚠️ **pass 13 · fail 2 · warn 1 · manual 3** — `recoverable: false` (직전 pass 10 · fail 3) |
 | **`/ops/cutover`** | `pnpm cutover` | ⚠️ **exit 1 — 활성화 1/3 조건** (변화 없음 — ①③이 막혀 있습니다) |
 | 검증 사전 점검 | `pnpm validation:preflight` | ⚠️ **exit 1 — 준비 4/11** (변화 없음) |
@@ -186,8 +186,14 @@ RTO는 여전히 모릅니다.** 원격 복제가 꺼져 있어 **호스트가 �
 
 ### 4-7. GitHub Actions
 
-푸시한 커밋에서 워크플로 3 Job이 모두 통과했습니다. 실행 번호와 소요는 §2
-표에 기록했습니다.
+태그가 가리키는 커밋 `5b04dc3`에서 워크플로 3 Job이 모두 통과했습니다
+(run 30682367752 · run_number 53 · 3분 55초).
+
+| Job | 결과 | 소요 |
+| --- | --- | --- |
+| `quality-gates` | success | 2분 3초 |
+| `live-checks` | success | 1분 9초 |
+| `web-e2e` | success | 3분 43초 |
 
 ### 4-8. 태그를 원격에 올리지 못했습니다
 
