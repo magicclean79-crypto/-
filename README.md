@@ -16,6 +16,10 @@
 > ref 푸시를 **403**으로 막아 원격에 없습니다
 > ([`RELEASE_READINESS.md`](RELEASE_READINESS.md)).
 >
+> **AI가 이 저장소를 인수받았다면** →
+> [`ai-continuity/FIRST_READ.md`](ai-continuity/FIRST_READ.md)부터 읽으십시오.
+> 전달용 묶음은 `AI_CONTINUITY.zip`입니다.
+>
 > 처음이면 [`USER_GUIDE.md`](USER_GUIDE.md) · 세우려면
 > [`MIGRATION_GUIDE.md`](MIGRATION_GUIDE.md) · 당직 중이면
 > [`OPERATIONS_RUNBOOK.md`](OPERATIONS_RUNBOOK.md) · 안 되는 것은
