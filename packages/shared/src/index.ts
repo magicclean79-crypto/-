@@ -3327,6 +3327,10 @@ export interface JobStageMetricDto {
   outputTokens: number | null;
   /** **이 단계가 쓴 메모리가 아니다** — 프로세스 전체 값이다 */
   processHeapDeltaBytes: number | null;
+  /** 이 단계가 쓴 돈 (USD) — null은 "공짜"가 아니라 **"안 쟀다"** (TASK-4701) */
+  costUsd: number | null;
+  /** 가격표에 없어 비용에서 빠진 호출 수 — 0보다 크면 costUsd는 최소값이다 */
+  unpricedCalls: number | null;
 }
 
 /** 작업 상세 */
@@ -3342,6 +3346,10 @@ export interface JobDetailDto {
     slowestStage: string | null;
     inputTokens: number | null;
     outputTokens: number | null;
+    /** 작업 전체가 쓴 돈 (USD) — 한 단계라도 모르면 null (TASK-4701) */
+    costUsd: number | null;
+    /** 가격표에 없어 빠진 호출 수 — 0보다 크면 costUsd는 최소값이다 */
+    unpricedCalls: number;
     detail: string;
   };
 }

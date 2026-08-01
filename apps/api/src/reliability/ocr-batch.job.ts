@@ -1,8 +1,8 @@
 import { Injectable } from "@nestjs/common";
-import { classifyFailure } from "@acos/core";
 import type { Checkpoint } from "@acos/core";
 
 import { OcrService } from "../ocr/ocr.service";
+import { judgeBatchItem } from "./batch-stage";
 import { JobLoggerService } from "./job-logger.service";
 import type { JobDefinition, JobStage } from "./job-runner.service";
 
@@ -71,61 +71,36 @@ export class OcrBatchJob {
         if (state.done.some((row) => row.imageId === imageId)) {
           return state;
         }
-        try {
+        // 건너뛸 문제와 멈춰야 할 문제를 가르는 규칙은 **한자리에**
+        // 있습니다 (`judgeBatchItem`, TASK-4701) — 4603의 라이브 결함 4건
+        // 중 2건이 이 규칙이었고, 같은 모양의 작업이 넷이 되었기 때문입니다.
+        const verdict = await judgeBatchItem<string>(async () => {
           const result = await this.ocr.runOcr(imageId);
-          // **던지지 않았다고 성공이 아닙니다** (라이브에서 잡음).
+          // **던지지 않았다고 성공이 아닙니다** (4603 라이브에서 잡음).
           // `runOcr`은 Provider 실패를 기록하고 `status: "FAILED"`로
           // 돌려줍니다 — 한 장이 실패했다고 요청 전체를 500으로 만들지
           // 않으려는 의도이고, 그 판단은 옳습니다. 그런데 그것을 그대로
-          // 성공으로 세면 **"3/3 끝냈습니다"라고 말하면서 한 장은 글자가
-          // 없는** 상태가 되고, 체크포인트가 그 장을 끝난 것으로 표시해
+          // 성공으로 세면 "3/3 끝냈습니다"라고 말하면서 한 장은 글자가
+          // 없는 상태가 되고, 체크포인트가 그 장을 끝난 것으로 표시해
           // 이어하기로도 다시 시도되지 않습니다.
-          if (result.status !== "SUCCESS") {
-            // **기록된 실패 사유를 분류합니다.** 던지지 않았다고 해서 이
-            // 실패가 "이 한 장의 문제"라는 뜻은 아닙니다 — Provider가
-            // 통째로 죽어 있으면 모든 장이 같은 이유로 실패하고, 그때
-            // 계속 진행하면 열 번 더 실패하며 그중 일부는 돈이 나갑니다.
-            const recorded = classifyFailure(new Error(result.error ?? ""));
-            if (recorded.retriable || recorded.kind === "blocked") {
-              throw new Error(result.error ?? "OCR이 실패로 끝났습니다");
-            }
-            this.jobLog.warn("OCR이 실패로 끝난 이미지를 건너뜁니다.", {
-              imageId,
-              status: result.status,
-              detail: result.error ?? "원문 없음",
-            });
-            return {
-              ...state,
-              skipped: [
-                ...state.skipped,
-                {
-                  imageId,
-                  reason: "이 이미지에서 글자를 읽지 못했습니다. 파일을 확인해 주세요.",
-                },
-              ],
-            };
-          }
-          return {
-            ...state,
-            done: [...state.done, { imageId, ocrId: result.id }],
-          };
-        } catch (error) {
-          const verdict = classifyFailure(error);
-          // 공통 원인이면 멈춥니다 — 계속해 봐야 열 번 더 실패합니다.
-          if (verdict.retriable || verdict.kind === "blocked") {
-            throw error;
-          }
-          // 이 한 장의 문제입니다 — 건너뛰되 결과에 남깁니다.
-          this.jobLog.warn("이미지 한 장을 건너뜁니다.", {
-            imageId,
-            kind: verdict.kind,
-            detail: verdict.operatorDetail,
-          });
-          return {
-            ...state,
-            skipped: [...state.skipped, { imageId, reason: verdict.userMessage }],
-          };
+          return result.status === "SUCCESS"
+            ? { ok: true, value: result.id }
+            : { ok: false, error: result.error ?? "OCR이 실패로 끝났습니다" };
+        });
+
+        if (verdict.done) {
+          return { ...state, done: [...state.done, { imageId, ocrId: verdict.value }] };
         }
+
+        this.jobLog.warn("이미지 한 장을 건너뜁니다.", {
+          imageId,
+          kind: verdict.kind,
+          detail: verdict.detail,
+        });
+        return {
+          ...state,
+          skipped: [...state.skipped, { imageId, reason: verdict.reason }],
+        };
       },
     }));
 

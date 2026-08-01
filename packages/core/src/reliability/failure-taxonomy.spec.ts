@@ -130,6 +130,68 @@ describe("classifyFailure (TASK-4603)", () => {
     expect(verdict.operatorDetail).toContain("sk-abc123");
   });
 
+
+  /**
+   * 라이브에서 잡은 결함 (TASK-4701): Vision이 503을 내는데도 묶음이
+   * **"성공"으로 끝났다.** 어댑터는 상태 코드마다 사람이 할 일을 적어
+   * 남기는데(좋은 설계다), 그 문장이 기록에 남는 순간 구조가 사라진다.
+   * 나중에 읽는 쪽에는 `Error(문장)` 하나만 오고, 분류하지 못한 실패는
+   * "이 한 장의 문제"로 취급되어 전부 건너뛴 뒤 작업은 성공으로 남았다.
+   * **상대가 통째로 죽은 날 우리 화면이 초록이었다.**
+   */
+  it("우리 문장에 담긴 상태 코드를 되찾는다", () => {
+    const outage = classifyFailure(
+      new Error("Google Cloud Vision 장애 (503) — 우리 설정 문제가 아닙니다: Backend unavailable"),
+    );
+    expect(outage.kind).toBe("upstream");
+    expect(outage.retriable).toBe(true);
+
+    expect(
+      classifyFailure(new Error("Google Cloud Vision 할당량 초과 (429) — 잠시 후")).kind,
+    ).toBe("throttled");
+    expect(
+      classifyFailure(new Error("Google Cloud Vision 인증 실패 (403) — 키가 유효하지 않습니다")).kind,
+    ).toBe("unauthorized");
+    expect(
+      classifyFailure(new Error("Google Cloud Vision이 요청을 거절했습니다 (400) — 형식 확인")).kind,
+    ).toBe("rejected");
+  });
+
+  /**
+   * 넓게 잡으면 본문에 우연히 들어간 숫자를 상태 코드로 읽게 되고, 그건
+   * 지금 문제보다 나쁘다.
+   */
+  it("아무 괄호 숫자나 상태 코드로 읽지 않는다", () => {
+    expect(classifyFailure(new Error("상품 코드 (503) 재고 없음")).kind).toBe("unknown");
+    expect(classifyFailure(new Error("장애 (999) 알 수 없음")).kind).toBe("unknown");
+  });
+
+  /**
+   * 없는 물건 하나와 없는 창고는 다르다. 뭉쳐 두면 파일 하나가 빠졌을 때
+   * 묶음 전체가 멈추거나, 버킷이 통째로 없을 때 전부 건너뛰고 성공으로
+   * 끝난다.
+   */
+  it("없는 파일 하나와 없는 버킷을 가른다", () => {
+    const key = classifyFailure(
+      new Error("이미지를 읽을 수 없습니다: The specified key does not exist."),
+    );
+    expect(key.kind).toBe("rejected");
+    expect(key.retriable).toBe(false);
+
+    const bucket = classifyFailure(
+      new Error("이미지를 읽을 수 없습니다: 버킷을 찾을 수 없습니다: acos"),
+    );
+    expect(bucket.kind).toBe("storage");
+    expect(bucket.retriable).toBe(true);
+  });
+
+  /** 붙어 온 상태 코드가 우선이다 — 문장에서 되찾는 것은 없을 때만이다 */
+  it("붙어 온 상태 코드를 문장이 덮어쓰지 않는다", () => {
+    expect(
+      classifyFailure(new Error("호출 실패 (500)"), { status: 429 }).kind,
+    ).toBe("throttled");
+  });
+
   it("아무것도 아닌 값이 와도 터지지 않는다", () => {
     for (const value of [null, undefined, "", 0, {}, []]) {
       expect(() => classifyFailure(value)).not.toThrow();

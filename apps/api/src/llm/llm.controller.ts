@@ -44,6 +44,8 @@ import { ExperimentLifecycleService } from "./experiment-lifecycle.service";
 import { LlmBudgetService } from "./llm-budget.service";
 import { LlmService } from "./llm.service";
 import { ProviderProductionService } from "./provider-production.service";
+import { PricingHealthService } from "../pricing/pricing-health.service";
+import type { PricingHealthDto } from "../pricing/pricing-health.service";
 
 @Controller("llm")
 export class LlmController {
@@ -53,6 +55,8 @@ export class LlmController {
     private readonly lifecycle: ExperimentLifecycleService,
     private readonly analyticsService: ExperimentAnalyticsService,
     private readonly production: ProviderProductionService,
+    // 가격표를 얼마나 믿을 수 있는가 (TASK-4701, 지시 5)
+    private readonly pricingHealthService: PricingHealthService,
   ) {}
 
   /** 선택된 Provider 확인 (기본 mock) */
@@ -122,6 +126,23 @@ export class LlmController {
     @Query("hours") hours?: string,
   ): Promise<CostVerificationDto> {
     return this.production.verifyCost({ hours: Number(hours) || undefined });
+  }
+
+  /**
+   * 가격표 건강 상태 (TASK-4701, 지시 5).
+   *
+   * 두 가지를 함께 봅니다: **가격표에 없는 모델로 나간 호출**(이름·기능·
+   * 처음 본 날까지)과 **단가의 나이**. 지금까지 미산정은 건수로만 보였고,
+   * 건수는 사람이 할 수 있는 일을 알려 주지 않았습니다.
+   *
+   * 여기서 단가를 추정하지 않습니다 — 근거 없는 숫자로 낸 비용은 없는
+   * 것보다 나쁩니다. ADMIN 전용.
+   */
+  @Get("pricing-health")
+  @UseGuards(AuthGuard)
+  @RequireRole("ADMIN")
+  async pricingHealth(@Query("hours") hours?: string): Promise<PricingHealthDto> {
+    return this.pricingHealthService.health({ hours: Number(hours) || undefined });
   }
 
   /**

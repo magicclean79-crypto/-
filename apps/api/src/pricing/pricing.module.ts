@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { PriceSourceService } from "./price-source.service";
+import { PricingHealthService } from "./pricing-health.service";
 import { PricingCacheBus } from "./pricing-cache.bus";
 import { PricingService } from "./pricing.service";
 
@@ -18,7 +19,14 @@ import { PricingService } from "./pricing.service";
   // 적용 즉시 캐시를 무효화한다 (TASK-3201, CTO 정책 3201-⑤) — 버스는
   // Redis가 있을 때만 실제로 전파하고, 없으면 단일 인스턴스 모드다
   // 외부 가격 공지 (TASK-3301, CTO 정책 3301-①) — 못 읽으면 사람을 부른다
-  providers: [PricingService, PricingCacheBus, PriceSourceService],
-  exports: [PricingService, PricingCacheBus, PriceSourceService],
+  // 가격표를 얼마나 믿을 수 있는가 (TASK-4701, 지시 5) — 단가의 나이와
+  // 가격표에 없는 모델을 **이름으로** 드러낸다
+  providers: [PricingService, PricingCacheBus, PriceSourceService, PricingHealthService],
+  exports: [
+    PricingService,
+    PricingCacheBus,
+    PriceSourceService,
+    PricingHealthService,
+  ],
 })
 export class PricingModule {}

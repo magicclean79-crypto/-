@@ -106,14 +106,46 @@ export class GeminiLlmProvider implements LlmProvider {
       );
     }
 
+    // 토큰 상세 (TASK-4701, 지시 2).
+    //
+    // Gemini는 **두 군데**가 어긋납니다:
+    // ① `promptTokenCount`는 캐시 토큰을 **포함**합니다(OpenAI 모양) — 빼야
+    //    합니다.
+    // ② 생각 토큰(`thoughtsTokenCount`)이 `candidatesTokenCount`에 **없습니다**.
+    //    그런데 청구는 됩니다 — 그래서 이 값을 더하지 않으면 **출력을 덜
+    //    세고**, 생각을 많이 한 호출일수록 더 크게 어긋납니다.
+    const meta = response.usageMetadata as
+      | (NonNullable<typeof response.usageMetadata> & {
+          thoughtsTokenCount?: number | null;
+        })
+      | undefined;
+    const promptTokens = meta?.promptTokenCount ?? null;
+    const cachedTokens = meta?.cachedContentTokenCount ?? null;
+    const candidateTokens = meta?.candidatesTokenCount ?? null;
+    const thoughtTokens = meta?.thoughtsTokenCount ?? null;
+
     return {
       provider: this.name,
       // 응답의 스냅샷 모델명 우선 (비용 접두사 매칭) — 없으면 요청 모델
       model: response.modelVersion ?? model,
       text: response.text ?? "",
       usage: {
-        inputTokens: response.usageMetadata?.promptTokenCount ?? null,
-        outputTokens: response.usageMetadata?.candidatesTokenCount ?? null,
+        inputTokens:
+          promptTokens === null
+            ? null
+            : Math.max(0, promptTokens - (cachedTokens ?? 0)),
+        outputTokens:
+          candidateTokens === null
+            ? null
+            : candidateTokens + (thoughtTokens ?? 0),
+      },
+      usageDetail: {
+        cachedInputTokens: cachedTokens,
+        // Gemini의 캐시 쓰기는 저장 시간당 과금이라 **호출 단위로 셀 수
+        // 없습니다.** 개념이 다르므로 이 칸에 담지 않습니다 — 담으면
+        // 호출 비용에 섞여 어느 쪽도 못 믿게 됩니다.
+        cacheWriteTokens: null,
+        reasoningTokens: thoughtTokens,
       },
       raw: response,
     };

@@ -167,6 +167,37 @@ const BLOCKED_HINTS = [
   "강제로 여는 방법은 없습니다",
 ];
 
+/**
+ * 우리가 쓴 문장에서 상태 코드를 되찾는다. (TASK-4701, 라이브에서 잡음)
+ *
+ * ## 왜 이런 것이 필요한가
+ *
+ * 어댑터는 상태 코드마다 **사람이 할 일**을 적어 남깁니다 — 좋은 설계이고
+ * 바꾸지 않습니다. 그런데 그 문장이 기록에 남는 순간 **구조는 사라집니다.**
+ * 나중에 그 기록을 읽는 쪽(묶음 작업)에는 `Error(문장)` 하나만 옵니다.
+ *
+ * 라이브에서 이렇게 드러났습니다: Vision이 503을 내는데도 묶음이
+ * **"성공"으로 끝났습니다.** 문장을 분류하지 못해 `unknown`이 되었고,
+ * `unknown`은 "이 한 장의 문제"로 취급되어 전부 건너뛴 뒤 작업은 성공으로
+ * 남았습니다. **상대가 통째로 죽은 날 우리 화면은 초록입니다.**
+ *
+ * 그래서 우리 문장이 담고 있는 상태 코드를 되찾습니다. 아무 괄호 숫자나
+ * 읽지 않습니다 — **우리가 쓰는 문구 뒤의 괄호**만 봅니다. 넓게 잡으면
+ * 본문에 우연히 들어간 숫자를 상태 코드로 읽게 되고, 그건 지금 문제보다
+ * 나쁩니다.
+ */
+const STATUS_IN_OUR_MESSAGE =
+  /(?:장애|인증 실패|할당량 초과|호출 실패|요청을 거절했습니다|응답이 올바르지 않습니다)\s*\((\d{3})\)/;
+
+function recoverStatus(message: string): number | null {
+  const match = STATUS_IN_OUR_MESSAGE.exec(message);
+  if (match === null) {
+    return null;
+  }
+  const status = Number(match[1]);
+  return status >= 400 && status <= 599 ? status : null;
+}
+
 function inferKind(
   error: unknown,
   message: string,
@@ -178,11 +209,13 @@ function inferKind(
     return "blocked";
   }
 
-  if (status !== null) {
-    if (status === 401 || status === 403) return "unauthorized";
-    if (status === 429) return "throttled";
-    if (status >= 500) return "upstream";
-    if (status >= 400) return "rejected";
+  // 상태 코드가 붙어 오지 않았다면, 우리 문장이 담고 있는지 봅니다.
+  const resolved = status ?? recoverStatus(message);
+  if (resolved !== null) {
+    if (resolved === 401 || resolved === 403) return "unauthorized";
+    if (resolved === 429) return "throttled";
+    if (resolved >= 500) return "upstream";
+    if (resolved >= 400) return "rejected";
   }
 
   const code = codeOf(error);
@@ -205,7 +238,14 @@ function inferKind(
   if (/timed? ?out|시간 안에|시간 초과|deadline/.test(lower)) return "timeout";
   if (/fetch failed|network|socket hang up|연결/.test(lower)) return "network";
   if (/prisma|database|데이터베이스/.test(lower)) return "database";
-  if (/s3|storage|저장소|nosuchkey|nosuchbucket/.test(lower)) return "storage";
+  // **없는 물건 하나와 없는 창고는 다릅니다** (TASK-4701). 물건 하나가
+  // 없는 것은 그 한 건의 문제이고, 창고가 없는 것은 전부의 문제입니다.
+  // 뭉쳐 두면 파일 하나가 빠졌을 때 묶음 전체가 멈추거나(비싼 쪽),
+  // 버킷이 통째로 없을 때 전부 건너뛰고 성공으로 끝납니다(위험한 쪽).
+  if (/nosuchkey|specified key does not exist|키를 찾을 수 없/.test(lower)) {
+    return "rejected";
+  }
+  if (/s3|storage|저장소|nosuchbucket|버킷을 찾을 수 없/.test(lower)) return "storage";
   if (/budget|forbidden by policy/.test(lower)) return "blocked";
 
   return "unknown";

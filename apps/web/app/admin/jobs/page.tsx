@@ -7,6 +7,13 @@ import { authFetchInit } from "../../../lib/auth-client";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
+/** 자동 이어하기 상태 (TASK-4701, 지시 3) */
+interface QueueStatus {
+  enabled: boolean;
+  kinds: string[];
+  detail: string;
+}
+
 /**
  * 작업 현황. (TASK-4603, Sprint 46 — 프로덕션 품질)
  *
@@ -25,6 +32,9 @@ const STATUS_LABEL: Record<string, string> = {
   running: "진행 중",
   succeeded: "성공",
   failed: "실패",
+  // 서버가 멈춰 남은 작업 (TASK-4701). **실패가 아니라 "끝났는지 모른다"**
+  // 입니다 — 끝난 단계는 체크포인트에 그대로 있습니다.
+  interrupted: "서버가 멈춤",
 };
 
 const STATUS_STYLE: Record<string, string> = {
@@ -33,6 +43,8 @@ const STATUS_STYLE: Record<string, string> = {
   succeeded:
     "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
   failed: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300",
+  interrupted:
+    "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
 };
 
 const TREND_LABEL: Record<string, string> = {
@@ -45,6 +57,7 @@ const TREND_LABEL: Record<string, string> = {
 export default function JobsPage() {
   const [jobs, setJobs] = useState<JobRunDto[] | null>(null);
   const [metrics, setMetrics] = useState<JobMetricsDto | null>(null);
+  const [queue, setQueue] = useState<QueueStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
@@ -52,9 +65,12 @@ export default function JobsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [jobsResponse, metricsResponse] = await Promise.all([
+      const [jobsResponse, metricsResponse, queueResponse] = await Promise.all([
         fetch(`${API_URL}/jobs?take=20`, authFetchInit()),
         fetch(`${API_URL}/jobs/metrics/stages`, authFetchInit()),
+        // **조회는 아무것도 이어하지 않습니다** — 화면을 열 때마다 돈이
+        // 나가면 안 됩니다(4601 재전송과 같은 규칙).
+        fetch(`${API_URL}/jobs/queue/status`, authFetchInit()),
       ]);
       if (!jobsResponse.ok) {
         setJobs(null);
@@ -64,6 +80,9 @@ export default function JobsPage() {
       setJobs(((await jobsResponse.json()) as { jobs: JobRunDto[] }).jobs);
       setMetrics(
         metricsResponse.ok ? ((await metricsResponse.json()) as JobMetricsDto) : null,
+      );
+      setQueue(
+        queueResponse.ok ? ((await queueResponse.json()) as QueueStatus) : null,
       );
       setError(null);
     } catch {
@@ -122,6 +141,34 @@ export default function JobsPage() {
         <p data-testid="jobs-error" className="text-sm text-red-600">
           {error}
         </p>
+      ) : null}
+
+      {queue !== null ? (
+        <section
+          data-testid="job-queue"
+          className="space-y-1 rounded-xl border border-zinc-200 p-4 dark:border-zinc-800"
+        >
+          <h2 className="text-lg font-medium">자동 이어하기</h2>
+          <p
+            data-testid="job-queue-detail"
+            className="text-sm text-zinc-600 dark:text-zinc-400"
+          >
+            {queue.detail}
+          </p>
+          <p className="text-xs text-zinc-500">
+            이어할 줄 아는 작업: {queue.kinds.length === 0 ? "없음" : queue.kinds.join(" · ")}
+          </p>
+          {/*
+            켜져 있어도 **아무거나 이어하지 않습니다**: 다시 해도 같은 실패
+            (예산·권한·잘못된 입력)는 사람이 고쳐야 하고, 자동은 2회에서
+            그만두되 목록에서 지우지는 않습니다.
+          */}
+          <p className="text-xs text-zinc-500">
+            다시 해도 같은 실패는 자동으로 돌리지 않습니다. 자동은 2회까지만
+            시도하고, 그만둔 작업도 목록에 남습니다 — 조용히 그만두면 아무도
+            못 끝낸 작업이 없는 일이 됩니다.
+          </p>
+        </section>
       ) : null}
 
       {jobs !== null ? (

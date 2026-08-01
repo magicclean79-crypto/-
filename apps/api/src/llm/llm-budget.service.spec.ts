@@ -35,7 +35,25 @@ function createPrismaMock(
 }
 
 describe("LLM 비용 예산 (TASK-0902)", () => {
+  /**
+   * 시각을 달의 중간에 고정한다 (TASK-4701에서 고침).
+   *
+   * 위 mock은 "조회 시작 시각이 오늘 0시 이후면 일간"으로 두 질의를
+   * 가릅니다. 그런데 **달의 1일에는 월 시작과 일 시작이 같은 시각**이라
+   * 월간 질의까지 일간으로 읽히고, 그래서 이 파일은 **매달 1일에만
+   * 실패**했습니다.
+   *
+   * 한 달에 하루만 빨간 게이트는 게이트가 아닙니다 — 그날 사람은 "또
+   * 그거네" 하고 넘어가게 되고, 그 습관은 진짜 실패에도 적용됩니다.
+   * 2026-08-01에 실제로 이 실패를 만났습니다.
+   */
+  beforeEach(() => {
+    jest.useFakeTimers({ doNotFake: ["nextTick", "setImmediate"] });
+    jest.setSystemTime(new Date("2026-08-15T12:00:00Z"));
+  });
+
   afterEach(() => {
+    jest.useRealTimers();
     delete process.env.LLM_DAILY_BUDGET_USD;
     delete process.env.LLM_MONTHLY_BUDGET_USD;
     delete process.env.LLM_BUDGET_ALERT_RATIO;

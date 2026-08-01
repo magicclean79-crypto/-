@@ -3,6 +3,7 @@ import type {
   LlmMessageDto,
   LlmResponseFormat,
 } from "@acos/shared";
+import type { UsageDetail } from "../execution/usage-detail";
 
 /**
  * LLM Provider 추상화 (Port). (TASK-0501, Sprint 5 — AI Execution)
@@ -46,9 +47,23 @@ export interface LlmResult {
   model: string;
   text: string;
   usage: {
+    /**
+     * **캐시를 뺀** 새로 청구되는 입력 토큰 (TASK-4701).
+     *
+     * Provider마다 이 자리에 담아 주는 값의 뜻이 다릅니다 — Anthropic은
+     * 캐시를 빼고 주고, OpenAI·Gemini는 포함해서 줍니다. 어댑터가 **우리
+     * 뜻으로 옮겨서** 넣습니다. 옮기지 않으면 같은 칸의 숫자가 Provider를
+     * 바꿀 때마다 다른 것을 세게 됩니다.
+     */
     inputTokens: number | null;
+    /** **생각 토큰까지 포함한** 청구되는 출력 토큰 */
     outputTokens: number | null;
   };
+  /**
+   * 토큰 상세 (TASK-4701) — 캐시 읽기·쓰기·생각. 상세를 주지 않는
+   * Provider는 생략하며, 그때 비용은 예전 셈 그대로입니다.
+   */
+  usageDetail?: UsageDetail | null;
   /** Provider 원본 응답 (JSON 직렬화 가능해야 함) */
   raw: unknown;
 }

@@ -14,6 +14,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { RequestContextService } from "../common/request-context.service";
 import { JobContextService } from "./job-context.service";
 import { JobLoggerService } from "./job-logger.service";
+import { TokenMeterService } from "./token-meter.service";
 
 /** 한 단계가 하는 일 */
 export interface JobStage<TState> {
@@ -84,7 +85,17 @@ export class JobRunnerService {
     private readonly context: JobContextService,
     private readonly jobLog: JobLoggerService,
     private readonly requests: RequestContextService,
+    private readonly meter: TokenMeterService,
   ) {}
+
+  /**
+   * 심장박동 주기 (TASK-4701, 지시 3).
+   *
+   * 죽음 판정(90초)의 1/3입니다 — 한 번 놓쳐도 죽은 것으로 읽히지 않아야
+   * 합니다. 살아 있는 작업을 죽었다고 보고 또 돌리면 **같은 일을 두 번
+   * 삽니다.**
+   */
+  private static readonly HEARTBEAT_INTERVAL_MS = 30_000;
 
   get retryPolicy(): JobRetryPolicy {
     const resolved = resolveJobRetryPolicy(process.env as Record<string, string | undefined>);
@@ -184,6 +195,51 @@ export class JobRunnerService {
       resumed: continues,
     });
 
+    // 이 작업이 부른 호출을 되찾는 끈 (TASK-4701) — 모르면 토큰·비용을
+    // **재지 않습니다.** 시간만으로 묶으면 남의 호출까지 셉니다.
+    const requestId = this.requests.current()?.requestId ?? null;
+
+    // 심장박동 — 이게 없으면 프로세스가 죽었을 때 이 행은 영원히 `running`
+    // 이고, 아무도 그 행을 보지 않으면 작업은 끝나지 않은 채 끝난 것처럼
+    // 남습니다.
+    const heartbeat = setInterval(() => {
+      void this.safe("심장박동", () =>
+        this.prisma.jobRun.update({
+          where: { id: jobId },
+          data: { heartbeatAt: new Date() },
+        }),
+      );
+    }, JobRunnerService.HEARTBEAT_INTERVAL_MS);
+    heartbeat.unref?.();
+
+    try {
+      return await this.runStages(definition, input, {
+        jobId,
+        attempts,
+        plan,
+        carried,
+        keptCheckpoints,
+        requestId,
+      });
+    } finally {
+      clearInterval(heartbeat);
+    }
+  }
+
+  private async runStages<TInput, TState>(
+    definition: JobDefinition<TInput, TState>,
+    input: TInput,
+    ctx: {
+      jobId: string;
+      attempts: number;
+      plan: ReturnType<typeof planResume>;
+      carried: string[];
+      keptCheckpoints: Checkpoint[];
+      requestId: string | null;
+    },
+  ): Promise<JobResult> {
+    const { jobId, attempts, plan, carried, keptCheckpoints, requestId } = ctx;
+
     return this.context.run({ jobId, kind: definition.kind, stage: "start" }, async () => {
       this.jobLog.info(
         plan.verdict === "resume" ? "작업을 이어합니다." : "작업을 시작합니다.",
@@ -207,9 +263,21 @@ export class JobRunnerService {
         }
 
         this.context.setStage(stage.name);
+        const stageFrom = new Date();
         const outcome = await this.runStage(definition, stage, state);
-        metrics.push(outcome.metric);
-        await this.persistMetric(jobId, definition.kind, outcome.metric);
+        // 이 단계가 부른 호출을 **다시 재지 않고 읽어 옵니다** — 두 번 재면
+        // 같은 사실에 두 개의 답이 생깁니다.
+        const usage = await this.meter.measure(requestId, stageFrom, new Date());
+        const metric: StageMetric = {
+          ...outcome.metric,
+          // 어댑터가 알려 준 값이 있으면 그것을 우선합니다(그 단계가 스스로
+          // 아는 값입니다). 없으면 기록에서 읽어 온 값입니다.
+          tokens: outcome.metric.tokens ?? usage.tokens,
+          costUsd: usage.costUsd,
+          unpricedCalls: usage.unpricedCalls,
+        };
+        metrics.push(metric);
+        await this.persistMetric(jobId, definition.kind, metric);
 
         if (!outcome.ok) {
           const decision = planJobRetry(outcome.error, attempts, this.retryPolicy);
@@ -349,6 +417,10 @@ export class JobRunnerService {
       tokens: stage.tokensOf?.(state) ?? null,
       // **이 단계가 쓴 메모리가 아닙니다** — 프로세스 전체 값입니다.
       processHeapDeltaBytes: process.memoryUsage().heapUsed - heapBefore,
+      // 비용은 여기서 알 수 없습니다 — 기록을 읽어야 나오고, 그건 호출
+      // 지점이 아니라 실행 루프가 합니다 (TASK-4701).
+      costUsd: null,
+      unpricedCalls: null,
       ok,
     };
   }
@@ -378,6 +450,8 @@ export class JobRunnerService {
             lastError: null,
             userMessage: null,
             completedAt: null,
+            // **시작하는 순간 심장박동을 찍습니다** (TASK-4701, 라이브에서 잡음).
+            heartbeatAt: new Date(),
           },
         });
         return;
@@ -393,6 +467,19 @@ export class JobRunnerService {
           attempts: input.attempts,
           actorId: input.actorId ?? null,
           requestId,
+          /**
+           * 첫 박동은 **시작하는 순간** 찍습니다.
+           *
+           * 라이브에서 잡은 것: 박동을 30초 주기로만 찍었더니 **30초 안에
+           * 끝나는 작업은 박동이 한 번도 없었습니다.** 큐는 "박동이 없으면
+           * 시작 시각으로 본다"고 되어 있었는데, 이어한 작업의 시작 시각은
+           * **원래 시작한 때**라 이미 오래됐습니다. 그래서 큐가 **지금 돌고
+           * 있는 작업을 죽었다고 표시**했습니다.
+           *
+           * 그 상태로 다른 인스턴스가 하나 더 있었다면 **같은 일을 두 번
+           * 사게 됩니다** — 이 설계가 막으려던 바로 그 사고입니다.
+           */
+          heartbeatAt: new Date(),
         },
       });
     });
@@ -423,6 +510,8 @@ export class JobRunnerService {
           inputTokens: metric.tokens?.input ?? null,
           outputTokens: metric.tokens?.output ?? null,
           processHeapDeltaBytes: metric.processHeapDeltaBytes,
+          costUsd: metric.costUsd,
+          unpricedCalls: metric.unpricedCalls,
         },
       }),
     );
@@ -441,6 +530,21 @@ export class JobRunnerService {
           checkpoints: checkpoints as never,
           totalMs,
           completedAt: new Date(),
+          /**
+           * 성공한 작업이 실패 문구를 달고 있지 않게 지웁니다
+           * (TASK-4701, 라이브에서 잡음).
+           *
+           * 화면에 **"성공"이라는 표와 "서버가 멈춰 중단됐습니다"라는
+           * 문장이 나란히** 떴습니다. 같은 사실에 두 개의 답이고, 우리가
+           * 4101부터 계속 경계해 온 모양입니다.
+           *
+           * 이어할 때(`persistStart`)도 지우지만 그것만으로는 모자랍니다 —
+           * 도는 **중간에** 누가 실패 문구를 쓸 수 있고, 실제로 그랬습니다.
+           * 끝나는 자리에서 한 번 더 지웁니다.
+           */
+          failureKind: null,
+          lastError: null,
+          userMessage: null,
         },
       }),
     );

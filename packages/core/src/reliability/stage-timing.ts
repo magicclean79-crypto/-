@@ -32,6 +32,17 @@ export interface StageMetric {
    * 다른 일이 돌았다면 그 몫이 섞여 있습니다.
    */
   processHeapDeltaBytes: number | null;
+  /**
+   * 이 단계가 쓴 돈 (USD) — 모르면 null (TASK-4701).
+   *
+   * **0으로 채우지 않는 이유는 토큰과 같습니다.** 다만 하나 더 있습니다:
+   * 가격표에 없는 모델로 나간 호출이 섞여 있으면 이 값은 **최소값**입니다.
+   * 그 사실은 `unpricedCalls`가 말합니다 — 최소값을 실제값으로 읽으면
+   * 예산이 실제보다 여유 있어 보입니다.
+   */
+  costUsd: number | null;
+  /** 이 단계에서 가격표에 없는 모델로 나간 호출 수 — 모르면 null */
+  unpricedCalls: number | null;
   ok: boolean;
 }
 
@@ -50,6 +61,10 @@ export interface PerfReport {
   slowest: StageMetric | null;
   /** 토큰 합계 — 하나라도 모르면 null (0으로 채우지 않습니다) */
   tokens: { input: number | null; output: number | null };
+  /** 비용 합계 (USD) — 하나라도 모르면 null (TASK-4701) */
+  costUsd: number | null;
+  /** 가격표에 없는 모델로 나간 호출 수 — 있으면 비용은 최소값이다 */
+  unpricedCalls: number;
   detail: string;
 }
 
@@ -72,6 +87,8 @@ export function summarizePerf(input: {
       : stages.reduce((best, row) => (row.durationMs > best.durationMs ? row : best), stages[0]);
 
   const tokens = sumTokens(stages);
+  const costUsd = sumCost(stages);
+  const unpricedCalls = stages.reduce((sum, row) => sum + (row.unpricedCalls ?? 0), 0);
 
   const parts: string[] = [
     `전체 ${formatMs(input.totalMs)} · 단계 ${stages.length}개.`,
@@ -94,6 +111,18 @@ export function summarizePerf(input: {
       "토큰을 알 수 없는 단계가 있어 합계를 내지 않았습니다 — 모르는 값을 0으로 채우면 합계가 실제보다 작아집니다.",
     );
   }
+  if (costUsd !== null) {
+    parts.push(
+      unpricedCalls > 0
+        ? // 최소값을 실제값으로 읽으면 예산이 실제보다 여유 있어 보입니다.
+          `이 작업이 쓴 돈은 최소 $${costUsd.toFixed(6)}입니다 — 가격표에 없는 모델로 나간 호출 ${unpricedCalls}건은 여기에 들어 있지 않습니다.`
+        : `이 작업이 쓴 돈은 $${costUsd.toFixed(6)}입니다.`,
+    );
+  } else if (stages.some((row) => row.costUsd !== null)) {
+    parts.push(
+      "비용을 모르는 단계가 있어 합계를 내지 않았습니다 — 일부만 더하면 그 합계가 전체로 읽힙니다.",
+    );
+  }
 
   return {
     stages,
@@ -102,8 +131,31 @@ export function summarizePerf(input: {
     unmeasuredMs,
     slowest,
     tokens,
+    costUsd,
+    unpricedCalls,
     detail: parts.join(" "),
   };
+}
+
+/**
+ * 비용 합계 — **하나라도 모르면 null.**
+ *
+ * 아는 것만 더해서 내놓으면 그 합계가 "이 작업이 쓴 돈"으로 읽힙니다.
+ * 일부만 더한 값에 이름을 붙이면 아무도 그것이 일부인지 다시 확인하지
+ * 않습니다.
+ */
+function sumCost(stages: StageMetric[]): number | null {
+  if (stages.length === 0) {
+    return null;
+  }
+  let total = 0;
+  for (const row of stages) {
+    if (row.costUsd === null || row.costUsd === undefined) {
+      return null;
+    }
+    total += row.costUsd;
+  }
+  return Number(total.toFixed(6));
 }
 
 function sumTokens(stages: StageMetric[]): { input: number | null; output: number | null } {

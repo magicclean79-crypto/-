@@ -12,6 +12,9 @@ function stage(overrides: Partial<StageMetric> & { stage: string }): StageMetric
     tokens: overrides.tokens === undefined ? null : overrides.tokens,
     processHeapDeltaBytes:
       overrides.processHeapDeltaBytes === undefined ? null : overrides.processHeapDeltaBytes,
+    // 못 잰 것은 `null`입니다 — 0으로 채우면 "공짜였다"로 읽힙니다 (TASK-4701)
+    costUsd: overrides.costUsd === undefined ? null : overrides.costUsd,
+    unpricedCalls: overrides.unpricedCalls === undefined ? null : overrides.unpricedCalls,
     ok: overrides.ok ?? true,
   };
 }

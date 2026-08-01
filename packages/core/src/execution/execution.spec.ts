@@ -92,6 +92,9 @@ describe("ExecutionTracker", () => {
     expect(result.text).toBe("본문");
     expect(store.entries).toHaveLength(1);
     expect(store.entries[0]).toEqual({
+      // 상세를 주지 않는 Provider는 `null`입니다 (TASK-4701) — 그때 비용은
+      // 예전 셈과 한 푼도 다르지 않습니다.
+      usageDetail: null,
       feature: "content-generation",
       provider: "mock",
       model: "mock-llm-1",

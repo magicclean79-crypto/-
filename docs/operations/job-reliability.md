@@ -178,7 +178,21 @@
 
 화면: `/admin/jobs`
 
+## 이후 (TASK-4701, Sprint 47)
+
+이 층은 **넓어졌습니다.** 작업 종류가 넷이 되었고(분석·생성·발행 추가),
+토큰과 비용이 이어졌고, 죽은 프로세스가 남긴 작업을 큐가 되살립니다.
+그리고 이 문서가 설명하는 규칙 중 **두 가지가 라이브에서 다시 고쳐졌습니다**:
+
+- "던지지 않았다고 성공이 아니다"의 판정이 **어댑터가 남긴 문장을 읽지
+  못해** `unknown`이 되고 있었습니다 — Vision이 503을 내는데도 묶음이
+  "성공"으로 끝났습니다. 이제 우리 문장이 담은 상태 코드를 되찾습니다.
+- **자격 증명 실패는 한 건의 문제가 될 수 없습니다** — 이제 묶음을 멈춥니다.
+
+자세히: `docs/operations/reliability-expansion.md`
+
 ## 관련 문서
 
+- `docs/operations/reliability-expansion.md` — 이 층의 확대 (TASK-4701)
 - `docs/operations/validation-environment.md` — 검증 환경
 - `reports/CTO_REPORT.md` — 스프린트별 보고

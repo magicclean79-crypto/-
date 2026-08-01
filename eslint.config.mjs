@@ -35,6 +35,10 @@ export default tseslint.config(
         console: "readonly",
         URL: "readonly",
         fetch: "readonly",
+        // 계약 스텁과 라이브 검사 스크립트가 쓴다 (TASK-4701)
+        Buffer: "readonly",
+        setTimeout: "readonly",
+        clearTimeout: "readonly",
       },
     },
   },

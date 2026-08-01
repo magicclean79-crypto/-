@@ -86,13 +86,37 @@ export class OpenAiLlmProvider implements LlmProvider {
       );
     }
 
+    // 토큰 상세 (TASK-4701, 지시 2).
+    //
+    // OpenAI의 `prompt_tokens`는 **캐시 토큰을 포함**합니다. 캐시는 싸게
+    // 청구되므로, 포함된 값에 기본 단가를 곱하면 **실제보다 많이** 냈다고
+    // 기록하게 됩니다 — Anthropic과 **반대 방향**으로 틀립니다.
+    //
+    // 그래서 여기서 빼고, 뺀 몫을 상세에 남깁니다. 두 Provider가 같은 칸에
+    // 같은 뜻을 담아야 합계를 믿을 수 있습니다.
+    const promptTokens = response.usage?.prompt_tokens ?? null;
+    const cachedTokens = response.usage?.prompt_tokens_details?.cached_tokens ?? null;
+
     return {
       provider: this.name,
       model: response.model,
       text: choice?.message?.content ?? "",
       usage: {
-        inputTokens: response.usage?.prompt_tokens ?? null,
+        inputTokens:
+          promptTokens === null
+            ? null
+            : Math.max(0, promptTokens - (cachedTokens ?? 0)),
+        // `completion_tokens`에는 생각 토큰이 **이미 들어 있습니다** — 빼지
+        // 않습니다. 빼면 청구서보다 적게 셉니다.
         outputTokens: response.usage?.completion_tokens ?? null,
+      },
+      usageDetail: {
+        cachedInputTokens: cachedTokens,
+        // OpenAI는 캐시 쓰기에 값을 매기지 않습니다 — 개념이 없으므로
+        // `null`입니다(0이 아닙니다).
+        cacheWriteTokens: null,
+        reasoningTokens:
+          response.usage?.completion_tokens_details?.reasoning_tokens ?? null,
       },
       raw: response,
     };

@@ -22,9 +22,24 @@
 #    워크플로에는 없었다 — 사람이 로컬에서 돌리는 것에만 의존하고 있었다.
 # 3. **Node 22.** 러너가 Node 20을 폐기 예정으로 경고하고 있었다.
 #
-# 여기서 돌리지 **않는** 것: Live Verification. 실 PostgreSQL·Redis·S3와 실
-# Provider 자격 증명이 필요하고, 그것을 CI에 넣으면 남의 서비스에 돈이 나가는
-# 테스트가 매 푸시마다 돈다. Live Verification은 사람이 돌리고 보고서에 남긴다.
+# TASK-4701 (Sprint 47, CTO 지시 4)에서 더한 것: **live-checks Job.**
+#
+# 지금까지 여기서 Live Verification을 하나도 돌리지 않았고, 그 대가를
+# TASK-4603에서 치렀다 — 라이브 결함 4건이 나왔는데 **넷 다 유닛 테스트를
+# 통과한 것들**이었다. 인메모리 mock은 우리가 상상한 대로 동작하고 실제 DB는
+# 우리가 쓴 대로 동작한다.
+#
+# 그래서 **자격 증명이 필요 없는 것만** 여기로 옮긴다: 실 PostgreSQL(서비스
+# 컨테이너) + 우리 계약 스텁. 무엇이 옮겨지고 무엇이 남는지는 사람이 문장으로
+# 정하지 않는다 — `@acos/core`의 `judgeCiCoverage`가 판정하고
+# `pnpm check:live-coverage`가 출력한다.
+#
+# 여기서 **여전히** 돌리지 않는 것: 실 Provider 호출(자격 증명·과금),
+# 운영 저장소, 그리고 사람이 눈으로 읽어야 하는 화면 문장.
+#
+# 그리고 가장 중요한 것: **이 Job이 초록이라고 Live Verification이 끝난 것이
+# 아니다.** 여기서 증명하는 것은 배선이 맞는가이고, 실제 Provider가 우리
+# 요청을 어떻게 대하는지는 증명하지 않는다.
 name: CI
 
 on:
@@ -113,3 +128,95 @@ jobs:
 
       - name: Test (Web e2e)
         run: pnpm test:e2e
+
+  # 라이브 검사 — 자격 증명이 필요 없는 것만 (TASK-4701, CTO 지시 4)
+  live-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: acos
+        ports:
+          - 5432:5432
+        # 준비되기 전에 붙으면 "DB가 죽었다"가 아니라 "아직 안 떴다"인데,
+        # 실패 메시지는 그 둘을 구별해 주지 않는다.
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/acos
+      # 실 Provider를 부르지 않는다 — 자격 증명도 과금도 없다
+      LLM_PROVIDER: mock
+      OCR_PROVIDER: google-vision
+      GOOGLE_VISION_API_KEY: ci-stub-key
+      GOOGLE_VISION_ENDPOINT: http://127.0.0.1:9100/v1/images:annotate
+      S3_ENDPOINT: http://127.0.0.1:9000
+      S3_BUCKET: acos
+      S3_ACCESS_KEY: S3RVER
+      S3_SECRET_KEY: S3RVER
+      S3_FORCE_PATH_STYLE: "true"
+      S3_PUBLIC_URL: http://127.0.0.1:9000/acos
+      AUTH_ADMIN_EMAIL: admin@acos.local
+      AUTH_ADMIN_PASSWORD: admin1234
+      # 자동 이어하기는 기본이 꺼짐이다 — 검사에서만 켠다
+      JOB_AUTO_RESUME: "on"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      # 무엇이 CI에서 돌고 무엇이 사람 몫인지 먼저 출력한다 —
+      # 이 Job이 전부를 덮는다고 읽히면 안 된다.
+      - name: 라이브 검증 CI 적용 범위
+        run: pnpm check:live-coverage
+
+      - name: 마이그레이션
+        run: pnpm --filter api exec prisma migrate deploy
+
+      - name: 계약 스텁 (Vision · S3)
+        run: |
+          node scripts/ci-vision-stub.mjs > /tmp/vision-stub.log 2>&1 &
+          npx --yes s3rver -d /tmp/s3 -p 9000 --address 127.0.0.1 > /tmp/s3.log 2>&1 &
+          node scripts/wait-for.mjs http://127.0.0.1:9100/__mode 30
+
+      - name: 씨앗
+        run: node scripts/seed-live-checks.mjs
+
+      - name: API 기동
+        run: |
+          node apps/api/dist/main.js > /tmp/api.log 2>&1 &
+          node scripts/wait-for.mjs http://127.0.0.1:4000/health 60
+
+      - name: 라이브 검사
+        env:
+          VISION_STUB_CONTROL: http://127.0.0.1:9100
+        run: pnpm live:checks
+
+      # 실패했을 때 로그가 없으면 "왜 빨간지"를 아무도 못 찾는다.
+      - name: 실패 시 로그
+        if: failure()
+        run: |
+          echo "--- api ---"; tail -200 /tmp/api.log || true
+          echo "--- vision stub ---"; tail -50 /tmp/vision-stub.log || true
+          echo "--- s3 ---"; tail -50 /tmp/s3.log || true

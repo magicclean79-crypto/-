@@ -3775,6 +3775,26 @@ const server = http.createServer(async (req, res) => {
               "0/3단계에서 멈췄습니다. 이어해도 같은 결과가 나오는 실패입니다 — 원인을 먼저 고쳐 주세요.",
           },
           {
+            // 서버가 멈춰 남은 작업 (TASK-4701) — 실패가 아니라
+            // "끝났는지 모른다"이며, 끝난 단계는 체크포인트에 남아 있다
+            id: "job-interrupted",
+            kind: "analysis-batch",
+            status: "interrupted",
+            attempts: 1,
+            completedStages: ["analysis:1:p-a"],
+            totalStages: 4,
+            failureKind: "timeout",
+            userMessage:
+              "작업을 돌리던 서버가 멈춰 중단됐습니다. 끝난 단계는 남아 있어 이어할 수 있습니다.",
+            resumable: true,
+            totalMs: null,
+            requestId: "req-11223344",
+            startedAt: new Date().toISOString(),
+            completedAt: null,
+            detail:
+              "1/4단계까지 진행한 채로 서버가 멈췄습니다. 끝난 단계는 체크포인트에 남아 있어 이어할 수 있습니다.",
+          },
+          {
             id: "job-ok",
             kind: "ocr-batch",
             status: "succeeded",
@@ -3791,6 +3811,25 @@ const server = http.createServer(async (req, res) => {
             detail: "2/2단계를 끝냈습니다.",
           },
         ],
+      }),
+    );
+    return;
+  }
+
+  /** 자동 이어하기 상태 (TASK-4701, 지시 3) — ADMIN 전용 */
+  if (url.pathname === "/jobs/queue/status") {
+    if (req.headers.authorization !== "Bearer stub-token") {
+      res.statusCode = req.headers.authorization ? 403 : 401;
+      res.end(JSON.stringify({ message: "ADMIN 권한이 필요합니다." }));
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify({
+        enabled: true,
+        kinds: ["analysis-batch", "content-batch", "ocr-batch", "publish-batch"],
+        detail:
+          "자동 이어하기가 켜져 있습니다 — 죽은 프로세스가 남긴 작업을 큐가 되살립니다.",
       }),
     );
     return;

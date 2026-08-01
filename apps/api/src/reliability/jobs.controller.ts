@@ -5,6 +5,7 @@ import {
   Get,
   HttpCode,
   NotFoundException,
+  OnModuleInit,
   Param,
   Post,
   Query,
@@ -24,9 +25,14 @@ import type {
 import { AuthGuard, RequireRole } from "../auth/auth.guard";
 import type { AuthenticatedRequest } from "../auth/auth.guard";
 import { PrismaService } from "../prisma/prisma.service";
+import { AnalysisBatchJob } from "./analysis-batch.job";
+import { ContentBatchJob } from "./content-batch.job";
 import { JobLoggerService } from "./job-logger.service";
+import { JobQueueService } from "./job-queue.service";
+import { JobRegistryService } from "./job-registry.service";
 import { JobRunnerService } from "./job-runner.service";
 import { OcrBatchJob } from "./ocr-batch.job";
+import { PublishBatchJob } from "./publish-batch.job";
 
 /** 재시도할 만한 실패거나 아직 도는 중이면 이어할 수 있다 */
 const RESUMABLE_KINDS = new Set([
@@ -54,13 +60,82 @@ const TREND_WINDOW_HOURS = 24 * 7;
 @Controller("jobs")
 @UseGuards(AuthGuard)
 @RequireRole("ADMIN")
-export class JobsController {
+export class JobsController implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     private readonly runner: JobRunnerService,
     private readonly ocrBatch: OcrBatchJob,
+    private readonly analysisBatch: AnalysisBatchJob,
+    private readonly contentBatch: ContentBatchJob,
+    private readonly publishBatch: PublishBatchJob,
+    private readonly registry: JobRegistryService,
+    private readonly queue: JobQueueService,
     private readonly jobLog: JobLoggerService,
   ) {}
+
+  /**
+   * 종류마다 "어떻게 이어하는가"와 "항목이 몇 개인가"를 등록한다.
+   *
+   * 등록하지 않으면 그 종류는 **자동 이어하기에서 조용히 빠집니다.** 큐에
+   * if를 늘어놓지 않는 이유가 이것입니다 — 새 작업을 만든 사람이 큐를
+   * 고치는 것을 잊으면, 잊었다는 사실이 프로세스가 죽은 날에야 드러납니다.
+   */
+  onModuleInit(): void {
+    this.registry.register(OcrBatchJob.KIND, {
+      resume: (jobId, input) => {
+        const ids = normalizeIds((input as { imageIds?: unknown }).imageIds, "imageIds");
+        return this.runner.run(this.ocrBatch.definition({ imageIds: ids }), { imageIds: ids }, {
+          resumeJobId: jobId,
+        });
+      },
+      countItems: (input) => countOf(input, "imageIds"),
+    });
+
+    this.registry.register(AnalysisBatchJob.KIND, {
+      resume: (jobId, input) => {
+        const value = input as { productIds?: unknown; apply?: unknown };
+        const ids = normalizeIds(value.productIds, "productIds");
+        const payload = { productIds: ids, apply: value.apply === true };
+        return this.runner.run(this.analysisBatch.definition(payload), payload, {
+          resumeJobId: jobId,
+        });
+      },
+      countItems: (input) => countOf(input, "productIds"),
+    });
+
+    this.registry.register(ContentBatchJob.KIND, {
+      resume: (jobId, input) => {
+        const value = input as { projectId?: unknown; versions?: unknown };
+        const payload = {
+          projectId: String(value.projectId ?? ""),
+          versions: normalizeVersions(value.versions),
+        };
+        return this.runner.run(this.contentBatch.definition(payload), payload, {
+          resumeJobId: jobId,
+        });
+      },
+      countItems: (input) => countOf(input, "versions"),
+    });
+
+    this.registry.register(PublishBatchJob.KIND, {
+      resume: (jobId, input) => {
+        const value = input as {
+          projectId?: unknown;
+          contentIds?: unknown;
+          actor?: unknown;
+        };
+        const payload = {
+          projectId: String(value.projectId ?? ""),
+          contentIds: normalizeIds(value.contentIds, "contentIds"),
+          actor: typeof value.actor === "string" ? value.actor : null,
+        };
+        return this.runner.run(this.publishBatch.definition(payload), payload, {
+          resumeJobId: jobId,
+        });
+      },
+      countItems: (input) => countOf(input, "contentIds"),
+    });
+  }
 
   /**
    * 이미지 묶음 OCR을 돌린다 — **실제 호출이 발생하고 과금됩니다.**
@@ -74,10 +149,85 @@ export class JobsController {
     @Body("imageIds") imageIds: unknown,
     @Req() request: AuthenticatedRequest,
   ): Promise<JobDetailDto> {
-    const ids = normalizeIds(imageIds);
+    const ids = normalizeIds(imageIds, "imageIds");
     const result = await this.runner.run(
       this.ocrBatch.definition({ imageIds: ids }),
       { imageIds: ids },
+      { actorId: request.user?.id },
+    );
+    return this.detail(result.jobId);
+  }
+
+  /**
+   * 상품 묶음 분석 — **실제 호출이 발생하고 과금됩니다.**
+   *
+   * 이 저장소에서 가장 비싼 호출입니다(이미지를 첨부한 멀티모달). 이어하기가
+   * 아끼는 돈이 가장 큰 자리이기도 합니다.
+   */
+  @Post("analysis-batch")
+  @HttpCode(200)
+  async runAnalysisBatch(
+    @Body("productIds") productIds: unknown,
+    @Body("apply") apply: unknown,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<JobDetailDto> {
+    const ids = normalizeIds(productIds, "productIds");
+    const payload = { productIds: ids, apply: apply === true };
+    const result = await this.runner.run(
+      this.analysisBatch.definition(payload),
+      payload,
+      { actorId: request.user?.id },
+    );
+    return this.detail(result.jobId);
+  }
+
+  /** 상세페이지 묶음 생성 — **실제 호출이 발생하고 과금됩니다.** */
+  @Post("content-batch")
+  @HttpCode(200)
+  async runContentBatch(
+    @Body("projectId") projectId: unknown,
+    @Body("versions") versions: unknown,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<JobDetailDto> {
+    if (typeof projectId !== "string" || projectId.trim() === "") {
+      throw new BadRequestException("projectId를 보내 주세요.");
+    }
+    const payload = {
+      projectId: projectId.trim(),
+      versions: normalizeVersions(versions),
+    };
+    const result = await this.runner.run(
+      this.contentBatch.definition(payload),
+      payload,
+      { actorId: request.user?.id },
+    );
+    return this.detail(result.jobId);
+  }
+
+  /**
+   * 콘텐츠 묶음 발행.
+   *
+   * 과금은 없지만 **되돌리기가 가장 번거로운 동작**입니다. 여기서 체크포인트가
+   * 하는 일은 돈을 아끼는 것이 아니라 "어디까지 나갔는가"에 답하는 것입니다.
+   */
+  @Post("publish-batch")
+  @HttpCode(200)
+  async runPublishBatch(
+    @Body("projectId") projectId: unknown,
+    @Body("contentIds") contentIds: unknown,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<JobDetailDto> {
+    if (typeof projectId !== "string" || projectId.trim() === "") {
+      throw new BadRequestException("projectId를 보내 주세요.");
+    }
+    const payload = {
+      projectId: projectId.trim(),
+      contentIds: normalizeIds(contentIds, "contentIds"),
+      actor: request.user?.email ?? null,
+    };
+    const result = await this.runner.run(
+      this.publishBatch.definition(payload),
+      payload,
       { actorId: request.user?.id },
     );
     return this.detail(result.jobId);
@@ -92,10 +242,7 @@ export class JobsController {
    */
   @Post(":id/resume")
   @HttpCode(200)
-  async resume(
-    @Param("id") id: string,
-    @Req() request: AuthenticatedRequest,
-  ): Promise<JobDetailDto> {
+  async resume(@Param("id") id: string): Promise<JobDetailDto> {
     const row = await this.prisma.jobRun.findUnique({ where: { id } });
     if (row === null) {
       throw new NotFoundException(`작업을 찾을 수 없습니다: ${id}`);
@@ -105,20 +252,62 @@ export class JobsController {
         "아직 도는 중인 작업입니다 — 같은 작업을 두 번 돌리면 과금도 두 번 됩니다.",
       );
     }
-    if (row.kind !== OcrBatchJob.KIND) {
+    if (!this.registry.knows(row.kind)) {
       throw new BadRequestException(
         `이어하기를 지원하지 않는 작업 종류입니다: ${row.kind}`,
       );
     }
 
-    const input = row.input as { imageIds?: unknown };
-    const ids = normalizeIds(input.imageIds);
-    const result = await this.runner.run(
-      this.ocrBatch.definition({ imageIds: ids }),
-      { imageIds: ids },
-      { actorId: request.user?.id, resumeJobId: id },
-    );
-    return this.detail(result.jobId);
+    const result = await this.registry.resume(row.kind, id, row.input);
+    return this.detail(result?.jobId ?? id);
+  }
+
+  /**
+   * 자동 이어하기 상태 (TASK-4701).
+   *
+   * **훑기를 지금 한 번 돌리지 않습니다** — 조회가 무언가를 일으키면
+   * 화면을 열 때마다 돈이 나갈 수 있습니다(4601 재전송과 같은 규칙).
+   */
+  @Get("queue/status")
+  async queueStatus(): Promise<{
+    enabled: boolean;
+    kinds: string[];
+    detail: string;
+  }> {
+    const enabled = this.queue.enabled;
+    return {
+      enabled,
+      kinds: this.registry.kinds(),
+      detail: enabled
+        ? "자동 이어하기가 켜져 있습니다 — 죽은 프로세스가 남긴 작업을 큐가 되살립니다."
+        : "자동 이어하기가 꺼져 있습니다 (JOB_AUTO_RESUME=on으로 켭니다) — " +
+          "지금은 죽은 프로세스가 남긴 작업을 사람이 이어해야 합니다.",
+    };
+  }
+
+  /**
+   * 자동 이어하기를 지금 한 번 훑는다 — **사람이 눌렀을 때만.**
+   *
+   * 조회(`GET`)와 가르는 이유: 이 호출은 실제로 작업을 이어할 수 있고,
+   * 이어하기는 돈이 나가는 호출을 합니다.
+   */
+  @Post("queue/sweep")
+  @HttpCode(200)
+  async sweepQueue(): Promise<{
+    scanned: number;
+    resumed: number;
+    orphaned: number;
+    unknownKind: number;
+    detail: string;
+  }> {
+    const report = await this.queue.sweep();
+    return {
+      scanned: report.scanned,
+      resumed: report.resumed,
+      orphaned: report.orphaned,
+      unknownKind: report.unknownKind,
+      detail: report.summary,
+    };
   }
 
   /** 최근 작업 목록 */
@@ -129,7 +318,11 @@ export class JobsController {
       orderBy: { startedAt: "desc" },
       take: bounded,
     });
-    return { jobs: rows.map(toJobDto) };
+    return {
+      jobs: rows.map((row) =>
+        toJobDto(row, this.registry.countItems(row.kind, row.input)),
+      ),
+    };
   }
 
   /** 작업 하나 — 계측과 로그까지 */
@@ -242,6 +435,8 @@ export class JobsController {
           ? null
           : { input: metric.inputTokens, output: metric.outputTokens },
       processHeapDeltaBytes: metric.processHeapDeltaBytes,
+      costUsd: metric.costUsd === null ? null : Number(metric.costUsd),
+      unpricedCalls: metric.unpricedCalls,
       ok: metric.ok,
     }));
     const perf = summarizePerf({ stages: stageMetrics, totalMs: row.totalMs ?? 0 });
@@ -251,7 +446,7 @@ export class JobsController {
     const level = this.jobLog.level();
 
     return {
-      job: toJobDto(row),
+      job: toJobDto(row, this.registry.countItems(row.kind, row.input)),
       metrics: metrics.map(toMetricDto),
       events: events.map(toEventDto),
       perf: {
@@ -261,6 +456,8 @@ export class JobsController {
         slowestStage: perf.slowest?.stage ?? null,
         inputTokens: perf.tokens.input,
         outputTokens: perf.tokens.output,
+        costUsd: perf.costUsd,
+        unpricedCalls: perf.unpricedCalls,
         detail: `${perf.detail} 지금 로그 최소 등급은 ${level.level}입니다.`,
       },
     };
@@ -273,21 +470,58 @@ function generalizeStage(stage: string): string {
   return parts.length <= 1 ? stage : `${parts[0]}:*`;
 }
 
-function normalizeIds(value: unknown): string[] {
+/**
+ * 한 번에 처리할 최대 항목 수.
+ *
+ * 상한이 없으면 **한 번의 요청이 얼마를 쓸지 아무도 모릅니다.** 이 값은
+ * 네 종류에 모두 같습니다 — 종류마다 다르게 두면 "왜 이건 50개고 저건
+ * 200개지"에 답할 수 있는 사람이 곧 없어집니다.
+ */
+const MAX_ITEMS = 50;
+
+function normalizeIds(value: unknown, field: string): string[] {
   if (!Array.isArray(value)) {
-    throw new BadRequestException("imageIds를 배열로 보내 주세요.");
+    throw new BadRequestException(`${field}를 배열로 보내 주세요.`);
   }
-  const ids = value.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "");
+  const ids = value.filter(
+    (entry): entry is string => typeof entry === "string" && entry.trim() !== "",
+  );
   if (ids.length === 0) {
-    throw new BadRequestException("처리할 이미지가 없습니다.");
+    throw new BadRequestException("처리할 항목이 없습니다.");
   }
-  if (ids.length > 50) {
-    // 상한이 없으면 한 번의 요청이 얼마를 쓸지 아무도 모릅니다.
+  if (ids.length > MAX_ITEMS) {
     throw new BadRequestException(
-      "한 번에 최대 50장까지 처리합니다 — 상한이 없으면 한 요청이 얼마를 쓸지 알 수 없습니다.",
+      `한 번에 최대 ${MAX_ITEMS}건까지 처리합니다 — 상한이 없으면 한 요청이 얼마를 쓸지 알 수 없습니다.`,
     );
   }
   return ids;
+}
+
+function normalizeVersions(value: unknown): number[] {
+  if (!Array.isArray(value)) {
+    throw new BadRequestException("versions를 배열로 보내 주세요.");
+  }
+  const versions = value
+    .map((entry) => Number(entry))
+    .filter((entry) => Number.isInteger(entry) && entry > 0);
+  if (versions.length === 0) {
+    throw new BadRequestException("처리할 버전이 없습니다.");
+  }
+  if (versions.length > MAX_ITEMS) {
+    throw new BadRequestException(
+      `한 번에 최대 ${MAX_ITEMS}건까지 처리합니다 — 상한이 없으면 한 요청이 얼마를 쓸지 알 수 없습니다.`,
+    );
+  }
+  return versions;
+}
+
+/** 저장된 입력에서 항목 수 — 못 세면 0이며 0은 "없다"가 아니라 "모른다"다 */
+function countOf(input: unknown, field: string): number {
+  if (typeof input !== "object" || input === null) {
+    return 0;
+  }
+  const value = (input as Record<string, unknown>)[field];
+  return Array.isArray(value) ? value.length : 0;
 }
 
 interface JobRow {
@@ -305,16 +539,20 @@ interface JobRow {
   completedAt: Date | null;
 }
 
-function toJobDto(row: JobRow): JobRunDto {
+function toJobDto(row: JobRow, totalStages: number): JobRunDto {
   const checkpoints = Array.isArray(row.checkpoints) ? row.checkpoints : [];
   const completedStages = checkpoints
     .filter((entry): entry is { stage: string; done: boolean } =>
       typeof entry === "object" && entry !== null && (entry as { done?: unknown }).done === true,
     )
     .map((entry) => entry.stage);
-  const totalStages = totalStagesOf(row.input);
+  // `interrupted`(서버가 멈춰 남은 작업, TASK-4701)도 이어할 수 있습니다 —
+  // 그 상태는 "실패했다"가 아니라 **"끝났는지 모른다"** 이고, 끝난 단계는
+  // 체크포인트에 그대로 있습니다.
   const resumable =
-    row.status === "failed" && row.failureKind !== null && RESUMABLE_KINDS.has(row.failureKind);
+    (row.status === "failed" || row.status === "interrupted") &&
+    row.failureKind !== null &&
+    RESUMABLE_KINDS.has(row.failureKind);
 
   // 건너뛴 것을 detail에 밝힙니다 — "3/3 끝냈습니다"만 적으면 글자를
   // 못 읽은 이미지가 성공 안에 숨습니다(라이브에서 잡음).
@@ -339,14 +577,17 @@ function toJobDto(row: JobRow): JobRunDto {
         ? `${completedStages.length}/${totalStages}단계를 끝냈습니다.`
         : row.status === "running"
           ? `${completedStages.length}/${totalStages}단계까지 진행했습니다.`
-          : `${completedStages.length}/${totalStages}단계에서 멈췄습니다.` +
-            (resumable
-              ? " 끝난 단계는 체크포인트에 남아 있어 이어할 수 있습니다."
-              : " 이어해도 같은 결과가 나오는 실패입니다 — 원인을 먼저 고쳐 주세요.")) +
+          : row.status === "interrupted"
+            ? `${completedStages.length}/${totalStages}단계까지 진행한 채로 서버가 멈췄습니다.` +
+              " 끝난 단계는 체크포인트에 남아 있어 이어할 수 있습니다."
+            : `${completedStages.length}/${totalStages}단계에서 멈췄습니다.` +
+              (resumable
+                ? " 끝난 단계는 체크포인트에 남아 있어 이어할 수 있습니다."
+                : " 이어해도 같은 결과가 나오는 실패입니다 — 원인을 먼저 고쳐 주세요.")) +
       (skipped.length === 0
         ? ""
         : ` 결과를 얻지 못해 건너뛴 항목 ${skipped.length}건이 있습니다: ${skipped
-            .map((row) => row.imageId)
+            .map((entry) => skippedLabel(entry))
             .join(" · ")}.`) +
       // 전부 건너뛴 것을 "끝냈습니다"로만 적으면, 아무것도 못 얻은 실행이
       // 성공으로 읽힙니다.
@@ -356,8 +597,26 @@ function toJobDto(row: JobRow): JobRunDto {
   };
 }
 
+/**
+ * 건너뛴 항목의 이름.
+ *
+ * 종류마다 id 칸 이름이 다릅니다(`imageId` · `productId` · `version` ·
+ * `contentId`). 여기서 종류를 알아내려 하면 새 작업이 생길 때마다 이 함수를
+ * 고쳐야 하고, 고치는 것을 잊으면 **그 종류만 건너뛴 항목이 이름 없이**
+ * 뜹니다. 그래서 **있는 칸 중 아무거나** 씁니다 — 이름을 아는 것이 목적이지
+ * 어느 칸에서 왔는지는 중요하지 않습니다.
+ */
+function skippedLabel(row: Record<string, unknown>): string {
+  for (const key of ["imageId", "productId", "contentId", "version"]) {
+    const value = row[key];
+    if (typeof value === "string" && value !== "") return value;
+    if (typeof value === "number") return `v${value}`;
+  }
+  return "(이름 없음)";
+}
+
 /** 체크포인트에 남은 "건너뛴 것" — 성공 안에 숨지 않게 꺼내 온다 */
-function skippedOf(checkpoints: unknown): { imageId: string; reason: string }[] {
+function skippedOf(checkpoints: unknown): Record<string, unknown>[] {
   if (!Array.isArray(checkpoints)) return [];
   const newest = checkpoints
     .filter(
@@ -370,16 +629,8 @@ function skippedOf(checkpoints: unknown): { imageId: string; reason: string }[] 
     );
   const output = (newest?.output ?? {}) as { skipped?: unknown };
   return Array.isArray(output.skipped)
-    ? (output.skipped as { imageId: string; reason: string }[])
+    ? (output.skipped as Record<string, unknown>[])
     : [];
-}
-
-function totalStagesOf(input: unknown): number {
-  if (typeof input === "object" && input !== null) {
-    const ids = (input as { imageIds?: unknown }).imageIds;
-    if (Array.isArray(ids)) return ids.length;
-  }
-  return 0;
 }
 
 function toEventDto(row: {
@@ -407,6 +658,8 @@ function toMetricDto(row: {
   inputTokens: number | null;
   outputTokens: number | null;
   processHeapDeltaBytes: number | null;
+  costUsd: unknown;
+  unpricedCalls: number | null;
 }): JobStageMetricDto {
   return {
     stage: row.stage,
@@ -415,5 +668,8 @@ function toMetricDto(row: {
     inputTokens: row.inputTokens,
     outputTokens: row.outputTokens,
     processHeapDeltaBytes: row.processHeapDeltaBytes,
+    // null은 "공짜였다"가 아니라 **"안 쟀다"** 입니다.
+    costUsd: row.costUsd === null || row.costUsd === undefined ? null : Number(row.costUsd),
+    unpricedCalls: row.unpricedCalls,
   };
 }

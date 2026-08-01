@@ -11,6 +11,7 @@ import { LLM_PROVIDER } from "./llm.constants";
 import { LlmController } from "./llm.controller";
 import { LlmService } from "./llm.service";
 import { ProviderProductionService } from "./provider-production.service";
+import { PricingHealthService } from "../pricing/pricing-health.service";
 
 describe("LLM API (API Test)", () => {
   let app: INestApplication;
@@ -86,6 +87,27 @@ describe("LLM API (API Test)", () => {
                 reason: "비교할 변형이 없습니다.",
                 conclusive: false,
               },
+              checkedAt: new Date().toISOString(),
+            }),
+          },
+        },
+        {
+          // 가격표 건강 상태 (TASK-4701, 지시 5) — 판정 자체는
+          // pricing-provenance.spec에서 검증한다
+          provide: PricingHealthService,
+          useValue: {
+            health: async ({ hours }: { hours?: number } = {}) => ({
+              ok: true,
+              hours: hours ?? 168,
+              freshness: {
+                rows: [],
+                fresh: 0,
+                stale: 0,
+                unknownSource: 0,
+                summary: "가격표 0건",
+              },
+              unpriced: { rows: [], totalCalls: 0, summary: "없습니다" },
+              detail: "확인할 것이 없습니다.",
               checkedAt: new Date().toISOString(),
             }),
           },

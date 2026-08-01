@@ -1,4 +1,10 @@
 import type { ExecutionStatus } from "@acos/shared";
+import {
+  CACHE_READ_MULTIPLIER,
+  CACHE_WRITE_MULTIPLIER,
+  hasUsageDetail,
+} from "./usage-detail";
+import type { UsageDetail } from "./usage-detail";
 
 /**
  * Execution Domain. (TASK-0601, Sprint 6)
@@ -26,6 +32,15 @@ export interface NewExecution {
   status: ExecutionStatus;
   inputTokens: number | null;
   outputTokens: number | null;
+  /**
+   * 토큰 상세 (TASK-4701, Sprint 47 — 지시 2).
+   *
+   * 캐시에서 읽은 입력·캐시에 쓴 입력·생각에 쓴 출력. 지금까지 우리는 호출
+   * 하나를 두 숫자로만 셌고, Provider마다 **틀리는 방향이 달랐습니다** —
+   * 하나는 부풀고 하나는 깎였습니다. 상세를 주지 않는 Provider는 `null`이며
+   * 그때 비용은 예전 셈 그대로입니다.
+   */
+  usageDetail?: UsageDetail | null;
   /** 예상 비용 (USD) — 가격표에 없는 모델은 null */
   cost: number | null;
   latencyMs: number;
@@ -151,6 +166,41 @@ export function estimateLlmCost(
 }
 
 /**
+ * 상세까지 반영한 비용 (USD) — 가격표에 없는 모델이나 사용량 미상은 `null`.
+ * (TASK-4701, Sprint 47 — 지시 2)
+ *
+ * **상세가 하나도 없으면 `estimateLlmCost`와 한 푼도 다르지 않습니다.**
+ * 그래야 옛 기록이 검증에서 전부 "불일치"로 뜨지 않습니다 — 비용 기록은
+ * 수정하지 않으므로(Append Only, 정책 3101-②), 셈을 바꾸면 과거 전체가
+ * 틀린 것으로 보이고 진짜 불일치가 그 소음에 묻힙니다.
+ */
+export function estimateLlmCostDetailed(
+  model: string,
+  usage: { inputTokens: number | null; outputTokens: number | null },
+  detail: UsageDetail | null | undefined,
+  pricing: typeof DEFAULT_LLM_PRICING = DEFAULT_LLM_PRICING,
+): number | null {
+  const base = estimateLlmCost(model, usage, pricing);
+  if (base === null || !hasUsageDetail(detail)) {
+    return base;
+  }
+  const price = findPricing(model, pricing);
+  if (price === null) {
+    return base;
+  }
+
+  // 상세를 하나라도 알면, 나머지 `null`은 "그 개념이 없다"이므로 0입니다.
+  // (어댑터는 세 칸을 모두 명시하며, `null`은 그 Provider에 그 개념이
+  //  없다는 뜻입니다 — "몰라서 비어 있다"가 아닙니다.)
+  const extra =
+    ((detail?.cachedInputTokens ?? 0) * price.inputPerMillion * CACHE_READ_MULTIPLIER +
+      (detail?.cacheWriteTokens ?? 0) * price.inputPerMillion * CACHE_WRITE_MULTIPLIER) /
+    1_000_000;
+
+  return Number((base + extra).toFixed(6));
+}
+
+/**
  * 가격표 공급자 (TASK-3101, CTO 정책 3101-①).
  *
  * 표 자체를 받거나 **매번 물어보는 함수**를 받는다. 함수를 허용하는 이유는
@@ -192,6 +242,12 @@ export interface TrackedLlmResult {
   provider: string;
   model: string;
   usage: { inputTokens: number | null; outputTokens: number | null };
+  /**
+   * 토큰 상세 (TASK-4701) — 캐시·생각 토큰. 주지 않으면 예전과 동일하게
+   * 셉니다(`estimateLlmCostDetailed`가 상세 없이는 `estimateLlmCost`와
+   * 한 푼도 다르지 않습니다).
+   */
+  usageDetail?: UsageDetail | null;
 }
 
 /**
@@ -268,7 +324,15 @@ export class ExecutionTracker {
         status: "SUCCESS",
         inputTokens: result.usage.inputTokens,
         outputTokens: result.usage.outputTokens,
-        cost: estimateLlmCost(result.model, result.usage, await this.table()),
+        // 캐시·생각 토큰까지 반영한 비용 (TASK-4701) — 상세를 주지 않는
+        // Provider는 예전과 한 푼도 다르지 않습니다.
+        usageDetail: result.usageDetail ?? null,
+        cost: estimateLlmCostDetailed(
+          result.model,
+          result.usage,
+          result.usageDetail,
+          await this.table(),
+        ),
         latencyMs: this.now() - startedAt,
         error: null,
         diagnostic,

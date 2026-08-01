@@ -53,5 +53,8 @@ import { PrismaAnalysisRunStore } from "./prisma-analysis-run.store";
       inject: [LlmService, PROMPT_ENGINE, CompanyBrainService],
     },
   ],
+  // 묶음 분석(TASK-4701, 지시 1)이 **불러 쓰기만** 합니다 — 이 모듈 안의
+  // 것은 하나도 바뀌지 않고, 기존 `POST /products/:id/analysis`도 그대로입니다.
+  exports: [AnalysisService],
 })
 export class AnalysisModule {}

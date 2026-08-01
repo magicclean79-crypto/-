@@ -6,6 +6,7 @@ import { JobContextService } from "./job-context.service";
 import { JobLoggerService } from "./job-logger.service";
 import { JobRunnerService } from "./job-runner.service";
 import type { JobDefinition } from "./job-runner.service";
+import { TokenMeterService } from "./token-meter.service";
 
 /** job_runs · job_events · job_stage_metrics를 흉내 내는 인메모리 Prisma */
 function createPrismaMock() {
@@ -47,6 +48,12 @@ function createPrismaMock() {
       }),
       findMany: jest.fn(async () => events.map((row) => ({ ...row }))),
     },
+    execution: {
+      // 단계별 토큰·비용은 **다시 재지 않고 기록에서 읽어 옵니다**
+      // (TokenMeterService, TASK-4701). 이 테스트에는 호출 기록이 없으므로
+      // "물어봤고 없었다" = 0건입니다.
+      findMany: jest.fn(async () => []),
+    },
     jobStageMetric: {
       create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => {
         sequence += 1;
@@ -77,6 +84,7 @@ async function build(prisma: ReturnType<typeof createPrismaMock>) {
       JobContextService,
       JobLoggerService,
       RequestContextService,
+      TokenMeterService,
       { provide: PrismaService, useValue: prisma },
     ],
   }).compile();
@@ -407,5 +415,75 @@ describe("JobRunnerService (TASK-4603)", () => {
     expect(seen).toEqual(["a", "b"]);
     // 작업이 끝나면 컨텍스트가 남지 않는다
     expect(context.current()).toBeNull();
+  });
+});
+
+/**
+ * 죽음 판정과 성공 문구. (TASK-4701 — 라이브에서 잡음)
+ */
+describe("JobRunnerService — 심장박동과 성공 문구 (TASK-4701)", () => {
+  beforeAll(() => {
+    jest.spyOn(Logger.prototype, "log").mockImplementation(() => undefined);
+    jest.spyOn(Logger.prototype, "debug").mockImplementation(() => undefined);
+    jest.spyOn(Logger.prototype, "warn").mockImplementation(() => undefined);
+  });
+
+  /**
+   * 박동을 30초 주기로만 찍으면 **30초 안에 끝나는 작업은 박동이 한 번도
+   * 없습니다.** 큐는 그때 시작 시각을 보는데, 이어한 작업의 시작 시각은
+   * 원래 시작한 때라 이미 오래됐습니다 — 그래서 큐가 **지금 돌고 있는
+   * 작업을 죽었다고 표시**했습니다.
+   */
+  it("시작하는 순간 심장박동을 찍는다", async () => {
+    const prisma = createPrismaMock();
+    const { runner } = await build(prisma);
+
+    await runner.run(
+      definition([{ name: "a", run: async (state) => ({ visited: [...state.visited, "a"] }) }]),
+      { items: ["x"] },
+    );
+
+    expect(prisma.runs[0].heartbeatAt).toBeInstanceOf(Date);
+  });
+
+  /**
+   * 화면에 "성공"이라는 표와 "서버가 멈춰 중단됐습니다"라는 문장이 나란히
+   * 떴습니다 — 같은 사실에 두 개의 답입니다.
+   */
+  it("성공한 작업이 실패 문구를 달고 있지 않다", async () => {
+    const prisma = createPrismaMock();
+    const { runner } = await build(prisma);
+
+    const first = await runner.run(
+      definition([
+        { name: "a", run: async (state) => ({ visited: [...state.visited, "a"] }) },
+        {
+          name: "b",
+          run: async () => {
+            throw Object.assign(new Error("끊김"), { code: "ECONNRESET" });
+          },
+        },
+      ]),
+      { items: ["x"] },
+    );
+    expect(prisma.runs[0].userMessage).not.toBeNull();
+
+    // 도는 중에 누가 실패 문구를 다시 쓸 수도 있습니다 — 실제로 큐가
+    // 그랬습니다. 그래서 끝나는 자리에서 한 번 더 지웁니다.
+    prisma.runs[0].userMessage = "작업을 돌리던 서버가 멈춰 중단됐습니다.";
+    prisma.runs[0].failureKind = "timeout";
+
+    await runner.run(
+      definition([
+        { name: "a", run: async (state) => ({ visited: [...state.visited, "a"] }) },
+        { name: "b", run: async (state) => ({ visited: [...state.visited, "b"] }) },
+      ]),
+      { items: ["x"] },
+      { resumeJobId: first.jobId },
+    );
+
+    expect(prisma.runs[0].status).toBe("succeeded");
+    expect(prisma.runs[0].userMessage).toBeNull();
+    expect(prisma.runs[0].failureKind).toBeNull();
   });
 });

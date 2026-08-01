@@ -17,6 +17,8 @@
     "test:e2e": "turbo run test --filter=web",
     "check:major-migrations": "node scripts/check-major-migrations.mjs",
     "check:ci-gates": "node scripts/check-ci-gates.mjs",
+    "check:live-coverage": "node scripts/check-live-coverage.mjs",
+    "live:checks": "node scripts/live-checks.mjs",
     "cutover": "node scripts/cutover.mjs",
     "validation:preflight": "node scripts/validation-preflight.mjs",
     "clean": "turbo run clean && rm -rf node_modules",

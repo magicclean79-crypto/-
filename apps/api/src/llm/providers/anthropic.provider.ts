@@ -115,13 +115,35 @@ export class AnthropicLlmProvider implements LlmProvider {
       .map((block) => block.text)
       .join("");
 
+    // 토큰 상세 (TASK-4701, 지시 2).
+    //
+    // Anthropic의 `input_tokens`는 **캐시 토큰을 빼고** 옵니다 — 그래서
+    // 캐시가 걸린 호출을 예전처럼 세면 **실제보다 적게** 나갔다고 기록하게
+    // 됩니다. 두 칸(읽기·쓰기)을 따로 받아야 비용이 맞습니다.
+    //
+    // `cache_creation_input_tokens`는 **더 비쌉니다** — 캐시는 공짜로
+    // 생기지 않고, 처음 한 번은 오히려 값을 더 냅니다.
+    const usage = response.usage as typeof response.usage & {
+      cache_read_input_tokens?: number | null;
+      cache_creation_input_tokens?: number | null;
+    };
+
     return {
       provider: this.name,
       model: response.model,
       text,
       usage: {
-        inputTokens: response.usage.input_tokens ?? null,
-        outputTokens: response.usage.output_tokens ?? null,
+        // 이미 캐시를 뺀 값이므로 그대로가 우리 뜻과 같습니다.
+        inputTokens: usage.input_tokens ?? null,
+        outputTokens: usage.output_tokens ?? null,
+      },
+      usageDetail: {
+        cachedInputTokens: usage.cache_read_input_tokens ?? null,
+        cacheWriteTokens: usage.cache_creation_input_tokens ?? null,
+        // Anthropic은 생각 토큰을 따로 세어 주지 않습니다 — `output_tokens`
+        // 안에 들어 있고, 얼마인지는 **우리가 알 수 없습니다.** 0으로
+        // 채우지 않습니다.
+        reasoningTokens: null,
       },
       raw: response,
     };

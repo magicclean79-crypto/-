@@ -1,15 +1,23 @@
 import { Module } from "@nestjs/common";
 
+import { AnalysisModule } from "../analysis/analysis.module";
 import { CommonModule } from "../common/common.module";
+import { ContentsModule } from "../contents/contents.module";
 import { OcrModule } from "../ocr/ocr.module";
 import { PrismaModule } from "../prisma/prisma.module";
 import { AuthModule } from "../auth/auth.module";
 import { AllExceptionsFilter } from "./all-exceptions.filter";
+import { AnalysisBatchJob } from "./analysis-batch.job";
+import { ContentBatchJob } from "./content-batch.job";
 import { JobContextService } from "./job-context.service";
 import { JobLoggerService } from "./job-logger.service";
+import { JobQueueService } from "./job-queue.service";
+import { JobRegistryService } from "./job-registry.service";
 import { JobRunnerService } from "./job-runner.service";
 import { JobsController } from "./jobs.controller";
 import { OcrBatchJob } from "./ocr-batch.job";
+import { PublishBatchJob } from "./publish-batch.job";
+import { TokenMeterService } from "./token-meter.service";
 
 /**
  * 작업 신뢰성. (TASK-4603, Sprint 46 — 프로덕션 품질)
@@ -23,15 +31,37 @@ import { OcrBatchJob } from "./ocr-batch.job";
  * **어디에 붙었는지 한 곳만 보면 됩니다.**
  */
 @Module({
-  imports: [PrismaModule, CommonModule, OcrModule, AuthModule],
+  imports: [
+    PrismaModule,
+    CommonModule,
+    OcrModule,
+    AuthModule,
+    // TASK-4701 지시 1 — 분석·생성·발행을 이 층에 태우기 위해 **불러 쓰기만**
+    // 합니다. 세 모듈 안의 것은 하나도 바뀌지 않습니다.
+    AnalysisModule,
+    ContentsModule,
+  ],
   controllers: [JobsController],
   providers: [
     JobContextService,
     JobLoggerService,
     JobRunnerService,
+    TokenMeterService,
+    JobRegistryService,
+    JobQueueService,
     OcrBatchJob,
+    AnalysisBatchJob,
+    ContentBatchJob,
+    PublishBatchJob,
     AllExceptionsFilter,
   ],
-  exports: [JobContextService, JobLoggerService, JobRunnerService, AllExceptionsFilter],
+  exports: [
+    JobContextService,
+    JobLoggerService,
+    JobRunnerService,
+    TokenMeterService,
+    JobRegistryService,
+    AllExceptionsFilter,
+  ],
 })
 export class ReliabilityModule {}

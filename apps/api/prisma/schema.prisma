@@ -540,6 +540,22 @@ model Execution {
   status       ExecutionStatus
   inputTokens  Int?
   outputTokens Int?
+  /**
+   * 토큰 상세 (TASK-4701, Sprint 47 — 지시 2).
+   *
+   * 지금까지 호출 하나를 두 숫자로만 셌고, **Provider마다 틀리는 방향이
+   * 달랐다**: Anthropic의 `input_tokens`는 캐시를 빼고 와서 적게 셌고,
+   * OpenAI·Gemini의 입력은 캐시를 포함해서 와서 많이 셌다. 세 방향이 다르니
+   * 합계는 어느 쪽으로도 못 믿는다.
+   *
+   * **옛 행은 전부 null이며, null일 때 비용 계산은 예전과 한 푼도 다르지
+   * 않다** — 셈을 과거에 소급하면 지금까지의 모든 기록이 "불일치"로 뜨고
+   * (비용 기록은 Append Only다, 정책 3101-②) 진짜 불일치가 묻힌다.
+   */
+  cachedInputTokens Int?
+  cacheWriteTokens  Int?
+  /// 생각에 쓴 출력 토큰 — **outputTokens 안에 이미 들어 있다**(따로 곱하지 않는다)
+  reasoningTokens   Int?
   cost         Decimal?        @db.Decimal(12, 6) // 예상 비용(USD) — 가격표 없는 모델은 null
   latencyMs    Int
   error        String?
@@ -1395,7 +1411,28 @@ model JobRun {
   actorId      String?
   /// 이 작업을 시작한 요청 (TASK-3601) — 요청과 작업을 맞춰 보기 위해
   requestId    String?
+  /**
+   * 심장박동 (TASK-4701, 지시 3).
+   *
+   * `running`으로 적혀 있는 것과 **실제로 돌고 있는 것**은 다르다. 프로세스가
+   * 죽으면 그 행은 영원히 `running`이고, 아무도 그 행을 보지 않으면 작업은
+   * 끝나지 않은 채 끝난 것처럼 남는다. 박동이 멈춘 지 오래면 그 프로세스가
+   * 죽은 것으로 본다 — **박동이 있는 작업은 절대 건드리지 않는다**(돌고 있는
+   * 작업을 죽었다고 보고 또 돌리면 같은 일을 두 번 산다).
+   */
+  heartbeatAt  DateTime?
+  /**
+   * **자동으로** 이어한 횟수 (TASK-4701). 사람이 누른 것은 세지 않는다.
+   *
+   * 따로 세는 이유: 사람이 누른 재시도와 아무도 안 본 재시도는 같은 값이
+   * 아니다. 자동은 상한이 더 낮고(2회 < 수동 3회), 그 상한에 닿아도 행을
+   * 지우지 않는다 — 조용히 그만두면 아무도 못 끝낸 작업이 없는 일이 된다.
+   */
+  autoResumeRounds Int    @default(0)
+  /// 자동 이어하기가 마지막으로 판단한 시각 — 대기는 여기서부터 잰다
+  autoResumeAt DateTime?
   startedAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
   completedAt  DateTime?
 
   events  JobEvent[]
@@ -1403,6 +1440,8 @@ model JobRun {
 
   @@index([kind, startedAt])
   @@index([status, startedAt])
+  // 자동 이어하기가 훑는 축 (TASK-4701) — 살아 있지 않은 작업만 본다
+  @@index([status, heartbeatAt])
   @@map("job_runs")
 }
 
@@ -1441,6 +1480,15 @@ model JobStageMetric {
   /// 단계 전후의 프로세스 힙 차이. **이 단계가 쓴 메모리가 아니다** —
   /// 프로세스 전체 값이고 같은 시간에 돈 다른 일의 몫이 섞여 있다.
   processHeapDeltaBytes Int?
+  /**
+   * 이 단계가 쓴 돈 (USD) — 모르면 null (TASK-4701, 지시 2).
+   *
+   * 재지 못한 것을 0으로 적으면 "이 단계는 공짜였다"로 읽히고, 그 합계로
+   * 예산을 재면 상한이 실제보다 여유 있어 보인다.
+   */
+  costUsd               Decimal? @db.Decimal(12, 6)
+  /// 가격표에 없어 비용에서 빠진 호출 수 — 0보다 크면 costUsd는 **최소값**이다
+  unpricedCalls         Int?
   at                    DateTime @default(now())
 
   @@index([kind, stage, at])

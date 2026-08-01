@@ -91,6 +91,46 @@ test.describe("작업 현황 (TASK-4603)", () => {
     await expect(page.getByTestId("job-job-timeout")).toContainText("요청 req-abcd");
   });
 
+
+  /**
+   * 자동 이어하기는 **아무도 안 보는 사이에 돈을 씁니다.** 그래서 화면이
+   * 켜져 있는지, 무엇을 이어할 줄 아는지, 무엇은 자동으로 안 하는지를
+   * 함께 말해야 합니다 (TASK-4701, 지시 3).
+   */
+  test("자동 이어하기가 켜져 있는지와 그 한계를 함께 말한다", async ({ page }) => {
+    await setMode("data");
+    await open(page, "/admin/jobs");
+
+    await expect(page.getByTestId("job-queue-detail")).toContainText(
+      "자동 이어하기가 켜져 있습니다",
+    );
+    await expect(page.getByTestId("job-queue")).toContainText("analysis-batch");
+    // 켜져 있어도 아무거나 이어하지 않는다는 사실을 같은 자리에서 말한다
+    await expect(page.getByTestId("job-queue")).toContainText(
+      "다시 해도 같은 실패는 자동으로 돌리지 않습니다",
+    );
+    await expect(page.getByTestId("job-queue")).toContainText("목록에 남습니다");
+  });
+
+  /**
+   * 서버가 멈춰 남은 작업은 **실패가 아니라 "끝났는지 모른다"** 입니다.
+   * 실패로 칠하면 사람이 원인을 찾으러 가고, 성공으로 칠하면 아무도 안
+   * 이어합니다 (TASK-4701).
+   */
+  test("서버가 멈춘 작업을 실패로 칠하지 않는다", async ({ page }) => {
+    await setMode("data");
+    await open(page, "/admin/jobs");
+
+    await expect(page.getByTestId("job-status-job-interrupted")).toHaveText(
+      "서버가 멈춤",
+    );
+    await expect(page.getByTestId("job-job-interrupted")).toContainText(
+      "이어할 수 있습니다",
+    );
+    // 이어하기 버튼이 있어야 한다 — 끝난 단계는 체크포인트에 남아 있다
+    await expect(page.getByTestId("job-resume-job-interrupted")).toBeVisible();
+  });
+
   test("로그인 없이는 읽을 수 없다", async ({ page }) => {
     await setMode("data");
     await page.goto("/admin/jobs");

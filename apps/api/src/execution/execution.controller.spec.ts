@@ -27,6 +27,11 @@ const rows: Execution[] = [
     // 요청 추적 (TASK-3601, 정책 3601-②) — 옛 기록은 모른다(null)
     requestId: null,
     traceId: null,
+    // 토큰 상세 (TASK-4701, 지시 2) — 옛 기록은 null이며, null일 때 비용
+    // 계산은 예전과 한 푼도 다르지 않다
+    cachedInputTokens: null,
+    cacheWriteTokens: null,
+    reasoningTokens: null,
     createdAt: new Date("2026-07-28T02:00:00Z"),
   },
   {
@@ -49,6 +54,11 @@ const rows: Execution[] = [
     // 요청 추적 (TASK-3601, 정책 3601-②) — 옛 기록은 모른다(null)
     requestId: null,
     traceId: null,
+    // 토큰 상세 (TASK-4701, 지시 2) — 옛 기록은 null이며, null일 때 비용
+    // 계산은 예전과 한 푼도 다르지 않다
+    cachedInputTokens: null,
+    cacheWriteTokens: null,
+    reasoningTokens: null,
     createdAt: new Date("2026-07-28T01:00:00Z"),
   },
 ];
