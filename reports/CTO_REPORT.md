@@ -38,7 +38,7 @@
 | Major Migration 교차 검증 | `pnpm check:major-migrations` | ✅ 2건 |
 | 라이브 검증 CI 범위 | `pnpm check:live-coverage` | ✅ 15건 중 11건(73%) |
 | **Live Verification** | `pnpm live:checks` | ✅ **11/11** |
-| **GitHub Actions** | 워크플로 3 Job | ✅ run 30682367752 — 모두 `success` |
+| **GitHub Actions** | 워크플로 3 Job | ✅ **run 30683212033 — 4분 18초**, 모두 `success` |
 | **`/ops/go-live`** | `GET /ops/go-live` | ❌ **`not-started` — 충족 2/8** |
 | **Production Validation** | `POST /ops/validation-run/execute` | ❌ **403 — 시작 불가** |
 | `/ops/readiness` | `GET /ops/readiness` | ⚠️ pass 13 · fail 2 · warn 1 · manual 3 |

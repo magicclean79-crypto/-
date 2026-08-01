@@ -128,7 +128,7 @@ verdict: not-started       충족 2 / 8       lastValidation: null
 | Major Migration 교차 검증 | ✅ 2건 |
 | 라이브 검증 CI 범위 | ✅ 15건 중 11건(73%) |
 | **Live Verification** | ✅ **11/11** |
-| **GitHub Actions** | ✅ run 30682367752 — 3 Job 모두 `success` |
+| **GitHub Actions** | ✅ **run 30683212033 — 4분 18초**, 3 Job 모두 `success` |
 | `/ops/readiness` | ⚠️ pass 13 · fail 2 · warn 1 · manual 3 |
 | `pnpm cutover` | ⚠️ 운영 활성화 **1/3** |
 
@@ -238,7 +238,7 @@ v1.0.0 태그 · Release Notes 확정 · 출시 선언
 
 ## 11. 답을 받지 못한 것
 
-`reports/CTO_REQUEST.md` **#84**에 있습니다. 특히:
+`reports/CTO_REQUEST.md` **#85**에 있습니다. 특히:
 
 - **R-2 — 넷을 누가 언제까지 준비할지.** 이번에도 답이 오지 않았고,
   **이것이 v1.0.0을 막는 유일한 실질 원인**입니다.
