@@ -1,13 +1,20 @@
 # AI Product Content OS
 
-> **`v1.0.0-rc.1`** — CTO 승인. 정식 v1.0은 **미승인**입니다.
-> 태그는 만들었으나 **원격에 올리지 못했습니다** — 이 환경의 git
-> 게이트웨이가 태그 ref 푸시를 **403**으로 막습니다
-> ([`RELEASE_READINESS.md`](RELEASE_READINESS.md) 참고). 출시 판단은
-> [`reports/CTO_RELEASE_REPORT.md`](reports/CTO_RELEASE_REPORT.md)에 있습니다.
+> **`v1.0.0-rc.1`** — Release Candidate. 정식 `v1.0.0`은 **아직
+> 붙이지 않았습니다.**
 >
-> 정식 `v1.0.0`은 **실 Provider 검증이 통과한 뒤에만** 붙입니다. 남은
-> 준비 상태는 [`RELEASE_READINESS.md`](RELEASE_READINESS.md)에서 봅니다.
+> 실 Provider Validation을 **한 번도 돌린 적이 없습니다**
+> (`validation_runs` **0건**) — 실패가 아니라 **시작하지 못한 것**입니다.
+> 남은 것은 사람이 준비해야 하는 7항목이며
+> [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md)로 관리합니다.
+>
+> 최종 판단 [`reports/CTO_FINAL_RELEASE_REPORT.md`](reports/CTO_FINAL_RELEASE_REPORT.md) ·
+> 막는 것 [`reports/RELEASE_BLOCKER_REPORT.md`](reports/RELEASE_BLOCKER_REPORT.md) ·
+> Go-Live 판정 [`reports/GO_LIVE_REPORT.md`](reports/GO_LIVE_REPORT.md)
+>
+> rc.1 태그는 커밋 `5b04dc3`에 만들었으나 이 환경의 git 게이트웨이가 태그
+> ref 푸시를 **403**으로 막아 원격에 없습니다
+> ([`RELEASE_READINESS.md`](RELEASE_READINESS.md)).
 >
 > 처음이면 [`USER_GUIDE.md`](USER_GUIDE.md) · 세우려면
 > [`MIGRATION_GUIDE.md`](MIGRATION_GUIDE.md) · 당직 중이면

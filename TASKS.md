@@ -8,7 +8,11 @@
 
 ## 미완료 (스펙 확정, 구현 대기)
 
-- (없음 — TASK-4901 완료. **Code Freeze 유지**이며 CTO 승인 전 다음 TASK를 시작하지 않는다)
+- (없음 — TASK-5001 완료로 **프로젝트의 마지막 Sprint가 끝났다.** 추가 TASK를 생성하지 않는다. 이후 개발은 v1.1 Roadmap으로 전환한다)
+
+## 완료 — Sprint 50 (Release Sprint · 마지막)
+
+- [x] **TASK-5001 — v1.0 Production Release 시도** (`reports/CTO_FINAL_RELEASE_REPORT.md`): **코드 변경 없음.** 새 기능 없음 · API 변경 없음 · DB 변경 없음. **Release Readiness 7항목을 전부 실측**했고 **7개 중 1개만 충족**입니다(Recovery Drill). 지시 3대로 `POST /ops/validation-run/execute`를 실제로 호출했으나 **403**이었고, `validation_runs`는 **0건**입니다(DB에서 직접 셌습니다). **Validation은 실패한 것이 아니라 시작조차 못 했습니다** — 제품 판정도 `not-started`(충족 2/8)이며 "실패가 아니라 안 한 것입니다. 이 상태에서 나머지 항목이 초록인 것은 준비가 끝났다는 뜻이 아니라 아직 시작도 안 했다는 뜻입니다"라고 말합니다. **우회하지 않았습니다**(지시 2) — mock으로 대체하면 `validation_runs`에 행은 생기지만 그 행은 거짓말이고, 나중에 실연결의 증거로 읽힙니다. **Network Allowlist는 판정보다 넓게 봤습니다** — `pnpm cutover`는 "공식 주소 1곳에 모두 닿습니다"라고 하는데 그 1곳은 Vision이라, 직접 붙어 확인한 결과 Anthropic·Gemini·Vision·S3는 도달하고 **`api.openai.com`만 연결 실패**였습니다. **S3는 계정이 없어 막혔습니다** — 환경의 AWS 자격 증명이 `InvalidClientTokenId`(읽기 전용 확인, 아무것도 만들지 않음). **정식 `v1.0.0`을 붙이지 않았습니다.** 게이트는 전부 초록입니다(build 6/6 · test 2,963 · typecheck 0 · lint 0 · live 11/11 · CI 3 Job). **막고 있는 것은 코드가 아닙니다.** 제출물 4종: CTO_FINAL_RELEASE_REPORT · RELEASE_BLOCKER_REPORT · RELEASE_CHECKLIST · GO_LIVE_REPORT.
 
 ## 완료 — Sprint 49 (Release 준비)
 

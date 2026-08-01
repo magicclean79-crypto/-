@@ -13,255 +13,163 @@
 
 | 항목 | 값 |
 | --- | --- |
-| 보고 기준 TASK | **TASK-4901 — Release 준비 5항목 · `v1.0.0-rc.1` 태그** (Sprint 49) |
+| 보고 기준 TASK | **TASK-5001 — v1.0 Production Release** (Sprint 50 · **마지막 Sprint**) |
 | 보고일 | 2026-08-01 |
 | 브랜치 | `claude/ai-product-content-os-setup-jb5oai` |
-| 태그 | **`v1.0.0-rc.1`** 생성(CTO 승인). **원격 푸시는 실패했습니다 — 게이트웨이가 태그 ref를 403으로 막습니다** (§4-8). 정식 `v1.0.0`은 **붙이지 않았습니다** — 조건이 "Validation 통과 시"이고 `validation_runs`는 **0건**입니다 |
-| 핵심 성과 | **백업이 진짜 돌아오는지 처음으로 끝까지 확인했습니다** — 복원본으로 애플리케이션을 실제로 띄워 로그인과 데이터 조회까지 봤습니다 |
-| 반영한 지시 | **5항목 중 2항목 완료(④⑤) · 3항목 막힘(①②③) · ⑥ 조건 미충족** |
-| **자체 발견 결함** | **1건 — 지난 Sprint에 저희가 쓴 런북의 경로 4개가 존재하지 않았습니다** (§4-1) |
-| 새 기능 | **없음.** API 변경 없음 · DB 구조 변경 없음 — Code Freeze 유지 |
-| 구현 중단 상태 | **TASK-4901 완료 후 즉시 중단** — CTO 승인 전 다음 TASK 미착수 |
+| **결론** | **정식 `v1.0.0`을 붙이지 못했습니다** — Validation이 실패한 것이 아니라 **시작조차 못 했습니다** |
+| `validation_runs` | **0건** (DB에서 직접 셌습니다) |
+| 반영한 지시 | ①②③⑤ 수행 · ④는 **조건 미충족으로 미수행** |
+| 코드 변경 | **없음.** 새 기능 · API · DB · 수정 전부 **0건** |
+| 제출물 | CTO_FINAL_RELEASE_REPORT · RELEASE_BLOCKER_REPORT · RELEASE_CHECKLIST · GO_LIVE_REPORT |
+| 이후 | **추가 TASK를 생성하지 않습니다.** v1.1 Roadmap으로 전환 |
 
-> TASK-4801(v1.0 Release Candidate)의 보고는 `reports/CTO_RELEASE_REPORT.md`에
-> 있습니다. 이 문서는 그 다음 주기입니다.
+> 판단의 전문은 `reports/CTO_FINAL_RELEASE_REPORT.md`에 있습니다.
 
 ## 2. 품질 게이트
 
 | 게이트 | 명령 | 결과 |
 | --- | --- | --- |
-| Build | `pnpm build` | ✅ 6/6 워크스페이스 성공 |
-| Test | `pnpm test` | ✅ **2,963** — core 1,736 · api **975(+3)** · web e2e 252 — 전체 통과 |
+| Build | `pnpm build` | ✅ 6/6 |
+| Test | `pnpm test` | ✅ **2,963** — core 1,736 · api 975 · web e2e 252 |
 | TypeScript | `pnpm typecheck` | ✅ 오류 0 |
 | ESLint | `pnpm lint` | ✅ 오류 0, 경고 0 |
-| Playwright | `pnpm test:e2e` | ✅ 252 통과 |
-| 품질 게이트 자체 검증 | `pnpm check:ci-gates` | ✅ 필수 게이트 7개 순서 일치 |
-| Major Migration 교차 검증 | `pnpm check:major-migrations` | ✅ 2건 일치 (이번 주기 마이그레이션 없음) |
-| 라이브 검증 CI 범위 | `pnpm check:live-coverage` | ✅ 15건 중 11건(73%) CI 가능 — 4건은 사람 몫 |
-| **Live Verification** | `pnpm live:checks` + 실 PostgreSQL·Redis·S3 + 제어 가능 스텁 | ✅ **11/11 통과** (§4-6) |
-| **Release 준비 라이브** | 실제 백업·복원·리허설 (§4-2·4-3) | ✅ **복원본으로 서비스 기동까지 확인** |
-| **GitHub Actions** | 실제 워크플로 실행 (병렬 3 Job) | ✅ **run 30682367752 통과 — 3분 55초** (세 Job 모두 `success`) |
-| **`/ops/readiness`** | `GET /ops/readiness` | ⚠️ **pass 13 · fail 2 · warn 1 · manual 3** — `recoverable: false` (직전 pass 10 · fail 3) |
-| **`/ops/cutover`** | `pnpm cutover` | ⚠️ **exit 1 — 활성화 1/3 조건** (변화 없음 — ①③이 막혀 있습니다) |
-| 검증 사전 점검 | `pnpm validation:preflight` | ⚠️ **exit 1 — 준비 4/11** (변화 없음) |
+| Playwright | `pnpm test:e2e` | ✅ 252 |
+| 품질 게이트 자체 검증 | `pnpm check:ci-gates` | ✅ 7개 순서 일치 |
+| Major Migration 교차 검증 | `pnpm check:major-migrations` | ✅ 2건 |
+| 라이브 검증 CI 범위 | `pnpm check:live-coverage` | ✅ 15건 중 11건(73%) |
+| **Live Verification** | `pnpm live:checks` | ✅ **11/11** |
+| **GitHub Actions** | 워크플로 3 Job | ✅ run 30682367752 — 모두 `success` |
+| **`/ops/go-live`** | `GET /ops/go-live` | ❌ **`not-started` — 충족 2/8** |
+| **Production Validation** | `POST /ops/validation-run/execute` | ❌ **403 — 시작 불가** |
+| `/ops/readiness` | `GET /ops/readiness` | ⚠️ pass 13 · fail 2 · warn 1 · manual 3 |
+| `/ops/cutover` | `pnpm cutover` | ⚠️ 전환 0/4 · 운영 활성화 **1/3** |
+| 검증 사전 점검 | `pnpm validation:preflight` | ⚠️ 준비 **4/11** |
+
+**막고 있는 것은 코드가 아닙니다.** 위 표에서 빨간 것은 전부 **환경과
+자격 증명**입니다.
 
 ## 3. 변경 사항 (이번 보고 주기)
 
-### TASK-4901 — Release 준비 5항목 · `v1.0.0-rc.1`
+### TASK-5001 — v1.0 Production Release
 
-**3-1. 새 기능은 하나도 없습니다**
+**소스 코드 변경 0건입니다.** 지시 5가 "새 기능을 개발하지 않는다"이고,
+게이트가 전부 초록이며 Critical이 0건이라 고칠 것도 없었습니다.
 
-Code Freeze 상태에서 한 일은 셋입니다: **실제로 운영 절차를 수행한 것**,
-**저희가 쓴 문서의 오류를 고친 것**, 그리고 **그 오류가 다시 생기지 않게
-기계가 보게 한 것**. 소스 변경은 **테스트 파일 1개 추가가 전부**입니다.
+만든 것은 문서 4종입니다.
 
-| 파일 | 성격 |
+| 문서 | 내용 |
 | --- | --- |
-| `apps/api/src/ops/runbook-routes.spec.ts` | **신규 검사** — 런북의 주소 ↔ 실제 라우트 표 대조 |
-| `OPERATIONS_RUNBOOK.md` | 존재하지 않던 경로 4개 수정 |
-| `RELEASE_READINESS.md` | **신규** — 정식 `v1.0.0`까지 남은 것 추적 |
-| `README.md` · `TASKS.md` | rc.1 상태 반영 |
+| `reports/CTO_FINAL_RELEASE_REPORT.md` | 최종 출시 판단 |
+| `reports/RELEASE_BLOCKER_REPORT.md` | Blocker 6가지와 해제 조건 |
+| `RELEASE_CHECKLIST.md` | 사람이 준비할 7항목 (지시 2) |
+| `reports/GO_LIVE_REPORT.md` | 제품이 내린 Go-Live 판정 |
 
-**3-2. 런북의 경로를 고쳤습니다 (§4-1의 결함)**
-
-| 런북에 적혀 있던 것 | 실제 |
-| --- | --- |
-| `GET /ops/backup` | **없음** → `/ops/readiness`의 `backup` 블록 |
-| `GET /ops/recovery` | **없음** → `/ops/readiness`의 `restore`·`enterprise.objectives` + `/ops/drills` |
-| `GET /ops/schedule` | **없음** → `/ops/diagnostics`의 `checks[].scheduler` |
-| `GET /ops/lock` | **없음** → `/ops/readiness`의 `redis` 블록 |
-
-**3-3. 기계가 보게 했습니다**
-
-`runbook-routes.spec.ts`는 컨트롤러 소스에서 `@Controller` 접두사와 메서드
-데코레이터를 읽어 **실제 라우트 표**를 만들고, 런북에서 뽑은 주소가 전부 그
-표에 있는지 봅니다. `:id`·`$ID` 같은 자리는 하나의 자리표로 정규화합니다.
-
-검사가 **아무것도 안 보는 상태로 초록이 되는 것**을 막기 위해 두 가지를
-함께 봅니다: 라우트 표가 80개 이상인가, 런북에서 주소를 15개 이상 뽑았는가.
-정규식이 깨지면 **통과가 아니라 실패**합니다.
+`README.md` · `TASKS.md`도 상태를 반영해 갱신했습니다.
 
 ## 4. 테스트 결과
 
-### 4-1. 자체 발견 결함 — 런북이 없는 주소를 가리키고 있었습니다
+### 4-1. Release Readiness 7항목 실측 (지시 1)
 
-**어떻게 찾았는가**: 코드를 읽어서가 아니라, **런북에 적힌 명령을 그대로 쳐
-봤기 때문**입니다. `curl $API/ops/recovery`가 404를 뱉었습니다.
+| | 항목 | 상태 | 근거 |
+| --- | --- | --- | --- |
+| 1 | Provider Credential | ❌ | `LLM_PROVIDER=mock` |
+| 2 | Network Allowlist | ⚠️ 부분 | **`api.openai.com`만 연결 실패** |
+| 3 | Validation Environment | ❌ | 검증 대상 미정 |
+| 4 | Production Host Inventory | ❌ | 선언 2 · **미선언 6** · 미관측 1 |
+| 5 | Amazon S3 | ❌ | s3rver (`storage-standard` fail) |
+| 6 | Backup Chain | ❌ | **18.4시간 공백** (24시간에 2/24회) |
+| 7 | Recovery Drill | ✅ | `pass` · RPO 37분 · RTO 1초 |
 
-전수 확인한 결과 **네 개**가 존재한 적 없는 주소였습니다. 전부 TASK-4801에서
-**저희가 쓴 문서**입니다.
+### 4-2. Network Allowlist — 판정보다 넓게 봤습니다
 
-**왜 이것이 실제 피해인가.** 런북은 당직 중에 읽는 문서이고, 그때가 시간이
-가장 비싼 순간입니다. 장애 한가운데서 붙여 넣은 명령이 404를 뱉으면 사람은
-**"서버가 죽었나"를 먼저 의심합니다** — 없는 주소를 적어 둔 대가를 **가장
-나쁜 순간에** 치릅니다.
+`pnpm cutover`는 "네트워크 ✓ **공식 주소 1곳**에 모두 닿습니다"라고
+말하는데, **그 1곳은 Vision입니다.** 판정만 읽으면 길이 다 열린 것으로
+보이므로 직접 확인했습니다:
 
-**왜 아무도 몰랐는가.** 이 결함은 **아무것도 실패시키지 않습니다.** 빌드도
-테스트도 초록이고, 문서는 사람이 실제로 그 명령을 칠 때까지 조용합니다.
-
-**검사가 진짜 잡는지 확인했습니다.** 런북에 `$API/ops/does-not-exist`를
-일부러 넣고 돌렸습니다:
-
-```
-+   "/ops/does-not-exist",
-Tests:       1 failed, 2 passed, 3 total
-```
-
-**초록만 나올 수 있는 검사는 검사가 아닙니다.** 확인 후 원복했습니다.
-
-### 4-2. Release 준비 ④ — Backup Restore Test (실제 수행)
-
-| 단계 | 결과 |
+| 주소 | 응답 |
 | --- | --- |
-| 백업 (`POST /ops/backup/run`) | 265,771바이트 · 269항목 · 265ms · 체크섬 · 무결성 통과 |
-| 복원 (`POST /ops/backup/verify-restore`) | 별도 DB `acos_restore_4901`에 **49테이블** · 1,352ms |
+| `api.anthropic.com` · `generativelanguage.googleapis.com` · `vision.googleapis.com` | 404 (도달) |
+| `s3.amazonaws.com` | 307 (도달) |
+| **`api.openai.com`** | **연결 실패** |
 
-**API 응답을 믿지 않았습니다.** 대상 DB에 직접 붙어 확인했습니다:
+판정이 틀린 것은 아니지만 **읽는 사람을 오해시킬 수 있습니다** — v1.1
+후보로 남겼습니다.
 
-| 확인 | 값 |
-| --- | --- |
-| 테이블 수 | 49 |
-| `users` | **9건 = 운영 9건** |
-| `_prisma_migrations` | **57건** |
-| `prisma migrate status` | **up to date** |
-
-`/ops/readiness`의 `restore`가 `ok`("복원 검증 통과 — 테이블 49개 확인")로
-바뀌었습니다.
-
-### 4-3. Release 준비 ⑤ — Recovery Drill (실제 수행)
-
-절차서는 "복원 → 마이그레이션 상태 확인"까지인데, 한 걸음 더 갔습니다.
-**복원본으로 애플리케이션을 실제로 띄웠습니다.**
-
-| 확인 | 결과 |
-| --- | --- |
-| `/health` | 200 |
-| ADMIN 로그인 | 성공 — **같은 계정 · 같은 id** |
-| `/projects` | 실제 데이터 반환 |
-| 총 소요 | 약 103초 |
-
-복원이 증명해야 하는 것은 "파일이 돌아왔다"가 아니라 **"서비스가
-돌아왔다"** 입니다. 덤프가 열린다는 것과 그 위에서 제품이 산다는 것은 다른
-사실입니다.
-
-`db-major-change` 리허설 요구가 해소됐습니다
-(`satisfiedAt: 2026-08-01T03:21:45Z`).
-
-**기록에 한계도 함께 남겼습니다** — 개발 호스트에서 했으므로 **운영 호스트의
-RTO는 여전히 모릅니다.** 원격 복제가 꺼져 있어 **호스트가 사라지는
-시나리오는 검증하지 못했습니다.**
-
-### 4-4. 부수 확인 — 안전장치가 문서가 아니라 코드에서 막습니다
-
-복원본으로 띄우려고 `DATABASE_URL`을 복원 대상과 같게 두었더니 **기동이
-거부됐습니다**:
+### 4-3. Production Validation 시도 (지시 3)
 
 ```
-환경 오류 [BACKUP_RESTORE_DB_URL] 복원 대상이 운영 데이터베이스와 같습니다 —
-복원은 대상을 지우고 쓰므로 검증이 곧 사고가 됩니다.
+POST /ops/validation-run/execute → HTTP 403
+SELECT count(*) FROM validation_runs;  -- 0
 ```
 
-결정 1601-②가 문서에만 있는 규칙이 아니라는 것을, 그 상황을 실제로 만들어
-확인한 것은 이번이 처음입니다.
+거절 사유 3건: 검증 대상 미정 · 사람이 줘야 하는 단계 3건 · 앞 단계에 막힌
+단계 4건.
 
-### 4-5. Release 준비 ①②③ — 막혔습니다
+**우회하지 않았습니다(지시 2).** mock으로 대체하면 행은 생기지만 그 행은
+거짓말이고, 제품이 그 위험을 직접 문장으로 막고 있습니다 — "준비되지 않은
+채 돌리면 스텁을 상대로 한 성공 기록이 남고, 그 기록은 나중에 실연결의
+증거로 읽힙니다."
 
-| | 시도 | 결과 |
-| --- | --- | --- |
-| ① | `pnpm validation:preflight` | 준비 **4/11** · 막는 것 3가지 |
-| ② | `POST /ops/validation-run/execute` | **403** — `validation_runs` 여전히 **0건** |
-| ③ | `sts:GetCallerIdentity` (읽기 전용) | **`InvalidClientTokenId`** — 유효한 AWS 계정이 아닙니다 |
-
-③에 대해: 이 환경에 `AWS_ACCESS_KEY_ID`가 있어 유효한지 **읽기 전용으로만**
-물어봤고, s3rver용 더미로 확인됐습니다. **아무것도 만들지 않았습니다** — 남의
-계정에 버킷을 만드는 것은 되돌리기 어렵고 돈이 나가는 일이라, 유효했더라도
-여쭙기 전에는 만들지 않았을 것입니다.
-
-### 4-6. 라이브 검사 11/11
-
-처음 돌렸을 때 2건이 **"판정하지 않음"** 이었습니다 — 제어 가능한 Vision
-스텁이 떠 있지 않아서입니다. 여기서 중요한 것은 그 2건이 **통과로 세지지
-않았다**는 점입니다("모르는 것을 통과로 세지 않습니다"). 스텁을 CI와 같은
-방식으로 띄운 뒤 11/11이 됐습니다.
-
-### 4-7. GitHub Actions
-
-태그가 가리키는 커밋 `5b04dc3`에서 워크플로 3 Job이 모두 통과했습니다
-(run 30682367752 · run_number 53 · 3분 55초).
-
-| Job | 결과 | 소요 |
-| --- | --- | --- |
-| `quality-gates` | success | 2분 3초 |
-| `live-checks` | success | 1분 9초 |
-| `web-e2e` | success | 3분 43초 |
-
-### 4-8. 태그를 원격에 올리지 못했습니다
-
-`v1.0.0-rc.1`을 CI가 검증한 커밋 `5b04dc3`에 주석 태그로 만들었지만 **푸시가
-403으로 거절**됐습니다. 브랜치 푸시는 정상이므로 **태그 ref만** 막는
-정책입니다. 네 번 재시도했고 네 번 같은 응답이었습니다.
+### 4-4. Go-Live 판정
 
 ```
-error: RPC failed; HTTP 403 curl 22 The requested URL returned error: 403
+verdict: not-started    충족 2/8    lastValidation: null
 ```
 
-이 세션의 GitHub 도구에도 태그를 만드는 것은 없습니다(읽기 전용
-`get_tag`·`get_release_by_tag`만).
+충족: 경보 경로 도달 확인 · 되돌리는 절차 확인.
 
-**우회하지 않았습니다.** 태그 대신 브랜치를 올리면 "태그가 아니면서 태그처럼
-보이는 것"이 남고, 지정 브랜치 외 푸시는 하지 않기로 되어 있습니다. 사람이
-한 줄로 만들 수 있는 명령을 `RELEASE_READINESS.md`에 적어 두었습니다.
+> **실패가 아니라 안 한 것입니다.** 이 상태에서 나머지 항목이 초록인 것은
+> 준비가 끝났다는 뜻이 아니라 **아직 시작도 안 했다는 뜻**입니다.
+
+### 4-5. S3 — 읽기 전용으로만 확인했습니다
+
+환경의 `AWS_ACCESS_KEY_ID`가 유효한지 `sts:GetCallerIdentity`로
+물어봤고 **`InvalidClientTokenId`**였습니다. **아무것도 만들지
+않았습니다.**
 
 ## 5. 아키텍처 변경
 
-**없습니다.** Port/Adapter 경계 변경 없음, 모듈 구성 변경 없음, 판정 로직
-변경 없음. 추가된 것은 **검사 파일 1개**뿐입니다.
+**없습니다.** 이번 주기에 소스 파일을 하나도 바꾸지 않았습니다.
 
-**현황** — 순수 판정은 `@acos/core`, 어댑터는 `apps/api`. 이번 주기에 이
-경계를 건드린 곳은 없습니다.
+**현황** — 순수 판정은 `@acos/core`, 어댑터는 `apps/api`. 쉰 스프린트 동안
+이 경계를 유지했습니다.
 
 ## 6. 데이터 모델
 
-**변경 없음.** 마이그레이션 **57건** 유지, Major Migration **2건** 유지.
+**변경 없음.** 마이그레이션 **57건**, Major Migration **2건**.
 
-이번 주기에 만든 데이터베이스 `acos_restore_4901`은 **복원 검증 대상**이며
-제품 스키마의 일부가 아닙니다.
+`validation_runs` 테이블은 존재하지만 **행이 0건**입니다 — 스키마가 없는
+것이 아니라 **한 번도 쓰이지 않은 것**입니다.
 
 ## 7. API 표면
 
-**변경 없음.** 엔드포인트 추가·삭제·응답 형태 변경 모두 없습니다.
-
-문서가 가리키던 주소 4개를 고친 것은 **문서 수정**이며, API가 바뀐 것이
-아닙니다 — 그 주소들은 애초에 존재한 적이 없습니다.
+**변경 없음.** 추가·삭제·응답 형태 변경 모두 0건.
 
 ## 8. 리스크·기술 부채
 
 | | 리스크 | 상태 |
 | --- | --- | --- |
-| **R1** | **실 Provider 검증 0건** — 정식 v1.0의 유일한 전제 | **열두 스프린트째.** 넷(자격 증명·허용 목록·검증 환경·호스트 목록)이 없으면 시작조차 안 됩니다 |
-| **R2** | **운영 저장소가 s3rver** | 유효한 AWS 계정이 없어 막힘. 보호 상태가 영영 "직접 확인"으로 남습니다 |
-| **R3** | **`backup-chain` 18.4시간 공백** | 자격 증명이 아니라 **호스트가 24시간 살아 있어야** 해소됩니다. 이 컨테이너는 그 시간을 살지 않습니다 |
-| **R4** | **원격 복제 꺼짐(`BACKUP_OFFSITE`)** | 호스트가 사라지는 시나리오는 **리허설로도 검증하지 못했습니다** |
-| **R5** | **운영 호스트 RTO 미상** | 리허설은 개발 호스트에서 했습니다 |
-| **R6** | 다중 인스턴스 실검증 없음 | v1.1 이관 (변화 없음) |
-| **R7** | 가격표 7종뿐 | 없는 모델은 비용이 집계되지 않습니다. **누가 채울지 미정** (R-7 미답) |
+| **B-1** | **Provider Credential 없음** | **열두 스프린트째.** 나머지 대부분이 여기서 파생됩니다 |
+| **B-2** | Validation Environment 없음 | 검증은 실제 호출을 하고 돈을 씁니다 — 운영에 대고 할 수 없습니다 |
+| **B-3** | Host Inventory 미확정 | 목록이 틀리면 보호가 **막는 게 아니라 통과시킵니다** |
+| **B-4** | 운영 저장소가 s3rver | 유효한 AWS 계정 없음 |
+| **B-5** | Backup Chain 18.4시간 공백 | **시간 문제** — 호스트가 24시간 살아야 합니다 |
+| **B-6** | `api.openai.com` 미도달 | Provider를 확정하면 그 주소만 열어도 됩니다 |
+| R-7 | 가격표 7종뿐 | 없는 모델은 비용이 집계되지 않습니다 |
+| R-8 | 다중 인스턴스 실검증 없음 | 두 프로세스를 실제로 붙여 보지 못했습니다 |
+| R-9 | 출시 문서 4종 경로 미점검 | TASK-4901의 검사는 **런북만** 봅니다 — 확인한 것이 아닙니다 |
 
-**부채로 남긴 것**: 다른 출시 문서 4종(`RELEASE_NOTES_v1.0` ·
-`MIGRATION_GUIDE` · `KNOWN_LIMITATIONS` · `USER_GUIDE`)에도 같은 종류의 오류가
-있을 수 있습니다. 이번에 넣은 검사는 **런북만** 봅니다 — 나머지는 API 주소를
-거의 싣지 않아 우선순위를 낮게 두었지만, **확인한 것은 아닙니다.**
+**부채가 아닌 것**: 코드 품질(게이트 전부 초록·Critical 0건)과 복구
+능력(리허설 완료·RPO/RTO 충족).
 
 ## 9. 다음 권장 사항
 
-1. **R-2에 날짜를 정해 주십시오 — 이것이 전부를 막고 있습니다.** ①②③이
-   모두 넷의 준비에 걸려 있고, ④⑤는 끝났습니다. **지시대로라면 저희가 지금
-   더 할 수 있는 Release 준비 항목이 없습니다.**
-2. **`backup-chain`을 정식 v1.0의 전제로 둘지 정해 주십시오.** 두시려면
-   예약 백업이 도는 호스트가 최소 24시간 필요합니다.
-3. **`BACKUP_OFFSITE`를 켤지 정해 주십시오.** 지금은 백업이 데이터베이스와
-   같은 곳에만 있습니다.
-4. 정식 `v1.0.0`은 **`validation_runs`에 통과 기록이 남고 `pnpm cutover`가
-   3/3을 낼 때** 붙입니다. 그때 `RELEASE_NOTES_v1.0.md`를 정식판으로 고치고
-   최종 Release Report를 제출하겠습니다.
-5. **CTO_REQUEST #84 확인** — 특히 미답으로 남은 R-5·R-6·R-7과 #83의
-   ①(자동 이어하기 기본값)·②(두 인스턴스 실경쟁).
+1. **`RELEASE_CHECKLIST.md`의 7항목에 담당자와 날짜를 정해 주십시오.**
+   이 표가 채워지지 않으면 `v1.0.0`은 붙지 않습니다.
+2. **B-1 하나가 풀리면 B-2·B-6이 같이 움직입니다** — 어떤 Provider를 쓸지
+   먼저 정하는 것이 가장 빠른 길입니다.
+3. **`v1.0.0-rc.1` 태그를 원격에 올려 주십시오** — 저희는 태그 ref 푸시가
+   403으로 막혀 있습니다. 명령은 `RELEASE_READINESS.md`에 있습니다.
+4. **CTO_REQUEST #85 확인** — 특히 ①(이 상태를 "실패"로 볼지 "미시작"으로
+   볼지)과 R-2.
+5. v1.1 Roadmap 순서는 `CTO_FINAL_RELEASE_REPORT` §10에 있습니다.
