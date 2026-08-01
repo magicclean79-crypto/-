@@ -136,19 +136,38 @@ async function seedImages(count) {
   return unique.slice(0, count);
 }
 
+/**
+ * 묶음이 끝까지 도는가.
+ *
+ * **"끝났다"만 보면 안 됩니다** (TASK-4801에서 고침). 모든 항목이
+ * 건너뛰어져도 작업은 `succeeded`입니다 — 한 건의 문제로 건너뛰는 것은
+ * 정상 동작이기 때문입니다. 그래서 상태만 보는 검사는 **저장소 설정이
+ * 통째로 틀린 상태에서도 초록**이 됩니다.
+ *
+ * 실제로 그렇게 됐습니다: s3rver가 다른 디렉터리를 보고 있어 이미지를
+ * 하나도 못 읽었는데 이 검사는 통과했습니다. **초록일 수 있는 게이트는
+ * 게이트가 아닙니다.**
+ *
+ * 그래서 **일을 실제로 했는지**까지 봅니다.
+ */
 async function checkBatchSucceeds(imageIds) {
   const response = await call("/jobs/ocr-batch", {
     method: "POST",
     body: JSON.stringify({ imageIds }),
   });
   const job = response.body?.job;
-  const ok = response.status === 200 && job?.status === "succeeded";
+  const finished = response.status === 200 && job?.status === "succeeded";
+  // 건너뛴 것이 있으면 그만큼 **얻은 것이 없습니다.**
+  const skipped = typeof job?.detail === "string" && job.detail.includes("건너뛴 항목");
+  const ok = finished && !skipped;
   record(
     "job-batch-succeeds",
     ok,
     ok
-      ? `${job.completedStages.length}/${job.totalStages}단계 · ${job.totalMs}ms`
-      : `HTTP ${response.status} · ${JSON.stringify(response.body).slice(0, 200)}`,
+      ? `${job.completedStages.length}/${job.totalStages}단계 · ${job.totalMs}ms · 건너뛴 항목 없음`
+      : finished
+        ? `끝나기는 했지만 얻은 것이 없습니다: ${job.detail.slice(0, 160)}`
+        : `HTTP ${response.status} · ${JSON.stringify(response.body).slice(0, 200)}`,
   );
   return job ?? null;
 }

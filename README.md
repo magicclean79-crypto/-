@@ -1,5 +1,13 @@
 # AI Product Content OS
 
+> **v1.0 Release Candidate** — 버전 1.0.0. 출시 판단은
+> [`reports/CTO_RELEASE_REPORT.md`](reports/CTO_RELEASE_REPORT.md)에 있습니다.
+>
+> 처음이면 [`USER_GUIDE.md`](USER_GUIDE.md) · 세우려면
+> [`MIGRATION_GUIDE.md`](MIGRATION_GUIDE.md) · 당직 중이면
+> [`OPERATIONS_RUNBOOK.md`](OPERATIONS_RUNBOOK.md) · 안 되는 것은
+> [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md).
+
 AI 기반 제품 콘텐츠 운영 시스템(Monorepo)입니다. pnpm + Turborepo로 관리됩니다.
 
 ## 프로젝트 구조
