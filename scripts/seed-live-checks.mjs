@@ -25,6 +25,7 @@
  *   exit 2 — 심지 못했다 — **통과로 처리하지 않는다**
  */
 
+import { appendFileSync } from "node:fs";
 import { createRequire } from "node:module";
 
 // Prisma Client는 `apps/api`의 의존성입니다. 저장소 뿌리에서는 보이지
@@ -46,6 +47,24 @@ const TINY_PNG = Buffer.from(
 );
 
 const prisma = new PrismaClient();
+
+/**
+ * 심은 이미지를 **검사에게 넘겨 줍니다.**
+ *
+ * 검사는 원래 "OCR에 성공한 적 있는 이미지"를 골랐습니다 — 읽히지 않는
+ * 파일을 골라 놓고 층이 잘못됐다고 말하면 오진이기 때문입니다. 그런데
+ * **빈 DB에는 성공 기록이 없습니다.** CI에서 검사가 "쓸 이미지가 없습니다"로
+ * 끝난 이유가 이것입니다(판정 불가 — 통과가 아닙니다).
+ *
+ * 그래서 심은 쪽이 이름을 알려 줍니다. 방금 파일까지 올려 두었으므로
+ * **읽힌다는 것을 우리가 압니다.**
+ */
+function handOver(ids) {
+  console.log(`[seed] image-ids: ${ids.join(",")}`);
+  if (process.env.GITHUB_ENV) {
+    appendFileSync(process.env.GITHUB_ENV, `IMAGE_IDS=${ids.join(",")}\n`);
+  }
+}
 
 async function putObject(key) {
   const response = await fetch(`${S3_ENDPOINT}/${S3_BUCKET}/${key}`, {
@@ -82,6 +101,7 @@ try {
       await putObject(image.key);
     }
     console.log(`[seed] 이미지 ${existing}장이 이미 있어 파일만 확인했습니다.`);
+    handOver(images.map((image) => image.id));
     process.exit(0);
   }
 
@@ -92,10 +112,11 @@ try {
     data: { projectId: project.id, name: "검사용 상품", description: null },
   });
 
+  const created = [];
   for (let index = 0; index < WANT_IMAGES; index += 1) {
     const key = `images/live-checks/${project.id}-${index}.png`;
     await putObject(key);
-    await prisma.image.create({
+    const image = await prisma.image.create({
       data: {
         productId: product.id,
         projectId: project.id,
@@ -108,9 +129,11 @@ try {
         originalName: `live-${index}.png`,
       },
     });
+    created.push(image.id);
   }
 
   console.log(`[seed] 프로젝트 1개 · 상품 1개 · 이미지 ${WANT_IMAGES}장을 심었습니다.`);
+  handOver(created);
   process.exit(0);
 } catch (error) {
   console.error(`[seed] 심지 못했습니다: ${String(error)}`);

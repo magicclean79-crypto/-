@@ -209,6 +209,11 @@ jobs:
           node scripts/wait-for.mjs http://127.0.0.1:9100/__mode 60
           node scripts/wait-for.mjs http://127.0.0.1:9000/acos 120
 
+      # 씨앗이 심은 이미지 이름을 `IMAGE_IDS`로 넘겨 줍니다.
+      # 검사는 원래 "OCR에 성공한 적 있는 이미지"를 골랐는데, 빈 DB에는
+      # 그런 기록이 없어 "쓸 이미지가 없습니다"로 끝났습니다(판정 불가 —
+      # 통과가 아닙니다). 심은 쪽은 파일까지 올려 두었으므로 그 이미지가
+      # 읽힌다는 것을 압니다.
       - name: 씨앗
         run: node scripts/seed-live-checks.mjs
 
