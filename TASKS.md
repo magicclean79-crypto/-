@@ -8,7 +8,11 @@
 
 ## 미완료 (스펙 확정, 구현 대기)
 
-- (없음 — TASK-5101로 **v1.0의 마지막 공식 산출물까지 끝났다.** 추가 TASK를 생성하지 않는다. 이후 개발은 v1.1 Roadmap으로 전환한다)
+- [ ] **TASK-5201 — Release Blocker 제거 (진행 불가 · 자격 증명 대기)**: 지시 1~8 중 **어느 것도 시작하지 못했다.** 계정 준비는 완료되었으나 값이 이 실행 환경에 도착하지 않았고(`OPENAI_API_KEY` 없음 · `AWS_ACCESS_KEY_ID`는 프록시 더미), `api.openai.com`은 연결 차단이다. `CREDENTIALS_HANDOFF.md`의 절차대로 값이 도착하면 즉시 재개한다.
+
+## 완료 — Sprint 52 (Release Blocker 제거 착수)
+
+- [x] **TASK-5201(부분) — 자격 증명 도착 확인 및 전달 절차 정리** (`CREDENTIALS_HANDOFF.md`): **코드 변경 0건.** 지시 1~8을 시작하기 전에 자격 증명이 실제로 도착했는지 확인했고, **도착하지 않았음을 확인**했습니다 — `OPENAI_API_KEY`는 환경변수에도 `apps/api/.env`(5줄, s3rver 설정뿐)에도 없고, `AWS_ACCESS_KEY_ID`는 **`proxy-in…`(14자) 샌드박스 프록시 더미**입니다(실제 AWS 키는 `AKIA`/`ASIA`로 시작하는 20자). **막힌 것이 둘임을 새로 발견했습니다** — 키가 도착해도 이 환경에서 **`api.openai.com`은 연결 자체가 되지 않습니다**(`curl exit 56`). AWS 쪽은 `s3.amazonaws.com` 307 · `sts.amazonaws.com` 302로 열려 있어 **OpenAI만 닫혀 있습니다.** **우회하지 않았습니다** — `OPENAI_BASE_URL`을 프록시로 돌리면 호출은 성공하지만 그 기록은 전환으로 인정되지 않으며(TASK-3401 · 결정 3501-①), `validation_runs`에 남은 그 행은 나중에 실연결의 증거로 읽힙니다. 기존 절차서(`s3-migration.md` · `validation-environment.md` · `production-cutover.md`)를 대체하지 않고 **빠져 있던 "값을 어디에 넣는가"만** 채웠으며, 키를 채팅·커밋·로그에 넣지 않는 방법을 명시했습니다(`.gitignore` 15~16행이 `.env`를 막고 있음을 확인). `RELEASE_CHECKLIST.md`를 실측 상태로 갱신했습니다.
 
 ## 완료 — Sprint 51 (AI Continuity System)
 

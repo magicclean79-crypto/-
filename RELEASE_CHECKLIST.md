@@ -1,6 +1,13 @@
 # RELEASE_CHECKLIST — 정식 `v1.0.0` 출시 점검표
 
-> TASK-5001, Sprint 50 (마지막 Sprint) · 실측일 2026-08-01
+> TASK-5001 → **TASK-5201 갱신** · 실측일 2026-08-01
+>
+> **2026-08-01 갱신**: CTO가 OpenAI 계정 · API Key · AWS 계정 준비 완료를
+> 확인했습니다. 그런데 **그 값들이 이 실행 환경에는 도착하지 않았습니다**
+> (`OPENAI_API_KEY` 없음 · `AWS_ACCESS_KEY_ID`는 프록시 더미 `proxy-in…`).
+> 전달 방법은 [`CREDENTIALS_HANDOFF.md`](CREDENTIALS_HANDOFF.md)에 적었습니다.
+> **추가로 `api.openai.com`이 이 환경에서 연결 차단(curl exit 56)입니다** —
+> 키가 도착해도 이것이 따로 풀려야 합니다.
 >
 > **사람이 준비해야 하는 항목은 이 표로만 관리합니다.** 자동으로 우회하거나
 > mock으로 대체하지 않습니다 (CTO 지시 2).
@@ -11,8 +18,8 @@
 
 | | 항목 | 상태 | 누가 |
 | --- | --- | --- | --- |
-| 1 | Provider Credential | ❌ **없음** | 사람 |
-| 2 | Network Allowlist | ⚠️ **부분** — OpenAI만 안 닿음 | 사람 |
+| 1 | Provider Credential | ⚠️ **계정 준비됨 · 이 환경에 미도착** | 사람 |
+| 2 | Network Allowlist | ❌ **`api.openai.com` 연결 차단** | 사람 |
 | 3 | Validation Environment | ❌ **없음** | 사람 |
 | 4 | Production Host Inventory | ❌ **미확정** — 미선언 6개 | 사람 |
 | 5 | Amazon S3 | ❌ **s3rver** | 사람 |
