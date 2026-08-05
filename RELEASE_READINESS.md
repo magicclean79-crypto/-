@@ -28,31 +28,58 @@
 
 ### 이 환경 판정 (측정값)
 
-| 판정 | 컨테이너 (08-01) | **로컬 (08-04)** |
-| --- | --- | --- |
-| `/ops/readiness` | pass 13 · fail 2 · warn 1 · manual 3 | **pass 9 · fail 0 · warn 3 · manual 6** · `recoverable: true` |
-| `pnpm cutover` | 전환 0/4 · 활성화 1/3 | **전환 0/4 · 활성화 0/3** |
-| `pnpm validation:preflight` | 준비 4/11 | **준비 0/11** |
-| `/ops/go-live` | `not-started` 2/8 | **`not-started` 0/8** |
-| `validation_runs` | 0건 | **0건** |
+| 판정 | 컨테이너 (08-01) | 로컬 최초 (08-04) | **로컬 현재 (08-05)** |
+| --- | --- | --- | --- |
+| `/ops/readiness` | pass 13 · fail 2 · warn 1 · manual 3 | pass 9 · fail 0 · warn 3 · manual 6 | **pass 10 · fail 1 · warn 3 · manual 4** |
+| `pnpm cutover` | 전환 0/4 · 활성화 1/3 | 전환 0/4 · 활성화 0/3 | **전환 0/4 · 활성화 0/3** |
+| `pnpm validation:preflight` | 준비 4/11 | 준비 0/11 | **준비 1/11** |
+| 운영 활성화 런북 | — | — | **1/8** |
+| `/ops/go-live` | `not-started` 2/8 | `not-started` 0/8 | **`not-started` 2/8** |
+| `validation_runs` | 0건 | 0건 | **0건** |
 
 ### 이 환경에서 실제로 밟은 것
 
 | 단계 | 결과 |
 | --- | --- |
 | 런타임 | PostgreSQL 16.14 · 마이그레이션 **57건** · 테이블 **49개** · `/health` 200 |
-| 백업 | 116,223B · **269항목** · 체크섬 · 무결성 통과 |
-| 복원 검증 | `acos_restore`에 **49테이블** · 1,601ms · **대상 DB 직접 대조** |
+| 백업 | 118,484B · **269항목** · 367ms · 체크섬 · 무결성 통과 |
+| 복원 검증 | `acos_restore`에 **49테이블** · 1,404ms · **대상 DB 직접 대조** |
+| **복구 리허설** | ✅ **복원본으로 서비스 기동** — `/health` 200(4.1초) · ADMIN 로그인(운영과 동일 id) · `/projects` 200 |
+| 운영 환경변수 감사 | ENV_SPECS **96개** · 운영 필수 9 · **누락 7 · 권고 9** |
 | 코드 게이트 | build 6/6 · typecheck 0 · lint 0 · test **2,963** 전건 통과 |
 
 `readiness`의 `backup`·`restore` fail 2건은 **`spawn pg_dump ENOENT`**(PATH
-누락)였고, 제품 결함이 아니었습니다. PATH 반영 후 fail 3 → **0**.
+누락)였고, 제품 결함이 아니었습니다. PATH 반영 후 fail 3 → 0.
 
-### 해제된 항목
+### 해제된 항목 둘
 
-**`api.openai.com`이 열렸습니다** — `401` + `www-authenticate: Bearer
-realm="OpenAI API"`. 프록시가 아닌 진짜 OpenAI임을 헤더로 확인했습니다.
-열두 스프린트 만에 처음입니다.
+1. **`api.openai.com`이 열렸습니다** — `401` + `www-authenticate: Bearer
+   realm="OpenAI API"`. 프록시가 아닌 진짜 OpenAI임을 헤더로 확인했습니다.
+   열두 스프린트 만에 처음입니다.
+2. **복구 리허설을 수행했습니다** — `drill`·`objectives`(RPO/RTO)가 pass로
+   바뀌고 `db-major-change` 요구가 해소됐습니다. Go-Live가 0/8 → **2/8**로,
+   검증 계획이 0/11 → **1/11**로 전진했습니다.
+   단 **개발 호스트 기준**이며, 운영 호스트의 RTO는 여전히 모릅니다.
+
+### 새로 fail이 된 항목 하나 — 이것은 나쁜 소식이 아닙니다
+
+`backup-chain`이 manual(판정 유보) → **fail(18.0시간 공백)** 로 바뀌었습니다.
+**제품이 관측 구간 24시간을 넘겨 드디어 판정할 수 있게 된 것**이고, 판정
+결과는 컨테이너에서 본 18.4시간과 사실상 같습니다. 서로 다른 두 환경이 같은
+결론에 도달했으므로 이 저지 항목은 **환경 탓이 아니라 실재하는 것**입니다.
+
+해소 조건은 코드가 아니라 시간입니다 — 예약 백업이 도는 호스트가 **24시간
+연속 살아 있어야** 합니다.
+
+### 지금 우리 몫으로 남은 단계: **0건**
+
+`GET /ops/validation-plan`이 직접 말합니다 — 11단계 중 사람이 줘야 끝나는 것
+**5건**, 앞 단계에 막힌 것 **4건**, 완료 **1건**, 그리고 **지금 우리가 할 수
+있는 단계 1건(KPI 기준선)은 시간이 막고 있습니다.**
+
+`POST /ops/kpi/snapshot` → `{"taken":false,"detail":"오늘 스냅샷이 이미
+있습니다 — 하루 한 번만 찍습니다."}` **제품이 두 번째 점을 만들어 주지
+않습니다.** 강제로 채울 방법이 없고, 그것이 옳은 동작입니다.
 
 ---
 
