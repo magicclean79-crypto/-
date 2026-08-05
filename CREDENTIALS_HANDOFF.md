@@ -157,6 +157,23 @@ v1.0.0 태그 · Release Notes 확정 · FINAL_RELEASE_REPORT
 > `validateEnvironment`를 `production: true`로 직접 불러 얻은 결과입니다.
 > **제품을 production 등급으로 기동하지는 않았습니다** — 등급을 위조하면
 > 흔적이 남지 않기 때문입니다.
+>
+> **이 표는 [`config/validation.env.example`](config/validation.env.example)을
+> 대체하지 않습니다.** 두 문서는 보는 각도가 다릅니다:
+>
+> | | 무엇을 답하는가 |
+> | --- | --- |
+> | `config/validation.env.example` | **검증 스프린트를 시작하려면** 무엇을 채워야 하는가 (`VALIDATION_TARGET_*` · `DEPLOY_TIER` · 알림 채널) |
+> | 이 §7 | **운영으로 기동하려면** 무엇이 없으면 안 되는가 (기동을 막는 7개) |
+>
+> 둘 다 채워야 합니다. 겹치는 칸은 같은 값이어야 하고, 어긋나면 그 자체가
+> 사고입니다.
+>
+> **배포 등급은 `DEPLOY_TIER`와 `NODE_ENV`로 정해집니다** —
+> `DEPLOY_TIER=staging` · `NODE_ENV=production`. 이 두 줄이 §7-0의 답이지만,
+> **이 로컬 머신에 적으면 안 됩니다**: `NODE_ENV=production`이 되는 순간
+> §7-1의 7개가 치명적 오류가 되어 기동 자체가 거부됩니다. 그 7개를 갖춘
+> 실제 호스트에서만 의미가 있습니다.
 
 ### 7-0. 먼저 정해야 하는 것 (다른 모든 항목의 전제)
 
@@ -203,6 +220,12 @@ v1.0.0 태그 · Release Notes 확정 · FINAL_RELEASE_REPORT
 > ("경보 경로 도달 확인"). 권고가 아니라 **출시 조건**입니다.
 > **6번(`REDIS_URL`)은 인스턴스를 1개만 띄운다면 필요 없습니다** — 다만
 > 다중 인스턴스 동작은 v1.0에서 검증되지 않았습니다(`KNOWN_LIMITATIONS` H-2).
+
+**추가로 검증 스프린트에는 `ALERT_URGENT_WEBHOOK_URL`도 필요합니다** —
+검증 계획 11단계의 "긴급 알림 경로 구성"이 이것입니다. 일반 채널과 따로
+두는 이유는 `config/validation.env.example` §6에 있습니다: 검증 스프린트는
+**실패를 만들려고 하는 기간**이고, 그 실패가 일반 채널에 묻히면 검증하는
+사람이 가장 늦게 압니다.
 
 ### 7-3. Production Hosts — 목록이 비어 있습니다
 
