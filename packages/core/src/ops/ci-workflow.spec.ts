@@ -91,7 +91,10 @@ describe("CI 워크플로 (TASK-2201, CTO 결정 2101-③)", () => {
   });
 
   it("브라우저 설치가 빠지면 판정이 그 사실을 말한다", () => {
-    const broken = workflow.replace(/.*playwright install.*\n/, "");
+    // `\r?\n` — Windows 체크아웃(core.autocrlf)에서는 CRLF로 오고, `.`은
+    // `\r`을 매치하지 않아 LF만 기대하면 이 replace가 조용히 무효가 된다.
+    // 지우지 못한 원본이 그대로 통과해 **판정이 아니라 테스트가 거짓말한다.**
+    const broken = workflow.replace(/.*playwright install.*\r?\n/, "");
     const judged = judgeCiWorkflow(broken);
     expect(judged.ok).toBe(false);
     expect(judged.detail).toContain("브라우저");
