@@ -13,15 +13,21 @@
 
 | 항목 | 값 |
 | --- | --- |
-| 보고 기준 TASK | **TASK-5501 — AWS staging 배포 및 S3 리전 결함 수정** (TASK-5301·5401 연속) |
+| 보고 기준 TASK | **TASK-5501 — AWS staging 배포·S3 리전 결함 수정·LLM 실 호출 실증** (TASK-5301·5401 연속) |
 | 보고일 | 2026-08-06 |
 | 브랜치 | `claude/ai-product-content-os-setup-jb5oai` |
-| 커밋 | `1323127` (fix, S3 리전) · `24a9221`·`8a73eb2` (docs) · 이번 주기 |
-| **결론** | **로컬 development 환경은 여전히 원리적으로 v1.0을 붙일 수 없지만, AWS staging이 배포됐고 실측 게이트가 크게 전진했습니다.** 남은 것은 사람이 주는 3건과 시간 2건뿐입니다 |
+| 커밋 | `1323127`(fix, S3 리전) · `24a9221`·`8a73eb2`·`7499484`(docs) · 이번 주기 |
+| **결론** | **staging에서 LLM 실 호출이 처음 성공했습니다** (`openai/gpt-4o-2024-08-06`, 1853ms). `cutover` 검증 2/4로 전진했습니다. 남은 최대 걸림돌은 **OCR(Google Cloud Vision)** — 없으면 `activation`·`cutover ready`·`go-live`에 구조적으로 도달할 수 없습니다 |
 | `validation_runs` | **0건** (staging DB에서 직접 셌습니다) |
 | 코드 변경 | **제품 코드 15줄 + 테스트 32줄** (S3 리전 버그 수정, §4-9). 새 기능 **0건** |
-| 실행 환경 | **AWS staging** (`ec2-3-39-9-111.ap-northeast-2`, t3.small) 신규 배포 + Windows 로컬(이전과 동일) |
-| **staging 게이트 전진** | readiness pass **9→11**·fail **2→1** · 검증 계획 **3/11→5/11** · 런북 **1/8→2/8** · Go-Live **1/8→2/8** |
+| 실행 환경 | **AWS staging** (`ec2-3-39-9-111.ap-northeast-2`, t3.small) — `DEPLOY_TIER=staging`·`NODE_ENV=production` 정상 반영 |
+| **staging 게이트 전진** | `cutover` verified **1/4→2/4**(LLM 실증) · readiness pass **9→11** · 진단 `deploy-tier` fail→ok |
+
+> **이번 회차의 핵심 발견 — "부분 점수는 없습니다".** `packages/core/src/ops/activation.ts`는
+> LLM·OCR·S3 **셋 다** 실 자격 증명이어야 `credentials` 조건을 충족합니다.
+> OCR이 `mock`인 한 LLM·S3가 완벽해도 `cutover ready`·`activation 3/3`·
+> `go-live declarable`에 **원리적으로 도달할 수 없습니다.** 이것이 지금
+> 남은 사실상 마지막 실질 게이트입니다.
 
 > **이번 보고의 핵심은 세 가지입니다.**
 >
@@ -62,20 +68,24 @@
 **막고 있는 것은 코드가 아닙니다.** 코드 게이트 4종은 전부 초록이고,
 빨간 것은 전부 **환경·자격 증명·배포 등급**입니다.
 
-### 2-1. AWS staging 게이트 (2026-08-06, S3 리전 수정 후)
+### 2-1. AWS staging 게이트 (2026-08-06, LLM 실증 후 최신)
 
 위 표는 **로컬 development** 값입니다. 실제 출시가 진행되는 **staging**은
 따로 측정합니다.
 
 | 게이트 | 결과 |
 | --- | --- |
-| `/health` · ADMIN 로그인 | ✅ 200 · 성공 |
+| `/health` · ADMIN 로그인 | ✅ 200 · 성공 (쿠키 `Secure` 없음 — 터널 접근 유지) |
 | `/ops/readiness` | ✅ pass **11** · fail **1**(`backup-chain`, 시간 의존) · warn 4 · manual 2 |
-| `storage` | ✅ **pass** — 실 AWS 자격 증명 연결 확인 (§4-9) |
-| 운영 기동 필수 7개 | ✅ **0개 누락** — S3 4개 전부 충족 |
-| 검증 계획 | ⚠️ **5/11** — 사람 3 · 우리 1(시간) · 막힘 2 |
+| `/ops/diagnostics` | ✅ ok **8** · fail **2**(알림 채널·운영 호스트 — 사람 결정 대기) |
+| `배포 단계 선언` | ✅ **ok** — "스테이징 단계로 돌고 있습니다" (`DEPLOY_TIER=staging`+`NODE_ENV=production`) |
+| `/ops/cutover` | ✅ **`applicable: true`** · verified **2/4**(LLM·S3) |
+| **LLM 실 호출** | ✅ **성공** — `openai/gpt-4o-2024-08-06`, 1853ms (§4-10) |
+| S3 실 쓰기·읽기·삭제 | ✅ **성공** — 118ms |
+| OCR 실 호출 | ⏸ **skip** — `OCR_PROVIDER=mock`. **막힌 최종 게이트** (§4-10) |
+| 검증 계획 | ⚠️ **4/11** — 사람 3 · 우리 2 · 막힘 2 |
 | 활성화 런북 | ⚠️ **2/8** |
-| `/ops/go-live` | ⚠️ `not-started` **2/8** |
+| `/ops/go-live` | ⚠️ `not-started` **1/8** |
 | 복구 리허설 | ✅ **성공** — 실 호스트 RTO **3.6초** |
 | 재부팅 복구 | ✅ 재시작 0회로 자동 복구 (53초) |
 
@@ -368,6 +378,80 @@ Versioning `Enabled`·공개 차단 켜짐(안전한 기본값).
 | `PRODUCTION_HOSTS` | **아직 없음** — staging 주소를 넣지 않기로 결정(넣으면 보호가 무력화됨) |
 | `ALERT_WEBHOOK_URL` | **아직 없음** — 나중에 생성 |
 
+### 4-10. OpenAI 키 반입 · 배포 등급 정정 · LLM 실 호출 실증 (2026-08-06)
+
+#### OpenAI 키 반입
+
+CSV와 같은 절차: 파일(`openai-key.txt`, `sk-proj-` 164자) → 로컬에서 값
+미노출로 형식만 확인 → `scp`로 `~/acos-secrets/openai-api-key`(600) →
+로컬 임시 파일 즉시 삭제 → `.env`에 `LLM_PROVIDER=openai`·
+`OPENAI_API_KEY`로 반영.
+
+#### `cutover`가 실제로 읽는 것은 `DEPLOY_TIER`가 아니라 원시 `NODE_ENV`
+
+`cutover`를 적용 대상(`applicable`)으로 만들려면 다른 판정들이 쓰는
+`resolveDeploymentTier`(→ `DEPLOY_TIER` 우선)가 아니라
+[`production-cutover.service.ts:85`](../apps/api/src/ops/production-cutover.service.ts#L85)의
+**원시 `process.env.NODE_ENV`**가 `["production","staging"]`에 있어야
+합니다(`CUTOVER_ENVIRONMENTS`). 같은 `NODE_ENV`를 `isOperationalEnv()`
+(세션 쿠키 `Secure` 플래그)도 봅니다 — 둘을 동시에 만족시키기 어렵습니다.
+
+시도 1: `NODE_ENV=staging` → `/ops/diagnostics`의 `deploy-tier` 검사가 직접
+말해 줬습니다: **"DEPLOY_TIER=staging인데 NODE_ENV=staging입니다 — 개발
+모드로 도는 환경에서 잰 값은 운영의 값이 아닙니다... NODE_ENV=production을
+함께 두세요."** (정책 4101-③) — 제품이 올바른 조합을 스스로 알려줬습니다.
+
+최종 값(CTO 승인, 사전에 `validateEnvironment(production:true)`로 error
+0건 확인 후 적용):
+
+```
+DEPLOY_TIER="staging"
+NODE_ENV="production"
+AUTH_COOKIE_SECURE="false"
+```
+
+`AUTH_COOKIE_SECURE=false`는 명시적 오버라이드입니다 — 지금은 SSH
+터널로만 접근하므로 브라우저↔로컬 포트(loopback)·로컬↔EC2(SSH 암호화)
+전체가 이미 보호돼 있어, `Secure`가 막으려는 평문 전송이 발생하지
+않습니다. 보안 그룹을 열고 실 도메인+HTTPS를 붙이면 이 줄을 지워야
+합니다. 적용 후 쿠키에 `Secure` 없음을 재확인했습니다 — 터널 로그인
+유지.
+
+효과: `배포 단계 선언` 진단 fail→ok, `cutover.applicable` false→**true**.
+
+#### LLM 실 호출 실증 — `POST /ops/smoke`
+
+코드 주석(`production-smoke.service.ts:34`)이 명시: "실 호출은 돈이
+나갑니다. 사람이 명시적으로 누를 때만 돕니다." CTO 승인 후 실행:
+
+```
+실 호출 2/3 통과. 구성이 실 Provider가 아니어서 부르지 않음: OCR(Vision) 실제 호출.
+  [passed ] LLM 실제 호출 · openai/gpt-4o-2024-08-06 · 1853ms
+  [skipped] OCR(Vision) 실제 호출 · mock — 부르지 않음(정상)
+  [passed ] S3 실제 쓰기·읽기 · 118ms
+```
+
+`cutover` 검증 **1/4 → 2/4**(LLM 신규 verified).
+
+#### 발견 — "부분 점수는 없습니다": OCR이 마지막 실질 게이트
+
+[`activation.ts:20-23`](../packages/core/src/ops/activation.ts#L20-L23):
+`credentials` 조건은 **LLM·OCR·S3 셋 다** 실 자격 증명이어야 충족됩니다.
+`OCR_PROVIDER=mock`인 한:
+
+- `credentials` 조건 — 영구 미충족(§`activation.ts:105-119`가 OCR도 검사)
+- 검증 계획의 `실 호출 스모크 3종 통과` — 영구 `blocked`("세 대상 모두
+  passed" 요구, OCR은 구조적으로 `skipped`만 가능)
+- 따라서 `cutover ready`·`activation 3/3`·`go-live declarable` **전부
+  도달 불가**
+
+CTO에 보고 후 **OCR도 지금 설정하기로 결정**했습니다. 전달된 파일
+(`ai-product-generator-personal-*.json`)은 **GCP 서비스 계정 키**였고,
+코드([`google-vision.provider.ts:61`](../apps/api/src/ocr/providers/google-vision.provider.ts#L61))는
+이 방식을 지원하지 않습니다 — 단순 `GOOGLE_VISION_API_KEY` 문자열만
+받습니다(쿼리 파라미터로 전송). 파일은 손대지 않고 올바른 자격 증명
+형태를 요청했습니다. **대기 중.**
+
 ## 5. 아키텍처 변경
 
 **경계 변경 없음.** `apps/api/src/storage/storage.service.ts`에 함수 1개·
@@ -431,14 +515,14 @@ Major Migration 2건.
 
 ## 9. 다음 권장 사항
 
-### 지금 사람이 해야 하는 것 (Claude가 할 수 없음) — 2026-08-06 갱신
+### 지금 사람이 해야 하는 것 (Claude가 할 수 없음) — 2026-08-06 재갱신
 
-**5개 → 3개로 줄었습니다.** 출시 환경 확정·S3 버킷+IAM·환경변수 7개
-주입은 전부 완료됐습니다(§4-9).
+**OpenAI 키는 반입 완료.** 남은 것은 3개, 그중 1개가 **cutover ready에
+도달하는 마지막 실질 조건**입니다.
 
 | 순위 | 항목 | 상태 | 예상 소요 |
 | --- | --- | --- | --- |
-| **1** | **OpenAI API 키 전달** | 전달 방법 확정(파일), 전달 대기 | 대기 중 |
+| **1** | **Google Cloud Vision API 키 발급** | 전달된 파일은 서비스 계정 JSON(사용 불가) — **단순 API 키**(`AIza...`, GCP Console → 사용자 인증 정보 → API 키, Cloud Vision API로 제한) 필요. **없으면 cutover ready·go-live에 구조적으로 도달 불가**(§4-10) | 5분(발급) |
 | **2** | `PRODUCTION_HOSTS` 확정 | **아직 없음** — 실제 운영 도메인이 정해지지 않음. staging 주소를 넣지 않기로 결정(넣으면 검증 대상 보호가 무력화됨) | 도메인 결정 필요 |
 | **3** | `ALERT_WEBHOOK_URL` 구성 | **아직 없음** — Go-Live 8항목 중 하나. 나중에 생성하기로 함 | 30분(생성 시) |
 
