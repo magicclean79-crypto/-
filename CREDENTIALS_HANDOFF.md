@@ -345,7 +345,7 @@ VALIDATION_TARGET_ACK=<위와 같은 호스트>
 
 # ── 운영 호스트 목록 (§7-3) ──
 PRODUCTION_HOSTS=<실제 운영 도메인>      # staging 주소를 넣으면 검증이 거부됩니다
-PUBLIC_BASE_URL=https://<이 staging 주소>
+# PUBLIC_BASE_URL 은 두지 마십시오 — §8-3 의 경고를 보십시오
 
 # ── 백업·복구 ──
 BACKUP_RESTORE_DB_URL=postgresql://…    # 운영 DB와 다른 DB
@@ -377,6 +377,86 @@ TZ=Asia/Seoul
 
 즉 **staging 주소는 운영 도메인 목록에 들어 있지 않은 공개 주소**여야 합니다.
 이 로컬 머신이 후보가 될 수 없는 이유도 이것입니다(`local`).
+
+> ### ⚠️ 정정 (2026-08-06, staging에서 실증)
+>
+> 이 문서의 이전 판은 §8-2에 `PUBLIC_BASE_URL=https://<이 staging 주소>`와
+> `VALIDATION_TARGET_URL=https://<이 staging 주소>`를 **둘 다** 적어 두었습니다.
+> **그렇게 하면 검증이 시작되지 않습니다.**
+>
+> `self` 판정은 [`validation-target.ts`](packages/core/src/ops/validation-target.ts)가
+> **`PUBLIC_BASE_URL`의 호스트와 대상 호스트를 비교**해서 내립니다. 둘이 같으면
+> `self`이고, 제품은 **자기 자신을 검증 대상으로 받지 않습니다.**
+>
+> AWS staging에서 실제로 확인했습니다 — `PUBLIC_BASE_URL`을 두지 않으니:
+>
+> ```
+> GET /ops/validation-run
+> target.verdict = accepted
+> detail = 검증 대상: http://ec2-3-39-9-111.ap-northeast-2.compute.amazonaws.com:4000 (확인됨).
+> ```
+>
+> **`PUBLIC_BASE_URL`은 설정하지 마십시오.** 설정해야 할 이유가 생기면, 그 값이
+> `VALIDATION_TARGET_URL`과 **다른 호스트**여야 합니다.
+
+### 8-3-1. staging 배포 완료 (2026-08-06)
+
+EC2 인스턴스가 준비돼 배포를 마쳤습니다. **아직 development 등급**입니다 —
+S3 자격 증명이 없어 `NODE_ENV=production`으로 올리면 기동이 거부됩니다.
+
+| 항목 | 값 |
+| --- | --- |
+| 호스트 | `ec2-3-39-9-111.ap-northeast-2.compute.amazonaws.com` (3.39.9.111) |
+| 인스턴스 | **t3.small** · 2 vCPU · 1,909 MB · 30GB |
+| **스왑** | **4GB 추가** — 없으면 빌드가 OOM으로 죽습니다 |
+| 런타임 | Node 22.23.2 · pnpm 10.33.0 · Docker 25.0.14 · Compose v5.4.0 · `pg_dump` 16.14 |
+| DB | PostgreSQL 16 (Docker, **127.0.0.1 전용**) · `acos` + `acos_restore` |
+| 마이그레이션 | **57건** · 테이블 **49개** |
+| 서비스 | systemd `acos-api`(4000) · `acos-web`(3000) — 둘 다 `enabled` (재부팅 자동 기동) |
+| 코드 | `~/acos` · `git clone` (public 저장소) |
+| 비밀 | `~/acos-secrets/` (700) — `pg-password` · `admin-password` (각 600) |
+| 백업 | `~/acos-data/backups` |
+| 로그 | `~/acos-data/api.log` · `web.log` |
+
+**보안 그룹은 22번만 열려 있습니다** (의도된 선택). 화면 확인은 SSH 터널로 합니다:
+
+```powershell
+ssh -i <key> -N -L 3000:127.0.0.1:3000 -L 4000:127.0.0.1:4000 ec2-user@<host>
+# 브라우저에서 http://localhost:3000
+```
+
+터널 모드에 맞춰 `WEB_URL`·`NEXT_PUBLIC_API_URL`을 `localhost`로 두었습니다.
+**포트를 열거나 도메인을 붙이면 이 두 값을 바꾸고 web을 재빌드해야 합니다** —
+`NEXT_PUBLIC_API_URL`은 빌드 시점에 번들에 박힙니다.
+
+**MinIO는 일부러 설치하지 않았습니다.** 설치하면 `storage`는 통과하지만
+`storage-standard`가 `not-production`으로 남아 게이트에 기여하지 않고,
+2GB 서버의 메모리만 씁니다.
+
+#### staging 판정 (2026-08-06 실측)
+
+| 판정 | 값 |
+| --- | --- |
+| `/ops/readiness` | pass 9 · **fail 2**(`storage`·`backup-chain`) · warn 2 · manual 5 |
+| 검증 계획 | **3/11** — 사람 4 · 우리 2 · 막힘 2 |
+| 활성화 런북 | **1/8** |
+| `/ops/go-live` | `not-started` **1/8** |
+| 운영 기동 차단 | **4건 — 전부 S3** |
+
+#### staging에서 완료한 것
+
+- **검증용 환경 확보** → `done` (`target.verdict: accepted`)
+- **스키마 적용 완료** → `done`
+- **되돌리는 절차 확인** → `done` — 실제 호스트에서 복구 리허설 수행
+
+리허설 결과(**출시 호스트 기준 첫 RTO**): 백업 116,737B·269항목·178ms →
+복원 49테이블·1,415ms → **복원본 기동 2,031ms**(`/health` 200) → ADMIN
+로그인(운영과 동일 id) → `/projects` 200. 행 수 `users` 1=1 ·
+`user_audit_log` 0=0 · `kpi_snapshots` 9=9. **총 3.6초.**
+
+증명하지 않은 것: DB가 거의 비어 있어 약한 검증이고, `BACKUP_OFFSITE`가 꺼져
+있어 **백업이 이 인스턴스의 EBS에만 있습니다** — 인스턴스가 사라지면 백업도
+사라집니다. S3 백업 버킷이 이것을 해소합니다.
 
 ### 8-4. 넘겨 주시면 저희가 이어서 하는 일
 
