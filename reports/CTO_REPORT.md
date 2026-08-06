@@ -17,17 +17,19 @@
 | 보고일 | 2026-08-06 |
 | 브랜치 | `claude/ai-product-content-os-setup-jb5oai` |
 | 커밋 | `1323127`(fix, S3 리전) · `24a9221`·`8a73eb2`·`7499484`(docs) · 이번 주기 |
-| **결론** | **staging에서 LLM 실 호출이 처음 성공했습니다** (`openai/gpt-4o-2024-08-06`, 1853ms). `cutover` 검증 2/4로 전진했습니다. 남은 최대 걸림돌은 **OCR(Google Cloud Vision)** — 없으면 `activation`·`cutover ready`·`go-live`에 구조적으로 도달할 수 없습니다 |
-| `validation_runs` | **0건** (staging DB에서 직접 셌습니다) |
+| **결론** | **`cutover.ready = true` — 4/4 전부 verified. `activation` 3/3 전체 충족.** 이 저장소가 12+ 스프린트 동안 도달하지 못한 지점입니다. 남은 것은 `PRODUCTION_HOSTS`·`ALERT_WEBHOOK_URL` 사람 결정 2건과 표본 부족 1건뿐입니다 |
+| `validation_runs` | **0건** (staging DB에서 직접 셌습니다) — 위 조건이 갖춰져야 `POST /ops/validation-run/execute`가 열립니다 |
 | 코드 변경 | **제품 코드 15줄 + 테스트 32줄** (S3 리전 버그 수정, §4-9). 새 기능 **0건** |
 | 실행 환경 | **AWS staging** (`ec2-3-39-9-111.ap-northeast-2`, t3.small) — `DEPLOY_TIER=staging`·`NODE_ENV=production` 정상 반영 |
-| **staging 게이트 전진** | `cutover` verified **1/4→2/4**(LLM 실증) · readiness pass **9→11** · 진단 `deploy-tier` fail→ok |
+| **staging 게이트 전진** | `cutover` verified **2/4→4/4**(OCR·CI 실증) · `activation` **미충족→3/3** · readiness pass **9→11** |
 
-> **이번 회차의 핵심 발견 — "부분 점수는 없습니다".** `packages/core/src/ops/activation.ts`는
-> LLM·OCR·S3 **셋 다** 실 자격 증명이어야 `credentials` 조건을 충족합니다.
-> OCR이 `mock`인 한 LLM·S3가 완벽해도 `cutover ready`·`activation 3/3`·
-> `go-live declarable`에 **원리적으로 도달할 수 없습니다.** 이것이 지금
-> 남은 사실상 마지막 실질 게이트입니다.
+> **이번 회차의 핵심 — "부분 점수는 없습니다"를 실제로 넘었습니다.**
+> `packages/core/src/ops/activation.ts`가 요구하는 LLM·OCR·S3 **셋 다**
+> 실 자격 증명과 실 호출 증거를 갖췄습니다. Vision은 스모크가 아니라
+> **실제 이미지 업로드→OCR 제품 경로**(`POST /uploads/images` →
+> `POST /images/:id/ocr`)로 증거를 남겼고, CI는 `GITHUB_REPOSITORY`
+> 설정만으로 이미 존재하던 통과 이력(run 13231273)을 읽었습니다.
+> §4-11에 전체 과정을 기록했습니다.
 
 > **이번 보고의 핵심은 세 가지입니다.**
 >
@@ -79,13 +81,15 @@
 | `/ops/readiness` | ✅ pass **11** · fail **1**(`backup-chain`, 시간 의존) · warn 4 · manual 2 |
 | `/ops/diagnostics` | ✅ ok **8** · fail **2**(알림 채널·운영 호스트 — 사람 결정 대기) |
 | `배포 단계 선언` | ✅ **ok** — "스테이징 단계로 돌고 있습니다" (`DEPLOY_TIER=staging`+`NODE_ENV=production`) |
-| `/ops/cutover` | ✅ **`applicable: true`** · verified **2/4**(LLM·S3) |
+| `/ops/cutover` | ✅ **`ready: true` · verified 4/4** (LLM·OCR·S3·CI 전부) |
+| `/ops/activation` | ✅ **3/3 전체 충족** (자격 증명·네트워크·전환) — **첫 달성** |
 | **LLM 실 호출** | ✅ **성공** — `openai/gpt-4o-2024-08-06`, 1853ms (§4-10) |
+| **OCR 실 호출** | ✅ **성공** — 실제 업로드→OCR 경로, `google-vision`, $0.0015 (§4-11) |
 | S3 실 쓰기·읽기·삭제 | ✅ **성공** — 118ms |
-| OCR 실 호출 | ⏸ **skip** — `OCR_PROVIDER=mock`. **막힌 최종 게이트** (§4-10) |
-| 검증 계획 | ⚠️ **4/11** — 사람 3 · 우리 2 · 막힘 2 |
-| 활성화 런북 | ⚠️ **2/8** |
-| `/ops/go-live` | ⚠️ `not-started` **1/8** |
+| **CI(GitHub Actions)** | ✅ **verified** — 최근 실행(run 13231273) 통과 확인 (§4-11) |
+| 검증 계획 | ⚠️ **5/11** — 사람 2 · 우리 2 · 막힘 2 |
+| 활성화 런북 | ⚠️ **5/8** |
+| `/ops/go-live` | ⚠️ `not-started` **2/8** |
 | 복구 리허설 | ✅ **성공** — 실 호스트 RTO **3.6초** |
 | 재부팅 복구 | ✅ 재시작 0회로 자동 복구 (53초) |
 
@@ -450,7 +454,83 @@ CTO에 보고 후 **OCR도 지금 설정하기로 결정**했습니다. 전달�
 코드([`google-vision.provider.ts:61`](../apps/api/src/ocr/providers/google-vision.provider.ts#L61))는
 이 방식을 지원하지 않습니다 — 단순 `GOOGLE_VISION_API_KEY` 문자열만
 받습니다(쿼리 파라미터로 전송). 파일은 손대지 않고 올바른 자격 증명
-형태를 요청했습니다. **대기 중.**
+형태를 요청했습니다.
+
+### 4-11. OCR·CI 실증 — `cutover.ready = true` 달성 (2026-08-06)
+
+#### Google Cloud Vision API 키 반입
+
+CTO가 올바른 형태(단순 API 키, `AIza...` 39자)를 재발급해 전달. 같은
+절차(값 미노출 → `scp` → `.env` 600) 반영 후 재기동.
+
+#### 스모크 3/3 통과 — 그런데 `cutover.vision`은 그대로 `unverified`
+
+`POST /ops/smoke` 재실행: LLM·OCR·S3 **전부 `passed`**(OCR 176ms). 그런데
+`cutover`의 `vision` 항목은 그대로 `unverified`였습니다.
+
+원인을 코드로 추적했습니다. [`production-smoke.service.ts:223`](../apps/api/src/ops/production-smoke.service.ts#L223)의
+`probeOcr()`은 주입된 `OcrProvider`를 **직접** 호출합니다
+(`this.ocr.recognize(...)`) — 결과는 `SmokeRun` 테이블에만 남습니다.
+반면 [`production-cutover.service.ts:65`](../apps/api/src/ops/production-cutover.service.ts#L65)의
+`ocrSuccesses`는 `OcrResult` 테이블(실제 제품 경로 `POST /images/:id/ocr`가
+쓰는 테이블)을 봅니다. **LLM은 우연히 같은 문제가 없었습니다** —
+`probeLlm()`이 `LlmService.complete()`를 그대로 호출하고, 이 메서드
+자체가 모든 호출에서 `Execution` 행을 남기는 단일 기록 지점이기 때문입니다.
+OCR은 그 단일화된 기록 지점을 스모크가 건너뜁니다.
+
+[`judgeVision`](../packages/core/src/ops/production-cutover.ts#L597)이
+정확한 다음 행동을 코드에 이미 적어 뒀습니다: **"이미지 1장으로
+`POST /images/:id/ocr`을 돌려 확인하세요."**
+
+#### 실제 업로드→OCR 실행 (CTO 승인 후)
+
+CTO 승인을 받고(영구 흔적이 남는 것을 사전에 밝힘) 실제 제품 경로로
+수행:
+
+```
+POST /uploads/images  (1x1 PNG, multipart)
+  → 201, 실 S3 버킷에 저장 (detail-generator-images-20260806)
+POST /images/:imageId/ocr
+  → 201, provider=google-vision · status=SUCCESS · cost=$0.0015
+```
+
+`cutover.vision` → **`verified`**("공식 주소로 최근 성공한 OCR이 1건").
+`cutover` 3/4.
+
+#### CI(GitHub Actions) — 자격 증명 없이 해소
+
+남은 것은 CI 하나. [`ci-status.service.ts:48`](../apps/api/src/ops/ci-status.service.ts#L48)를
+읽고 `GITHUB_REPOSITORY`만 있으면 되는 것을 확인했습니다 — 저장소가
+**public**이라 `GITHUB_TOKEN` 없이도 Actions API가 응답합니다. 이번
+세션에 이미 6차례 푸시가 있었으므로 CI는 이미 돌았을 것으로 판단해
+설정만 추가:
+
+```
+GITHUB_REPOSITORY="magicclean79-crypto/-"
+```
+
+재기동 후 `cutover.ci` → **`verified`**("가장 최근 실행(13231273)이
+통과했습니다. 필수 게이트 7개가 순서대로 돌았습니다.").
+
+#### 결과 — `cutover.ready = true`, `activation` 3/3
+
+```
+cutover:    verified 4/4 · ready: true
+activation: 자격 증명 O · 네트워크 O · 전환 판정 O · 전체 충족 = true
+```
+
+이 저장소가 **12+ 스프린트 동안 도달하지 못한 지점**입니다.
+
+#### 남은 것 — 사람 결정 2건 + 표본 1건
+
+| 항목 | 원인 | 파급 |
+| --- | --- | --- |
+| `PRODUCTION_HOSTS` | 실제 운영 도메인 미정 | 런북 3단계·검증 계획 2단계 차단 |
+| `ALERT_WEBHOOK_URL` | 채널 미생성 | Go-Live 조건 1개 직접 차단 |
+| 비용 귀속률 | 표본 1건(목표 20건) | 판정 유보(달성도 미달도 아님) |
+
+위 둘이 풀려야 `POST /ops/validation-run/execute`가 열리고,
+`validation_runs`(현재 0건)에 처음으로 행이 생깁니다.
 
 ## 5. 아키텍처 변경
 
@@ -517,16 +597,17 @@ Major Migration 2건.
 
 ### 지금 사람이 해야 하는 것 (Claude가 할 수 없음) — 2026-08-06 재갱신
 
-**OpenAI 키는 반입 완료.** 남은 것은 3개, 그중 1개가 **cutover ready에
-도달하는 마지막 실질 조건**입니다.
+**cutover ready = true 달성.** OpenAI·Vision 키 모두 반입 완료. 남은
+것은 2개이며, 둘 다 코드로 대신할 수 없는 사람의 결정입니다.
 
-| 순위 | 항목 | 상태 | 예상 소요 |
+| 순위 | 항목 | 상태 | 파급 |
 | --- | --- | --- | --- |
-| **1** | **Google Cloud Vision API 키 발급** | 전달된 파일은 서비스 계정 JSON(사용 불가) — **단순 API 키**(`AIza...`, GCP Console → 사용자 인증 정보 → API 키, Cloud Vision API로 제한) 필요. **없으면 cutover ready·go-live에 구조적으로 도달 불가**(§4-10) | 5분(발급) |
-| **2** | `PRODUCTION_HOSTS` 확정 | **아직 없음** — 실제 운영 도메인이 정해지지 않음. staging 주소를 넣지 않기로 결정(넣으면 검증 대상 보호가 무력화됨) | 도메인 결정 필요 |
-| **3** | `ALERT_WEBHOOK_URL` 구성 | **아직 없음** — Go-Live 8항목 중 하나. 나중에 생성하기로 함 | 30분(생성 시) |
+| **1** | `PRODUCTION_HOSTS` 확정 | **아직 없음** — 실제 운영 도메인이 정해지지 않음. staging 주소를 넣지 않기로 결정(넣으면 검증 대상 보호가 무력화됨) | 런북 3단계·검증 계획 2단계·Go-Live 2조건 차단 |
+| **2** | `ALERT_WEBHOOK_URL` 구성 | **아직 없음** — 나중에 생성하기로 함 | Go-Live 1조건 직접 차단 |
 
-**키를 채팅에 붙여넣지 마십시오.** 대화 기록에 영구히 남습니다.
+이 둘이 풀리면 `POST /ops/validation-run/execute`가 열려
+`validation_runs`(현재 0건)에 처음 행이 생깁니다 — **실제 비용이
+발생하는 단계**이므로 그때 다시 승인을 요청합니다.
 
 ### 시간이 지나야 되는 것 (사람도 코드도 줄일 수 없음)
 
