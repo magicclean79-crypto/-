@@ -106,6 +106,38 @@ describe("StorageService 프로비저닝 (TASK-2201)", () => {
   });
 });
 
+describe("StorageService AWS 리전 (TASK-5501)", () => {
+  const original = { ...process.env };
+  afterEach(() => {
+    process.env = { ...original };
+  });
+
+  /**
+   * minio SDK는 `region`을 명시하지 않으면 리전이 다를 때 재검색하는데, 그
+   * 재검색 요청도 서명이 필요해 같은 오류로 실패한다 — `us-east-1`이 아닌
+   * 리전에서 실제 AWS로 검증하며 드러난 결함이다(s3rver·MinIO는 리전을
+   * 신경 쓰지 않아 드러나지 않았다).
+   */
+  function clientRegion(service: StorageService): string | undefined {
+    return (service as unknown as { client: { region?: string } }).client.region;
+  }
+
+  it("표준 AWS 리전 엔드포인트에서 리전을 뽑아 SDK에 넘긴다", () => {
+    process.env.S3_ENDPOINT = "https://s3.ap-northeast-2.amazonaws.com";
+    expect(clientRegion(new StorageService())).toBe("ap-northeast-2");
+  });
+
+  it("dualstack 엔드포인트에서도 리전을 뽑는다", () => {
+    process.env.S3_ENDPOINT = "https://s3.dualstack.eu-west-1.amazonaws.com";
+    expect(clientRegion(new StorageService())).toBe("eu-west-1");
+  });
+
+  it("MinIO·s3rver 엔드포인트는 리전을 강제하지 않는다 — SDK 기본 동작 유지", () => {
+    process.env.S3_ENDPOINT = "http://localhost:9000";
+    expect(clientRegion(new StorageService())).toBeUndefined();
+  });
+});
+
 describe("StorageService 개발 안내 (TASK-2201)", () => {
   const original = { ...process.env };
   afterEach(() => {

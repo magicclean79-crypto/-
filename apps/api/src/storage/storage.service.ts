@@ -13,6 +13,19 @@ import type { ProtectionState, ProvisioningPolicy } from "@acos/core";
 
 const DEFAULT_ENDPOINT = "http://localhost:9000";
 
+/**
+ * 표준 AWS S3 리전 엔드포인트(`s3.<region>.amazonaws.com` ·
+ * `s3.dualstack.<region>.amazonaws.com`)에서 리전을 뽑아낸다.
+ *
+ * minio SDK는 `region`을 명시하지 않으면 리전이 다를 때 자동으로 재검색하는
+ * 대신, 그 재검색 요청 자체도 서명이 필요해 같은 오류로 실패한다 —
+ * `us-east-1`이 아닌 리전에서 서명이 어긋난다. s3rver·MinIO(개발)는 리전을
+ * 신경 쓰지 않아 드러나지 않았고, 실 AWS로 처음 검증하며 나왔다.
+ */
+function awsRegionFromEndpoint(hostname: string): string | undefined {
+  return /^s3(?:\.dualstack)?\.([a-z0-9-]+)\.amazonaws\.com$/.exec(hostname)?.[1];
+}
+
 function publicReadPolicy(bucket: string): string {
   return JSON.stringify({
     Version: "2012-10-17",
@@ -48,6 +61,7 @@ export class StorageService implements OnModuleInit {
   constructor() {
     const endpoint = new URL(process.env.S3_ENDPOINT ?? DEFAULT_ENDPOINT);
     const useSSL = endpoint.protocol === "https:";
+    const region = awsRegionFromEndpoint(endpoint.hostname);
 
     this.client = new Client({
       endPoint: endpoint.hostname,
@@ -55,6 +69,7 @@ export class StorageService implements OnModuleInit {
       useSSL,
       accessKey: process.env.S3_ACCESS_KEY ?? "minioadmin",
       secretKey: process.env.S3_SECRET_KEY ?? "minioadmin",
+      ...(region ? { region } : {}),
     });
 
     this.publicBase = (
