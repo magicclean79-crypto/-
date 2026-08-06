@@ -260,12 +260,138 @@ v1.0.0 태그 · Release Notes 확정 · FINAL_RELEASE_REPORT
 | | 항목 | 필요한 것 | 예상 |
 | --- | --- | --- | --- |
 | 1 | `backup-chain` (18.0시간 공백) | 예약 백업이 도는 호스트가 **24시간 연속 가동** | 24시간 |
-| 2 | KPI 기준선 (스냅샷 1점) | 하루 한 번만 찍힘 → **UTC 자정** 경과 | ~17시간 |
+| 2 | KPI 기준선 (스냅샷 1점) | 하루 1회 제한 + **두 점이 20시간 이상 떨어져야** 함 | ~17시간 |
 | 3 | 비용 귀속률 목표 | 귀속 대상 호출 **20건 이상** — 실 Provider 트래픽 필요 | 자격 증명 이후 |
 
 > 2번은 시도해 봤습니다: `POST /ops/kpi/snapshot` →
 > `{"taken":false,"detail":"오늘 스냅샷이 이미 있습니다 — 하루 한 번만
 > 찍습니다."}` **제품이 두 번째 점을 만들어 주지 않습니다.** 옳은 동작입니다.
 >
+> `docs/operations/validation-environment.md`가 그 이유를 정확히 적어 뒀습니다:
+>
+> > 두 점이 최소 20시간은 떨어져 있어야 기준선으로 셉니다. 몇 분 간격으로 두
+> > 번 찍어 이 단계를 통과시키면 그건 기준선이 아니라 **초록을 산 것**입니다.
+>
+> 이 환경의 첫 점은 `2026-08-05T00:11Z`이므로 두 번째 점은 **UTC 자정 경과 후**
+> (`2026-08-06T00:00Z` 이후)에 찍히고, 간격은 약 24시간이 되어 두 조건을
+> 동시에 만족합니다.
+>
 > 3번을 mock 호출 20건으로 채우지 않았습니다. 그 숫자는 **스텁을 상대로 얻은
 > 초록**이고, 이 저장소가 쉰 스프린트 동안 막아 온 바로 그것입니다.
+
+---
+
+## 8. AWS staging 환경 — 무엇을 만들고 무엇을 넘겨 주시면 되는가
+
+> **2026-08-05 · CTO 결정**: 출시 환경은 **AWS staging**으로 정했습니다.
+>
+> 이 절은 **만들 것의 목록과 넘겨줄 값**만 적습니다. 버킷·IAM의 상세 절차는
+> [`docs/operations/s3-migration.md`](docs/operations/s3-migration.md) §2~§4에
+> 이미 있고 **여기서 반복하지 않습니다.** 검증 스프린트에 채울 칸은
+> [`config/validation.env.example`](config/validation.env.example)에 있습니다.
+
+### 8-1. 만들 것
+
+| | 자원 | 요건 | 참조 |
+| --- | --- | --- | --- |
+| 1 | **컴퓨트 호스트** (EC2 / ECS / App Runner 등) | 아웃바운드로 `api.openai.com` 도달 가능. **공개 주소가 있어야** 합니다 — 사설 주소는 검증 대상으로 거부됩니다 | §8-3 |
+| 2 | **PostgreSQL** (RDS 권장) | 마이그레이션 57건이 올라갈 빈 DB. Node 20+ / PostgreSQL 16 기준으로 검증됨 | — |
+| 3 | **복원 검증용 별도 DB** | `BACKUP_RESTORE_DB_URL` — **운영 DB와 반드시 다른 DB.** 같으면 복원이 운영을 지웁니다 | 결정 1601-② |
+| 4 | **S3 버킷 2개** | 이미지용 + 백업용. **같은 버킷이면 안 됩니다** — 판정이 `invalid`로 거부합니다 | `s3-migration.md` §2 |
+| 5 | **IAM 사용자/역할** | 권한 6종. **`s3:GetBucketVersioning`·`s3:GetReplicationConfiguration`을 빠뜨리지 마십시오** — 전환 후 조회 실패가 배포를 막습니다 | `s3-migration.md` §3 |
+| 6 | **백업 볼륨** | `BACKUP_DIR` — **컨테이너 밖 영속 볼륨.** 컨테이너 안이면 재배포에 백업이 사라집니다 | — |
+| 7 | **알림 웹훅 2개** | 일반 + 긴급. Slack·Teams·Webhook 중 무엇이든 | `validation.env.example` §6~§7 |
+
+버킷 둘 다 **Versioning 필수**입니다 (`s3-migration.md` §2). 이미지 버킷만
+공개 읽기를 허용하고 **백업 버킷은 공개 금지**입니다.
+
+> **운영에서는 애플리케이션이 버킷을 만들지 않습니다** (결정 2101-④).
+> `NODE_ENV=production`이면 버킷 생성·정책 적용을 **하지 않습니다** — 없으면
+> 그냥 실패합니다. 그래서 사람이 먼저 만들어야 합니다.
+
+### 8-2. 그 호스트의 환경변수 (전체)
+
+```bash
+# ── 배포 등급 — 이 두 줄이 development 등급을 벗어나게 합니다 ──
+DEPLOY_TIER=staging
+NODE_ENV=production
+
+# ── 필수 9개 (없으면 기동 거부) ──
+DATABASE_URL=postgresql://…            # RDS
+WEB_URL=https://<웹 도메인>             # localhost 금지
+S3_ENDPOINT=https://s3.<region>.amazonaws.com
+S3_BUCKET=<이미지 버킷>
+S3_ACCESS_KEY=<IAM 액세스 키>
+S3_SECRET_KEY=<IAM 시크릿 키>
+AUTH_ADMIN_EMAIL=<초기 관리자>
+AUTH_ADMIN_PASSWORD=<강한 비밀번호>      # admin1234 를 그대로 올리면 그것이 사고
+BACKUP_DIR=/var/backups/acos           # 컨테이너 밖 볼륨
+
+# ── Provider (검증의 목적) ──
+LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-…
+OCR_PROVIDER=google-vision
+GOOGLE_VISION_API_KEY=…
+LLM_DAILY_BUDGET_USD=<금액>             # 검증은 실제로 과금됩니다
+# OPENAI_BASE_URL 은 설정하지 마십시오 — 공식 주소가 아니면 전환으로 세지 않습니다
+
+# ── 검증 대상 선언 (§8-3) ──
+VALIDATION_TARGET_URL=https://<이 staging 주소>
+VALIDATION_TARGET_ACK=<위와 같은 호스트>
+
+# ── 운영 호스트 목록 (§7-3) ──
+PRODUCTION_HOSTS=<실제 운영 도메인>      # staging 주소를 넣으면 검증이 거부됩니다
+PUBLIC_BASE_URL=https://<이 staging 주소>
+
+# ── 백업·복구 ──
+BACKUP_RESTORE_DB_URL=postgresql://…    # 운영 DB와 다른 DB
+BACKUP_BUCKET=<백업 버킷>
+BACKUP_OFFSITE=on
+OPS_SCHEDULED_CHECKS=on                 # 백업 사슬 24시간을 채우려면 필요
+
+# ── 알림 ──
+ALERT_WEBHOOK_URL=…                     # Go-Live 8항목의 하나
+ALERT_URGENT_WEBHOOK_URL=…              # 검증 스프린트 요구
+
+# ── 권고 ──
+LLM_FAILOVER_PRIORITY=…
+TZ=Asia/Seoul
+# REDIS_URL — 인스턴스를 1개만 띄우면 불필요 (다중 인스턴스는 v1.0 미검증)
+```
+
+### 8-3. 검증 대상 주소는 형식만 맞으면 통과하지 않습니다
+
+`VALIDATION_TARGET_URL`은 아래 넷 중 하나면 **확인 값을 넣어도 거부**됩니다
+(정책 4101-①):
+
+| 적은 값 | 판정 |
+| --- | --- |
+| `PRODUCTION_HOSTS`에 있는 주소 | `production` — 거부 |
+| 지금 이 인스턴스 | `self` — 거부 |
+| 사설망·노트북 주소 | `local` — 거부 |
+| `VALIDATION_TARGET_ACK` 불일치 | `unacknowledged` — 거부 |
+
+즉 **staging 주소는 운영 도메인 목록에 들어 있지 않은 공개 주소**여야 합니다.
+이 로컬 머신이 후보가 될 수 없는 이유도 이것입니다(`local`).
+
+### 8-4. 넘겨 주시면 저희가 이어서 하는 일
+
+값이 도착하면 §5의 순서를 그대로 밟습니다. 그중 저희가 하는 것은 이렇습니다.
+
+| | 할 일 | 예상 |
+| --- | --- | --- |
+| 1 | 배포 — `pnpm build` → `prisma migrate deploy` → 기동 | 1~2시간 |
+| 2 | `pnpm validation:preflight` **11/11** 확인 | 30분 |
+| 3 | `POST /ops/validation-run/execute` — **실제 과금 발생** | 1~2시간 |
+| 4 | `pnpm cutover` **3/3** | 30분 |
+| 5 | `GET /ops/go-live` **8/8** | 30분 |
+| 6 | RELEASE_NOTES 정식판 · `v1.0.0` 태그 · FINAL_RELEASE_REPORT | 1~2시간 |
+
+**3번에서 `validation_runs`에 행이 생기지 않으면 4번 이후는 하지 않습니다.**
+
+필요한 접근 수단: 그 호스트에 배포·명령 실행할 방법(SSH / 배포 파이프라인 /
+컨테이너 레지스트리 중 무엇이든)과 `GATE_EMAIL`·`GATE_PASSWORD`.
+
+> **키를 채팅에 붙여넣지 마십시오.** 호스트의 시크릿 저장소(SSM Parameter
+> Store · Secrets Manager · 환경 설정)에 넣고, 저희에게는 **넣었다는 사실만**
+> 알려 주십시오.
