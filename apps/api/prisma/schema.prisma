@@ -19,6 +19,7 @@ model Project {
   decisions       Decision[]
   projectMemories ProjectMemory[]
   images          Image[]
+  productProfiles ProductProfile[]
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
 
@@ -173,6 +174,47 @@ model OcrResult {
 }
 
 enum OcrStatus {
+  PENDING
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+// Product Detail Engine V1 (TASK-5601, Sprint 35) — 사진 여러 장 → OCR +
+// 이미지 특징 분석(STEP 3) → 하나의 Product Profile JSON(STEP 4)으로 통합한
+// 실행 1건. ProductObject(기존 엔터프라이즈 조립 파이프라인)와는 별개다 —
+// V1은 Project·Company Brain 의존 없이 "사진만 넣으면" 동작해야 한다.
+model ProductProfile {
+  id            String               @id @default(cuid())
+  // 이번 실행에 포함된 이미지들 — 조인 테이블 없이 스칼라 배열로 둔다
+  // (이 실행 1건이 이미지 순서·소속을 감사용으로만 기억하면 충분하다)
+  imageIds      String[]
+  // 업로드한 사람이 밝힌 소속(선택) — Image.projectId와 같은 원칙:
+  // 없으면 "공용"이 아니라 "모른다"다
+  project       Project?             @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  projectId     String?
+  status        ProductProfileStatus @default(PENDING)
+  // 실행 시점에 쓰인 OCR 텍스트 스냅샷(감사용) — 이미지별 최신 OCR 결과가
+  // 나중에 바뀌어도 이 실행이 실제로 무엇을 근거로 삼았는지 남는다
+  ocrText       String?
+  // STEP 3 원본 결과 (ImageFeatureAnalysis)
+  imageFeatures Json?
+  // STEP 4 최종 결과 (ProductProfile)
+  profile       Json?
+  provider      String?
+  error         String?
+  attempts      Int                  @default(0)
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  @@index([projectId])
+  @@index([status])
+  @@map("product_profiles")
+}
+
+enum ProductProfileStatus {
   PENDING
   RUNNING
   SUCCESS

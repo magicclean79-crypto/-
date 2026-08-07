@@ -71,6 +71,16 @@ describe("PromptEngine", () => {
         name: "Vision 이미지 분석",
         description: expect.stringContaining("VisionSummary"),
       },
+      {
+        key: "product-feature-vision",
+        name: "이미지 특징 분석",
+        description: expect.stringContaining("재질"),
+      },
+      {
+        key: "product-profile-synthesis",
+        name: "Product Profile 통합",
+        description: expect.stringContaining("Product Profile"),
+      },
     ]);
   });
 });

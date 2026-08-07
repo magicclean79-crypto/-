@@ -344,6 +344,71 @@ export interface VisionSummary {
   confidence: number; // 0.0 ~ 1.0
 }
 
+// ── Product Detail Engine V1 (Sprint 35, TASK-5601) ────────────────────
+// CTO 지시 "Sprint 35 Phase 1" — 사진 업로드 → OCR → 이미지 특징 분석 →
+// 하나의 Product Profile JSON 통합. ProductObject(기존 엔터프라이즈 조립
+// 파이프라인)와는 별개다 — V1은 Project·Company Brain 의존 없이 동작한다.
+
+/** 이미지 특징 분석 — 상품 이미지에서 직접 확인한 특징 (STEP 3) */
+export interface ImageFeatureAnalysis {
+  material: string | null;
+  color: string | null;
+  structure: string | null;
+  usage: string | null;
+  components: string[];
+  /** 그 외 눈에 보이는 특이사항 (자유 서술) */
+  notes: string | null;
+  confidence: number; // 0.0 ~ 1.0
+}
+
+/** Product Profile — OCR + 이미지 특징 분석을 통합한 상세페이지 재료 (STEP 4) */
+export interface ProductProfile {
+  productName: string;
+  brand: string | null;
+  model: string | null;
+  material: string | null;
+  features: string[];
+  specifications: Record<string, string>;
+  usage: string | null;
+  advantages: string[];
+  warnings: string[];
+  keywords: string[];
+  confidence: number; // 0.0 ~ 1.0
+}
+
+export const PRODUCT_PROFILE_STATUSES = [
+  "PENDING",
+  "RUNNING",
+  "SUCCESS",
+  "FAILED",
+] as const;
+export type ProductProfileStatus = (typeof PRODUCT_PROFILE_STATUSES)[number];
+
+export interface ProductProfileDto {
+  id: string;
+  /** 이번 실행에 포함된 이미지들 */
+  imageIds: string[];
+  /** 업로드한 사람이 밝힌 소속(선택) — null은 "모른다" */
+  projectId: string | null;
+  status: ProductProfileStatus;
+  /** 실행 시점 OCR 텍스트 스냅샷(감사용) */
+  ocrText: string | null;
+  imageFeatures: ImageFeatureAnalysis | null;
+  profile: ProductProfile | null;
+  provider: string | null;
+  error: string | null;
+  attempts: number;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RunProductProfileRequest {
+  imageIds: string[];
+  projectId?: string;
+}
+
 export interface ProductObjectDto {
   id: string;
   projectId: string;
