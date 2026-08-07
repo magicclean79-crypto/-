@@ -70,6 +70,12 @@ const FEATURE_MAX_TOKENS: Record<string, { env: string; fallback: number }> = {
   "content-generation": { env: "LLM_CONTENT_MAX_TOKENS", fallback: 4096 },
   "product-analysis": { env: "LLM_ANALYSIS_MAX_TOKENS", fallback: 2048 },
   "vision-analysis": { env: "LLM_VISION_MAX_TOKENS", fallback: 2048 },
+  // 필드 8개 + strengths/improvements 배열 + summary — Gemini는 기본값 없이도
+  // 넉넉히 나오지만(실측 output_tokens 3879) OpenAI/Anthropic 어댑터
+  // 기본값(1024)은 이 응답 크기에서 실제로 잘렸다(claude-opus-5 실측:
+  // stop_reason=max_tokens). Anthropic은 생각 토큰도 이 예산 안에서 쓰므로
+  // 여유를 크게 둔다.
+  "design-review": { env: "LLM_DESIGN_REVIEW_MAX_TOKENS", fallback: 8192 },
 };
 
 /**

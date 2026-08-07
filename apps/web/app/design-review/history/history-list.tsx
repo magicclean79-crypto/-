@@ -34,10 +34,12 @@ export function DesignReviewHistoryList() {
       .catch((err) => setError(err instanceof Error ? err.message : "불러오기 실패"));
   }, []);
 
+  const MAX_COMPARE = 3;
+
   const toggleSelect = (id: string) => {
     setSelected((prev) => {
       if (prev.includes(id)) return prev.filter((x) => x !== id);
-      if (prev.length >= 2) return [prev[1], id];
+      if (prev.length >= MAX_COMPARE) return [...prev.slice(1), id];
       return [...prev, id];
     });
   };
@@ -63,17 +65,18 @@ export function DesignReviewHistoryList() {
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <p className="text-sm text-zinc-500">
-          총 {items.length}건 · 체크박스로 2개를 고르면 Provider 결과를 나란히 비교할 수 있습니다.
+          총 {items.length}건 · 체크박스로 최대 {MAX_COMPARE}개를 고르면 Provider 결과를 나란히
+          비교할 수 있습니다 (예: OpenAI · Claude · Gemini 동시 비교).
         </p>
         <button
           type="button"
-          disabled={selected.length !== 2}
+          disabled={selected.length < 2}
           onClick={() =>
-            router.push(`/design-review/history/compare?a=${selected[0]}&b=${selected[1]}`)
+            router.push(`/design-review/history/compare?ids=${selected.join(",")}`)
           }
           className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
         >
-          선택한 2개 비교
+          선택한 {selected.length}개 비교
         </button>
       </div>
 

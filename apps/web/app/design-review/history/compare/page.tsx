@@ -17,19 +17,6 @@ async function fetchRun(id: string): Promise<DesignReviewDto> {
   return response.json();
 }
 
-function DiffRow({ label, a, b }: { label: string; a: string; b: string }) {
-  const changed = a !== b;
-  return (
-    <tr className={changed ? "bg-amber-50 dark:bg-amber-950/30" : ""}>
-      <th className="w-28 shrink-0 px-3 py-2 text-left align-top text-xs font-medium text-zinc-500">
-        {label}
-      </th>
-      <td className="w-1/2 px-3 py-2 align-top text-sm">{a || "—"}</td>
-      <td className="w-1/2 px-3 py-2 align-top text-sm">{b || "—"}</td>
-    </tr>
-  );
-}
-
 function fieldRows(result: DesignReviewResult | null): Record<string, string> {
   if (!result) return {};
   return {
@@ -47,45 +34,70 @@ function fieldRows(result: DesignReviewResult | null): Record<string, string> {
   };
 }
 
+/** Tailwind는 클래스명을 소스에서 문자 그대로 스캔한다 — 템플릿 리터럴로
+ * 동적 조합한 클래스는 인식하지 못하므로 고정 매핑을 쓴다. */
+const GRID_COLS: Record<number, string> = {
+  1: "grid-cols-1",
+  2: "grid-cols-1 sm:grid-cols-2",
+  3: "grid-cols-1 sm:grid-cols-3",
+};
+
+function DiffRow({ label, values }: { label: string; values: string[] }) {
+  const allSame = values.every((v) => v === values[0]);
+  return (
+    <tr className={allSame ? "" : "bg-amber-50 dark:bg-amber-950/30"}>
+      <th className="w-28 shrink-0 px-3 py-2 text-left align-top text-xs font-medium text-zinc-500">
+        {label}
+      </th>
+      {values.map((value, i) => (
+        <td key={i} className="w-1/3 px-3 py-2 align-top text-sm">
+          {value || "—"}
+        </td>
+      ))}
+    </tr>
+  );
+}
+
 function CompareBody() {
   const searchParams = useSearchParams();
-  const idA = searchParams.get("a");
-  const idB = searchParams.get("b");
-  const [a, setA] = useState<DesignReviewDto | null>(null);
-  const [b, setB] = useState<DesignReviewDto | null>(null);
+  const idsParam = searchParams.get("ids");
+  const legacyA = searchParams.get("a");
+  const legacyB = searchParams.get("b");
+  const ids = idsParam
+    ? idsParam.split(",").filter(Boolean)
+    : [legacyA, legacyB].filter((x): x is string => Boolean(x));
+
+  const [records, setRecords] = useState<DesignReviewDto[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!idA || !idB) {
-      setError("비교할 두 결과의 id가 필요합니다 (?a=...&b=...).");
+    if (ids.length < 2) {
+      setError("비교할 결과의 id가 2개 이상 필요합니다 (?ids=a,b,c).");
       return;
     }
-    Promise.all([fetchRun(idA), fetchRun(idB)])
-      .then(([recordA, recordB]) => {
-        setA(recordA);
-        setB(recordB);
-      })
+    Promise.all(ids.map(fetchRun))
+      .then(setRecords)
       .catch((err) => setError(err instanceof Error ? err.message : "불러오기 실패"));
-  }, [idA, idB]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idsParam, legacyA, legacyB]);
 
   if (error) {
     return <p className="text-sm text-red-600 dark:text-red-400">{error}</p>;
   }
-  if (!a || !b) {
+  if (!records) {
     return <p className="text-sm text-zinc-500">불러오는 중…</p>;
   }
 
-  const rowsA = fieldRows(a.result);
-  const rowsB = fieldRows(b.result);
-  const labels = Object.keys(rowsA);
+  const rowsList = records.map((r) => fieldRows(r.result));
+  const labels = Object.keys(rowsList[0] ?? {});
 
   return (
     <div className="flex flex-col gap-8">
-      <div className="grid grid-cols-2 gap-4">
-        {[a, b].map((record, index) => (
+      <div className={`grid gap-4 ${GRID_COLS[records.length] ?? "grid-cols-1"}`}>
+        {records.map((record, index) => (
           <div key={record.id}>
             <p className="text-xs font-medium text-zinc-500">
-              {index === 0 ? "A" : "B"} · {record.createdAt.replace("T", " ").slice(0, 16)}
+              {String.fromCharCode(65 + index)} · {record.createdAt.replace("T", " ").slice(0, 16)}
             </p>
             <p className="truncate font-semibold">
               provider: {record.provider ?? "-"} {record.result && `· ${record.result.overallScore}점`}
@@ -94,8 +106,8 @@ function CompareBody() {
         ))}
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        {[a, b].map((record) => (
+      <div className={`grid gap-4 ${GRID_COLS[records.length] ?? "grid-cols-1"}`}>
+        {records.map((record) => (
           <div key={record.id} className="flex flex-wrap gap-2">
             {record.imageIds.map((imageId) => (
               <AuthImage
@@ -116,17 +128,23 @@ function CompareBody() {
             <thead className="bg-zinc-50 dark:bg-zinc-900">
               <tr>
                 <th className="px-3 py-2 text-left text-xs font-medium text-zinc-500">항목</th>
-                <th className="px-3 py-2 text-left text-xs font-medium text-zinc-500">
-                  {a.provider ?? "A"}
-                </th>
-                <th className="px-3 py-2 text-left text-xs font-medium text-zinc-500">
-                  {b.provider ?? "B"}
-                </th>
+                {records.map((record, index) => (
+                  <th
+                    key={record.id}
+                    className="px-3 py-2 text-left text-xs font-medium text-zinc-500"
+                  >
+                    {record.provider ?? String.fromCharCode(65 + index)}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
               {labels.map((label) => (
-                <DiffRow key={label} label={label} a={rowsA[label]} b={rowsB[label]} />
+                <DiffRow
+                  key={label}
+                  label={label}
+                  values={rowsList.map((rows) => rows[label] ?? "")}
+                />
               ))}
             </tbody>
           </table>
@@ -138,7 +156,7 @@ function CompareBody() {
 
 export default function ComparePage() {
   return (
-    <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-8 px-6 py-16">
+    <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-8 px-6 py-16">
       <div>
         <Link
           href="/design-review/history"
