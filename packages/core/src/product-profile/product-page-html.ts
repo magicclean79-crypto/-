@@ -184,11 +184,23 @@ function renderPlainList(items: string[]): string {
 }
 
 /** 특징 카드 — 사진이 있으면 썸네일(클릭 시 확대), 없으면 체크 아이콘("사진 → 핵심 설명" 구조)
- * `variant`로 카드 크기/배경 스타일을 바꾼다 — 생활용품 Template A~E 비교용(Sprint 36). */
+ * `variant`로 카드 크기/배경 스타일을 바꾼다 — 생활용품 Template A~E 비교용(Sprint 36).
+ * `"stacked"`는 CTO 피드백(2026-08-08 — "이미지 갤러리 형식보단 큰 사진으로 사진→설명→
+ * 사진→설명 반복") 반영: 작은 썸네일 그리드가 아니라 사진 1장을 전체 폭으로 크게 보여주고
+ * 그 밑에 설명을 붙인 카드를 세로로 반복한다 — 별도 "이미지 갤러리" 섹션이 필요 없어진다. */
 function renderFeatureCards(
   items: ProductPageFeatureItem[],
-  variant: "medium" | "large" | "grid" | "plain" = "medium",
+  variant: "medium" | "large" | "grid" | "plain" | "stacked" = "medium",
 ): string {
+  if (variant === "stacked") {
+    const figures = items.map(({ text, image }) => {
+      const media = image
+        ? zoomLink(image, `<img src="${dataUri(image)}" alt="" loading="lazy">`)
+        : `<span class="pde-feature-stacked-icon">${ICONS.check}</span>`;
+      return `<figure class="pde-feature-stacked">${media}<figcaption>${escapeHtml(text)}</figcaption></figure>`;
+    });
+    return `<div class="pde-feature-stack">${figures.join("")}</div>`;
+  }
   const cards = items.map(({ text, image }) => {
     const media = image
       ? zoomLink(image, `<span class="pde-feature-media"><img src="${dataUri(image)}" alt="" loading="lazy"></span>`)
@@ -663,6 +675,13 @@ function sharedLivingGoodsCss(accent: string): string {
 .pde-page .pde-feature-grid--grid .pde-feature-media { width: 56px; height: 56px; margin: 0 auto; }
 .pde-page .pde-feature-grid--plain .pde-feature-card { border-bottom: 1px solid #f1f1f1; padding: 10px 0; border-radius: 0; }
 .pde-page .pde-feature-grid--plain .pde-feature-media { width: 40px; height: 40px; }
+.pde-page .pde-feature-stack { display: flex; flex-direction: column; gap: 28px; padding: 4px 14px 18px; }
+.pde-page .pde-feature-stacked { margin: 0; }
+.pde-page .pde-feature-stacked > a { display: block; }
+.pde-page .pde-feature-stacked img { width: 100%; border-radius: 12px; display: block; object-fit: cover; }
+.pde-page .pde-feature-stacked figcaption { margin-top: 10px; font-size: 13.5px; font-weight: 600; color: #27272a; line-height: 1.5; }
+.pde-page .pde-feature-stacked:has(figcaption:empty) figcaption { display: none; }
+.pde-page .pde-feature-stacked-icon { display: flex; align-items: center; justify-content: center; width: 100%; height: 160px; border-radius: 12px; background: color-mix(in srgb, ${accent} 10%, white); color: ${accent}; }
 .pde-page .pde-description, .pde-page .pde-usage { margin: 0; font-size: 12.5px; color: #52525b; background: #fafafa; border-radius: 10px; padding: 10px 12px; white-space: pre-wrap; }
 .pde-page .pde-spec-checklist { margin: 0; padding: 10px 12px; list-style: none; display: flex; flex-direction: column; gap: 8px; background: #f8fafc; border-radius: 10px; font-size: 12.5px; }
 .pde-page .pde-spec-item { display: flex; align-items: baseline; gap: 8px; }
@@ -687,13 +706,32 @@ function sharedLivingGoodsCss(accent: string): string {
 `;
 }
 
-/** 공통 섹션 빌더 — A~E가 순서만 다르게 조합한다 */
+/** 사진(특징 페어링 사진 + 남은 갤러리 사진)을 중복 없이 하나로 합친다 — 어떤 사진도
+ * 작은 갤러리 썸네일로만 숨어 있지 않고 전부 큰 사진 스토리에 등장하게 한다. */
+function mergedStackedItems(vm: ProductPageViewModel): ProductPageFeatureItem[] {
+  const used = new Set(
+    vm.features.map((f) => f.image?.base64).filter((b): b is string => Boolean(b)),
+  );
+  const extra: ProductPageFeatureItem[] = vm.galleryImages
+    .filter((image) => !used.has(image.base64))
+    .map((image) => ({ text: "", image }));
+  return [...vm.features, ...extra];
+}
+
+/**
+ * 공통 섹션 빌더 — A~E가 순서만 다르게 조합한다.
+ * (CTO 피드백, 2026-08-08: "메인사진 위, 상품제목, 그다음 사진→설명→사진→설명
+ * 반복, 그 밑에 특징·스펙·주의사항 나열") Hero 다음에 오는 "사진 스토리"
+ * 블록은 작은 이미지 갤러리·작은 특징 카드를 대체한다 — 사진은 전체 폭으로
+ * 크게, 설명은 그 바로 아래에 붙인다. 특징 텍스트는 사진과 별개로 아래쪽에
+ * 스캔하기 쉬운 불릿 목록으로 다시 한번 요약한다.
+ */
 function livingGoodsSections(vm: ProductPageViewModel, opts: {
-  featureVariant: "medium" | "large" | "grid" | "plain";
   spec: "checklist" | "accordion";
 }) {
-  const feature = vm.features.length > 0
-    ? renderSection("check", "feature", "특징", renderFeatureCards(vm.features, opts.featureVariant))
+  const photoStory = renderFeatureCards(mergedStackedItems(vm), "stacked");
+  const featureList = vm.features.length > 0
+    ? renderSection("check", "feature", "특징", renderPlainList(vm.features.map((f) => f.text)))
     : "";
   const description = renderSection("info", "info", "제품 설명", `<p class="pde-description">${escapeHtml(vm.description)}</p>`);
   const usage = vm.usage
@@ -713,8 +751,7 @@ function livingGoodsSections(vm: ProductPageViewModel, opts: {
   const warnings = vm.warnings.length > 0
     ? renderSection("warning", "warning", "주의사항", `<div class="pde-warning-box">${renderPlainList(vm.warnings)}</div>`)
     : "";
-  const gallery = renderGallerySection(vm.galleryImages);
-  return { feature, description, usage, spec, components, warnings, gallery };
+  return { photoStory, featureList, description, usage, spec, components, warnings };
 }
 
 /**
@@ -728,16 +765,16 @@ export const LIVING_GOODS_TEMPLATE_A: ProductPageTemplate = {
   name: "생활용품 A — 신뢰/근거형",
   description: "구매포인트 → Hero → 특징(증거 사진) → 스펙 체크리스트 순으로 근거를 쌓는 구성. 블루 단일 액센트.",
   render(vm) {
-    const s = livingGoodsSections(vm, { featureVariant: "medium", spec: "checklist" });
+    const s = livingGoodsSections(vm, { spec: "checklist" });
     const html = [
       '<div class="pde-page pde-page--a">',
-      renderPurchasePoints(vm.purchasePoints, "filled"),
       renderHero(vm, "overlay"),
-      s.feature,
-      s.spec,
-      s.gallery,
+      renderPurchasePoints(vm.purchasePoints, "filled"),
+      s.photoStory,
+      s.featureList,
       s.description,
       s.usage,
+      s.spec,
       s.components,
       s.warnings,
       "</div>",
@@ -765,16 +802,16 @@ export const LIVING_GOODS_TEMPLATE_B: ProductPageTemplate = {
   name: "생활용품 B — 감성/무드형",
   description: "오버레이 없는 풀블리드 무드 Hero → 설명 먼저 → 구매포인트(아웃라인) 순. 웜톤 테라코타 액센트, 세리프 헤드라인.",
   render(vm) {
-    const s = livingGoodsSections(vm, { featureVariant: "plain", spec: "checklist" });
+    const s = livingGoodsSections(vm, { spec: "checklist" });
     const html = [
       '<div class="pde-page pde-page--b">',
       renderHero(vm, "mood"),
-      s.description,
       renderPurchasePoints(vm.purchasePoints, "outline"),
-      s.feature,
-      s.gallery,
-      s.spec,
+      s.photoStory,
+      s.featureList,
+      s.description,
       s.usage,
+      s.spec,
       s.components,
       s.warnings,
       "</div>",
@@ -801,14 +838,14 @@ export const LIVING_GOODS_TEMPLATE_C: ProductPageTemplate = {
   name: "생활용품 C — 즉시구매/가격강조형",
   description: "구매포인트(가격 배지 스타일)를 Hero보다 먼저 배치, 특징은 2열 그리드로 촘촘하게. 레드/옐로 액센트.",
   render(vm) {
-    const s = livingGoodsSections(vm, { featureVariant: "grid", spec: "checklist" });
+    const s = livingGoodsSections(vm, { spec: "checklist" });
     const html = [
       '<div class="pde-page pde-page--c">',
-      renderPurchasePoints(vm.purchasePoints, "badge"),
       renderHero(vm, "compact"),
+      renderPurchasePoints(vm.purchasePoints, "badge"),
+      s.photoStory,
+      s.featureList,
       s.spec,
-      s.feature,
-      s.gallery,
       s.description,
       s.usage,
       s.components,
@@ -839,14 +876,14 @@ export const LIVING_GOODS_TEMPLATE_D: ProductPageTemplate = {
   name: "생활용품 D — 기능증명형",
   description: "Hero·특징 카드 모두 대형 사진으로 기능 증거를 강조. 그레이+틸 단일 액센트.",
   render(vm) {
-    const s = livingGoodsSections(vm, { featureVariant: "large", spec: "checklist" });
+    const s = livingGoodsSections(vm, { spec: "checklist" });
     const html = [
       '<div class="pde-page pde-page--d">',
       renderHero(vm, "overlay"),
-      s.feature,
       renderPurchasePoints(vm.purchasePoints, "filled"),
+      s.photoStory,
+      s.featureList,
       s.spec,
-      s.gallery,
       s.description,
       s.usage,
       s.components,
@@ -877,13 +914,13 @@ export const LIVING_GOODS_TEMPLATE_E: ProductPageTemplate = {
   name: "생활용품 E — 미니멀 스칸디나비아형",
   description: "무채색 + 블루 단일 액센트, 넉넉한 여백, 스펙은 IKEA식 접이식 아코디언(기본 접힘).",
   render(vm) {
-    const s = livingGoodsSections(vm, { featureVariant: "plain", spec: "accordion" });
+    const s = livingGoodsSections(vm, { spec: "accordion" });
     const html = [
       '<div class="pde-page pde-page--e">',
       renderHero(vm, "spacious"),
       renderPurchasePoints(vm.purchasePoints, "outline"),
-      s.feature,
-      s.gallery,
+      s.photoStory,
+      s.featureList,
       s.description,
       s.usage,
       s.spec,
