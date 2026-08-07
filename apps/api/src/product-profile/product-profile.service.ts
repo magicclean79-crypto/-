@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException, Optional } from "@n
 import {
   ProductProfileEngine,
   ProductProfileExecutionService,
+  wrapProductProfileHtmlDocument,
 } from "@acos/core";
 import type { VisionImageInput } from "@acos/core";
 import type { ProductProfileDto } from "@acos/shared";
@@ -20,6 +21,9 @@ function toDto(record: ProductProfileRecord): ProductProfileDto {
     ocrText: record.ocrText,
     imageFeatures: record.imageFeatures as ProductProfileDto["imageFeatures"],
     profile: record.profile as ProductProfileDto["profile"],
+    pageCopy: record.pageCopy as ProductProfileDto["pageCopy"],
+    html: record.html,
+    css: record.css,
     provider: record.provider,
     error: record.error,
     attempts: record.attempts,
@@ -131,6 +135,32 @@ export class ProductProfileService {
       throw new NotFoundException(`Product Profile을 찾을 수 없습니다: ${id}`);
     }
     return toDto(record);
+  }
+
+  /**
+   * STEP 5 결과를 완전한 HTML 문서로 감싸 반환한다 — 미리보기/다운로드용.
+   * 실행이 나중에 다시 열어볼 수 있어야 한다는 요구(Sprint 35 Phase 2)를
+   * 충족한다: 저장된 record에서 그대로 재구성하므로 재실행이 필요 없다.
+   */
+  async getHtmlDocument(id: string): Promise<string> {
+    const record = await this.prisma.productProfile.findUnique({
+      where: { id },
+    });
+    if (!record) {
+      throw new NotFoundException(`Product Profile을 찾을 수 없습니다: ${id}`);
+    }
+    if (!record.html || !record.profile) {
+      throw new BadRequestException(
+        "이 실행에는 아직 생성된 HTML이 없습니다 (status: " + record.status + ").",
+      );
+    }
+    const profile = record.profile as unknown as ProductProfileDto["profile"];
+    return wrapProductProfileHtmlDocument(
+      profile!.productName,
+      record.html,
+      record.css ?? "",
+      profile!.keywords,
+    );
   }
 
   async list(take: number): Promise<ProductProfileDto[]> {

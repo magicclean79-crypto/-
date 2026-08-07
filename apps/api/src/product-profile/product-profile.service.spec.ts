@@ -33,6 +33,11 @@ const validProfile = {
   confidence: 0.75,
 };
 
+const validCopy = {
+  headline: "접어서 보관하는 PVC 주방 매트",
+  description: "물세척이 가능한 접이식 PVC 매트로 주방 바닥을 깔끔하게 지켜줍니다.",
+};
+
 /** product_profiles 테이블을 흉내 내는 인메모리 Prisma 목업 */
 function createPrismaMock() {
   const rows = new Map<string, ProductProfileRecord>();
@@ -54,6 +59,9 @@ function createPrismaMock() {
             ocrText: data.ocrText ?? null,
             imageFeatures: null,
             profile: null,
+            pageCopy: null,
+            html: null,
+            css: null,
             provider: data.provider ?? null,
             error: null,
             attempts: 0,
@@ -108,7 +116,9 @@ const defaultComplete: ProductProfileLlmClient = async (request) => ({
   text:
     request.step === "vision"
       ? JSON.stringify(validFeatures)
-      : JSON.stringify(validProfile),
+      : request.step === "synthesis"
+        ? JSON.stringify(validProfile)
+        : JSON.stringify(validCopy),
 });
 
 describe("ProductProfileService (Service Test)", () => {
@@ -158,6 +168,9 @@ describe("ProductProfileService (Service Test)", () => {
     expect(result.projectId).toBe("proj-1");
     expect(result.imageFeatures).toEqual(validFeatures);
     expect(result.profile).toEqual(validProfile);
+    expect(result.pageCopy).toEqual(validCopy);
+    expect(result.html).toContain(validProfile.productName);
+    expect(result.css).toContain(".pde-page");
     expect(result.provider).toBe("llm:openai");
   });
 
@@ -246,5 +259,40 @@ describe("ProductProfileService (Service Test)", () => {
     const prisma = createPrismaMock();
     const service = await createService(prisma);
     await expect(service.get("nope")).rejects.toThrow(NotFoundException);
+  });
+
+  it("getHtmlDocument()는 SUCCESS 실행의 HTML을 완전한 문서로 감싸 반환한다", async () => {
+    const prisma = createPrismaMock();
+    prisma.image.findMany.mockResolvedValue(images);
+    const service = await createService(prisma);
+    const run = await service.run(["img-1", "img-2"]);
+
+    const doc = await service.getHtmlDocument(run.id);
+    expect(doc).toContain("<!DOCTYPE html>");
+    expect(doc).toContain(validProfile.productName);
+    expect(doc).toContain(validCopy.headline);
+  });
+
+  it("getHtmlDocument()는 없는 id에 404를 던진다", async () => {
+    const prisma = createPrismaMock();
+    const service = await createService(prisma);
+    await expect(service.getHtmlDocument("nope")).rejects.toThrow(NotFoundException);
+  });
+
+  it("getHtmlDocument()는 FAILED 실행처럼 html이 없으면 400을 던진다", async () => {
+    const prisma = createPrismaMock();
+    prisma.image.findMany.mockResolvedValue(images);
+    const service = await createService(prisma, {
+      complete: async (request) =>
+        request.step === "vision"
+          ? { provider: "openai", model: "gpt-4o", text: "이건 JSON이 아니다" }
+          : defaultComplete(request),
+    });
+    const run = await service.run(["img-1", "img-2"]);
+
+    expect(run.status).toBe("FAILED");
+    await expect(service.getHtmlDocument(run.id)).rejects.toThrow(
+      BadRequestException,
+    );
   });
 });

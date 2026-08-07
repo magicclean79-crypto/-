@@ -1,6 +1,7 @@
-import type { LlmImageDto, LlmMessageDto, LlmResponseFormat } from "@acos/shared";
+import type { LlmImageDto, LlmMessageDto, LlmResponseFormat, ProductPageCopy } from "@acos/shared";
 import type { PromptEngine } from "../prompt/prompt-engine";
 import { PRODUCT_FEATURE_VISION_TEMPLATE_KEY } from "../prompt/templates/product-feature-vision.template";
+import { PRODUCT_PAGE_COPY_TEMPLATE_KEY } from "../prompt/templates/product-page-copy.template";
 import { PRODUCT_PROFILE_SYNTHESIS_TEMPLATE_KEY } from "../prompt/templates/product-profile-synthesis.template";
 import {
   DEFAULT_IMAGE_GUARD_POLICY,
@@ -15,6 +16,8 @@ import {
   type ImageFeatureAnalysis,
   type ImageFeatureAnalysisContext,
 } from "./image-feature-analysis";
+import { parseProductPageCopyResponse, type ProductPageCopyContext } from "./product-page-copy";
+import { renderProductProfileHtml } from "./product-page-html";
 import {
   parseProductProfileResponse,
   type ProductProfile,
@@ -27,7 +30,7 @@ export type ProductProfileLlmClient = (request: {
   images: LlmImageDto[];
   responseFormat: LlmResponseFormat;
   /** 어느 단계 호출인지 — Execution feature 태깅용 */
-  step: "vision" | "synthesis";
+  step: "vision" | "synthesis" | "copy";
   /** 배정 주체 프로젝트 (TASK-1101 Sticky Assignment) — 없으면 무상태 */
   projectId?: string;
 }) => Promise<{ provider: string; model: string; text: string }>;
@@ -53,10 +56,14 @@ export interface ProductProfileEngineInput {
 export interface ProductProfileEngineResult {
   imageFeatures: ImageFeatureAnalysis;
   profile: ProductProfile;
+  pageCopy: ProductPageCopy;
+  html: string;
+  css: string;
   raw: {
     provider: string;
     vision: { provider: string; model: string; responseText: string };
     synthesis: { provider: string; model: string; responseText: string };
+    copy: { provider: string; model: string; responseText: string };
     imageCount: number;
     omittedImageCount: number;
     skippedImages: { id: string; reason: string }[];
@@ -78,6 +85,13 @@ const DEFAULT_MAX_IMAGES = 5;
  * 뽑는다. STEP 4는 그 결과 + OCR 텍스트만으로(이미지 재첨부 없음) 최종
  * Product Profile을 통합한다 — 이미지 판단은 STEP 3이 끝냈으므로 STEP 4가
  * 다시 보면 같은 사실에 두 개의 답이 생길 수 있다.
+ *
+ * STEP 5(Sprint 35 Phase 2)는 두 단계로 나뉜다: (a) Product Profile만
+ * 근거로 대표 문구·제품 설명을 LLM으로 생성하고(이미지 재첨부 없음 —
+ * STEP 4와 같은 원칙), (b) 그 결과를 Product Profile·STEP 3 구성품과
+ * 함께 **LLM 없이 결정적으로** HTML/CSS로 렌더링한다(`renderProductProfileHtml`,
+ * 순수 함수) — 마크업 조립에는 새 사실 판단이 필요 없어 LLM 호출을 하나
+ * 더 늘릴 이유가 없다.
  *
  * 실패 시 reject — 재시도/폴백은 호출자(apps/api ProductProfileService)가
  * 담당한다.
@@ -167,9 +181,34 @@ export class ProductProfileEngine {
     });
     const profile = parseProductProfileResponse(synthesisCompletion.text);
 
+    // STEP 5a — 상세페이지 카피 생성 (텍스트 전용, Profile만 근거)
+    const copyContext: ProductPageCopyContext = { profile };
+    const copyMessages = this.options.promptEngine.render(
+      PRODUCT_PAGE_COPY_TEMPLATE_KEY,
+      copyContext,
+    );
+    const copyCompletion = await this.options.complete({
+      messages: copyMessages,
+      images: [],
+      responseFormat: "json",
+      step: "copy",
+      projectId: input.projectId,
+    });
+    const pageCopy = parseProductPageCopyResponse(copyCompletion.text);
+
+    // STEP 5b — HTML/CSS 렌더링 (LLM 호출 없음, 결정적)
+    const { html, css } = renderProductProfileHtml(
+      profile,
+      imageFeatures.components,
+      pageCopy,
+    );
+
     return {
       imageFeatures,
       profile,
+      pageCopy,
+      html,
+      css,
       raw: {
         provider: this.name,
         vision: {
@@ -181,6 +220,11 @@ export class ProductProfileEngine {
           provider: synthesisCompletion.provider,
           model: synthesisCompletion.model,
           responseText: synthesisCompletion.text,
+        },
+        copy: {
+          provider: copyCompletion.provider,
+          model: copyCompletion.model,
+          responseText: copyCompletion.text,
         },
         imageCount: images.length,
         omittedImageCount: input.images.length - attachedImages.length,

@@ -2,6 +2,7 @@ import type { LlmImageDto, LlmMessageDto, LlmResponseFormat } from "@acos/shared
 import { createDefaultPromptEngine } from "../prompt/default-engine";
 import type { VisionImageInput } from "../vision/vision-provider";
 import { ImageFeatureParseError } from "./image-feature-analysis";
+import { ProductPageCopyParseError } from "./product-page-copy";
 import { ProductProfileEngine, type ProductProfileLlmClient } from "./product-profile-engine";
 
 const validFeatures = {
@@ -28,34 +29,40 @@ const validProfile = {
   confidence: 0.75,
 };
 
+const validCopy = {
+  headline: "접어서 보관하는 PVC 주방 매트",
+  description: "물세척이 가능한 접이식 PVC 매트로 주방 바닥을 깔끔하게 지켜줍니다.",
+};
+
 function image(id: string, mimeType: string, bytes = new Uint8Array([1, 2, 3])): VisionImageInput {
   return { id, mimeType, getBytes: async () => bytes };
 }
 
 /** step별로 서로 다른 응답을 돌려주는 스텁 — 실 LLM Gateway 대신 사용 */
 function stubComplete(
-  responses: Partial<Record<"vision" | "synthesis", string>>,
+  responses: Partial<Record<"vision" | "synthesis" | "copy", string>>,
   calls: {
     messages: LlmMessageDto[];
     images: LlmImageDto[];
     responseFormat: LlmResponseFormat;
-    step: "vision" | "synthesis";
+    step: "vision" | "synthesis" | "copy";
     projectId?: string;
   }[],
 ): ProductProfileLlmClient {
   return async (request) => {
     calls.push(request);
-    const text =
-      responses[request.step] ??
-      (request.step === "vision"
-        ? JSON.stringify(validFeatures)
-        : JSON.stringify(validProfile));
+    const defaults: Record<"vision" | "synthesis" | "copy", string> = {
+      vision: JSON.stringify(validFeatures),
+      synthesis: JSON.stringify(validProfile),
+      copy: JSON.stringify(validCopy),
+    };
+    const text = responses[request.step] ?? defaults[request.step];
     return { provider: "openai", model: "gpt-4o", text };
   };
 }
 
 describe("ProductProfileEngine", () => {
-  it("이미지 특징 분석(STEP 3) → Profile 통합(STEP 4) 순서로 두 번 호출한다", async () => {
+  it("이미지 특징 분석(STEP 3) → Profile 통합(STEP 4) → 카피 생성(STEP 5) 순서로 세 번 호출하고 HTML을 렌더링한다", async () => {
     const calls: Parameters<ProductProfileLlmClient>[0][] = [];
     const engine = new ProductProfileEngine({
       promptEngine: createDefaultPromptEngine(),
@@ -69,15 +76,21 @@ describe("ProductProfileEngine", () => {
       projectId: "proj-1",
     });
 
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(3);
     expect(calls[0].step).toBe("vision");
     expect(calls[0].images).toHaveLength(2);
     expect(calls[1].step).toBe("synthesis");
-    // STEP 4는 이미지를 다시 첨부하지 않는다
+    // STEP 4·STEP 5는 이미지를 다시 첨부하지 않는다
     expect(calls[1].images).toEqual([]);
+    expect(calls[2].step).toBe("copy");
+    expect(calls[2].images).toEqual([]);
 
     expect(result.imageFeatures).toEqual(validFeatures);
     expect(result.profile).toEqual(validProfile);
+    expect(result.pageCopy).toEqual(validCopy);
+    expect(result.html).toContain(validProfile.productName);
+    expect(result.html).toContain(validCopy.headline);
+    expect(result.css).toContain(".pde-page");
     expect(result.raw.provider).toBe("llm:openai");
     expect(result.raw.imageCount).toBe(2);
     expect(result.raw.skippedImages).toEqual([]);
@@ -133,5 +146,19 @@ describe("ProductProfileEngine", () => {
       engine.run({ images: [image("a", "image/png")], ocrTexts: [] }),
     ).rejects.toThrow(ImageFeatureParseError);
     expect(calls).toHaveLength(1); // synthesis 는 불리지 않았다
+  });
+
+  it("STEP 5(카피) 응답이 해석 불가면 그대로 reject한다", async () => {
+    const calls: Parameters<ProductProfileLlmClient>[0][] = [];
+    const engine = new ProductProfileEngine({
+      promptEngine: createDefaultPromptEngine(),
+      llmProviderName: "openai",
+      complete: stubComplete({ copy: "이건 JSON이 아니다" }, calls),
+    });
+
+    await expect(
+      engine.run({ images: [image("a", "image/png")], ocrTexts: [] }),
+    ).rejects.toThrow(ProductPageCopyParseError);
+    expect(calls).toHaveLength(3); // vision·synthesis는 끝났고 copy에서 실패했다
   });
 });

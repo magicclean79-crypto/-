@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Header, Param, Post, Query } from "@nestjs/common";
 import type { ProductProfileDto, RunProductProfileRequest } from "@acos/shared";
 import { ProductProfileService } from "./product-profile.service";
 
@@ -29,6 +29,13 @@ export class ProductProfileController {
   @Get(":id")
   async get(@Param("id") id: string): Promise<ProductProfileDto> {
     return this.service.get(id);
+  }
+
+  /** STEP 5 결과 — 완전한 HTML 문서(미리보기·다운로드용). 나중에 다시 열어볼 수 있다 */
+  @Get(":id/html")
+  @Header("Content-Type", "text/html; charset=utf-8")
+  async getHtml(@Param("id") id: string): Promise<string> {
+    return this.service.getHtmlDocument(id);
   }
 
   /** 최근 실행 목록 */

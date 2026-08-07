@@ -201,6 +201,13 @@ model ProductProfile {
   imageFeatures Json?
   // STEP 4 최종 결과 (ProductProfile)
   profile       Json?
+  // STEP 5a 결과 (ProductPageCopy — 대표 문구·제품 설명, Sprint 35 Phase 2)
+  pageCopy      Json?
+  // STEP 5b 결과 — Product Profile을 렌더링한 상세페이지 HTML(재사용 가능한
+  // fragment)과 그에 대응하는 CSS. LLM 없이 결정적으로 생성되지만, STEP 5a의
+  // 결과(pageCopy)에 의존하므로 이 실행의 산출물로 함께 저장한다.
+  html          String?
+  css           String?
   provider      String?
   error         String?
   attempts      Int                  @default(0)

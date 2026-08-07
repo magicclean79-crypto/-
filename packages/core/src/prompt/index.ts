@@ -5,3 +5,4 @@ export * from "./templates/product-analysis.template";
 export * from "./templates/vision-analysis.template";
 export * from "./templates/product-feature-vision.template";
 export * from "./templates/product-profile-synthesis.template";
+export * from "./templates/product-page-copy.template";

@@ -376,6 +376,14 @@ export interface ProductProfile {
   confidence: number; // 0.0 ~ 1.0
 }
 
+/** 상세페이지 카피 — 대표 문구 + 제품 설명 (STEP 5, Sprint 35 Phase 2) */
+export interface ProductPageCopy {
+  /** 짧고 강력한 한 줄 (상세페이지 최상단) */
+  headline: string;
+  /** 자연스러운 문단 형태의 제품 설명 */
+  description: string;
+}
+
 export const PRODUCT_PROFILE_STATUSES = [
   "PENDING",
   "RUNNING",
@@ -395,6 +403,12 @@ export interface ProductProfileDto {
   ocrText: string | null;
   imageFeatures: ImageFeatureAnalysis | null;
   profile: ProductProfile | null;
+  /** STEP 5 — LLM이 생성한 대표 문구·제품 설명 */
+  pageCopy: ProductPageCopy | null;
+  /** STEP 5 — Product Profile을 렌더링한 상세페이지 HTML(재사용 가능한 template 구조) */
+  html: string | null;
+  /** STEP 5 — html과 함께 쓰는 반응형 CSS */
+  css: string | null;
   provider: string | null;
   error: string | null;
   attempts: number;

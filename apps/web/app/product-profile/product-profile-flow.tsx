@@ -100,7 +100,7 @@ async function runOcr(imageId: string): Promise<OcrResultDto> {
   return body;
 }
 
-/** STEP 3+4 — 이미지 특징 분석 + Product Profile 통합 (실 OpenAI Vision) */
+/** STEP 3+4+5 — 이미지 특징 분석 + Product Profile 통합 + 상세페이지 카피/HTML 생성 (실 OpenAI Vision) */
 async function runProductProfile(imageIds: string[]): Promise<ProductProfileDto> {
   const response = await fetch(
     `${API_URL}/product-profile`,
@@ -122,6 +122,27 @@ async function runProductProfile(imageIds: string[]): Promise<ProductProfileDto>
   return body;
 }
 
+/** STEP 5 결과 다운로드 — 서버에 저장된 완전한 HTML 문서를 그대로 받아 파일로 저장한다 */
+async function downloadHtml(id: string, productName: string): Promise<void> {
+  const response = await fetch(
+    `${API_URL}/product-profile/${id}/html`,
+    authFetchInit({ method: "GET" }),
+  );
+  if (!response.ok) {
+    throw new Error(`다운로드 실패 (HTTP ${response.status})`);
+  }
+  const html = await response.text();
+  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `${productName.replace(/[\\/:*?"<>|]/g, "_") || "product-page"}.html`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 export function ProductProfileFlow() {
   const [items, setItems] = useState<UploadItem[]>([]);
   const [isDragging, setIsDragging] = useState(false);
@@ -130,6 +151,8 @@ export function ProductProfileFlow() {
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
   const [profile, setProfile] = useState<ProductProfileDto | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const updateItem = useCallback((id: string, patch: Partial<UploadItem>) => {
@@ -232,6 +255,7 @@ export function ProductProfileFlow() {
   const runAnalysis = useCallback(async () => {
     setAnalyzing(true);
     setAnalyzeError(null);
+    setDownloadError(null);
     setProfile(null);
     try {
       const result = await runProductProfile(doneItems.map((item) => item.image!.id));
@@ -244,6 +268,21 @@ export function ProductProfileFlow() {
       setAnalyzing(false);
     }
   }, [doneItems]);
+
+  const downloadCurrentHtml = useCallback(async () => {
+    if (!profile) return;
+    setDownloading(true);
+    setDownloadError(null);
+    try {
+      await downloadHtml(profile.id, profile.profile?.productName ?? "product-page");
+    } catch (error) {
+      setDownloadError(
+        error instanceof Error ? error.message : "다운로드에 실패했습니다.",
+      );
+    } finally {
+      setDownloading(false);
+    }
+  }, [profile]);
 
   return (
     <div className="flex flex-col gap-8">
@@ -383,13 +422,16 @@ export function ProductProfileFlow() {
         </section>
       )}
 
-      {/* STEP 3+4 — 이미지 분석 + Product Profile 통합 */}
+      {/* STEP 3+4+5 — 이미지 분석 + Product Profile 통합 + 상세페이지 카피/HTML 생성 */}
       {doneItems.length > 0 && (
         <section className="flex flex-col gap-3">
-          <h2 className="text-lg font-semibold">STEP 3+4 · 이미지 분석 → Product Profile 통합</h2>
+          <h2 className="text-lg font-semibold">
+            STEP 3+4+5 · 이미지 분석 → Product Profile 통합 → 상세페이지 HTML 생성
+          </h2>
           <p className="text-sm text-zinc-500">
-            실제 OpenAI Vision 호출 2건(이미지 특징 분석 + Profile 통합)이
-            실행됩니다 — 소액이지만 실제 과금이 발생합니다. OCR을 먼저
+            실제 OpenAI 호출 3건(이미지 특징 분석 + Profile 통합 + 상세페이지
+            카피 생성)이 실행됩니다 — 소액이지만 실제 과금이 발생합니다. HTML
+            렌더링 자체는 LLM 호출 없이 결정적으로 생성됩니다. OCR을 먼저
             실행해 두면 정확도가 올라가지만 필수는 아닙니다.
           </p>
           <div>
@@ -400,8 +442,8 @@ export function ProductProfileFlow() {
               className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
             >
               {analyzing
-                ? "분석 중… (수 초 소요)"
-                : `사진 ${doneItems.length}장으로 Product Profile 생성`}
+                ? "생성 중… (수 초 소요)"
+                : `사진 ${doneItems.length}장으로 상세페이지 생성`}
             </button>
           </div>
           {analyzeError && (
@@ -490,6 +532,43 @@ export function ProductProfileFlow() {
                 </div>
               </dl>
             </Card>
+          )}
+
+          {profile.status === "SUCCESS" && profile.html && (
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-base font-semibold">STEP 5 · 상세페이지 HTML 미리보기</h3>
+                <button
+                  type="button"
+                  onClick={() => void downloadCurrentHtml()}
+                  disabled={downloading}
+                  className="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                >
+                  {downloading ? "다운로드 중…" : "HTML 파일로 다운로드"}
+                </button>
+              </div>
+              {downloadError && (
+                <p className="text-sm text-red-600 dark:text-red-400">{downloadError}</p>
+              )}
+              {profile.pageCopy && (
+                <p className="text-sm text-zinc-500">
+                  대표 문구: “{profile.pageCopy.headline}”
+                </p>
+              )}
+              <iframe
+                title="상세페이지 미리보기"
+                srcDoc={`<style>${profile.css ?? ""}</style>${profile.html}`}
+                sandbox=""
+                className="h-[640px] w-full rounded-xl border border-zinc-200 bg-white dark:border-zinc-800"
+              />
+              <p className="text-xs text-zinc-500">
+                이 실행 결과는 서버에 저장되어 있습니다 — 링크: {" "}
+                <code className="rounded bg-zinc-100 px-1 py-0.5 dark:bg-zinc-800">
+                  GET /product-profile/{profile.id}
+                </code>{" "}
+                로 나중에 다시 열어볼 수 있습니다.
+              </p>
+            </div>
           )}
 
           <details className="rounded-xl border border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950">

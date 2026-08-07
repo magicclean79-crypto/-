@@ -81,6 +81,11 @@ describe("PromptEngine", () => {
         name: "Product Profile 통합",
         description: expect.stringContaining("Product Profile"),
       },
+      {
+        key: "product-page-copy",
+        name: "상세페이지 카피 생성",
+        description: expect.stringContaining("대표 문구"),
+      },
     ]);
   });
 });

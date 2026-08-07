@@ -20,9 +20,9 @@ export default function ProductProfilePage() {
           Product Detail Engine
         </h1>
         <p className="mt-2 text-zinc-600 dark:text-zinc-400">
-          사진만 넣으면 OCR·이미지 분석을 거쳐 하나의 Product Profile
-          JSON을 만듭니다. 실 OCR·실 OpenAI Vision만 사용합니다 — mock·가짜
-          응답은 없습니다. (V1 — 상세페이지 HTML 생성은 다음 Sprint)
+          사진만 넣으면 OCR·이미지 분석·Product Profile 통합을 거쳐 바로
+          미리보고 다운로드할 수 있는 상세페이지 HTML까지 만듭니다. 실
+          OCR·실 OpenAI만 사용합니다 — mock·가짜 응답은 없습니다.
         </p>
       </div>
       <ProductProfileFlow />

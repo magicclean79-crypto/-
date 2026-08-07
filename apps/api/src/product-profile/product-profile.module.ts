@@ -40,7 +40,9 @@ import { ProductProfileService } from "./product-profile.service";
                 feature:
                   step === "vision"
                     ? "product-profile-vision"
-                    : "product-profile-synthesis",
+                    : step === "synthesis"
+                      ? "product-profile-synthesis"
+                      : "product-profile-copy",
                 projectId,
               },
             );
