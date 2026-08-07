@@ -193,6 +193,7 @@ describe("Cross-Provider Routing Engine (TASK-1001)", () => {
       "content-generation",
       "product-analysis",
       "vision-analysis",
+      "design-review",
     ]);
     expect(
       routing.routes.find((route) => route.feature === "vision-analysis"),

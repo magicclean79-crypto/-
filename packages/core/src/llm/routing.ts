@@ -20,6 +20,7 @@ export const ROUTABLE_FEATURES = [
   "content-generation",
   "product-analysis",
   "vision-analysis",
+  "design-review",
 ] as const;
 
 export type RoutableFeature = (typeof ROUTABLE_FEATURES)[number];
@@ -29,6 +30,11 @@ export const LLM_FEATURE_PROVIDER_ENV: Record<string, string> = {
   "content-generation": "LLM_ROUTE_CONTENT",
   "product-analysis": "LLM_ROUTE_ANALYSIS",
   "vision-analysis": "LLM_ROUTE_VISION",
+  // "디자인 리뷰는 Gemini가 맡는다"(CTO 역할 분담) — 이 환경변수를
+  // "gemini"로 설정하면 코드 변경 없이 design-review 호출이 Gemini로
+  // 라우팅된다. 키가 없으면 자동으로 기본 Provider로 내려간다(§graceful
+  // degradation) — 지금은 아직 설정하지 않았다.
+  "design-review": "LLM_ROUTE_DESIGN_REVIEW",
 };
 
 export interface RoutingRule {

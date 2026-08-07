@@ -86,6 +86,11 @@ describe("PromptEngine", () => {
         name: "상세페이지 카피 생성",
         description: expect.stringContaining("대표 문구"),
       },
+      {
+        key: "design-review",
+        name: "디자인 리뷰",
+        description: expect.stringContaining("모바일UX"),
+      },
     ]);
   });
 });

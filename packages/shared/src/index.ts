@@ -423,6 +423,65 @@ export interface RunProductProfileRequest {
   projectId?: string;
 }
 
+// ── 디자인 리뷰 (시장 디자인 패턴 분석 — Gemini를 디자인 디렉터로 활용) ──
+// CTO 지시(2026-08-07): Claude는 프로그램 개발(엔진·HTML·Vision·Product
+// Profile)을, Gemini는 디자인 평가(레이아웃·타이포그래피·여백·사진배치·
+// 색상·시선흐름·구매유도력·모바일UX)를 담당한다. 이 타입은 그 평가
+// 결과의 계약이다 — 어떤 Provider가 채우든(지금은 아직 아무도 호출하지
+// 않음, Gemini API 키 확보 후 연결) 형태는 동일하다.
+
+/** 상세페이지 스크린샷 하나에 대한 디자인 평가 결과 */
+export interface DesignReviewResult {
+  /** 전체 레이아웃 구조(섹션 흐름, 그리드/카드 사용 등)에 대한 서술 평가 */
+  layout: string;
+  /** 폰트·글자 크기·줄간격에 대한 서술 평가 */
+  typography: string;
+  /** 여백(섹션 간·요소 간)에 대한 서술 평가 */
+  whitespace: string;
+  /** 사진 배치(크기·비율·순서·간격)에 대한 서술 평가 */
+  imagePlacement: string;
+  /** 색상 사용(팔레트·대비·포인트 컬러)에 대한 서술 평가 */
+  colorUsage: string;
+  /** 시선 흐름(어디를 먼저 보게 되는가)에 대한 서술 평가 */
+  visualHierarchy: string;
+  /** 구매 유도력(설득력·신뢰 요소·CTA 효과)에 대한 서술 평가 */
+  purchaseMotivation: string;
+  /** 모바일 화면에서의 사용성에 대한 서술 평가 */
+  mobileUx: string;
+  /** 잘된 점 */
+  strengths: string[];
+  /** 개선이 필요한 점 */
+  improvements: string[];
+  /** 전체 완성도 (0~100) — 지어낸 정밀도가 아니라 상대적 인상 점수 */
+  overallScore: number;
+  /** 총평 */
+  summary: string;
+}
+
+export interface RunDesignReviewRequest {
+  /** 평가할 스크린샷(들) — 기존 업로드 이미지 id를 그대로 재사용한다 */
+  imageIds: string[];
+  /** 어떤 카테고리의 상세페이지인지 (예: "캠핑용품") */
+  category: string;
+  /** 참고 맥락 — 예: "이 화면은 Template V1 시안이다" */
+  notes?: string;
+}
+
+export const DESIGN_REVIEW_STATUSES = ["SUCCESS", "FAILED"] as const;
+export type DesignReviewStatus = (typeof DESIGN_REVIEW_STATUSES)[number];
+
+export interface DesignReviewDto {
+  id: string;
+  imageIds: string[];
+  category: string;
+  notes: string | null;
+  status: DesignReviewStatus;
+  result: DesignReviewResult | null;
+  provider: string | null;
+  error: string | null;
+  createdAt: string;
+}
+
 export interface ProductObjectDto {
   id: string;
   projectId: string;

@@ -1,5 +1,6 @@
 import { PromptEngine } from "./prompt-engine";
 import { CONTENT_GENERATION_TEMPLATE } from "./templates/content-generation.template";
+import { DESIGN_REVIEW_TEMPLATE } from "./templates/design-review.template";
 import { PRODUCT_ANALYSIS_TEMPLATE } from "./templates/product-analysis.template";
 import { PRODUCT_FEATURE_VISION_TEMPLATE } from "./templates/product-feature-vision.template";
 import { PRODUCT_PAGE_COPY_TEMPLATE } from "./templates/product-page-copy.template";
@@ -18,5 +19,6 @@ export function createDefaultPromptEngine(): PromptEngine {
     PRODUCT_FEATURE_VISION_TEMPLATE,
     PRODUCT_PROFILE_SYNTHESIS_TEMPLATE,
     PRODUCT_PAGE_COPY_TEMPLATE,
+    DESIGN_REVIEW_TEMPLATE,
   ]);
 }

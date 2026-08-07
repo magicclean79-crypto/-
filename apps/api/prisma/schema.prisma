@@ -228,6 +228,26 @@ enum ProductProfileStatus {
   FAILED
 }
 
+// 디자인 리뷰 — "시장 디자인 패턴 학습" (Sprint 35, CTO 지시). 상세페이지
+// 스크린샷을 Gemini(디자인 디렉터 역할)가 레이아웃·타이포그래피·여백·
+// 사진배치·색상·시선흐름·구매유도력·모바일UX 관점에서 평가한 결과를
+// 남긴다. ProductProfile과 달리 재시도 상태 머신이 필요 없는 단발성
+// 평가라 성공/실패를 한 레코드에 그대로 담는다(별도 RUNNING 상태 없음).
+model DesignReview {
+  id         String   @id @default(cuid())
+  imageIds   String[]
+  category   String
+  notes      String?
+  // 성공 시에만 채워진다 — DesignReviewResult(JSON)
+  result     Json?
+  provider   String?
+  error      String?
+  createdAt  DateTime @default(now())
+
+  @@index([category])
+  @@map("design_reviews")
+}
+
 // 상세페이지 콘텐츠 — Product Object를 단일 입력으로 생성된다 (TASK-0303)
 model Content {
   id               String                   @id @default(cuid())

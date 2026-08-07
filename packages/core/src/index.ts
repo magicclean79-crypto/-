@@ -2,6 +2,7 @@ export * from "./ocr";
 export * from "./analysis";
 export * from "./product-object";
 export * from "./product-profile";
+export * from "./design-review";
 export * from "./vision";
 export * from "./content";
 export * from "./sop";

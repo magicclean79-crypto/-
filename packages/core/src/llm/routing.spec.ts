@@ -103,7 +103,7 @@ describe("Cross-Provider Routing (TASK-1001)", () => {
     ).toMatchObject({ feature: "dev", provider: "openai", source: "default" });
   });
 
-  it("라우팅 표는 대상 feature 3종을 모두 해석한다", () => {
+  it("라우팅 표는 대상 feature 4종을 모두 해석한다", () => {
     const table = buildRoutingTable({
       defaultProvider: "openai",
       rules: { "vision-analysis": { provider: "anthropic", model: null } },
@@ -115,6 +115,6 @@ describe("Cross-Provider Routing (TASK-1001)", () => {
     ).toBe("anthropic");
     expect(
       table.filter((row) => row.source === "default").map((row) => row.feature),
-    ).toEqual(["content-generation", "product-analysis"]);
+    ).toEqual(["content-generation", "product-analysis", "design-review"]);
   });
 });
