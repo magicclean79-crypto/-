@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   Logger,
+  NotFoundException,
   ServiceUnavailableException,
 } from "@nestjs/common";
 import { randomUUID } from "node:crypto";
@@ -133,6 +134,22 @@ export class UploadsService {
       throw new BadRequestException(check.detail);
     }
     return check.projectId;
+  }
+
+  /**
+   * 이미지 바이트를 id로 다시 가져온다 (Product Detail Engine 생성 이력
+   * 화면의 "사용된 사진" 표시용). `ImageDto.url`은 고정 공개 URL이지만
+   * 운영 버킷은 계정 단위 Public Access Block이 켜져 있을 수 있어(§4-9
+   * 관측) 항상 접근 가능하다고 보장할 수 없다 — 인증된 우리 서버를 거쳐
+   * 항상 같은 방식으로 보여준다.
+   */
+  async getImageFile(id: string): Promise<{ buffer: Buffer; mimeType: string }> {
+    const image = await this.prisma.image.findUnique({ where: { id } });
+    if (!image) {
+      throw new NotFoundException(`이미지를 찾을 수 없습니다: ${id}`);
+    }
+    const buffer = await this.storage.getObject(image.key);
+    return { buffer, mimeType: image.mimeType };
   }
 
   async listImages(take: number): Promise<ImageDto[]> {

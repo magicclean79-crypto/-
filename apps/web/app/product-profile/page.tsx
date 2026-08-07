@@ -16,9 +16,17 @@ export default function ProductProfilePage() {
         >
           ← 홈으로
         </Link>
-        <h1 className="mt-2 text-3xl font-bold tracking-tight">
-          Product Detail Engine
-        </h1>
+        <div className="mt-2 flex items-center justify-between gap-4">
+          <h1 className="text-3xl font-bold tracking-tight">
+            Product Detail Engine
+          </h1>
+          <Link
+            href="/product-profile/history"
+            className="shrink-0 rounded-lg border border-zinc-300 px-3 py-1.5 text-sm font-medium hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+          >
+            생성 이력 보기
+          </Link>
+        </div>
         <p className="mt-2 text-zinc-600 dark:text-zinc-400">
           사진만 넣으면 OCR·이미지 분석·Product Profile 통합을 거쳐 바로
           미리보고 다운로드할 수 있는 상세페이지 HTML까지 만듭니다. 실

@@ -3,8 +3,10 @@ import {
   Body,
   Controller,
   Get,
+  Param,
   Post,
   Query,
+  StreamableFile,
   UploadedFiles,
   UseInterceptors,
 } from "@nestjs/common";
@@ -63,5 +65,12 @@ export class UploadsController {
   ): Promise<UploadImagesResponse> {
     const images = await this.uploadsService.listImages(Number(take ?? "20"));
     return { images };
+  }
+
+  /** 이미지 원본 바이트 — 생성 이력 화면의 "사용된 사진" 표시용 */
+  @Get("images/:id/file")
+  async getImageFile(@Param("id") id: string): Promise<StreamableFile> {
+    const { buffer, mimeType } = await this.uploadsService.getImageFile(id);
+    return new StreamableFile(buffer, { type: mimeType });
   }
 }

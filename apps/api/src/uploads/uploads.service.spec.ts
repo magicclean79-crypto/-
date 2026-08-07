@@ -1,4 +1,4 @@
-import { BadRequestException } from "@nestjs/common";
+import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
@@ -125,5 +125,47 @@ describe("UploadsService — 업로드 단계 귀속 (TASK-4501, 정책 4501-②
       service.uploadImages([file()], "clx0000000000000000000009"),
     ).rejects.toThrow(BadRequestException);
     expect(storage.putObject).not.toHaveBeenCalled();
+  });
+});
+
+describe("UploadsService.getImageFile — 생성 이력의 '사용된 사진' 표시용", () => {
+  it("이미지 바이트와 mimeType을 저장소에서 그대로 가져온다", async () => {
+    const prisma = {
+      image: {
+        findUnique: jest.fn(async () => ({
+          id: "img-1",
+          key: "images/2026/08/a.png",
+          mimeType: "image/png",
+        })),
+      },
+    };
+    const storage = { getObject: jest.fn(async () => Buffer.from("bytes")) };
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        UploadsService,
+        { provide: PrismaService, useValue: prisma },
+        { provide: StorageService, useValue: storage },
+      ],
+    }).compile();
+    const service = moduleRef.get(UploadsService);
+
+    const result = await service.getImageFile("img-1");
+    expect(result.mimeType).toBe("image/png");
+    expect(result.buffer.toString()).toBe("bytes");
+    expect(storage.getObject).toHaveBeenCalledWith("images/2026/08/a.png");
+  });
+
+  it("없는 이미지는 404를 던진다", async () => {
+    const prisma = { image: { findUnique: jest.fn(async () => null) } };
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        UploadsService,
+        { provide: PrismaService, useValue: prisma },
+        { provide: StorageService, useValue: { getObject: jest.fn() } },
+      ],
+    }).compile();
+    const service = moduleRef.get(UploadsService);
+
+    await expect(service.getImageFile("nope")).rejects.toThrow(NotFoundException);
   });
 });
