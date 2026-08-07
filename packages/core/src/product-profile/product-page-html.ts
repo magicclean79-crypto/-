@@ -96,13 +96,16 @@ export function buildProductPageViewModel(
   if (profile.brand) specRows.push(["브랜드", profile.brand]);
   if (profile.model) specRows.push(["모델", profile.model]);
   if (profile.material) specRows.push(["재질", profile.material]);
-  // brand/model/material은 이미 위에서 넣었다 — LLM이 specifications에도 같은
-  // 값을 다른 키(영문 등)로 다시 담아도 중복 행으로 보이지 않게 값 기준으로 거른다
+  // brand/model/material/구성품은 다른 섹션에 이미 나온다 — LLM이 specifications에도
+  // 같은 값을 다른 키(영문 등)로 다시 담아도 중복 행으로 보이지 않게 값 기준으로 거른다
   const alreadyShown = new Set(
-    [profile.brand, profile.model, profile.material]
+    [profile.brand, profile.model, profile.material, components.join(", ")]
       .filter((value): value is string => Boolean(value))
       .map((value) => value.trim().toLowerCase()),
   );
+  for (const component of components) {
+    alreadyShown.add(component.trim().toLowerCase());
+  }
   for (const [key, value] of Object.entries(profile.specifications)) {
     if (alreadyShown.has(value.trim().toLowerCase())) {
       continue;

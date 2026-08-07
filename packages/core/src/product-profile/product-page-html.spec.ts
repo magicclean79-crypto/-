@@ -110,6 +110,18 @@ describe("renderProductProfileHtml", () => {
     expect(html).toContain("5mm");
   });
 
+  it("specifications의 값이 구성품과 같으면 스펙표에는 중복 행을 만들지 않는다", () => {
+    const withDuplicateComponent: ProductProfile = {
+      ...profile,
+      specifications: { 구성품: "본체", 두께: "5mm" },
+    };
+    const { html } = renderProductProfileHtml(withDuplicateComponent, ["본체"], copy, []);
+    const componentSpecOccurrences = html.split(">본체<").length - 1;
+    // "구성품" 섹션의 <li>본체</li> 1회만 있어야 한다 — 스펙표에는 없어야 한다
+    expect(componentSpecOccurrences).toBe(1);
+    expect(html).toContain("5mm");
+  });
+
   it("구성품이 있으면 구성품 섹션을 만든다", () => {
     const { html } = renderProductProfileHtml(profile, ["매트 본체", "고정 클립"], copy, []);
     expect(html).toContain("구성품");
