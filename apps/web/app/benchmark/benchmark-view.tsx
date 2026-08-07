@@ -49,25 +49,37 @@ async function uploadBlob(blob: Blob, fileName: string): Promise<string> {
   return body.images[0].id;
 }
 
-/** html2canvas는 실제 DOM에 렌더된 요소만 캡처할 수 있어, 화면 밖(고정폭)
- * 컨테이너에 HTML+CSS를 그대로 주입해 렌더한 뒤 캡처하고 즉시 제거한다. */
+/** html2canvas는 실제 DOM에 렌더된 요소만 캡처할 수 있다. 화면 밖(고정폭)
+ * iframe에 HTML+CSS만 따로 주입해서 렌더한 뒤 캡처하고 즉시 제거한다 —
+ * 부모 페이지의 Tailwind 전역 스타일(oklch/lab 등 html2canvas가 파싱하지
+ * 못하는 최신 CSS color 함수)이 섞여 들어가지 않도록 완전히 격리한다. */
 async function captureHtmlAsPng(html: string, css: string): Promise<Blob> {
   const html2canvas = (await import("html2canvas")).default;
-  const container = document.createElement("div");
-  container.style.position = "fixed";
-  container.style.top = "0";
-  container.style.left = "-9999px";
-  container.style.width = "800px";
-  container.style.background = "#ffffff";
-  container.innerHTML = `<style>${css}</style>${html}`;
-  document.body.appendChild(container);
+  const iframe = document.createElement("iframe");
+  iframe.style.position = "fixed";
+  iframe.style.top = "0";
+  iframe.style.left = "-9999px";
+  iframe.style.width = "800px";
+  iframe.style.height = "1px";
+  iframe.style.border = "none";
+  document.body.appendChild(iframe);
   try {
-    const canvas = await html2canvas(container, { width: 800, useCORS: true });
+    const doc = iframe.contentDocument;
+    if (!doc) throw new Error("캡처용 iframe을 초기화할 수 없습니다.");
+    doc.open();
+    doc.write(
+      `<!doctype html><html><head><style>body{margin:0;background:#fff;}${css}</style></head><body>${html}</body></html>`,
+    );
+    doc.close();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const bodyHeight = Math.max(doc.body.scrollHeight, 600);
+    iframe.style.height = `${bodyHeight}px`;
+    const canvas = await html2canvas(doc.body, { width: 800, useCORS: true });
     const blob: Blob | null = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
     if (!blob) throw new Error("캡처한 화면을 이미지로 변환할 수 없습니다.");
     return blob;
   } finally {
-    document.body.removeChild(container);
+    document.body.removeChild(iframe);
   }
 }
 
