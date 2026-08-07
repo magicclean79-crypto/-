@@ -194,17 +194,25 @@ function renderFeatureCards(items: ProductPageFeatureItem[]): string {
   return `<ul class="pde-feature-grid">${cards.join("")}</ul>`;
 }
 
+/**
+ * 스펙을 표(<table>)가 아니라 아이콘+텍스트 체크포인트 박스로 렌더링한다.
+ * (Sprint 36 — 시장 조사 반영, `reports/LIVING_GOODS_DESIGN_PRINCIPLES.md`
+ * 원리 5·규칙 6) 실제 캡처 53건(IKEA·다이소몰·지그재그) 전체에서 표 형태
+ * 스펙 테이블이 하나도 관찰되지 않았다 — IKEA는 아코디언, 다이소는 이
+ * 체크포인트 박스 스타일을 쓴다. `MAGICCLEAN_BRAND_BASELINE.md`가 이미
+ * "스펙표 디자인이 시장 평균보다 약하다"고 지적한 지점과도 일치한다.
+ */
 function renderSpecTable(rows: [string, string][]): string {
   if (rows.length === 0) {
     return "";
   }
-  const body = rows
+  const items = rows
     .map(
       ([key, value]) =>
-        `<tr><th scope="row">${escapeHtml(key)}</th><td>${escapeHtml(value)}</td></tr>`,
+        `<li class="pde-spec-item">${ICONS.check}<span class="pde-spec-key">${escapeHtml(key)}</span><span class="pde-spec-value">${escapeHtml(value)}</span></li>`,
     )
     .join("");
-  return `<table class="pde-spec-table"><tbody>${body}</tbody></table>`;
+  return `<ul class="pde-spec-checklist">${items}</ul>`;
 }
 
 /** data URI를 그대로 새 탭에 열어 "확대사진"을 본다 — 별도 JS 없이 브라우저 기본 기능만 쓴다 */
@@ -482,31 +490,34 @@ export const BASIC_PRODUCT_PAGE_TEMPLATE: ProductPageTemplate = {
   padding: 10px 12px;
   white-space: pre-wrap;
 }
-.pde-page .pde-spec-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12.5px;
-  border: 1px solid #eee;
+.pde-page .pde-spec-checklist {
+  margin: 0;
+  padding: 10px 12px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #f8fafc;
   border-radius: 10px;
-  overflow: hidden;
+  font-size: 12.5px;
 }
-.pde-page .pde-spec-table th,
-.pde-page .pde-spec-table td {
-  padding: 8px 10px;
-  text-align: left;
-  border-bottom: 1px solid #f1f1f1;
+.pde-page .pde-spec-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
 }
-.pde-page .pde-spec-table tr:last-child th,
-.pde-page .pde-spec-table tr:last-child td {
-  border-bottom: none;
+.pde-page .pde-spec-item svg {
+  flex-shrink: 0;
+  color: #475569;
+  transform: translateY(1px);
 }
-.pde-page .pde-spec-table tr:nth-child(even) {
-  background: #fafafa;
-}
-.pde-page .pde-spec-table th {
-  width: 34%;
+.pde-page .pde-spec-key {
   font-weight: 600;
   color: #71717a;
+  flex-shrink: 0;
+}
+.pde-page .pde-spec-value {
+  color: #18181b;
 }
 .pde-page .pde-list {
   margin: 0;

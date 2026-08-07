@@ -89,9 +89,10 @@ describe("renderProductProfileHtml", () => {
     expect(html).toContain("pde-feature-media--icon");
   });
 
-  it("브랜드·모델·재질·specifications를 스펙 표에 담는다", () => {
+  it("브랜드·모델·재질·specifications를 스펙 체크포인트 박스에 담는다 (표 아님 — 시장 조사 반영)", () => {
     const { html } = renderProductProfileHtml(profile, [], copy, []);
-    expect(html).toContain("<table");
+    expect(html).toContain("pde-spec-checklist");
+    expect(html).not.toContain("<table");
     expect(html).toContain("Magic Clean");
     expect(html).toContain("MC-100");
     expect(html).toContain("PVC");
