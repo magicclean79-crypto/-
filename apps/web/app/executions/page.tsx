@@ -214,6 +214,7 @@ export default async function ExecutionsPage({
             <option value="content-generation">content-generation</option>
             <option value="product-analysis">product-analysis</option>
             <option value="vision-analysis">vision-analysis</option>
+            <option value="design-review">design-review</option>
             <option value="dev">dev</option>
           </select>
         </label>

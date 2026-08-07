@@ -278,18 +278,32 @@ export function DesignReviewFlow() {
         >
           이력 보기
         </Link>
+        <Link
+          href="/executions?feature=design-review"
+          className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+        >
+          비용·응답시간·오류 로그 보기
+        </Link>
       </div>
 
       {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
       {result && (
         <>
           <ResultCard result={result} />
-          <Link
-            href={`/design-review/history/${result.id}`}
-            className="text-xs text-blue-600 underline hover:text-blue-800 dark:text-blue-400"
-          >
-            이 결과의 상세 화면 열기 →
-          </Link>
+          <div className="flex gap-3">
+            <Link
+              href={`/design-review/history/${result.id}`}
+              className="text-xs text-blue-600 underline hover:text-blue-800 dark:text-blue-400"
+            >
+              이 결과의 상세 화면 열기 →
+            </Link>
+            <Link
+              href="/executions?feature=design-review"
+              className="text-xs text-blue-600 underline hover:text-blue-800 dark:text-blue-400"
+            >
+              이 호출의 비용·응답시간 확인 →
+            </Link>
+          </div>
         </>
       )}
     </div>
