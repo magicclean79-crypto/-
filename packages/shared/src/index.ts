@@ -152,6 +152,55 @@ export interface ImageDto {
    */
   projectId?: string | null;
   createdAt: string;
+  /** 기본 ORIGINAL(사람이 업로드) — Gemini 이미지 생성/편집 결과만 값이 바뀐다 */
+  kind: ImageKind;
+  /** 이 이미지가 어떤 이미지로부터 만들어졌는지(편집/합성 결과일 때) */
+  sourceImageId?: string | null;
+  generationMetadata?: ImageGenerationMetadata | null;
+}
+
+export const IMAGE_KINDS = [
+  "ORIGINAL",
+  "BACKGROUND_REMOVED",
+  "BACKGROUND_GENERATED",
+  "COMPOSITED",
+] as const;
+export type ImageKind = (typeof IMAGE_KINDS)[number];
+
+export interface ImageGenerationMetadata {
+  prompt: string;
+  provider: string;
+  model: string;
+  /** 합성일 때 함께 쓰인 배경 이미지 id */
+  backgroundImageId?: string;
+}
+
+/** 배경 제거 → 배경 생성 → 합성 (Sprint 36 — Gemini 이미지 생성/편집) */
+export interface GenerateBackgroundRequest {
+  /** 배경을 생성할 때 참고할 원본 제품 이미지 id */
+  sourceImageId: string;
+  /** 원하는 배경 묘사 — 예: "밝은 베란다, 타일 바닥, 화분" */
+  prompt: string;
+}
+
+export interface CompositeImageRequest {
+  /** 배경이 제거된(또는 원본) 제품 이미지 id */
+  productImageId: string;
+  backgroundImageId: string;
+}
+
+export interface GenerateHeroImageRequest {
+  /** Hero로 만들 원본 제품 이미지 id */
+  imageId: string;
+  /** 배경 묘사 — 미지정 시 제품 정보로 자동 구성 */
+  backgroundPrompt?: string;
+}
+
+export interface GenerateHeroImageResult {
+  original: ImageDto;
+  backgroundRemoved: ImageDto;
+  backgroundGenerated: ImageDto;
+  composited: ImageDto;
 }
 
 export interface UploadImagesResponse {

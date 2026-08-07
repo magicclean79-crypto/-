@@ -37,6 +37,12 @@ export default function Home() {
             🎯 Benchmark Product
           </Link>
           <Link
+            href="/image-studio"
+            className="inline-flex items-center gap-2 rounded-lg bg-fuchsia-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-fuchsia-700"
+          >
+            🖼️ 이미지 스튜디오 (Gemini)
+          </Link>
+          <Link
             href="/projects"
             className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
           >

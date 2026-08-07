@@ -188,18 +188,21 @@ function renderPlainList(items: string[]): string {
  * `"stacked"`는 CTO 피드백(2026-08-08 — "이미지 갤러리 형식보단 큰 사진으로 사진→설명→
  * 사진→설명 반복") 반영: 작은 썸네일 그리드가 아니라 사진 1장을 전체 폭으로 크게 보여주고
  * 그 밑에 설명을 붙인 카드를 세로로 반복한다 — 별도 "이미지 갤러리" 섹션이 필요 없어진다. */
+/** 사진 1장 + 캡션 1개짜리 "스토리 카드" 하나 — `renderFeatureCards`의 stacked
+ * variant와 `renderMixedStory`(특징·설명·사용법을 사진과 섞어 배치)가 공유한다. */
+function renderStackedFigure({ text, image }: ProductPageFeatureItem): string {
+  const media = image
+    ? zoomLink(image, `<img src="${dataUri(image)}" alt="" loading="lazy">`)
+    : `<span class="pde-feature-stacked-icon">${ICONS.check}</span>`;
+  return `<figure class="pde-feature-stacked">${media}<figcaption>${escapeHtml(text)}</figcaption></figure>`;
+}
+
 function renderFeatureCards(
   items: ProductPageFeatureItem[],
   variant: "medium" | "large" | "grid" | "plain" | "stacked" = "medium",
 ): string {
   if (variant === "stacked") {
-    const figures = items.map(({ text, image }) => {
-      const media = image
-        ? zoomLink(image, `<img src="${dataUri(image)}" alt="" loading="lazy">`)
-        : `<span class="pde-feature-stacked-icon">${ICONS.check}</span>`;
-      return `<figure class="pde-feature-stacked">${media}<figcaption>${escapeHtml(text)}</figcaption></figure>`;
-    });
-    return `<div class="pde-feature-stack">${figures.join("")}</div>`;
+    return `<div class="pde-feature-stack">${items.map(renderStackedFigure).join("")}</div>`;
   }
   const cards = items.map(({ text, image }) => {
     const media = image
@@ -682,6 +685,8 @@ function sharedLivingGoodsCss(accent: string): string {
 .pde-page .pde-feature-stacked figcaption { margin-top: 10px; font-size: 13.5px; font-weight: 600; color: #27272a; line-height: 1.5; }
 .pde-page .pde-feature-stacked:has(figcaption:empty) figcaption { display: none; }
 .pde-page .pde-feature-stacked-icon { display: flex; align-items: center; justify-content: center; width: 100%; height: 160px; border-radius: 12px; background: color-mix(in srgb, ${accent} 10%, white); color: ${accent}; }
+.pde-page .pde-story-text { padding: 2px 2px 6px; }
+.pde-page .pde-story-text p { margin: 0; font-size: 13px; color: #52525b; line-height: 1.7; white-space: pre-wrap; }
 .pde-page .pde-description, .pde-page .pde-usage { margin: 0; font-size: 12.5px; color: #52525b; background: #fafafa; border-radius: 10px; padding: 10px 12px; white-space: pre-wrap; }
 .pde-page .pde-spec-checklist { margin: 0; padding: 10px 12px; list-style: none; display: flex; flex-direction: column; gap: 8px; background: #f8fafc; border-radius: 10px; font-size: 12.5px; }
 .pde-page .pde-spec-item { display: flex; align-items: baseline; gap: 8px; }
@@ -716,6 +721,33 @@ function mergedStackedItems(vm: ProductPageViewModel): ProductPageFeatureItem[] 
     .filter((image) => !used.has(image.base64))
     .map((image) => ({ text: "", image }));
   return [...vm.features, ...extra];
+}
+
+/**
+ * 특징·제품설명·사용방법을 사진과 섞어서 하나의 "스토리" 블록으로 배치한다.
+ * (CTO 지시, 2026-08-08 — Template D/V15 기준: "특징과 제품설명 사용방법을
+ * 제품사진과 적절하게 섞어서 중간에 배치하고 하단에 스펙·구성품·주의사항을
+ * 배치") 순서: 사진1 → 제품설명 → 사진2 → 사진3 → ... → 사용방법 → (남는 사진).
+ * 특징 텍스트는 각 사진의 캡션으로 이미 들어가 있어 별도 불릿 목록으로
+ * 반복하지 않는다.
+ */
+function renderMixedStory(vm: ProductPageViewModel): string {
+  const items = mergedStackedItems(vm);
+  const descBlock = vm.description
+    ? `<div class="pde-story-text"><p>${escapeHtml(vm.description)}</p></div>`
+    : "";
+  const usageBlock = vm.usage
+    ? `<div class="pde-story-text"><p>${escapeHtml(vm.usage)}</p></div>`
+    : "";
+  const descInsertIndex = Math.min(1, items.length);
+  const blocks: string[] = [];
+  items.forEach((item, idx) => {
+    if (idx === descInsertIndex) blocks.push(descBlock);
+    blocks.push(renderStackedFigure(item));
+  });
+  if (descInsertIndex >= items.length) blocks.push(descBlock);
+  blocks.push(usageBlock);
+  return `<div class="pde-feature-stack">${blocks.join("")}</div>`;
 }
 
 /**
@@ -866,26 +898,24 @@ export const LIVING_GOODS_TEMPLATE_C: ProductPageTemplate = {
 };
 
 /**
- * Template D — "기능증명형" (living-d-proof). 생활용품 원리3·규칙4 반영:
- * Hero와 특징 카드 모두 대형 사진으로 "증거"를 강조한다(감성이 아니라
- * 기능이 실제로 작동한다는 것을 사진으로 증명). 그레이+틸 단일 액센트로
- * 차분하고 신뢰감 있는 색상 언어를 쓴다.
+ * Template D — "기능증명형" (living-d-proof). 생활용품 원리3·규칙4 반영 +
+ * CTO 확정 지시(2026-08-08, V15 기준): Hero와 큰 사진 모두로 "증거"를
+ * 강조하고, 특징·제품설명·사용방법을 사진과 섞어 중간에 배치한 뒤(
+ * `renderMixedStory`) 스펙·구성품·주의사항은 하단에 모아 정리한다.
+ * 그레이+틸 단일 액센트로 차분하고 신뢰감 있는 색상 언어를 쓴다.
  */
 export const LIVING_GOODS_TEMPLATE_D: ProductPageTemplate = {
   key: "living-d-proof",
-  name: "생활용품 D — 기능증명형",
-  description: "Hero·특징 카드 모두 대형 사진으로 기능 증거를 강조. 그레이+틸 단일 액센트.",
+  name: "생활용품 D — 기능증명형 (CTO 확정 기준)",
+  description: "Hero + 사진 속에 특징·제품설명·사용방법을 섞어 배치, 하단에 스펙·구성품·주의사항 정리. 그레이+틸 단일 액센트.",
   render(vm) {
     const s = livingGoodsSections(vm, { spec: "checklist" });
     const html = [
       '<div class="pde-page pde-page--d">',
       renderHero(vm, "overlay"),
       renderPurchasePoints(vm.purchasePoints, "filled"),
-      s.photoStory,
-      s.featureList,
+      renderMixedStory(vm),
       s.spec,
-      s.description,
-      s.usage,
       s.components,
       s.warnings,
       "</div>",

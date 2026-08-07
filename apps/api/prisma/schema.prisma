@@ -115,12 +115,30 @@ model Image {
   project      Project?    @relation(fields: [projectId], references: [id], onDelete: SetNull)
   projectId    String?
   ocrResults   OcrResult[]
+  // Gemini 이미지 생성/편집 (Sprint 36 — CTO 지시: 배경 제거·배경 생성·제품
+  // 합성). 기본은 ORIGINAL(사람이 업로드한 사진) — AI가 만든 이미지만
+  // 이 값이 바뀐다. FK는 두지 않는다(DesignReview.productProfileId와 같은
+  // 원칙, apps/api/src/design-review/design-review.service.ts 참고) — 원본이
+  // 지워져도 생성 이력은 남아야 한다.
+  kind             ImageKind @default(ORIGINAL)
+  sourceImageId    String?
+  // {prompt, provider, model, backgroundImageId?} 등 — 필드가 늘어나도
+  // 마이그레이션 없이 확장 가능하게 Json으로 둔다(ProductProfile.imageFeatures와 같은 원칙)
+  generationMetadata Json?
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt
 
   @@index([productId])
   @@index([projectId])
+  @@index([sourceImageId])
   @@map("images")
+}
+
+enum ImageKind {
+  ORIGINAL
+  BACKGROUND_REMOVED
+  BACKGROUND_GENERATED
+  COMPOSITED
 }
 
 model OcrResult {

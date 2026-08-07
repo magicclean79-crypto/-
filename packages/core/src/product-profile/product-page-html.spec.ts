@@ -256,4 +256,29 @@ describe("생활용품 Template A~E (Sprint 36)", () => {
     const unique = new Set(cssByKey);
     expect(unique.size).toBe(livingGoodsKeys.length);
   });
+
+  it("living-d-proof(CTO 확정 기준)는 사진1→설명→사진2→사용방법 순으로 사진과 텍스트를 섞어 배치하고, 스펙·구성품·주의사항은 하단에 모은다", () => {
+    const twoPhotoProfile: ProductProfile = {
+      ...profile,
+      features: ["접이식", "미끄럼방지"],
+    };
+    const { html } = renderProductProfileHtml(
+      twoPhotoProfile,
+      ["매트 본체"],
+      copy,
+      [photo("a"), photo("b")],
+      "living-d-proof",
+    );
+    const figure1 = html.indexOf("접이식");
+    const descIdx = html.indexOf(copy.description);
+    const figure2 = html.indexOf("미끄럼방지");
+    const usageIdx = html.indexOf(profile.usage!);
+    const specIdx = html.indexOf(">스펙<");
+    expect(figure1).toBeGreaterThan(-1);
+    expect(figure1).toBeLessThan(descIdx);
+    expect(descIdx).toBeLessThan(figure2);
+    expect(figure2).toBeLessThan(usageIdx);
+    expect(usageIdx).toBeLessThan(specIdx);
+    expect(html).not.toContain(">특징<");
+  });
 });

@@ -35,6 +35,7 @@ function toImageDto(image: ImageWithOcr): ImageWithOcrDto {
     size: image.size,
     productId: image.productId,
     createdAt: image.createdAt.toISOString(),
+    kind: image.kind as ImageWithOcrDto["kind"],
     ocr: ocr
       ? {
           status: ocr.status,

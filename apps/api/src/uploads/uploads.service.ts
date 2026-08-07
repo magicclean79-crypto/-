@@ -35,6 +35,9 @@ function toDto(image: Image): ImageDto {
     productId: image.productId,
     projectId: image.projectId,
     createdAt: image.createdAt.toISOString(),
+    kind: image.kind as ImageDto["kind"],
+    sourceImageId: image.sourceImageId,
+    generationMetadata: image.generationMetadata as ImageDto["generationMetadata"],
   };
 }
 
