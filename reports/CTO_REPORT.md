@@ -13,23 +13,21 @@
 
 | 항목 | 값 |
 | --- | --- |
-| 보고 기준 TASK | **TASK-5501 — AWS staging 배포·S3 리전 결함 수정·LLM 실 호출 실증** (TASK-5301·5401 연속) |
-| 보고일 | 2026-08-06 |
+| 보고 기준 TASK | **TASK-5601 — Product Detail Engine V1 (Sprint 35 Phase 1)** — CTO 지시 |
+| 보고일 | 2026-08-07 |
 | 브랜치 | `claude/ai-product-content-os-setup-jb5oai` |
-| 커밋 | `1323127`(fix, S3 리전) · `24a9221`·`8a73eb2`·`7499484`(docs) · 이번 주기 |
-| **결론** | **`cutover.ready = true` — 4/4 전부 verified. `activation` 3/3 전체 충족.** 이 저장소가 12+ 스프린트 동안 도달하지 못한 지점입니다. 남은 것은 `PRODUCTION_HOSTS`·`ALERT_WEBHOOK_URL` 사람 결정 2건과 표본 부족 1건뿐입니다 |
-| `validation_runs` | **0건** (staging DB에서 직접 셌습니다) — 위 조건이 갖춰져야 `POST /ops/validation-run/execute`가 열립니다 |
-| 코드 변경 | **제품 코드 15줄 + 테스트 32줄** (S3 리전 버그 수정, §4-9). 새 기능 **0건** |
-| 실행 환경 | **AWS staging** (`ec2-3-39-9-111.ap-northeast-2`, t3.small) — `DEPLOY_TIER=staging`·`NODE_ENV=production` 정상 반영 |
-| **staging 게이트 전진** | `cutover` verified **2/4→4/4**(OCR·CI 실증) · `activation` **미충족→3/3** · readiness pass **9→11** |
+| 커밋 | `f3f7e5b`(feat, Product Detail Engine V1) — 27개 파일, +2,339줄 |
+| **결론** | **사진 2장 → 실 OCR → 실 OpenAI Vision 이미지 분석 → Product Profile JSON까지 staging에서 실제로 동작 확인.** 실제 제품(수박 & 샐러드 보관통) 사진으로 종단 실행해 정확한 사양(200mm/9kg/9리터/330mm)을 추출했습니다 |
+| `validation_runs` | **0건** — 이번 스프린트와 무관(남은 것은 여전히 `PRODUCTION_HOSTS`·`ALERT_WEBHOOK_URL` 사람 결정 2건) |
+| 코드 변경 | **신규 기능.** packages/core 8파일(파서·엔진·템플릿) · apps/api 5파일(모듈) · apps/web 2파일(화면) · Prisma 마이그레이션 1건. 기존 파일 변경은 등록/배럴 라인뿐(9파일, 총 +136/-2줄) |
+| 실행 환경 | AWS staging에 배포·마이그레이션·재빌드·재기동 완료. 로컬 게이트도 전부 통과 |
+| **부수 효과 — 인프라 게이트 추가 전진** | `readiness` fail **1→0**(`backup-chain` 24h 경과로 자연 해소) · 검증 계획 **5/11→6/11**(KPI 기준선 완료) · `cutover.ready` **유지 true** |
 
-> **이번 회차의 핵심 — "부분 점수는 없습니다"를 실제로 넘었습니다.**
+> **이전 회차 요약 — "부분 점수는 없습니다"를 실제로 넘었습니다.**
 > `packages/core/src/ops/activation.ts`가 요구하는 LLM·OCR·S3 **셋 다**
-> 실 자격 증명과 실 호출 증거를 갖췄습니다. Vision은 스모크가 아니라
-> **실제 이미지 업로드→OCR 제품 경로**(`POST /uploads/images` →
-> `POST /images/:id/ocr`)로 증거를 남겼고, CI는 `GITHUB_REPOSITORY`
-> 설정만으로 이미 존재하던 통과 이력(run 13231273)을 읽었습니다.
-> §4-11에 전체 과정을 기록했습니다.
+> 실 자격 증명과 실 호출 증거를 갖췄고, `cutover.ready = true`·
+> `activation` 3/3 전체 충족을 달성했습니다(TASK-5501, §4-11).
+> 이번 TASK-5601은 그 위에서 **처음으로 제품 기능**을 만들었습니다.
 
 > **이번 보고의 핵심은 세 가지입니다.**
 >
@@ -70,7 +68,7 @@
 **막고 있는 것은 코드가 아닙니다.** 코드 게이트 4종은 전부 초록이고,
 빨간 것은 전부 **환경·자격 증명·배포 등급**입니다.
 
-### 2-1. AWS staging 게이트 (2026-08-06, LLM 실증 후 최신)
+### 2-1. AWS staging 게이트 (2026-08-07, Product Detail Engine V1 실사용 후 최신)
 
 위 표는 **로컬 development** 값입니다. 실제 출시가 진행되는 **staging**은
 따로 측정합니다.
@@ -78,17 +76,13 @@
 | 게이트 | 결과 |
 | --- | --- |
 | `/health` · ADMIN 로그인 | ✅ 200 · 성공 (쿠키 `Secure` 없음 — 터널 접근 유지) |
-| `/ops/readiness` | ✅ pass **11** · fail **1**(`backup-chain`, 시간 의존) · warn 4 · manual 2 |
-| `/ops/diagnostics` | ✅ ok **8** · fail **2**(알림 채널·운영 호스트 — 사람 결정 대기) |
-| `배포 단계 선언` | ✅ **ok** — "스테이징 단계로 돌고 있습니다" (`DEPLOY_TIER=staging`+`NODE_ENV=production`) |
-| `/ops/cutover` | ✅ **`ready: true` · verified 4/4** (LLM·OCR·S3·CI 전부) |
-| `/ops/activation` | ✅ **3/3 전체 충족** (자격 증명·네트워크·전환) — **첫 달성** |
-| **LLM 실 호출** | ✅ **성공** — `openai/gpt-4o-2024-08-06`, 1853ms (§4-10) |
-| **OCR 실 호출** | ✅ **성공** — 실제 업로드→OCR 경로, `google-vision`, $0.0015 (§4-11) |
-| S3 실 쓰기·읽기·삭제 | ✅ **성공** — 118ms |
-| **CI(GitHub Actions)** | ✅ **verified** — 최근 실행(run 13231273) 통과 확인 (§4-11) |
-| 검증 계획 | ⚠️ **5/11** — 사람 2 · 우리 2 · 막힘 2 |
-| 활성화 런북 | ⚠️ **5/8** |
+| `/ops/readiness` | ✅ pass **12** · **fail 0**(`backup-chain` 24h 경과로 해소) · warn 4 · manual 2 · `recoverable: true` |
+| `/ops/diagnostics` | ✅ ok **8** · fail **2**(알림 채널·운영 호스트 — 사람 결정 대기, 불변) |
+| `/ops/cutover` | ✅ **`ready: true` · verified 4/4** (LLM·OCR·S3·CI 전부, 유지) |
+| `/ops/activation` | ✅ **3/3 전체 충족** (유지) |
+| **Product Detail Engine 실 호출** | ✅ **성공** — 업로드 2장 → OCR 2건 → Vision 분석 1건 → 통합 1건, 총 7.1초 (§4-12) |
+| 검증 계획 | ⚠️ **6/11** — 사람 2 · 우리 1(KPI 완료) · 막힘 2 |
+| 활성화 런북 | ⚠️ **6/8** |
 | `/ops/go-live` | ⚠️ `not-started` **2/8** |
 | 복구 리허설 | ✅ **성공** — 실 호스트 RTO **3.6초** |
 | 재부팅 복구 | ✅ 재시작 0회로 자동 복구 (53초) |
@@ -147,6 +141,67 @@ CTO가 EC2 인스턴스를 준비해 배포를 요청했습니다. 한 일 넷:
 
 **제품 코드 변경은 2번뿐입니다.** 나머지는 배포·자격 증명 반입으로,
 "새 기능을 추가하지 않는다"는 지시와 일치합니다.
+
+### TASK-5601 — Product Detail Engine V1 (Sprint 35 Phase 1)
+
+CTO 지시: "더 이상 인프라를 만드는 프로젝트가 아니다 — 사진만 넣으면 판매
+가능한 수준의 제품 상세페이지 재료를 자동 생성한다." 이번 Sprint 범위는
+화면 동작까지(HTML 생성은 다음 Sprint 제외). 품질 기준: Mock·Fake 응답 금지.
+
+| STEP | CTO 지시 | 처리 |
+| --- | --- | --- |
+| 1 | 사진 업로드(여러 장·드래그앤드롭·미리보기) | **기존 `POST /uploads/images` 재사용** — 이미 다중 파일·드래그앤드롭 지원 |
+| 2 | OCR 실행(Vision OCR·텍스트 추출·결과 표시) | **기존 `POST /images/:imageId/ocr` 재사용** — 이미 실 Google Cloud Vision |
+| 3 | 이미지 분석(재질·색상·구조·용도·구성품) | **신규** — `ProductProfileEngine`(멀티모달, OpenAI Vision) |
+| 4 | Product Profile JSON 통합 | **신규** — 같은 엔진의 2단계(텍스트 전용, 이미지 재첨부 없음) |
+
+STEP 1·2는 기존 코드가 이미 프로덕션급으로 실 Provider를 부르고 있어
+다시 만들지 않았습니다 — "이미 있는 것"과 "새로 만들 것"을 가른 조사
+결과는 §4-12 앞부분에 있습니다.
+
+#### 신규 — packages/core/src/product-profile/
+
+- `image-feature-analysis.ts` — STEP 3 파서(`ImageFeatureAnalysis`:
+  material/color/structure/usage/components/notes/confidence). 이미지에서
+  직접 확인 안 되면 null/빈 배열 — 지어내지 않습니다.
+- `product-profile.ts` — STEP 4 파서(`ProductProfile`: CTO 지시에 명시된
+  필드 그대로). `ImageFeatureAnalysis`/`ProductProfile` 자체는
+  `VisionSummary`/`ProductAnalysis`와 같은 원칙으로 `@acos/shared`에 둡니다
+  (출력 계약은 shared, core가 가져다 씁니다).
+- `product-profile-engine.ts` — `ProductProfileEngine`.
+  `LlmVisionProvider`(TASK-0505)와 같은 원칙(Image Guard, 이미지 상한 5장,
+  검증 실패 이미지는 스킵)이되 **Company Brain·Project 의존이 없습니다**
+  — "사진만 넣으면"이 V1의 전제이기 때문입니다. STEP 3(멀티모달) →
+  STEP 4(텍스트 전용) 순서로 실 LLM 호출 2건.
+- `product-profile-execution.service.ts` — `OcrExecutionService`
+  (TASK-2901)와 같은 구조의 상태 전이(PENDING/RUNNING/SUCCESS/FAILED) +
+  재시도 서비스.
+- 새 프롬프트 템플릿 2개(`product-feature-vision`·
+  `product-profile-synthesis`)를 `default-engine.ts`에 등록. 기존
+  `vision-analysis`/`product-analysis`(ProductObject 조립용)는 손대지
+  않고 병행합니다.
+
+#### 신규 — apps/api/src/product-profile/
+
+`ProductProfileService`가 STEP 3+4만 오케스트레이션합니다: 이미지 존재
+검증 → AI 비용 예산 관문(`LlmBudgetService`, 기존과 같은 상한) → 최신
+SUCCESS OCR 텍스트를 근거로 편입(없어도 진행) → 실행. **`maxAttempts: 1`을
+명시적으로 뒀습니다** — 한 실행에 실 LLM 호출 2건이 묶여 있어 자동
+재시도가 성공한 절반까지 다시 불러 비용이 배로 나가는 것을 막습니다
+(재시도는 사람이 다시 눌러서 합니다). 실패도 정상 응답입니다(OCR·
+Analysis와 같은 원칙) — `status` 필드가 사실을 말하고 5xx로 감추지
+않습니다.
+
+Prisma 마이그레이션 `20260825000000_product_profile_v1` —
+`product_profiles` 테이블. `imageIds`는 조인 테이블 없이 스칼라 배열로
+이번 실행에 포함된 이미지를 감사용으로만 기억합니다.
+
+#### 신규 — apps/web/app/product-profile/
+
+STEP 1~4를 한 화면에서: 드래그앤드롭 다중 업로드(기존 `/upload` 패턴
+재사용) → 이미지별 OCR 실행·결과 표시 → "Product Profile 생성" 버튼(과금
+발생을 화면에 명시) → 결과 카드(필드별 렌더링) + JSON 원본(`<details>`
+토글). 홈 화면에 진입 링크를 추가했습니다.
 
 ## 4. 테스트 결과
 
@@ -532,29 +587,122 @@ activation: 자격 증명 O · 네트워크 O · 전환 판정 O · 전체 충�
 위 둘이 풀려야 `POST /ops/validation-run/execute`가 열리고,
 `validation_runs`(현재 0건)에 처음으로 행이 생깁니다.
 
+### 4-12. Product Detail Engine V1 — 실 종단 실행 (2026-08-07)
+
+#### 자동 게이트
+
+- packages/core 신규 테스트 **23건** 추가(파서·템플릿·엔진). 전체
+  **1,759/1,759** 통과.
+- apps/api 신규 테스트 **8건** 추가(예산 관문·404·STEP4 이미지 미재첨부·
+  실패 시 정상 응답 등). 전체 **986/986** 통과.
+- 기존 `prompt-engine.spec.ts`(core)·`prompt.controller.spec.ts`(api)의
+  템플릿 등록 수 검증을 5종으로 갱신 — 회귀 아니라 신규 템플릿 반영.
+- web e2e **252/252** 통과(신규 화면은 실 Provider 필요라 e2e 대상에서
+  제외 — 아래 실 브라우저 실행으로 대신 검증).
+- build **6/6** · typecheck **0** · lint **0**.
+
+#### 실 브라우저 종단 실행 — Playwright로 실제 UI를 구동
+
+Mock 금지 지시에 따라, curl이 아니라 **실제 브라우저**로 로그인 →
+STEP 1(사진 2장 업로드) → STEP 2(OCR 전체 실행) → STEP 3+4(Product
+Profile 생성) 순서를 그대로 밟았습니다. 사용한 사진은 합성 이미지가 아닌
+**실제 제품 사진**(수박 & 샐러드 보관통, 서로 다른 두 장)입니다.
+
+```
+1) 로그인 완료
+2) STEP 1 — 사진 2장 업로드 완료 확인
+3) STEP 2 — OCR 전체 실행 → 완료 확인
+4) STEP 3+4 — Product Profile 생성 (실 호출 2건) → 결과 렌더링 확인
+```
+
+타임스탬프 기준 STEP 3+4 실 호출 소요: `2026-08-07T04:45:41.379Z` →
+`2026-08-07T04:45:48.491Z` = **7.1초**(멀티모달 1건 + 텍스트 1건).
+`provider: "llm:openai"`.
+
+**OCR이 실제로 읽은 텍스트**(포장 인쇄 문구, 요약):
+"수박 & 샐러드 보관통 · 지름 330mm · 높이 200mm · 하중 9kg · 용량
+9리터 · 실리콘 패킹 밀폐 · 채반 포함 · 컬러 랜덤 배송".
+
+**결과 검증 — 사양이 실제 포장과 정확히 일치**:
+
+| 필드 | 추출값 | 포장 표기 |
+| --- | --- | --- |
+| height | 200mm | 200mm ✅ |
+| diameter | 330mm | 330mm ✅ |
+| maxLoad | 9kg | 9kg ✅ |
+| capacity | 9리터 | 9리터 ✅ |
+| material | 실리콘 패킹 | 실리콘 패킹 ✅ |
+| warnings | "색상은 랜덤으로 배송됩니다" | "컬러 랜덤 배송" ✅ |
+
+**Product Profile JSON 전체**(§)는 이 보고서 하단 "Product Profile JSON
+예시"에 그대로 붙였습니다 — 별도로 다시 부르지 않았습니다.
+
+#### 실행 후 재측정 — 부수 효과
+
+staging에서 실제 트래픽이 발생하며 인프라 게이트도 함께 전진했습니다
+(이번 TASK가 만든 것이 아니라 **시간과 실행이 자연히 채운 것**입니다):
+
+| 판정 | 실행 전 | 실행 후 |
+| --- | --- | --- |
+| `/ops/readiness` fail | 1 (`backup-chain`) | **0** — 인스턴스 24h+ 연속 가동으로 자연 해소 |
+| `recoverable` | false | **true** |
+| 검증 계획 | 5/11 | **6/11**(KPI 기준선 2점째 확보) |
+| 활성화 런북 | 5/8 | **6/8** |
+| `cutover.ready`·`activation` | true·3/3 | **변화 없음(유지)** |
+
+비용 귀속률(`GET /ops/cost/attribution`): 전체 5건 · 귀속 0건 — 데모
+실행에 `projectId`를 지정하지 않았기 때문입니다(의도적 — 짐작으로 채우지
+않는다는 원칙). 표본이 아직 20건 미달이라 목표(95%) 판정은 유보 상태
+그대로입니다.
+
 ## 5. 아키텍처 변경
 
-**경계 변경 없음.** `apps/api/src/storage/storage.service.ts`에 함수 1개·
-생성자 3줄을 추가했지만(§4-9), 이것은 **어댑터 내부의 SDK 호출 방식
-수정**이지 아키텍처 변경이 아닙니다 — `@acos/core`(순수 판정)와
-`apps/api`(어댑터) 경계는 그대로입니다. 새 환경변수·API·DB 스키마 변경
-없음.
+**TASK-5601(이번 회차)**: 새 바운디드 컨텍스트 `product-profile`을
+**기존 경계 규칙을 그대로 따라** 추가했습니다 — 임의 변경이 아닙니다.
 
-**현황** — 이 경계 덕분에 문제를 빠르게 좁힐 수 있었습니다: `readiness`
-판정(core)은 정직하게 "접근 실패"를 그대로 보여줬고, 원인은 어댑터의 SDK
-호출 인자 하나였습니다.
+- `packages/core`(순수 판정/파서/오케스트레이터) → `apps/api`(NestJS
+  어댑터: Prisma·LLM Gateway 연결) → `apps/web`(UI) 3계층 그대로.
+- Port/Adapter: `ProductProfileLlmClient`(Port) ↔ `LlmService.complete()`
+  (Adapter), `ProductProfileRunStore`(Port) ↔ `PrismaProductProfileRunStore`
+  (Adapter) — `OcrExecutionService`/`LlmVisionProvider`(기존)와 완전히
+  같은 패턴입니다.
+- 출력 계약(`ImageFeatureAnalysis`/`ProductProfile`)은 `VisionSummary`/
+  `ProductAnalysis`와 같은 원칙으로 `@acos/shared`에 둡니다.
+- **기존 파이프라인(ProductObject/Vision-analysis/Analysis)은 한 줄도
+  바꾸지 않았습니다** — 템플릿 등록 배열에 2줄 추가한 것 외에는 전부
+  신규 파일입니다.
+
+**TASK-5501(이전 회차)**: `apps/api/src/storage/storage.service.ts`에
+함수 1개·생성자 3줄(S3 리전 서명 수정) — 어댑터 내부 SDK 호출 방식 수정.
+
+**현황** — 이 경계 덕분에 이번에도 빠르게 움직일 수 있었습니다: STEP 3
+(이미지 특징 분석)과 STEP 4(통합)를 서로 독립된 순수 파서+템플릿으로
+분리해 뒀기 때문에, 단위 테스트가 실 LLM 없이도 전체 파이프라인의 논리를
+검증했고 staging에서는 그 논리가 실제로 맞아떨어지는지만 확인하면
+됐습니다.
 
 ## 6. 데이터 모델
 
-**변경 없음.** 마이그레이션 **57건**(전부 적용) · 테이블 **49개** ·
-Major Migration 2건.
+**TASK-5601**: 마이그레이션 **58건**(전부 적용, +1) · 테이블 **50개**
+(+1 `product_profiles`) · Major Migration 2건(불변 — 신규 테이블은 기존
+행에 영향 없음). `product_profiles`는 조인 테이블 없이 `imageIds`를
+Postgres 스칼라 배열로 둡니다.
 
 `validation_runs`는 이 환경에서도 **0건**입니다 — 스키마는 있고 한 번도
 쓰이지 않았습니다.
 
 ## 7. API 표면
 
-**변경 없음.** 추가·삭제·응답 형태 변경 모두 0건.
+**TASK-5601**: 신규 라우트 3개(기존 변경 없음) — 전부 additive.
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `POST` | `/product-profile` | STEP 3+4 실행(실 LLM 호출 2건, 과금) |
+| `GET` | `/product-profile/:id` | 실행 결과 조회 |
+| `GET` | `/product-profile` | 최근 실행 목록 |
+
+STEP 1·2는 기존 `POST /uploads/images`·`POST /images/:imageId/ocr`를
+그대로 씁니다 — 이 표에 없는 이유입니다.
 
 ## 8. 리스크·기술 부채
 
@@ -595,27 +743,62 @@ Major Migration 2건.
 
 ## 9. 다음 권장 사항
 
-### 지금 사람이 해야 하는 것 (Claude가 할 수 없음) — 2026-08-06 재갱신
+### 지금 사람이 해야 하는 것 (Claude가 할 수 없음) — 2026-08-07 재갱신
 
-**cutover ready = true 달성.** OpenAI·Vision 키 모두 반입 완료. 남은
-것은 2개이며, 둘 다 코드로 대신할 수 없는 사람의 결정입니다.
+**시간 의존 항목이 전부 해소됐습니다** (`backup-chain`·KPI 기준선). 남은
+것은 처음부터 같았던 사람 결정 **2개뿐**입니다 — 그 외에는 코드로 대신할
+수 없습니다.
 
 | 순위 | 항목 | 상태 | 파급 |
 | --- | --- | --- | --- |
-| **1** | `PRODUCTION_HOSTS` 확정 | **아직 없음** — 실제 운영 도메인이 정해지지 않음. staging 주소를 넣지 않기로 결정(넣으면 검증 대상 보호가 무력화됨) | 런북 3단계·검증 계획 2단계·Go-Live 2조건 차단 |
+| **1** | `PRODUCTION_HOSTS` 확정 | **아직 없음** — 실제 운영 도메인이 정해지지 않음. staging 주소를 넣지 않기로 결정(넣으면 검증 대상 보호가 무력화됨) | 런북 2단계·검증 계획 2단계·Go-Live 2조건 차단 |
 | **2** | `ALERT_WEBHOOK_URL` 구성 | **아직 없음** — 나중에 생성하기로 함 | Go-Live 1조건 직접 차단 |
 
 이 둘이 풀리면 `POST /ops/validation-run/execute`가 열려
 `validation_runs`(현재 0건)에 처음 행이 생깁니다 — **실제 비용이
 발생하는 단계**이므로 그때 다시 승인을 요청합니다.
 
-### 시간이 지나야 되는 것 (사람도 코드도 줄일 수 없음)
+### 해소된 시간 의존 항목 (2026-08-07)
 
-| 항목 | 필요한 것 | 예상 |
+| 항목 | 결과 |
+| --- | --- |
+| ~~`backup-chain`~~ | ✅ **해소** — 인스턴스 24h+ 연속 가동, `readiness` fail 1→0 |
+| ~~KPI 기준선 2점째~~ | ✅ **해소** — 검증 계획·런북 각 1단계 전진 |
+| 비용 귀속률 목표(20건) | 진행 중 — 현재 5건(전부 미귀속, `projectId` 미지정) |
+
+### 다음 Sprint 제안 (CTO 지시 5 — 제출물)
+
+**Sprint 35 Phase 2 후보** (우선순위순):
+
+1. **상세페이지 HTML 생성** — 이번 Sprint에서 보류한 것. `ProductProfile`
+   JSON을 입력으로 받아 마크업(또는 마크다운)을 생성하는 STEP 5. 이미
+   있는 `content-generation` 템플릿·파이프라인(TASK-0502~0503)을 그대로
+   확장할 수 있는지부터 조사 — 새 파이프라인을 만들기 전에 재사용 가능성
+   을 먼저 봐야 합니다(이번 Sprint와 같은 원칙).
+2. **실패 UX** — 지금은 STEP 3에서 실패하면 STEP 4가 통째로 안 도는데,
+   화면에 "왜 실패했는지"(이미지 문제 vs Provider 문제 vs 예산 초과)를
+   더 구체적으로 보여줄 필요가 있습니다. `ImageGuardError`로 스킵된
+   이미지가 있을 때 화면에 그 사실을 표시하지 않는 것도 이번 Sprint의
+   빈틈입니다.
+3. **비용 귀속** — 지금 이 기능의 실행은 `projectId` 없이도 동작하는데
+   (V1 의도), 실사용이 늘면 이 경로의 비용이 계속 미귀속으로 쌓입니다.
+   화면에 소속 프로젝트 선택을 "선택"으로 추가할지는 CTO 판단이 필요합니다
+   — 업로드 화면처럼 옵션으로 두는 것이 V1 철학과 맞는지 확인 요청.
+4. **재실행 UX** — `POST /product-profile`은 호출마다 새 실행을 만듭니다
+   (이력 보존, OCR과 같은 원칙). 화면에 과거 실행 목록(`GET
+   /product-profile`)을 보여줄지는 다음 Sprint에서 결정.
+5. **프롬프트 튜닝** — 실제 실행에서 `brand`/`model`이 둘 다 null로
+   나왔습니다(포장에 브랜드명이 없었던 실제 사례이므로 오류는 아니지만).
+   더 다양한 실제 제품 사진으로 표본을 늘려 프롬프트 품질을 검증하는 것을
+   권합니다 — 이번엔 1개 제품, 2장으로만 확인했습니다.
+
+### 시간이 지나야 되는 것 (해소됨, 기록 보존)
+
+| 항목 | 필요한 것 | 결과 |
 | --- | --- | --- |
-| `backup-chain` (staging, 20.4시간 공백) | 인스턴스 **24시간 연속 가동** | ~4시간 남음(재부팅 복구는 §4-9에서 실증) |
-| KPI 기준선 2점째 (staging) | 첫 점 `06:25:43Z` — **UTC 날짜 변경 후** 2점째 | ~14시간 |
-| 비용 귀속률 목표 | 귀속 대상 호출 **20건 이상** | OpenAI 키 이후 |
+| `backup-chain` (staging) | 인스턴스 **24시간 연속 가동** | ✅ 해소(§4-12) |
+| KPI 기준선 2점째 (staging) | **UTC 날짜 변경 후** 2점째 | ✅ 해소(§4-12) |
+| 비용 귀속률 목표 | 귀속 대상 호출 **20건 이상** | 진행 중(현재 5건) |
 
 ### v1.1로 넘기는 것 (Code Freeze)
 
