@@ -38,6 +38,7 @@ export class PrismaProductProfileRunStore implements ProductProfileRunStore {
         imageIds: input.imageIds,
         projectId: input.projectId,
         ocrText: input.ocrText,
+        templateKey: input.templateKey ?? null,
         provider,
         status: "RUNNING",
         startedAt: new Date(),

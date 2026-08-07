@@ -51,6 +51,8 @@ export interface ProductProfileEngineInput {
   /** 참고용 OCR 텍스트 */
   ocrTexts: string[];
   projectId?: string;
+  /** STEP 5b HTML 렌더링에 쓸 템플릿 — 미지정 시 BASIC(기본형) */
+  templateKey?: string;
 }
 
 export interface ProductProfileEngineResult {
@@ -205,6 +207,7 @@ export class ProductProfileEngine {
       imageFeatures.components,
       pageCopy,
       images,
+      input.templateKey,
     );
 
     return {

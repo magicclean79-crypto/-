@@ -208,6 +208,9 @@ model ProductProfile {
   // 결과(pageCopy)에 의존하므로 이 실행의 산출물로 함께 저장한다.
   html          String?
   css           String?
+  // STEP 5b 렌더링에 쓰인 템플릿 키 (예: "basic", "living-a-trust") — 생활용품
+  // Template A~E 비교(Sprint 36)에서 어떤 실행이 어떤 템플릿인지 구분한다
+  templateKey   String?
   provider      String?
   error         String?
   attempts      Int                  @default(0)

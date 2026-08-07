@@ -1,5 +1,6 @@
 import type { ProductProfile } from "@acos/shared";
 import {
+  PRODUCT_PAGE_TEMPLATES,
   renderProductProfileHtml,
   wrapProductProfileHtmlDocument,
   type ProductPageImage,
@@ -209,5 +210,50 @@ describe("wrapProductProfileHtmlDocument", () => {
   it("keywords가 없으면 meta 태그를 생략한다", () => {
     const doc = wrapProductProfileHtmlDocument("제목", "<div></div>", "");
     expect(doc).not.toContain('name="keywords"');
+  });
+});
+
+describe("생활용품 Template A~E (Sprint 36)", () => {
+  const livingGoodsKeys = [
+    "living-a-trust",
+    "living-b-mood",
+    "living-c-value",
+    "living-d-proof",
+    "living-e-minimal",
+  ];
+
+  it("BASIC 포함 6개 템플릿이 등록되어 있다", () => {
+    expect(PRODUCT_PAGE_TEMPLATES.map((t) => t.key).sort()).toEqual(
+      ["basic", ...livingGoodsKeys].sort(),
+    );
+  });
+
+  it.each(livingGoodsKeys)("%s는 사진 없이도 렌더링되고 상품명·설명·구매포인트를 포함한다", (key) => {
+    const { html, css } = renderProductProfileHtml(profile, ["매트 본체"], copy, [], key);
+    expect(html).toContain(profile.productName);
+    expect(html).toContain(copy.description);
+    expect(html).toContain("물세척 가능");
+    expect(css).toContain(".pde-page");
+  });
+
+  it.each(livingGoodsKeys)("%s는 사진이 있으면 Hero에 사진을 쓴다", (key) => {
+    const { html } = renderProductProfileHtml(profile, [], copy, [photo("hero")], key);
+    expect(html).toContain("pde-hero");
+    expect(html).toMatch(/data:image\/jpeg;base64,/);
+  });
+
+  it("living-e-minimal은 스펙을 표/체크리스트가 아니라 접이식 아코디언으로 렌더링한다", () => {
+    const { html } = renderProductProfileHtml(profile, [], copy, [], "living-e-minimal");
+    expect(html).toContain("pde-spec-accordion");
+    expect(html).toContain("<details");
+    expect(html).not.toContain("<table");
+  });
+
+  it("각 템플릿은 서로 다른 CSS(색상 액센트)를 쓴다 — 진짜로 다른 템플릿인지 확인", () => {
+    const cssByKey = livingGoodsKeys.map(
+      (key) => renderProductProfileHtml(profile, [], copy, [], key).css,
+    );
+    const unique = new Set(cssByKey);
+    expect(unique.size).toBe(livingGoodsKeys.length);
   });
 });

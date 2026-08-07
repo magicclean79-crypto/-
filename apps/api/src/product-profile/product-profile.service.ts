@@ -24,6 +24,7 @@ function toDto(record: ProductProfileRecord): ProductProfileDto {
     pageCopy: record.pageCopy as ProductProfileDto["pageCopy"],
     html: record.html,
     css: record.css,
+    templateKey: record.templateKey,
     provider: record.provider,
     error: record.error,
     attempts: record.attempts,
@@ -67,7 +68,11 @@ export class ProductProfileService {
     });
   }
 
-  async run(imageIds: string[], projectId?: string): Promise<ProductProfileDto> {
+  async run(
+    imageIds: string[],
+    projectId?: string,
+    templateKey?: string,
+  ): Promise<ProductProfileDto> {
     const ids = [
       ...new Set(imageIds.map((id) => id.trim()).filter((id) => id.length > 0)),
     ];
@@ -110,13 +115,20 @@ export class ProductProfileService {
     }));
 
     const normalizedProjectId = projectId?.trim() || undefined;
+    const normalizedTemplateKey = templateKey?.trim() || undefined;
     const run = await this.execution.execute(
       {
         imageIds: ids,
         projectId: normalizedProjectId ?? null,
         ocrText: ocrTexts.length > 0 ? ocrTexts.join("\n\n---\n\n") : null,
+        templateKey: normalizedTemplateKey ?? null,
       },
-      { images: visionImages, ocrTexts, projectId: normalizedProjectId },
+      {
+        images: visionImages,
+        ocrTexts,
+        projectId: normalizedProjectId,
+        templateKey: normalizedTemplateKey,
+      },
     );
 
     // 실패도 정상 응답이다(OCR·Analysis와 같은 원칙) — status 필드가

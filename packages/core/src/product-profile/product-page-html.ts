@@ -183,15 +183,19 @@ function renderPlainList(items: string[]): string {
   return `<ul class="pde-list">${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`;
 }
 
-/** 특징 카드 — 사진이 있으면 썸네일(클릭 시 확대), 없으면 체크 아이콘("사진 → 핵심 설명" 구조) */
-function renderFeatureCards(items: ProductPageFeatureItem[]): string {
+/** 특징 카드 — 사진이 있으면 썸네일(클릭 시 확대), 없으면 체크 아이콘("사진 → 핵심 설명" 구조)
+ * `variant`로 카드 크기/배경 스타일을 바꾼다 — 생활용품 Template A~E 비교용(Sprint 36). */
+function renderFeatureCards(
+  items: ProductPageFeatureItem[],
+  variant: "medium" | "large" | "grid" | "plain" = "medium",
+): string {
   const cards = items.map(({ text, image }) => {
     const media = image
       ? zoomLink(image, `<span class="pde-feature-media"><img src="${dataUri(image)}" alt="" loading="lazy"></span>`)
       : `<span class="pde-feature-media pde-feature-media--icon">${ICONS.check}</span>`;
     return `<li class="pde-feature-card">${media}<span class="pde-feature-text">${escapeHtml(text)}</span></li>`;
   });
-  return `<ul class="pde-feature-grid">${cards.join("")}</ul>`;
+  return `<ul class="pde-feature-grid pde-feature-grid--${variant}">${cards.join("")}</ul>`;
 }
 
 /**
@@ -220,14 +224,40 @@ function zoomLink(image: ProductPageImage, inner: string): string {
   return `<a href="${dataUri(image)}" target="_blank" rel="noopener" aria-label="원본 크기로 보기">${inner}</a>`;
 }
 
-/** 첫 사진을 배경으로 쓰는 Hero 영역 — 사진이 없으면 그라디언트로 대체한다. 클릭하면 원본 크기로 열린다 */
-function renderHero(vm: ProductPageViewModel): string {
+/**
+ * 첫 사진을 배경으로 쓰는 Hero 영역 — 사진이 없으면 그라디언트로 대체한다. 클릭하면 원본 크기로 열린다.
+ * `variant="overlay"`(기본)는 사진 위에 제목을 얹는다("특징-사진 즉시 연결"). `variant="mood"`는
+ * 오버레이 없이 사진만 풀블리드로 보여주고 제목은 사진 아래 별도 블록으로 뺀다(생활용품 원리4 —
+ * 감성/라이프스타일형은 사진이 "무드"이지 정보 전달 수단이 아니라서 텍스트를 얹지 않는다).
+ */
+function renderHero(
+  vm: ProductPageViewModel,
+  variant: "overlay" | "mood" | "compact" | "spacious" = "overlay",
+): string {
   const titleBlock = `<h1>${escapeHtml(vm.productName)}</h1><p class="pde-headline">${escapeHtml(vm.headline)}</p>`;
   if (!vm.heroImage) {
-    return `<header class="pde-hero">${titleBlock}</header>`;
+    return `<header class="pde-hero pde-hero--${variant}">${titleBlock}</header>`;
+  }
+  if (variant === "mood") {
+    return [
+      `<header class="pde-hero pde-hero--mood">${zoomLink(vm.heroImage, `<img src="${dataUri(vm.heroImage)}" alt="" loading="lazy">`)}</header>`,
+      `<div class="pde-hero-title-block">${titleBlock}</div>`,
+    ].join("");
   }
   const overlay = `<div class="pde-hero-overlay">${titleBlock}</div>`;
-  return `<header class="pde-hero pde-hero--photo" style="background-image:url('${dataUri(vm.heroImage)}')">${zoomLink(vm.heroImage, overlay)}</header>`;
+  return `<header class="pde-hero pde-hero--photo pde-hero--${variant}" style="background-image:url('${dataUri(vm.heroImage)}')">${zoomLink(vm.heroImage, overlay)}</header>`;
+}
+
+/** 스펙을 IKEA식 접이식 아코디언(<details>, 기본 접힘)으로 렌더링한다 — 생활용품 원리5 참고,
+ * `reports/IKEA_PDP_REFERENCE_ANALYSIS.md`의 "표가 아니라 아코디언 텍스트" 관찰 반영. */
+function renderSpecAccordion(rows: [string, string][]): string {
+  if (rows.length === 0) {
+    return "";
+  }
+  const items = rows
+    .map(([key, value]) => `<dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}</dd>`)
+    .join("");
+  return `<details class="pde-spec-accordion"><summary>소재 및 상세 정보 보기</summary><dl>${items}</dl></details>`;
 }
 
 /**
@@ -250,12 +280,15 @@ function renderGallerySection(images: ProductPageImage[]): string {
  * 눈에 띄게 배치한다. "상세 특징"(features, 사진 페어링)과는 별개 섹션 —
  * 구매 포인트는 한눈에 훑는 요약, 상세 특징은 사진과 함께 자세히 보는 것.
  */
-function renderPurchasePoints(points: string[]): string {
+function renderPurchasePoints(
+  points: string[],
+  variant: "filled" | "outline" | "badge" = "filled",
+): string {
   if (points.length === 0) {
     return "";
   }
   const chips = points
-    .map((item) => `<li class="pde-chip">${ICONS.check}<span>${escapeHtml(item)}</span></li>`)
+    .map((item) => `<li class="pde-chip pde-chip--${variant}">${ICONS.check}<span>${escapeHtml(item)}</span></li>`)
     .join("");
   return `<section class="pde-section pde-purchase-points"><ul class="pde-chip-row">${chips}</ul></section>`;
 }
@@ -571,8 +604,319 @@ export const BASIC_PRODUCT_PAGE_TEMPLATE: ProductPageTemplate = {
   },
 };
 
+// ── 생활용품 Template A~E (Sprint 36) ──────────────────────────────────────
+//
+// CTO 지시(2026-08-08): 카테고리 확장보다 "좋은 템플릿 하나를 완성하는 것"이
+// 우선이다. `reports/LIVING_GOODS_DESIGN_PRINCIPLES.md`의 원리·IF-THEN 규칙을
+// 근거로 Hero·사진배치·색상·아이콘·정보순서가 서로 다른 5개 템플릿을 만들어
+// CTO가 브라우저에서 비교·승인할 수 있게 한다. 승인된 요소를 조합해 최종
+// "생활용품 Template V1"을 만드는 것이 목표이며, 이 5개 자체가 최종 결과물은
+// 아니다 — BASIC_PRODUCT_PAGE_TEMPLATE(Template V1의 현재 버전)은 그대로 둔다.
+
+const PDE_SHARED_BASE_FONT = `font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo",
+    "Noto Sans KR", sans-serif;`;
+
+/** A~E 공통 골격 CSS — 페이지 폭·기본 배지·특징 그리드 variant·구매포인트 chip variant·경고박스.
+ * 색상/Hero/타이포는 템플릿별로 뒤에 덧붙인다. */
+function sharedLivingGoodsCss(accent: string): string {
+  return `
+.pde-page {
+  max-width: 480px;
+  margin: 0 auto;
+  background: #ffffff;
+  ${PDE_SHARED_BASE_FONT}
+  color: #18181b;
+  line-height: 1.55;
+  word-break: keep-all;
+}
+.pde-page .pde-gallery { display: flex; gap: 6px; overflow-x: auto; }
+.pde-page .pde-gallery a { flex-shrink: 0; display: block; }
+.pde-page .pde-gallery img { width: 76px; height: 76px; object-fit: cover; border-radius: 8px; display: block; }
+.pde-page .pde-section { padding: 14px 14px 2px; }
+.pde-page .pde-section h2 { display: flex; align-items: center; gap: 7px; font-size: 14.5px; font-weight: 700; margin: 0 0 8px; }
+.pde-page .pde-badge { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 7px; flex-shrink: 0; }
+.pde-page .pde-badge--feature { background: color-mix(in srgb, ${accent} 12%, white); color: ${accent}; }
+.pde-page .pde-badge--spec { background: #f1f5f9; color: #475569; }
+.pde-page .pde-badge--box { background: #ecfdf5; color: #0d9488; }
+.pde-page .pde-badge--info { background: color-mix(in srgb, ${accent} 10%, white); color: ${accent}; }
+.pde-page .pde-badge--warning { background: #fef2f2; color: #dc2626; }
+.pde-page .pde-badge--gallery { background: #ecfeff; color: #0891b2; }
+.pde-page .pde-chip-row { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.pde-page .pde-chip { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 6px 12px; font-size: 11.5px; font-weight: 700; }
+.pde-page .pde-chip--filled { background: ${accent}; color: #fff; }
+.pde-page .pde-chip--outline { background: #fff; color: ${accent}; border: 1.5px solid ${accent}; }
+.pde-page .pde-chip--badge { background: #fef08a; color: #78350f; border: 1px solid #facc15; }
+.pde-page .pde-purchase-points { padding: 12px 14px 2px; }
+.pde-page .pde-feature-grid { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.pde-page .pde-feature-card { display: flex; align-items: center; gap: 10px; font-size: 12.5px; }
+.pde-page .pde-feature-card > a { display: block; flex-shrink: 0; }
+.pde-page .pde-feature-media { display: block; flex-shrink: 0; border-radius: 8px; overflow: hidden; }
+.pde-page .pde-feature-media img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pde-page .pde-feature-media--icon { display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, ${accent} 12%, white); color: ${accent}; }
+.pde-page .pde-feature-grid--medium .pde-feature-card { background: #f8fafc; border-radius: 10px; padding: 8px 10px; }
+.pde-page .pde-feature-grid--medium .pde-feature-media { width: 40px; height: 40px; }
+.pde-page .pde-feature-grid--large .pde-feature-card { background: #f8fafc; border-radius: 12px; padding: 10px; }
+.pde-page .pde-feature-grid--large .pde-feature-media { width: 72px; height: 72px; }
+.pde-page .pde-feature-grid--large .pde-feature-text { font-size: 13.5px; font-weight: 600; }
+.pde-page .pde-feature-grid--grid { flex-direction: row; flex-wrap: wrap; gap: 8px; }
+.pde-page .pde-feature-grid--grid .pde-feature-card { flex-direction: column; width: calc(50% - 4px); background: #fff; border: 1px solid #f1f1f1; border-radius: 10px; padding: 8px; text-align: center; }
+.pde-page .pde-feature-grid--grid .pde-feature-media { width: 56px; height: 56px; margin: 0 auto; }
+.pde-page .pde-feature-grid--plain .pde-feature-card { border-bottom: 1px solid #f1f1f1; padding: 10px 0; border-radius: 0; }
+.pde-page .pde-feature-grid--plain .pde-feature-media { width: 40px; height: 40px; }
+.pde-page .pde-description, .pde-page .pde-usage { margin: 0; font-size: 12.5px; color: #52525b; background: #fafafa; border-radius: 10px; padding: 10px 12px; white-space: pre-wrap; }
+.pde-page .pde-spec-checklist { margin: 0; padding: 10px 12px; list-style: none; display: flex; flex-direction: column; gap: 8px; background: #f8fafc; border-radius: 10px; font-size: 12.5px; }
+.pde-page .pde-spec-item { display: flex; align-items: baseline; gap: 8px; }
+.pde-page .pde-spec-item svg { flex-shrink: 0; color: ${accent}; transform: translateY(1px); }
+.pde-page .pde-spec-key { font-weight: 600; color: #71717a; flex-shrink: 0; }
+.pde-page .pde-spec-value { color: #18181b; }
+.pde-page .pde-spec-accordion { background: #f8fafc; border-radius: 10px; padding: 10px 12px; font-size: 12.5px; }
+.pde-page .pde-spec-accordion summary { cursor: pointer; font-weight: 600; color: #475569; }
+.pde-page .pde-spec-accordion dl { margin: 10px 0 0; display: flex; flex-direction: column; gap: 6px; }
+.pde-page .pde-spec-accordion dt { font-weight: 600; color: #71717a; }
+.pde-page .pde-spec-accordion dd { margin: 0 0 4px; }
+.pde-page .pde-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.pde-page .pde-list li { position: relative; padding-left: 13px; font-size: 12.5px; }
+.pde-page .pde-list li::before { content: ""; position: absolute; left: 0; top: 7px; width: 5px; height: 5px; border-radius: 50%; background: #a1a1aa; }
+.pde-page .pde-warning-box { background: #fef2f2; border-radius: 10px; padding: 10px 12px; }
+.pde-page .pde-warning-box .pde-list li { color: #b91c1c; }
+.pde-page .pde-warning-box .pde-list li::before { background: #dc2626; }
+.pde-page .pde-section:last-child { padding-bottom: 20px; }
+@media (min-width: 640px) {
+  .pde-page { margin: 24px auto; border: 1px solid #eee; border-radius: 20px; overflow: hidden; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.07); }
+}
+`;
+}
+
+/** 공통 섹션 빌더 — A~E가 순서만 다르게 조합한다 */
+function livingGoodsSections(vm: ProductPageViewModel, opts: {
+  featureVariant: "medium" | "large" | "grid" | "plain";
+  spec: "checklist" | "accordion";
+}) {
+  const feature = vm.features.length > 0
+    ? renderSection("check", "feature", "특징", renderFeatureCards(vm.features, opts.featureVariant))
+    : "";
+  const description = renderSection("info", "info", "제품 설명", `<p class="pde-description">${escapeHtml(vm.description)}</p>`);
+  const usage = vm.usage
+    ? renderSection("info", "info", "사용 방법", `<p class="pde-usage">${escapeHtml(vm.usage)}</p>`)
+    : "";
+  const spec = vm.specRows.length > 0
+    ? renderSection(
+        "spec",
+        "spec",
+        "스펙",
+        opts.spec === "accordion" ? renderSpecAccordion(vm.specRows) : renderSpecTable(vm.specRows),
+      )
+    : "";
+  const components = vm.components.length > 0
+    ? renderSection("box", "box", "구성품", renderPlainList(vm.components))
+    : "";
+  const warnings = vm.warnings.length > 0
+    ? renderSection("warning", "warning", "주의사항", `<div class="pde-warning-box">${renderPlainList(vm.warnings)}</div>`)
+    : "";
+  const gallery = renderGallerySection(vm.galleryImages);
+  return { feature, description, usage, spec, components, warnings, gallery };
+}
+
+/**
+ * Template A — "신뢰/근거형" (living-a-trust). 생활용품 원리1·규칙4·규칙6 반영:
+ * 구매 포인트를 Hero 앞에 먼저 내세우고, 특징(사진 증거) 바로 뒤에 스펙
+ * 체크포인트를 붙여 "근거를 눌러서 쌓는" 순서로 배치한다. 색상은 시장
+ * 관습(IKEA·다이소 공통 블루 CTA)을 따른 블루 단일 액센트.
+ */
+export const LIVING_GOODS_TEMPLATE_A: ProductPageTemplate = {
+  key: "living-a-trust",
+  name: "생활용품 A — 신뢰/근거형",
+  description: "구매포인트 → Hero → 특징(증거 사진) → 스펙 체크리스트 순으로 근거를 쌓는 구성. 블루 단일 액센트.",
+  render(vm) {
+    const s = livingGoodsSections(vm, { featureVariant: "medium", spec: "checklist" });
+    const html = [
+      '<div class="pde-page pde-page--a">',
+      renderPurchasePoints(vm.purchasePoints, "filled"),
+      renderHero(vm, "overlay"),
+      s.feature,
+      s.spec,
+      s.gallery,
+      s.description,
+      s.usage,
+      s.components,
+      s.warnings,
+      "</div>",
+    ].join("");
+    const css = sharedLivingGoodsCss("#2563eb") + `
+.pde-page--a .pde-hero { position: relative; padding: 40px 20px; text-align: center; background: linear-gradient(135deg, #1e3a8a, #1e293b); color: #fff; }
+.pde-page--a .pde-hero h1 { margin: 0 0 6px; font-size: 20px; font-weight: 800; }
+.pde-page--a .pde-headline { margin: 0; font-size: 13px; opacity: 0.85; }
+.pde-page--a .pde-hero--photo { min-height: 300px; padding: 0; display: flex; align-items: flex-end; background-size: cover; background-position: center; text-align: left; }
+.pde-page--a .pde-hero--photo > a { display: block; width: 100%; color: inherit; text-decoration: none; }
+.pde-page--a .pde-hero--photo .pde-hero-overlay { width: 100%; padding: 50px 18px 16px; background: linear-gradient(to top, rgba(30,58,138,0.88), rgba(0,0,0,0)); }
+`.trim();
+    return { html, css };
+  },
+};
+
+/**
+ * Template B — "감성/무드형" (living-b-mood). 생활용품 원리4·규칙5·규칙10
+ * 반영: Hero는 텍스트 오버레이 없는 풀블리드 무드샷이고, 제품 설명(감성
+ * 문구)이 구매포인트보다 먼저 나온다. 색상은 웜톤(테라코타)로 IKEA/다이소의
+ * 블루 CTA 관습과 의도적으로 다르게 구성해 비교 대상이 되게 한다.
+ */
+export const LIVING_GOODS_TEMPLATE_B: ProductPageTemplate = {
+  key: "living-b-mood",
+  name: "생활용품 B — 감성/무드형",
+  description: "오버레이 없는 풀블리드 무드 Hero → 설명 먼저 → 구매포인트(아웃라인) 순. 웜톤 테라코타 액센트, 세리프 헤드라인.",
+  render(vm) {
+    const s = livingGoodsSections(vm, { featureVariant: "plain", spec: "checklist" });
+    const html = [
+      '<div class="pde-page pde-page--b">',
+      renderHero(vm, "mood"),
+      s.description,
+      renderPurchasePoints(vm.purchasePoints, "outline"),
+      s.feature,
+      s.gallery,
+      s.spec,
+      s.usage,
+      s.components,
+      s.warnings,
+      "</div>",
+    ].join("");
+    const css = sharedLivingGoodsCss("#c2410c") + `
+.pde-page--b .pde-hero { padding: 0; }
+.pde-page--b .pde-hero--mood img { width: 100%; display: block; }
+.pde-page--b .pde-hero-title-block { padding: 18px 16px 4px; text-align: left; }
+.pde-page--b .pde-hero-title-block h1 { margin: 0 0 6px; font-size: 21px; font-weight: 700; font-family: Georgia, "Noto Serif KR", serif; color: #431407; }
+.pde-page--b .pde-headline { margin: 0; font-size: 13px; color: #78716c; font-style: italic; }
+`.trim();
+    return { html, css };
+  },
+};
+
+/**
+ * Template C — "즉시구매/가격강조형" (living-c-value). 생활용품 원리8·규칙9
+ * 반영: 구매포인트를 노란 가격배지 스타일로 Hero보다 먼저 배치하고, 특징
+ * 카드도 다이소식 2열 그리드(작은 정사각 사진)로 눌러 정보 밀도를 높인다.
+ * 색상은 레드/옐로 — 저가·즉시구매형 채널(다이소몰)의 관습을 반영.
+ */
+export const LIVING_GOODS_TEMPLATE_C: ProductPageTemplate = {
+  key: "living-c-value",
+  name: "생활용품 C — 즉시구매/가격강조형",
+  description: "구매포인트(가격 배지 스타일)를 Hero보다 먼저 배치, 특징은 2열 그리드로 촘촘하게. 레드/옐로 액센트.",
+  render(vm) {
+    const s = livingGoodsSections(vm, { featureVariant: "grid", spec: "checklist" });
+    const html = [
+      '<div class="pde-page pde-page--c">',
+      renderPurchasePoints(vm.purchasePoints, "badge"),
+      renderHero(vm, "compact"),
+      s.spec,
+      s.feature,
+      s.gallery,
+      s.description,
+      s.usage,
+      s.components,
+      s.warnings,
+      "</div>",
+    ].join("");
+    const css = sharedLivingGoodsCss("#dc2626") + `
+.pde-page--c .pde-section { padding: 10px 12px 2px; }
+.pde-page--c .pde-hero { position: relative; padding: 20px 16px; text-align: left; background: #fff5f5; color: #18181b; }
+.pde-page--c .pde-hero h1 { margin: 0 0 4px; font-size: 17px; font-weight: 800; }
+.pde-page--c .pde-headline { margin: 0; font-size: 12px; color: #71717a; }
+.pde-page--c .pde-hero--photo { min-height: 200px; padding: 0; display: flex; align-items: flex-end; background-size: cover; background-position: center; text-align: left; }
+.pde-page--c .pde-hero--photo > a { display: block; width: 100%; color: inherit; text-decoration: none; }
+.pde-page--c .pde-hero--photo .pde-hero-overlay { width: 100%; padding: 30px 14px 10px; background: linear-gradient(to top, rgba(0,0,0,0.7), rgba(0,0,0,0)); color: #fff; }
+`.trim();
+    return { html, css };
+  },
+};
+
+/**
+ * Template D — "기능증명형" (living-d-proof). 생활용품 원리3·규칙4 반영:
+ * Hero와 특징 카드 모두 대형 사진으로 "증거"를 강조한다(감성이 아니라
+ * 기능이 실제로 작동한다는 것을 사진으로 증명). 그레이+틸 단일 액센트로
+ * 차분하고 신뢰감 있는 색상 언어를 쓴다.
+ */
+export const LIVING_GOODS_TEMPLATE_D: ProductPageTemplate = {
+  key: "living-d-proof",
+  name: "생활용품 D — 기능증명형",
+  description: "Hero·특징 카드 모두 대형 사진으로 기능 증거를 강조. 그레이+틸 단일 액센트.",
+  render(vm) {
+    const s = livingGoodsSections(vm, { featureVariant: "large", spec: "checklist" });
+    const html = [
+      '<div class="pde-page pde-page--d">',
+      renderHero(vm, "overlay"),
+      s.feature,
+      renderPurchasePoints(vm.purchasePoints, "filled"),
+      s.spec,
+      s.gallery,
+      s.description,
+      s.usage,
+      s.components,
+      s.warnings,
+      "</div>",
+    ].join("");
+    const css = sharedLivingGoodsCss("#0d9488") + `
+.pde-page--d .pde-hero { position: relative; padding: 0; text-align: left; background: #27272a; color: #fff; }
+.pde-page--d .pde-hero h1 { margin: 0 0 6px; font-size: 20px; font-weight: 800; }
+.pde-page--d .pde-headline { margin: 0; font-size: 13px; opacity: 0.85; }
+.pde-page--d .pde-hero--photo { min-height: 360px; display: flex; align-items: flex-end; background-size: cover; background-position: center; }
+.pde-page--d .pde-hero--photo > a { display: block; width: 100%; color: inherit; text-decoration: none; }
+.pde-page--d .pde-hero--photo .pde-hero-overlay { width: 100%; padding: 60px 18px 16px; background: linear-gradient(to top, rgba(0,0,0,0.85), rgba(0,0,0,0)); }
+.pde-page--d .pde-warning-box { border: 1.5px solid #dc2626; }
+`.trim();
+    return { html, css };
+  },
+};
+
+/**
+ * Template E — "미니멀 스칸디나비아형" (living-e-minimal). 생활용품 원리5 +
+ * `reports/IKEA_PDP_REFERENCE_ANALYSIS.md`의 "표가 아니라 아코디언, 절제된
+ * 색상 시스템" 관찰 반영: 스펙을 네이티브 `<details>` 아코디언(기본 접힘)으로
+ * 두고, 색상은 거의 무채색 + 블루 액센트 하나만 쓴다. 여백을 가장 넉넉하게.
+ */
+export const LIVING_GOODS_TEMPLATE_E: ProductPageTemplate = {
+  key: "living-e-minimal",
+  name: "생활용품 E — 미니멀 스칸디나비아형",
+  description: "무채색 + 블루 단일 액센트, 넉넉한 여백, 스펙은 IKEA식 접이식 아코디언(기본 접힘).",
+  render(vm) {
+    const s = livingGoodsSections(vm, { featureVariant: "plain", spec: "accordion" });
+    const html = [
+      '<div class="pde-page pde-page--e">',
+      renderHero(vm, "spacious"),
+      renderPurchasePoints(vm.purchasePoints, "outline"),
+      s.feature,
+      s.gallery,
+      s.description,
+      s.usage,
+      s.spec,
+      s.components,
+      s.warnings,
+      "</div>",
+    ].join("");
+    const css = sharedLivingGoodsCss("#2563eb") + `
+.pde-page--e { line-height: 1.75; }
+.pde-page--e .pde-section { padding: 20px 18px 4px; }
+.pde-page--e .pde-hero { position: relative; padding: 56px 22px; text-align: center; background: #fafafa; color: #18181b; }
+.pde-page--e .pde-hero h1 { margin: 0 0 8px; font-size: 22px; font-weight: 700; letter-spacing: 0.2px; }
+.pde-page--e .pde-headline { margin: 0; font-size: 13.5px; color: #71717a; }
+.pde-page--e .pde-hero--photo { min-height: 340px; padding: 0; display: flex; align-items: flex-end; background-size: cover; background-position: center; text-align: left; }
+.pde-page--e .pde-hero--photo > a { display: block; width: 100%; color: inherit; text-decoration: none; }
+.pde-page--e .pde-hero--photo .pde-hero-overlay { width: 100%; padding: 70px 22px 22px; background: linear-gradient(to top, rgba(0,0,0,0.55), rgba(0,0,0,0)); color: #fff; }
+.pde-page--e .pde-warning-box { background: #fafafa; border: 1px solid #f1f1f1; }
+.pde-page--e .pde-warning-box .pde-list li { color: #71717a; }
+.pde-page--e .pde-warning-box .pde-list li::before { background: #a1a1aa; }
+`.trim();
+    return { html, css };
+  },
+};
+
 /** 등록된 상세페이지 템플릿 — Prompt Engine 템플릿 레지스트리와 같은 원칙. 새 스타일은 여기에 추가한다 */
-export const PRODUCT_PAGE_TEMPLATES: ProductPageTemplate[] = [BASIC_PRODUCT_PAGE_TEMPLATE];
+export const PRODUCT_PAGE_TEMPLATES: ProductPageTemplate[] = [
+  BASIC_PRODUCT_PAGE_TEMPLATE,
+  LIVING_GOODS_TEMPLATE_A,
+  LIVING_GOODS_TEMPLATE_B,
+  LIVING_GOODS_TEMPLATE_C,
+  LIVING_GOODS_TEMPLATE_D,
+  LIVING_GOODS_TEMPLATE_E,
+];
 
 function findTemplate(key: string): ProductPageTemplate {
   const found = PRODUCT_PAGE_TEMPLATES.find((template) => template.key === key);

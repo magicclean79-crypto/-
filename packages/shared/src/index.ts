@@ -409,6 +409,8 @@ export interface ProductProfileDto {
   html: string | null;
   /** STEP 5 — html과 함께 쓰는 반응형 CSS */
   css: string | null;
+  /** STEP 5b 렌더링에 쓰인 템플릿 키 (예: "basic", "living-a-trust") */
+  templateKey: string | null;
   provider: string | null;
   error: string | null;
   attempts: number;
@@ -421,6 +423,8 @@ export interface ProductProfileDto {
 export interface RunProductProfileRequest {
   imageIds: string[];
   projectId?: string;
+  /** STEP 5b HTML 렌더링에 쓸 템플릿 키 (예: "living-a-trust") — 미지정 시 기본형(basic) */
+  templateKey?: string;
 }
 
 // ── 디자인 리뷰 (시장 디자인 패턴 분석 — Gemini를 디자인 디렉터로 활용) ──

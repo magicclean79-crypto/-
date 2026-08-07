@@ -26,6 +26,8 @@ export interface ProductProfileRunInput {
   projectId: string | null;
   /** 실행 시점 OCR 텍스트 스냅샷(감사용) */
   ocrText: string | null;
+  /** STEP 5b 렌더링에 쓸 템플릿 키 — 감사·비교용으로 실행 기록에 남긴다 */
+  templateKey?: string | null;
 }
 
 /**

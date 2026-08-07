@@ -5,6 +5,7 @@ import Link from "next/link";
 import type { DesignReviewDto, ProductProfileDto } from "@acos/shared";
 import { Badge, Card } from "@acos/ui";
 import { authFetchInit } from "../../lib/auth-client";
+import { captureAndReview } from "../../lib/design-review-capture";
 import { AuthImage } from "../product-profile/auth-image";
 import { BENCHMARK_IMAGE_IDS, BENCHMARK_KEY, BENCHMARK_PRODUCT_NAME, benchmarkVersionKey } from "./constants";
 
@@ -32,55 +33,6 @@ async function fetchReviewFor(productProfileId: string): Promise<DesignReviewDto
   if (!response.ok) return null;
   const body = (await response.json()) as { results: DesignReviewDto[] };
   return body.results[0] ?? null;
-}
-
-async function uploadBlob(blob: Blob, fileName: string): Promise<string> {
-  const formData = new FormData();
-  formData.append("files", new File([blob], fileName, { type: "image/png" }));
-  const response = await fetch(
-    `${API_URL}/uploads/images`,
-    authFetchInit({ method: "POST", body: formData }),
-  );
-  const body = (await response.json()) as { images?: { id: string }[]; message?: string | string[] };
-  if (!response.ok || !body.images?.[0]) {
-    const message = Array.isArray(body.message) ? body.message.join(", ") : body.message;
-    throw new Error(message ?? `스크린샷 업로드 실패 (HTTP ${response.status})`);
-  }
-  return body.images[0].id;
-}
-
-/** html2canvas는 실제 DOM에 렌더된 요소만 캡처할 수 있다. 화면 밖(고정폭)
- * iframe에 HTML+CSS만 따로 주입해서 렌더한 뒤 캡처하고 즉시 제거한다 —
- * 부모 페이지의 Tailwind 전역 스타일(oklch/lab 등 html2canvas가 파싱하지
- * 못하는 최신 CSS color 함수)이 섞여 들어가지 않도록 완전히 격리한다. */
-async function captureHtmlAsPng(html: string, css: string): Promise<Blob> {
-  const html2canvas = (await import("html2canvas")).default;
-  const iframe = document.createElement("iframe");
-  iframe.style.position = "fixed";
-  iframe.style.top = "0";
-  iframe.style.left = "-9999px";
-  iframe.style.width = "800px";
-  iframe.style.height = "1px";
-  iframe.style.border = "none";
-  document.body.appendChild(iframe);
-  try {
-    const doc = iframe.contentDocument;
-    if (!doc) throw new Error("캡처용 iframe을 초기화할 수 없습니다.");
-    doc.open();
-    doc.write(
-      `<!doctype html><html><head><style>body{margin:0;background:#fff;}${css}</style></head><body>${html}</body></html>`,
-    );
-    doc.close();
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    const bodyHeight = Math.max(doc.body.scrollHeight, 600);
-    iframe.style.height = `${bodyHeight}px`;
-    const canvas = await html2canvas(doc.body, { width: 800, useCORS: true });
-    const blob: Blob | null = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
-    if (!blob) throw new Error("캡처한 화면을 이미지로 변환할 수 없습니다.");
-    return blob;
-  } finally {
-    document.body.removeChild(iframe);
-  }
 }
 
 function ScoreChart({ versions }: { versions: VersionRow[] }) {
@@ -127,8 +79,8 @@ function VersionCard({
           {profile.status === "FAILED" && <Badge tone="warn">생성 실패</Badge>}
           <Badge tone="ok">provider: {profile.provider ?? "-"}</Badge>
           {reviewLoading && <Badge tone="ok">점수 조회 중…</Badge>}
-          {review?.result && <Badge tone="ok">디자인 점수 {review.result.overallScore}점</Badge>}
-          {review && !review.result && <Badge tone="warn">디자인 리뷰 실패</Badge>}
+          {review?.result && <Badge tone="ok">AI 참고 점수 {review.result.overallScore}점 (승인 기준 아님)</Badge>}
+          {review && !review.result && <Badge tone="warn">AI 참고 채점 실패</Badge>}
         </div>
         <div className="flex flex-wrap gap-2">
           <Link
@@ -143,7 +95,7 @@ function VersionCard({
             onClick={() => onRunReview(profile)}
             className="rounded-lg bg-purple-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {running ? "캡처+디자인 리뷰 실행 중…" : review ? "디자인 리뷰 다시 실행" : "디자인 리뷰 실행"}
+            {running ? "캡처+AI 참고 채점 중…" : review ? "AI 참고 채점 다시 실행" : "AI 참고 채점 실행 (참고용)"}
           </button>
           {review && (
             <Link
@@ -235,26 +187,14 @@ export function BenchmarkView() {
       setRunningId(profile.id);
       setError(null);
       try {
-        const blob = await captureHtmlAsPng(profile.html, profile.css ?? "");
-        const imageId = await uploadBlob(blob, `benchmark-${profile.id}.png`);
-        const response = await fetch(
-          `${API_URL}/design-review`,
-          authFetchInit({
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              imageIds: [imageId],
-              category: `Benchmark: ${BENCHMARK_PRODUCT_NAME}`,
-              notes: `Benchmark Product 회귀 테스트 — ProductProfile ${profile.id}`,
-              productProfileId: profile.id,
-            }),
-          }),
-        );
-        if (!response.ok) {
-          const body = (await response.json()) as { message?: string | string[] };
-          const message = Array.isArray(body.message) ? body.message.join(", ") : body.message;
-          throw new Error(message ?? `디자인 리뷰 실행 실패 (HTTP ${response.status})`);
-        }
+        await captureAndReview({
+          html: profile.html,
+          css: profile.css ?? "",
+          fileName: `benchmark-${profile.id}.png`,
+          category: `Benchmark: ${BENCHMARK_PRODUCT_NAME}`,
+          notes: `Benchmark Product 참고용 AI 채점 — 최종 판단은 사람이 한다. ProductProfile ${profile.id}`,
+          productProfileId: profile.id,
+        });
         await load();
       } catch (err) {
         setError(err instanceof Error ? err.message : "디자인 리뷰 실행 실패");
@@ -287,7 +227,7 @@ export function BenchmarkView() {
         </div>
       </Card>
 
-      <Card title="Benchmark Score 추이">
+      <Card title="AI 참고 점수 추이 (승인 기준 아님 — 최종 판단은 사람이 직접 화면을 보고 합니다)">
         <ScoreChart versions={versions} />
       </Card>
 

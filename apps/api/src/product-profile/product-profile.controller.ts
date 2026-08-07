@@ -22,7 +22,7 @@ export class ProductProfileController {
     if (!Array.isArray(body?.imageIds)) {
       throw new BadRequestException("imageIds는 문자열 배열이어야 합니다.");
     }
-    return this.service.run(body.imageIds, body.projectId);
+    return this.service.run(body.imageIds, body.projectId, body.templateKey);
   }
 
   /** 실행 결과 조회 */
