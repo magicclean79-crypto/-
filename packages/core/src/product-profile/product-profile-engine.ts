@@ -197,10 +197,14 @@ export class ProductProfileEngine {
     const pageCopy = parseProductPageCopyResponse(copyCompletion.text);
 
     // STEP 5b — HTML/CSS 렌더링 (LLM 호출 없음, 결정적)
+    // 실제 업로드 사진(이미 Image Guard·리사이즈를 통과한 것)을 그대로
+    // Hero·특징 카드에 심는다 — "텍스트 생성"이 아니라 사진을 쓰는 상세페이지가
+    // 되려면 STEP 3이 분석한 그 사진이 STEP 5의 결과물에도 보여야 한다.
     const { html, css } = renderProductProfileHtml(
       profile,
       imageFeatures.components,
       pageCopy,
+      images,
     );
 
     return {
