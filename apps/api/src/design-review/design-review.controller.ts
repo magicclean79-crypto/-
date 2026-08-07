@@ -18,7 +18,7 @@ export class DesignReviewController {
     if (!Array.isArray(body?.imageIds)) {
       throw new BadRequestException("imageIds는 문자열 배열이어야 합니다.");
     }
-    return this.service.review(body.imageIds, body.category, body.notes);
+    return this.service.review(body.imageIds, body.category, body.notes, body.provider);
   }
 
   /** 실행 결과 조회 */

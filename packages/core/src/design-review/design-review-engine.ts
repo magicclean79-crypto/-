@@ -24,6 +24,8 @@ export type DesignReviewLlmClient = (request: {
    * ProductProfileLlmClient와 형태를 맞춰 둔다(다단계로 늘어날 가능성) */
   step: "review";
   projectId?: string;
+  /** 라우팅을 건너뛰고 특정 Provider로 강제 — 비교 테스트용 */
+  provider?: string;
 }) => Promise<{ provider: string; model: string; text: string }>;
 
 export interface DesignReviewEngineOptions {
@@ -42,6 +44,8 @@ export interface DesignReviewEngineInput {
   category: string;
   notes?: string;
   projectId?: string;
+  /** 라우팅을 건너뛰고 특정 Provider로 강제 — 비교 테스트용 */
+  provider?: string;
 }
 
 export interface DesignReviewEngineResult {
@@ -120,6 +124,7 @@ export class DesignReviewEngine {
       responseFormat: "json",
       step: "review",
       projectId: input.projectId,
+      provider: input.provider,
     });
     const result = parseDesignReviewResponse(completion.text);
 

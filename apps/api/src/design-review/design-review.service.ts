@@ -48,6 +48,7 @@ export class DesignReviewService {
     imageIds: string[],
     category: string,
     notes?: string,
+    provider?: string,
   ): Promise<DesignReviewDto> {
     const ids = [
       ...new Set(imageIds.map((id) => id.trim()).filter((id) => id.length > 0)),
@@ -86,6 +87,7 @@ export class DesignReviewService {
         images: visionImages,
         category: trimmedCategory,
         notes: trimmedNotes ?? undefined,
+        provider: provider?.trim() || undefined,
       });
       const record = await this.prisma.designReview.create({
         data: {

@@ -465,6 +465,8 @@ export interface RunDesignReviewRequest {
   category: string;
   /** 참고 맥락 — 예: "이 화면은 Template V1 시안이다" */
   notes?: string;
+  /** 라우팅을 건너뛰고 특정 Provider로 강제 (예: "gemini", "anthropic", "openai") — 비교 테스트용, 미지정 시 LLM_ROUTE_DESIGN_REVIEW 라우팅을 따른다 */
+  provider?: string;
 }
 
 export const DESIGN_REVIEW_STATUSES = ["SUCCESS", "FAILED"] as const;

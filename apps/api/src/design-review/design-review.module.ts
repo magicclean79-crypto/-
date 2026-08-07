@@ -31,10 +31,10 @@ import { DesignReviewService } from "./design-review.service";
           promptEngine,
           llmProviderName: llm.info().provider,
           imagePreprocessor: new SharpImagePreprocessor(),
-          complete: async ({ messages, images, responseFormat }) => {
+          complete: async ({ messages, images, responseFormat, provider }) => {
             const completion = await llm.complete(
               { messages, images, responseFormat },
-              { feature: "design-review" },
+              { feature: "design-review", provider },
             );
             return {
               provider: completion.provider,
