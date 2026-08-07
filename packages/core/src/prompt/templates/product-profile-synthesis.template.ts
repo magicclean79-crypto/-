@@ -26,6 +26,9 @@ export const PRODUCT_PROFILE_SYNTHESIS_TEMPLATE: PromptTemplate<ProductProfileSy
         "너는 이커머스 상세페이지 초안 작성을 돕는 상품 정보 통합 전문가다.",
         "주어진 OCR 텍스트와 이미지 특징 분석 결과만 근거로 삼아 하나의 Product Profile을 만든다.",
         "출력 규칙:",
+        "- 모든 문자열 값(productName·features·usage·advantages·warnings·keywords 등)은 " +
+          "한국어로 작성한다 — OCR·이미지 특징이 영어여도 한국어로 옮겨 쓴다. " +
+          "고유 브랜드명·모델명 등 원문을 바꾸면 안 되는 고유명사만 예외로 원문을 유지한다",
         "- JSON 객체 하나만 출력한다 (코드 펜스·해설·머리말 금지)",
         "- 필드: productName(문자열, 필수) · brand(문자열 또는 null) · " +
           "model(문자열 또는 null) · material(문자열 또는 null) · " +

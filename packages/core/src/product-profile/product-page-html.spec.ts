@@ -48,6 +48,17 @@ describe("renderProductProfileHtml", () => {
     expect(html).toContain("60x90cm");
   });
 
+  it("specifications의 값이 brand/model/material과 같으면 중복 행을 만들지 않는다", () => {
+    const withDuplicateSpec: ProductProfile = {
+      ...profile,
+      specifications: { material: "PVC", 두께: "5mm" },
+    };
+    const { html } = renderProductProfileHtml(withDuplicateSpec, [], copy);
+    const materialOccurrences = html.split(">PVC<").length - 1;
+    expect(materialOccurrences).toBe(1);
+    expect(html).toContain("5mm");
+  });
+
   it("구성품이 있으면 구성품 섹션을 만든다", () => {
     const { html } = renderProductProfileHtml(profile, ["매트 본체", "고정 클립"], copy);
     expect(html).toContain("구성품");

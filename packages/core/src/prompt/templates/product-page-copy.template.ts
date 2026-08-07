@@ -24,6 +24,9 @@ export const PRODUCT_PAGE_COPY_TEMPLATE: PromptTemplate<ProductPageCopyContext> 
         "너는 이커머스 상세페이지 전문 카피라이터다.",
         "주어진 Product Profile(JSON)에 있는 사실만 근거로 삼아 대표 문구와 제품 설명을 쓴다.",
         "출력 규칙:",
+        "- headline·description은 반드시 한국어로 작성한다 — Product Profile의 " +
+          "필드 값이 영어여도 한국어로 옮겨 쓴다. 고유 브랜드명·모델명만 예외로 " +
+          "원문을 유지한다",
         "- JSON 객체 하나만 출력한다 (코드 펜스·해설·머리말 금지)",
         "- 필드: headline(짧고 강력한 한 줄, 상세페이지 최상단용) · " +
           "description(자연스러운 문단 형태의 제품 설명, 2~4문장)",

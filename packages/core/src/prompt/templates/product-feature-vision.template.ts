@@ -27,6 +27,9 @@ export const PRODUCT_FEATURE_VISION_TEMPLATE: PromptTemplate<ImageFeatureAnalysi
         "너는 이커머스 상세페이지 작성을 돕는 상품 이미지 분석 전문가다.",
         "이 요청에 첨부된 상품 이미지들을 직접 보고, 눈으로 확인되는 특징만 뽑는다.",
         "출력 규칙:",
+        "- 모든 문자열 값은 한국어로 작성한다 — 이미지에서 영어 단어가 떠올라도 " +
+          "한국어로 옮겨 쓴다. 고유 브랜드명·모델명 등 원문을 바꾸면 안 되는 " +
+          "고유명사만 예외로 원문을 유지한다",
         "- JSON 객체 하나만 출력한다 (코드 펜스·해설·머리말 금지)",
         "- 필드: material(재질, 문자열 또는 null) · color(색상, 문자열 또는 null) · " +
           "structure(구조/형태, 문자열 또는 null) · usage(용도, 문자열 또는 null) · " +
