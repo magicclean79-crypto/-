@@ -18,7 +18,13 @@ export class DesignReviewController {
     if (!Array.isArray(body?.imageIds)) {
       throw new BadRequestException("imageIds는 문자열 배열이어야 합니다.");
     }
-    return this.service.review(body.imageIds, body.category, body.notes, body.provider);
+    return this.service.review(
+      body.imageIds,
+      body.category,
+      body.notes,
+      body.provider,
+      body.productProfileId,
+    );
   }
 
   /** 실행 결과 조회 */
@@ -27,9 +33,12 @@ export class DesignReviewController {
     return this.service.get(id);
   }
 
-  /** 최근 실행 목록 */
+  /** 최근 실행 목록 — productProfileId로 필터하면 특정 버전(예: Benchmark)의 리뷰만 조회 */
   @Get()
-  async list(@Query("take") take?: string): Promise<{ results: DesignReviewDto[] }> {
-    return { results: await this.service.list(Number(take ?? "20")) };
+  async list(
+    @Query("take") take?: string,
+    @Query("productProfileId") productProfileId?: string,
+  ): Promise<{ results: DesignReviewDto[] }> {
+    return { results: await this.service.list(Number(take ?? "20"), productProfileId) };
   }
 }

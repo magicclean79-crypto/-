@@ -14,6 +14,7 @@
     "@acos/core": "workspace:*",
     "@acos/shared": "workspace:*",
     "@acos/ui": "workspace:*",
+    "html2canvas": "^1.4.1",
     "next": "16.2.12",
     "react": "19.2.8",
     "react-dom": "19.2.8"

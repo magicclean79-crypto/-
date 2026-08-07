@@ -467,6 +467,8 @@ export interface RunDesignReviewRequest {
   notes?: string;
   /** 라우팅을 건너뛰고 특정 Provider로 강제 (예: "gemini", "anthropic", "openai") — 비교 테스트용, 미지정 시 LLM_ROUTE_DESIGN_REVIEW 라우팅을 따른다 */
   provider?: string;
+  /** Benchmark Product (Sprint 36) — 이 스크린샷이 어떤 ProductProfile 실행(버전)의 HTML을 캡처한 것인지 연결 */
+  productProfileId?: string;
 }
 
 export const DESIGN_REVIEW_STATUSES = ["SUCCESS", "FAILED"] as const;
@@ -482,6 +484,7 @@ export interface DesignReviewDto {
   provider: string | null;
   error: string | null;
   createdAt: string;
+  productProfileId: string | null;
 }
 
 export interface ProductObjectDto {

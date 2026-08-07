@@ -18,6 +18,7 @@ function toDto(record: DesignReviewRecord): DesignReviewDto {
     provider: record.provider,
     error: record.error,
     createdAt: record.createdAt.toISOString(),
+    productProfileId: record.productProfileId,
   };
 }
 
@@ -49,6 +50,7 @@ export class DesignReviewService {
     category: string,
     notes?: string,
     provider?: string,
+    productProfileId?: string,
   ): Promise<DesignReviewDto> {
     const ids = [
       ...new Set(imageIds.map((id) => id.trim()).filter((id) => id.length > 0)),
@@ -79,6 +81,7 @@ export class DesignReviewService {
     }));
 
     const trimmedNotes = notes?.trim() || null;
+    const trimmedProductProfileId = productProfileId?.trim() || null;
 
     // 실패도 정상 응답이다(다른 AI 기능과 같은 원칙) — status 필드가
     // 사실을 말한다. "실행했지만 실패했다"를 5xx로 감추지 않는다.
@@ -96,6 +99,7 @@ export class DesignReviewService {
           notes: trimmedNotes,
           result: result as unknown as Prisma.InputJsonValue,
           provider: raw.provider,
+          productProfileId: trimmedProductProfileId,
         },
       });
       return toDto(record);
@@ -106,6 +110,7 @@ export class DesignReviewService {
           category: trimmedCategory,
           notes: trimmedNotes,
           error: error instanceof Error ? error.message : String(error),
+          productProfileId: trimmedProductProfileId,
         },
       });
       return toDto(record);
@@ -120,9 +125,10 @@ export class DesignReviewService {
     return toDto(record);
   }
 
-  async list(take: number): Promise<DesignReviewDto[]> {
+  async list(take: number, productProfileId?: string): Promise<DesignReviewDto[]> {
     const bounded = Math.min(Math.max(Number.isFinite(take) ? take : 20, 1), 100);
     const records = await this.prisma.designReview.findMany({
+      where: productProfileId ? { productProfileId } : undefined,
       orderBy: { createdAt: "desc" },
       take: bounded,
     });

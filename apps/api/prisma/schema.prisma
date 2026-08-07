@@ -243,8 +243,14 @@ model DesignReview {
   provider   String?
   error      String?
   createdAt  DateTime @default(now())
+  // Benchmark Product 점수 추이 (Sprint 36, CTO 지시) — 이 리뷰가 평가한
+  // 스크린샷이 어떤 ProductProfile 실행(버전)의 HTML을 캡처한 것인지
+  // 명시적으로 연결한다. FK는 두지 않는다 — ProductProfile이 삭제돼도
+  // 평가 기록은 남아야 한다(과거 버전 이력 보존).
+  productProfileId String?
 
   @@index([category])
+  @@index([productProfileId])
   @@map("design_reviews")
 }
 
