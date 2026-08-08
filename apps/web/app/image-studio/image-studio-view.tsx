@@ -3,9 +3,13 @@
 import { useState } from "react";
 import type { GenerateHeroImageResult, ImageDto } from "@acos/shared";
 import { Badge, Card } from "@acos/ui";
+import type { ImageCategory } from "@acos/shared";
 import { authFetchInit } from "../../lib/auth-client";
 import { AuthImage } from "../product-profile/auth-image";
 import { BENCHMARK_IMAGE_IDS } from "../benchmark/constants";
+import { CategoryPanel } from "./category-panel";
+
+const CATEGORIES: ImageCategory[] = ["HERO", "USAGE_SCENE", "DETAIL", "FEATURE_HIGHLIGHT", "COMPONENTS"];
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
@@ -82,7 +86,21 @@ export function ImageStudioView() {
         </div>
       </Card>
 
-      <Card title="2. 원하는 배경 (선택 — 비워두면 자동으로 자연스러운 생활 공간을 만듭니다)">
+      <div>
+        <h2 className="mb-3 text-lg font-semibold">
+          2. 카테고리별 이미지 후보 (그룹마다 재생성·버전탐색·선택 가능)
+        </h2>
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          {CATEGORIES.map((category) => (
+            <CategoryPanel key={category} category={category} sourceImageId={selectedId} />
+          ))}
+        </div>
+      </div>
+
+      <Card title="(참고) 단일 Hero 파이프라인 빠른 테스트 — 배경 제거→생성→합성을 한 번에">
+        <p className="mb-3 text-xs text-zinc-500">
+          위 카테고리별 기능과 별개로, 예전에 만든 빠른 테스트용입니다.
+        </p>
         <input
           type="text"
           value={prompt}

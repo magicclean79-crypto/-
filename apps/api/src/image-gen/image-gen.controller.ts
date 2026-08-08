@@ -1,11 +1,18 @@
-import { BadRequestException, Body, Controller, Post } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Post, Query } from "@nestjs/common";
 import type {
   CompositeImageRequest,
   GenerateBackgroundRequest,
   GenerateHeroImageRequest,
   GenerateHeroImageResult,
+  GenerateImageCandidatesRequest,
+  GenerateImageCandidatesResult,
+  GenerateUsageShotsRequest,
+  GenerateUsageShotsResult,
+  ImageCategory,
   ImageDto,
+  SelectImageRequest,
 } from "@acos/shared";
+import { IMAGE_CATEGORIES } from "@acos/shared";
 import { ImageGenService } from "./image-gen.service";
 
 /**
@@ -48,5 +55,56 @@ export class ImageGenController {
       throw new BadRequestException("imageId는 필수입니다.");
     }
     return this.service.generateHero(body.imageId, body.backgroundPrompt);
+  }
+
+  /** 실사용 장면 여러 샷 생성(원거리/근거리) — CTO 실측으로 확인된 방식(2026-08-08) */
+  @Post("usage-shots")
+  async generateUsageShots(@Body() body: GenerateUsageShotsRequest): Promise<GenerateUsageShotsResult> {
+    if (!body?.imageId) {
+      throw new BadRequestException("imageId는 필수입니다.");
+    }
+    return this.service.generateUsageShots(body.imageId, body.scenePrompt, body.shotCount);
+  }
+
+  /** 카테고리별(Hero/사용장면/디테일/특징강조/구성품/기타) 이미지 후보 여러 버전 생성 */
+  @Post("candidates")
+  async generateCandidates(
+    @Body() body: GenerateImageCandidatesRequest,
+  ): Promise<GenerateImageCandidatesResult> {
+    if (!body?.imageId) {
+      throw new BadRequestException("imageId는 필수입니다.");
+    }
+    if (!IMAGE_CATEGORIES.includes(body.category)) {
+      throw new BadRequestException(`category는 다음 중 하나여야 합니다: ${IMAGE_CATEGORIES.join(", ")}`);
+    }
+    return this.service.generateImageCandidates(body.imageId, body.category, {
+      count: body.count,
+      style: body.style,
+      scenePrompt: body.scenePrompt,
+    });
+  }
+
+  /** 특정 원본 사진의 한 카테고리에 대해 지금까지 생성된 모든 버전을 조회 */
+  @Get("candidates")
+  async listCandidates(
+    @Query("sourceImageId") sourceImageId?: string,
+    @Query("category") category?: string,
+  ): Promise<{ results: ImageDto[] }> {
+    if (!sourceImageId || !category) {
+      throw new BadRequestException("sourceImageId, category는 필수입니다.");
+    }
+    if (!IMAGE_CATEGORIES.includes(category as ImageCategory)) {
+      throw new BadRequestException(`category는 다음 중 하나여야 합니다: ${IMAGE_CATEGORIES.join(", ")}`);
+    }
+    return { results: await this.service.listCandidates(sourceImageId, category as ImageCategory) };
+  }
+
+  /** 사용자가 카테고리별 최종 이미지를 직접 선택 */
+  @Post("select")
+  async selectImage(@Body() body: SelectImageRequest): Promise<ImageDto> {
+    if (!body?.imageId) {
+      throw new BadRequestException("imageId는 필수입니다.");
+    }
+    return this.service.selectImage(body.imageId);
   }
 }

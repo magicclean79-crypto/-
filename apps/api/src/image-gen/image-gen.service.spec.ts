@@ -175,4 +175,50 @@ describe("ImageGenService (Service Test)", () => {
     expect(edit).not.toHaveBeenCalled();
     expect(prisma.image.create).not.toHaveBeenCalled();
   });
+
+  it("generateUsageShots: 배경 제거 1번 + 지정한 개수만큼 사용 장면 샷을 생성한다", async () => {
+    const prisma = createPrismaMock();
+    prisma.seed({ id: "img-1" });
+    const edit = jest.fn(async (_req: ImageEditRequest) => fakeResult);
+    const service = await createService(prisma, edit);
+
+    const result = await service.generateUsageShots("img-1", "베란다에서 청소하는 모습", 3);
+
+    expect(result.original.id).toBe("img-1");
+    expect(result.backgroundRemoved.kind).toBe("BACKGROUND_REMOVED");
+    expect(result.shots).toHaveLength(3);
+    expect(result.failedCount).toBe(0);
+    // 배경 제거 1번 + 샷 3번 = 4번 호출
+    expect(edit).toHaveBeenCalledTimes(4);
+    result.shots.forEach((shot) => expect(shot.kind).toBe("COMPOSITED"));
+  });
+
+  it("generateUsageShots: shotCount는 1~6으로 클램프된다", async () => {
+    const prisma = createPrismaMock();
+    prisma.seed({ id: "img-1" });
+    const edit = jest.fn(async (_req: ImageEditRequest) => fakeResult);
+    const service = await createService(prisma, edit);
+
+    const result = await service.generateUsageShots("img-1", undefined, 99);
+
+    expect(result.shots).toHaveLength(6);
+  });
+
+  it("generateUsageShots: 일부 샷이 실패해도 나머지는 그대로 반환하고 failedCount로 알려준다", async () => {
+    const prisma = createPrismaMock();
+    prisma.seed({ id: "img-1" });
+    let calls = 0;
+    const edit = jest.fn(async (_req: ImageEditRequest) => {
+      calls++;
+      // 1번째 호출(배경 제거)은 성공, 2번째 샷 호출만 실패시킨다
+      if (calls === 2) throw new Error("Gemini 오류");
+      return fakeResult;
+    });
+    const service = await createService(prisma, edit);
+
+    const result = await service.generateUsageShots("img-1", undefined, 3);
+
+    expect(result.shots).toHaveLength(2);
+    expect(result.failedCount).toBe(1);
+  });
 });

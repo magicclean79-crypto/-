@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { BadRequestException, Inject, Injectable, NotFoundException, Optional } from "@nestjs/common";
 import type { ImageEditProvider } from "@acos/core";
-import type { GenerateHeroImageResult, ImageDto } from "@acos/shared";
+import type {
+  GenerateHeroImageResult,
+  GenerateImageCandidatesResult,
+  GenerateUsageShotsResult,
+  ImageCategory,
+  ImageDto,
+} from "@acos/shared";
 import type { Image } from "@prisma/client";
 import { LlmBudgetService } from "../llm/llm-budget.service";
 import { PrismaService } from "../prisma/prisma.service";
@@ -22,6 +28,10 @@ function toDto(image: Image): ImageDto {
     kind: image.kind as ImageDto["kind"],
     sourceImageId: image.sourceImageId,
     generationMetadata: image.generationMetadata as ImageDto["generationMetadata"],
+    category: image.category as ImageDto["category"],
+    groupVersion: image.groupVersion,
+    style: image.style,
+    selected: image.selected,
   };
 }
 
@@ -64,6 +74,10 @@ export class ImageGenService {
     prompt: string;
     model: string;
     backgroundImageId?: string;
+    shotIndex?: number;
+    category?: ImageCategory;
+    groupVersion?: number;
+    style?: string;
   }): Promise<ImageDto> {
     const extension = options.mimeType === "image/png" ? "png" : "jpg";
     const now = new Date();
@@ -81,11 +95,15 @@ export class ImageGenService {
         size: buffer.length,
         kind: options.kind,
         sourceImageId: options.sourceImageId,
+        category: options.category,
+        groupVersion: options.groupVersion,
+        style: options.style,
         generationMetadata: {
           prompt: options.prompt,
           provider: this.provider.name,
           model: options.model,
           ...(options.backgroundImageId ? { backgroundImageId: options.backgroundImageId } : {}),
+          ...(options.shotIndex !== undefined ? { shotIndex: options.shotIndex } : {}),
         },
       },
     });
@@ -187,4 +205,181 @@ export class ImageGenService {
       composited,
     };
   }
+
+  /**
+   * 실사용 장면 여러 샷 생성. (CTO 실측 확인, 2026-08-08 — "베란다 청소하는
+   * 모습 합성 실행시 제품이 잘보이도록 원거리 근거리샷으로 3~4장 생성으로
+   * 하니깐 어느정도 괜찮은 샷이 나왔다") 정적으로 배경에 얹는 단일 합성보다
+   * "실제 사용하는 모습"을 원거리·근거리 여러 컷으로 한 번에 뽑아서 그중
+   * 고르는 방식이 결과가 더 좋다는 것이 실측으로 확인됐다 — 배경 제거한
+   * 제품 사진 1장 + 카메라 거리별 지시만 다른 프롬프트로 Gemini를 여러 번
+   * 호출한다. 한 샷이 실패해도 나머지는 그대로 보여준다.
+   */
+  async generateUsageShots(
+    imageId: string,
+    scenePrompt: string | undefined,
+    shotCount: number | undefined,
+  ): Promise<GenerateUsageShotsResult> {
+    const scene = scenePrompt?.trim() || "이 제품이 실제로 사용되는 자연스러운 모습";
+    const count = Math.min(6, Math.max(1, shotCount ?? 4));
+    const original = await this.getImage(imageId);
+    const backgroundRemoved = await this.removeBackground(imageId);
+    const bgRemovedImage = await this.getImage(backgroundRemoved.id);
+    const bytes = await this.storage.getObject(bgRemovedImage.key);
+
+    const shots: ImageDto[] = [];
+    let failedCount = 0;
+    for (let i = 0; i < count; i++) {
+      const framing = USAGE_SHOT_FRAMINGS[i % USAGE_SHOT_FRAMINGS.length];
+      const prompt = `${scene}. ${framing} 사진처럼 자연스럽고 사실적으로 만들어줘.`;
+      try {
+        await this.budget?.assertWithinBudget({ what: `이미지 사용 장면 생성 (Gemini, ${i + 1}/${count})` });
+        const result = await this.provider.edit({
+          prompt,
+          images: [{ mimeType: bgRemovedImage.mimeType, base64: bytes.toString("base64") }],
+        });
+        const dto = await this.storeResult({
+          imageBytes: result.imageBytes,
+          mimeType: result.mimeType,
+          kind: "COMPOSITED",
+          sourceImageId: original.id,
+          prompt,
+          model: result.model,
+          shotIndex: i,
+        });
+        shots.push(dto);
+      } catch {
+        failedCount++;
+      }
+    }
+
+    return { original: toDto(original), backgroundRemoved, shots, failedCount };
+  }
+
+  /** 배경 제거 결과가 이미 있으면 재사용하고, 없으면 새로 만든다 — 카테고리마다
+   * 매번 배경을 다시 지우면 호출이 낭비된다. */
+  private async getOrCreateBackgroundRemoved(imageId: string): Promise<Image> {
+    const existing = await this.prisma.image.findFirst({
+      where: { sourceImageId: imageId, kind: "BACKGROUND_REMOVED" },
+      orderBy: { createdAt: "desc" },
+    });
+    if (existing) {
+      return existing;
+    }
+    const created = await this.removeBackground(imageId);
+    return this.getImage(created.id);
+  }
+
+  /**
+   * 카테고리별(Hero/사용장면/디테일/특징강조/구성품/기타) 이미지 후보 여러
+   * 버전 생성. (CTO 지시, 2026-08-08 — "AI 상세페이지 제작 플랫폼") 같은
+   * 소스+카테고리로 재생성해도 이전 버전을 지우지 않고 `groupVersion`을
+   * 1씩 늘려 새로 쌓는다 — 사용자가 언제든 이전 버전으로 돌아갈 수 있다.
+   */
+  async generateImageCandidates(
+    imageId: string,
+    category: ImageCategory,
+    options: { count?: number; style?: string; scenePrompt?: string },
+  ): Promise<GenerateImageCandidatesResult> {
+    const count = Math.min(6, Math.max(1, options.count ?? 4));
+    const original = await this.getImage(imageId);
+    const bgRemovedImage = await this.getOrCreateBackgroundRemoved(imageId);
+    const backgroundRemoved = toDto(bgRemovedImage);
+
+    const lastVersion = await this.prisma.image.findFirst({
+      where: { sourceImageId: imageId, category },
+      orderBy: { groupVersion: "desc" },
+      select: { groupVersion: true },
+    });
+    const groupVersion = (lastVersion?.groupVersion ?? 0) + 1;
+
+    const basePrompt = options.scenePrompt?.trim() || CATEGORY_PROMPTS[category];
+    const styleSuffix = options.style?.trim() ? ` 스타일 방향: ${options.style.trim()}.` : "";
+    const bytes = await this.storage.getObject(bgRemovedImage.key);
+
+    const candidates: ImageDto[] = [];
+    let failedCount = 0;
+    for (let i = 0; i < count; i++) {
+      const framing = CANDIDATE_FRAMINGS[i % CANDIDATE_FRAMINGS.length];
+      const prompt = `${basePrompt}${styleSuffix} ${framing} 사진처럼 자연스럽고 사실적으로 만들어줘.`;
+      try {
+        await this.budget?.assertWithinBudget({
+          what: `이미지 후보 생성 (Gemini, ${category} v${groupVersion} ${i + 1}/${count})`,
+        });
+        const result = await this.provider.edit({
+          prompt,
+          images: [{ mimeType: bgRemovedImage.mimeType, base64: bytes.toString("base64") }],
+        });
+        const dto = await this.storeResult({
+          imageBytes: result.imageBytes,
+          mimeType: result.mimeType,
+          kind: "COMPOSITED",
+          sourceImageId: original.id,
+          prompt,
+          model: result.model,
+          shotIndex: i,
+          category,
+          groupVersion,
+          style: options.style?.trim() || undefined,
+        });
+        candidates.push(dto);
+      } catch {
+        failedCount++;
+      }
+    }
+
+    return { original: toDto(original), backgroundRemoved, category, groupVersion, candidates, failedCount };
+  }
+
+  /** 특정 원본 사진의 한 카테고리에 대해 지금까지 생성된 모든 버전을 최신순으로 돌려준다 */
+  async listCandidates(sourceImageId: string, category: ImageCategory): Promise<ImageDto[]> {
+    const records = await this.prisma.image.findMany({
+      where: { sourceImageId, category },
+      orderBy: [{ groupVersion: "desc" }, { createdAt: "asc" }],
+    });
+    return records.map(toDto);
+  }
+
+  /** 사용자가 이 이미지를 해당 카테고리의 최종 선택으로 지정한다 */
+  async selectImage(imageId: string): Promise<ImageDto> {
+    const image = await this.getImage(imageId);
+    if (!image.category || !image.sourceImageId) {
+      throw new BadRequestException("카테고리가 없는 이미지는 선택할 수 없습니다.");
+    }
+    await this.prisma.image.updateMany({
+      where: { sourceImageId: image.sourceImageId, category: image.category },
+      data: { selected: false },
+    });
+    const updated = await this.prisma.image.update({
+      where: { id: imageId },
+      data: { selected: true },
+    });
+    return toDto(updated);
+  }
 }
+
+/** 카메라 거리별 지시 — 실측(2026-08-08)으로 확인된 "원거리/근거리 여러 컷" 조합 */
+const USAGE_SHOT_FRAMINGS = [
+  "원거리 와이드샷 — 공간 전체와 제품, 사용하는 사람이 함께 보이도록.",
+  "중간 거리 샷 — 사람이 제품을 사용하는 동작이 잘 보이도록.",
+  "근접 사용 장면 — 제품과 손, 사용 동작을 크게 보이도록.",
+  "클로즈업 — 제품 디테일과 사용 순간이 선명하게 보이도록.",
+];
+
+/** 카테고리 후보 생성용 카메라 거리 변주(사용 장면과 별개 — Hero/디테일/구성품 등도 재사용) */
+const CANDIDATE_FRAMINGS = [
+  "원거리 와이드샷.",
+  "중간 거리 샷.",
+  "근접 샷.",
+  "클로즈업.",
+];
+
+/** 카테고리별 기본 생성 프롬프트 (AI 상세페이지 제작 플랫폼, 2026-08-08) */
+const CATEGORY_PROMPTS: Record<ImageCategory, string> = {
+  HERO: "이 제품의 대표 Hero 이미지를 만들어줘 — 제품이 가장 매력적으로 보이는 각도와 조명, 제품과 어울리는 배경.",
+  USAGE_SCENE: "이 제품이 실제로 사용되는 자연스러운 모습을 보여주는 장면을 만들어줘.",
+  DETAIL: "이 제품의 재질과 디테일이 잘 보이는 클로즈업 사진을 만들어줘 — 표면 질감과 마감 처리가 선명하게 보이도록.",
+  FEATURE_HIGHLIGHT: "이 제품의 핵심 기능이 시각적으로 강조되어 보이는 이미지를 만들어줘.",
+  COMPONENTS: "이 제품의 구성품을 깔끔하게 펼쳐놓은 플랫레이 사진을 만들어줘.",
+  OTHER: "이 제품의 상세페이지에 필요한 보조 이미지를 만들어줘(사용방법, 사이즈 비교, 인포그래픽 등).",
+};

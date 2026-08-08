@@ -125,13 +125,35 @@ model Image {
   // {prompt, provider, model, backgroundImageId?} 등 — 필드가 늘어나도
   // 마이그레이션 없이 확장 가능하게 Json으로 둔다(ProductProfile.imageFeatures와 같은 원칙)
   generationMetadata Json?
+  // AI 상세페이지 제작 플랫폼 (CTO 지시, 2026-08-08) — 이미지 후보 생성/선택/
+  // 버전 관리. `kind`는 "어떤 처리를 거쳤는지"(배경제거/합성 등)를 뜻하고,
+  // `category`는 "상세페이지에서 어떤 역할인지"(Hero/사용장면/디테일 등)를
+  // 뜻한다 — 별개 차원이라 필드를 나눈다.
+  category      ImageCategory?
+  // 같은 sourceImageId + category로 재생성할 때마다 1씩 늘어난다(1부터).
+  // 재생성해도 이전 버전을 지우지 않고 새 groupVersion으로 쌓는다.
+  groupVersion  Int?
+  // 재생성 시 선택한 방향(예: "더 고급스럽게") — 자유 텍스트, 미지정 가능
+  style         String?
+  // 사용자가 이 카테고리의 최종 이미지로 직접 고른 것인지
+  selected      Boolean     @default(false)
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt
 
   @@index([productId])
   @@index([projectId])
   @@index([sourceImageId])
+  @@index([sourceImageId, category])
   @@map("images")
+}
+
+enum ImageCategory {
+  HERO
+  USAGE_SCENE
+  DETAIL
+  FEATURE_HIGHLIGHT
+  COMPONENTS
+  OTHER
 }
 
 enum ImageKind {

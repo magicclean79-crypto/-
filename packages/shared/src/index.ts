@@ -157,6 +157,60 @@ export interface ImageDto {
   /** 이 이미지가 어떤 이미지로부터 만들어졌는지(편집/합성 결과일 때) */
   sourceImageId?: string | null;
   generationMetadata?: ImageGenerationMetadata | null;
+  /** 상세페이지에서 이 이미지의 역할 — Hero/사용장면/디테일 등(AI 생성 후보만 값이 있음) */
+  category?: ImageCategory | null;
+  /** 같은 소스+카테고리로 재생성할 때마다 1씩 늘어나는 버전 번호(1부터) */
+  groupVersion?: number | null;
+  /** 재생성 시 선택한 방향(예: "더 고급스럽게") */
+  style?: string | null;
+  /** 사용자가 이 카테고리의 최종 이미지로 직접 선택했는지 */
+  selected?: boolean;
+}
+
+export const IMAGE_CATEGORIES = [
+  "HERO",
+  "USAGE_SCENE",
+  "DETAIL",
+  "FEATURE_HIGHLIGHT",
+  "COMPONENTS",
+  "OTHER",
+] as const;
+export type ImageCategory = (typeof IMAGE_CATEGORIES)[number];
+
+export const IMAGE_CATEGORY_LABELS: Record<ImageCategory, string> = {
+  HERO: "Hero 이미지",
+  USAGE_SCENE: "사용 장면",
+  DETAIL: "제품 디테일",
+  FEATURE_HIGHLIGHT: "특징 강조",
+  COMPONENTS: "구성품",
+  OTHER: "기타",
+};
+
+/** 카테고리별 이미지 후보 여러 버전 생성 (AI 상세페이지 제작 플랫폼, 2026-08-08) */
+export interface GenerateImageCandidatesRequest {
+  /** 원본 제품 사진 id */
+  imageId: string;
+  category: ImageCategory;
+  /** 생성할 후보 개수 (기본 4, 1~6) */
+  count?: number;
+  /** 재생성 방향 — 예: "더 고급스럽게", "더 미니멀하게" */
+  style?: string;
+  /** 장면 묘사 직접 지정(선택) — 미지정 시 카테고리 기본 프롬프트 사용 */
+  scenePrompt?: string;
+}
+
+export interface GenerateImageCandidatesResult {
+  original: ImageDto;
+  backgroundRemoved: ImageDto;
+  category: ImageCategory;
+  /** 이번에 새로 생성된 버전 번호 */
+  groupVersion: number;
+  candidates: ImageDto[];
+  failedCount: number;
+}
+
+export interface SelectImageRequest {
+  imageId: string;
 }
 
 export const IMAGE_KINDS = [
@@ -173,6 +227,8 @@ export interface ImageGenerationMetadata {
   model: string;
   /** 합성일 때 함께 쓰인 배경 이미지 id */
   backgroundImageId?: string;
+  /** 실사용 장면 여러 샷 생성일 때 몇 번째 샷인지(0부터) */
+  shotIndex?: number;
 }
 
 /** 배경 제거 → 배경 생성 → 합성 (Sprint 36 — Gemini 이미지 생성/편집) */
@@ -201,6 +257,28 @@ export interface GenerateHeroImageResult {
   backgroundRemoved: ImageDto;
   backgroundGenerated: ImageDto;
   composited: ImageDto;
+}
+
+/**
+ * 실사용 장면 여러 샷 생성 (CTO 실측 확인, 2026-08-08): 정적으로 배경에 얹는
+ * 단일 합성보다, "실제 사용하는 모습"을 원거리·근거리 여러 컷으로 한 번에
+ * 뽑아서 그중 고르는 방식이 결과가 더 좋았다 — 사람이 실제 촬영에서 여러
+ * 컷을 찍어 고르는 것과 같은 원리.
+ */
+export interface GenerateUsageShotsRequest {
+  imageId: string;
+  /** 사용 시나리오 묘사 — 예: "베란다에서 실제로 호스를 사용해 청소하는 모습" */
+  scenePrompt?: string;
+  /** 생성할 샷 개수 (기본 4, 1~6) */
+  shotCount?: number;
+}
+
+export interface GenerateUsageShotsResult {
+  original: ImageDto;
+  backgroundRemoved: ImageDto;
+  shots: ImageDto[];
+  /** 일부 샷이 실패해도 나머지는 그대로 보여준다 — 몇 개가 실패했는지 투명하게 표시 */
+  failedCount: number;
 }
 
 export interface UploadImagesResponse {
