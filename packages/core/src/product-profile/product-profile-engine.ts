@@ -40,7 +40,7 @@ export interface ProductProfileEngineOptions {
   complete: ProductProfileLlmClient;
   /** 뒤에 있는 LLM Provider 이름 (예: "mock", "openai") — 이력 식별용 */
   llmProviderName: string;
-  /** 첨부 이미지 수 상한 (기본 5, 최소 1) */
+  /** 첨부 이미지 수 상한 (기본 무제한 — CTO 지시 2026-08-08, 최소 1) */
   maxImages?: number;
   imagePreprocessor?: ImagePreprocessor;
   imagePolicy?: ImageGuardPolicy;
@@ -76,7 +76,9 @@ export interface ProductProfileEngineResult {
   };
 }
 
-const DEFAULT_MAX_IMAGES = 5;
+// CTO 지시(2026-08-08): "한 번에 최대 5장까지만 분석하는 기존 제한"을 없앤다.
+// 호출자가 명시적으로 maxImages를 넘기지 않으면 첨부된 사진을 전부 분석한다.
+const DEFAULT_MAX_IMAGES = Infinity;
 
 /**
  * Product Detail Engine V1 — STEP 3(이미지 특징 분석) + STEP 4(Profile

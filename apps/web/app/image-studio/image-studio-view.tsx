@@ -47,18 +47,29 @@ function StepCard({ label, image, description }: { label: string; image: ImageDt
 }
 
 export function ImageStudioView() {
-  const [selectedId, setSelectedId] = useState(BENCHMARK_IMAGE_IDS[0]);
+  const [selectedIds, setSelectedIds] = useState<string[]>([BENCHMARK_IMAGE_IDS[0]]);
   const [prompt, setPrompt] = useState("");
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<GenerateHeroImageResult | null>(null);
+
+  const toggleSelected = (imageId: string) => {
+    setSelectedIds((prev) => {
+      if (prev.includes(imageId)) {
+        // 최소 한 장은 선택되어 있어야 아래 카테고리 패널이 의미가 있다
+        if (prev.length === 1) return prev;
+        return prev.filter((id) => id !== imageId);
+      }
+      return [...prev, imageId];
+    });
+  };
 
   const run = async () => {
     setRunning(true);
     setError(null);
     setResult(null);
     try {
-      const r = await generateHero(selectedId, prompt);
+      const r = await generateHero(selectedIds[0], prompt);
       setResult(r);
     } catch (err) {
       setError(err instanceof Error ? err.message : "실행 실패");
@@ -69,33 +80,50 @@ export function ImageStudioView() {
 
   return (
     <div className="flex flex-col gap-6">
-      <Card title="1. 원본 제품 사진 선택 (Benchmark 분사기 7장)">
+      <Card title="1. 원본 제품 사진 선택 (Benchmark 분사기 7장, 여러 장 선택 가능)">
         <div className="flex flex-wrap gap-3">
-          {BENCHMARK_IMAGE_IDS.map((imageId) => (
-            <button
-              key={imageId}
-              type="button"
-              onClick={() => setSelectedId(imageId)}
-              className={`rounded-lg border-2 p-1 ${
-                selectedId === imageId ? "border-blue-600" : "border-transparent"
-              }`}
-            >
-              <AuthImage imageId={imageId} alt="원본 후보" className="h-20 w-20 rounded object-cover" />
-            </button>
-          ))}
+          {BENCHMARK_IMAGE_IDS.map((imageId) => {
+            const checked = selectedIds.includes(imageId);
+            return (
+              <button
+                key={imageId}
+                type="button"
+                onClick={() => toggleSelected(imageId)}
+                className={`relative rounded-lg border-2 p-1 ${
+                  checked ? "border-blue-600" : "border-transparent"
+                }`}
+              >
+                <AuthImage imageId={imageId} alt="원본 후보" className="h-20 w-20 rounded object-cover" />
+                {checked && (
+                  <span className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-blue-600 text-xs text-white">
+                    ✓
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
       </Card>
 
-      <div>
-        <h2 className="mb-3 text-lg font-semibold">
-          2. 카테고리별 이미지 후보 (그룹마다 재생성·버전탐색·선택 가능)
-        </h2>
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          {CATEGORIES.map((category) => (
-            <CategoryPanel key={category} category={category} sourceImageId={selectedId} />
-          ))}
+      {selectedIds.map((sourceImageId) => (
+        <div key={sourceImageId}>
+          <div className="mb-3 flex items-center gap-2">
+            <AuthImage
+              imageId={sourceImageId}
+              alt="선택한 원본"
+              className="h-10 w-10 rounded object-cover"
+            />
+            <h2 className="text-lg font-semibold">
+              2. 카테고리별 이미지 후보 (그룹마다 재생성·버전탐색·선택 가능)
+            </h2>
+          </div>
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {CATEGORIES.map((category) => (
+              <CategoryPanel key={category} category={category} sourceImageId={sourceImageId} />
+            ))}
+          </div>
         </div>
-      </div>
+      ))}
 
       <Card title="(참고) 대표 썸네일 빠른 테스트 — 배경 제거→생성→합성을 한 번에">
         <p className="mb-3 text-xs text-zinc-500">
