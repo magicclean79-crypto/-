@@ -13,6 +13,7 @@ const validFeatures = {
   components: ["매트 본체"],
   notes: null,
   confidence: 0.8,
+  photoTypes: ["DESIGN", "DESIGN"],
 };
 
 const validProfile = {
@@ -160,5 +161,35 @@ describe("ProductProfileEngine", () => {
       engine.run({ images: [image("a", "image/png")], ocrTexts: [] }),
     ).rejects.toThrow(ProductPageCopyParseError);
     expect(calls).toHaveLength(3); // vision·synthesis는 끝났고 copy에서 실패했다
+  });
+
+  it("사진 유형 자동 분류(CTO 지시) - INFO로 분류된 사진은 HTML에서 제외하고 photoTypeByImageId로 알려준다", async () => {
+    const calls: Parameters<ProductProfileLlmClient>[0][] = [];
+    const engine = new ProductProfileEngine({
+      promptEngine: createDefaultPromptEngine(),
+      llmProviderName: "openai",
+      complete: stubComplete(
+        {
+          vision: JSON.stringify({ ...validFeatures, photoTypes: ["DESIGN", "INFO"] }),
+        },
+        calls,
+      ),
+    });
+
+    const result = await engine.run({
+      images: [image("photo-front", "image/png"), image("photo-label", "image/jpeg")],
+      ocrTexts: [],
+    });
+
+    expect(result.photoTypeByImageId).toEqual([
+      { imageId: "photo-front", photoType: "DESIGN" },
+      { imageId: "photo-label", photoType: "INFO" },
+    ]);
+    // STEP 3(vision)에는 두 장 다 첨부되지만(정보 추출용으로도 봐야 하니까)
+    expect(calls[0].images).toHaveLength(2);
+    // STEP 5b(HTML)에는 DESIGN으로 분류된 photo-front(png)만 들어가고,
+    // INFO로 분류된 photo-label(jpeg)은 들어가지 않는다
+    expect(result.html).toContain("image/png");
+    expect(result.html).not.toContain("image/jpeg");
   });
 });

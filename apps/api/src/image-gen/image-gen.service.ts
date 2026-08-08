@@ -32,6 +32,7 @@ function toDto(image: Image): ImageDto {
     groupVersion: image.groupVersion,
     style: image.style,
     selected: image.selected,
+    photoType: image.photoType as ImageDto["photoType"],
   };
 }
 

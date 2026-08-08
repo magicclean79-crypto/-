@@ -257,7 +257,7 @@ export function HistoryDetail({ id }: { id: string }) {
       {/* Product Profile JSON */}
       {record.profile && (
         <section className="flex flex-col gap-2">
-          <h2 className="text-lg font-semibold">Product Profile (STEP 4)</h2>
+          <h2 className="text-lg font-semibold">제품 정보 (STEP 4)</h2>
           <details className="rounded-xl border border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950">
             <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
               JSON 원본 보기

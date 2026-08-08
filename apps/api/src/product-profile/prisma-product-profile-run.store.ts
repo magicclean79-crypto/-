@@ -66,6 +66,14 @@ export class PrismaProductProfileRunStore implements ProductProfileRunStore {
         completedAt: new Date(),
       },
     });
+    // 사진 유형 자동 분류 결과를 원본 Image 레코드에 반영한다(CTO 지시,
+    // 2026-08-08 — 최우선 기능). Product Profile 실행 자체가 실패해도 이미
+    // 분류는 무의미하므로 markSuccess에서만 반영한다.
+    await Promise.all(
+      result.photoTypeByImageId.map(({ imageId, photoType }) =>
+        this.prisma.image.update({ where: { id: imageId }, data: { photoType } }),
+      ),
+    );
     return toRun(record);
   }
 

@@ -426,7 +426,7 @@ export function ProductProfileFlow() {
       {doneItems.length > 0 && (
         <section className="flex flex-col gap-3">
           <h2 className="text-lg font-semibold">
-            STEP 3+4+5 · 이미지 분석 → Product Profile 통합 → 상세페이지 HTML 생성
+            STEP 3+4+5 · 이미지 분석 → 제품 정보 통합 → 상세페이지 HTML 생성
           </h2>
           <p className="text-sm text-zinc-500">
             실제 OpenAI 호출 3건(이미지 특징 분석 + Profile 통합 + 상세페이지
@@ -456,7 +456,7 @@ export function ProductProfileFlow() {
       {profile && (
         <section className="flex flex-col gap-3">
           <div className="flex items-center gap-2">
-            <h2 className="text-lg font-semibold">결과 · Product Profile</h2>
+            <h2 className="text-lg font-semibold">결과 · 제품 정보</h2>
             {profile.status === "SUCCESS" && <Badge tone="ok">생성 완료</Badge>}
             {profile.status === "FAILED" && <Badge tone="warn">생성 실패</Badge>}
           </div>
@@ -573,7 +573,7 @@ export function ProductProfileFlow() {
 
           <details className="rounded-xl border border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950">
             <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
-              Product Profile JSON 원본 보기
+              제품 정보 JSON 원본 보기
             </summary>
             <pre className="max-h-[480px] overflow-auto px-4 pb-4 text-xs">
               {JSON.stringify(profile, null, 2)}

@@ -137,6 +137,11 @@ model Image {
   style         String?
   // 사용자가 이 카테고리의 최종 이미지로 직접 고른 것인지
   selected      Boolean     @default(false)
+  // 사진 유형 자동 분류 (CTO 지시, 2026-08-08 — 최우선 기능). Product Profile
+  // 실행(STEP 3)이 끝나면 채워진다 — null은 "아직 분류 안 됨"이라 DESIGN으로
+  // 취급한다(안전한 기본값). INFO 사진(라벨/스펙표 등)은 Gemini·Claude에
+  // 전달하지 않는다.
+  photoType    PhotoType?
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt
 
@@ -145,6 +150,11 @@ model Image {
   @@index([sourceImageId])
   @@index([sourceImageId, category])
   @@map("images")
+}
+
+enum PhotoType {
+  DESIGN
+  INFO
 }
 
 enum ImageCategory {

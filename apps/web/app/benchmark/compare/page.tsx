@@ -140,7 +140,7 @@ function CompareBody() {
       </div>
 
       <section className="flex flex-col gap-2">
-        <h2 className="text-lg font-semibold">Product Profile 변경된 항목</h2>
+        <h2 className="text-lg font-semibold">제품 정보 변경된 항목</h2>
         <div className="overflow-x-auto rounded-xl border border-zinc-200 dark:border-zinc-800">
           <table className="w-full border-collapse text-sm">
             <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">

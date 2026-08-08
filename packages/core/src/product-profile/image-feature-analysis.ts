@@ -1,4 +1,4 @@
-import type { ImageFeatureAnalysis } from "@acos/shared";
+import type { ImageFeatureAnalysis, PhotoType } from "@acos/shared";
 
 /**
  * 이미지 특징 분석 프롬프트 컨텍스트 및 응답 파서. (TASK-5601, Sprint 35 —
@@ -69,6 +69,13 @@ function sanitizeConfidence(value: unknown): number {
   return Math.min(1, Math.max(0, value));
 }
 
+/** 길이가 imageCount와 다르거나 값이 이상해도 항상 imageCount 길이의 배열을 돌려준다 —
+ * 판단이 애매하면 DESIGN으로 둔다(잘못 폐기하는 것보다 안전한 쪽). */
+function sanitizePhotoTypes(value: unknown, imageCount: number): PhotoType[] {
+  const raw = Array.isArray(value) ? value : [];
+  return Array.from({ length: imageCount }, (_, i) => (raw[i] === "INFO" ? "INFO" : "DESIGN"));
+}
+
 /**
  * LLM 텍스트 응답 → ImageFeatureAnalysis 파서.
  *
@@ -79,6 +86,7 @@ function sanitizeConfidence(value: unknown): number {
  */
 export function parseImageFeatureAnalysisResponse(
   text: string,
+  imageCount: number,
 ): ImageFeatureAnalysis {
   const candidate = extractJsonCandidate(text);
   if (!candidate) {
@@ -106,5 +114,6 @@ export function parseImageFeatureAnalysisResponse(
     components: sanitizeStringArray(record.components),
     notes: sanitizeNullableString(record.notes),
     confidence: sanitizeConfidence(record.confidence),
+    photoTypes: sanitizePhotoTypes(record.photoTypes, imageCount),
   };
 }

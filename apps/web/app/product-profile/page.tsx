@@ -28,7 +28,7 @@ export default function ProductProfilePage() {
           </Link>
         </div>
         <p className="mt-2 text-zinc-600 dark:text-zinc-400">
-          사진만 넣으면 OCR·이미지 분석·Product Profile 통합을 거쳐 바로
+          사진만 넣으면 OCR·이미지 분석·제품 정보 통합을 거쳐 바로
           미리보고 다운로드할 수 있는 상세페이지 HTML까지 만듭니다. 실
           OCR·실 OpenAI만 사용합니다 — mock·가짜 응답은 없습니다.
         </p>

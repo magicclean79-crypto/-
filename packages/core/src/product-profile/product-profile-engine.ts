@@ -1,4 +1,4 @@
-import type { LlmImageDto, LlmMessageDto, LlmResponseFormat, ProductPageCopy } from "@acos/shared";
+import type { LlmImageDto, LlmMessageDto, LlmResponseFormat, PhotoType, ProductPageCopy } from "@acos/shared";
 import type { PromptEngine } from "../prompt/prompt-engine";
 import { PRODUCT_FEATURE_VISION_TEMPLATE_KEY } from "../prompt/templates/product-feature-vision.template";
 import { PRODUCT_PAGE_COPY_TEMPLATE_KEY } from "../prompt/templates/product-page-copy.template";
@@ -61,6 +61,10 @@ export interface ProductProfileEngineResult {
   pageCopy: ProductPageCopy;
   html: string;
   css: string;
+  /** 사진 유형 자동 분류 결과(CTO 지시, 2026-08-08) — 어떤 원본 이미지 id가
+   * DESIGN/INFO로 분류됐는지. 호출자(apps/api)가 이걸로 Image.photoType을
+   * 저장한다. Image Guard에서 걸러진 이미지는 여기 없다(분석 자체를 못 함). */
+  photoTypeByImageId: { imageId: string; photoType: PhotoType }[];
   raw: {
     provider: string;
     vision: { provider: string; model: string; responseText: string };
@@ -118,6 +122,8 @@ export class ProductProfileEngine {
   ): Promise<ProductProfileEngineResult> {
     const attachedImages = input.images.slice(0, this.maxImages);
     const images: LlmImageDto[] = [];
+    // images와 같은 순서로 쌍을 이룬다 — Image Guard에서 걸러진 사진은 여기 없다
+    const retainedImageIds: string[] = [];
     const skippedImages: { id: string; reason: string }[] = [];
     for (const image of attachedImages) {
       const source = {
@@ -136,6 +142,7 @@ export class ProductProfileEngine {
           mimeType: prepared.mimeType,
           base64: Buffer.from(prepared.bytes).toString("base64"),
         });
+        retainedImageIds.push(image.id);
       } catch (error) {
         if (!(error instanceof ImageGuardError)) {
           throw error;
@@ -162,6 +169,18 @@ export class ProductProfileEngine {
     });
     const imageFeatures = parseImageFeatureAnalysisResponse(
       featureCompletion.text,
+      images.length,
+    );
+
+    // 사진 유형 자동 분류 (CTO 지시, 2026-08-08 — 최우선 기능): INFO 사진(라벨/
+    // 스펙표/설명서 등)은 정보 추출이 끝나면 즉시 작업 대상에서 제외한다 —
+    // STEP 5b(HTML) 렌더링에도, 나중에 Gemini 이미지 생성에도 전달하지 않는다.
+    const photoTypeByImageId = retainedImageIds.map((imageId, index) => ({
+      imageId,
+      photoType: imageFeatures.photoTypes[index] ?? "DESIGN",
+    }));
+    const designImages = images.filter(
+      (_, index) => imageFeatures.photoTypes[index] !== "INFO",
     );
 
     // STEP 4 — Product Profile 통합 (텍스트 전용, 이미지 재첨부 없음)
@@ -202,11 +221,13 @@ export class ProductProfileEngine {
     // 실제 업로드 사진(이미 Image Guard·리사이즈를 통과한 것)을 그대로
     // Hero·특징 카드에 심는다 — "텍스트 생성"이 아니라 사진을 쓰는 상세페이지가
     // 되려면 STEP 3이 분석한 그 사진이 STEP 5의 결과물에도 보여야 한다.
+    // 단, INFO로 분류된 사진(라벨/스펙표 등)은 여기서 제외한다 — 상세페이지에
+    // 실제로 쓸 사진이 아니다.
     const { html, css } = renderProductProfileHtml(
       profile,
       imageFeatures.components,
       pageCopy,
-      images,
+      designImages,
       input.templateKey,
     );
 
@@ -216,6 +237,7 @@ export class ProductProfileEngine {
       pageCopy,
       html,
       css,
+      photoTypeByImageId,
       raw: {
         provider: this.name,
         vision: {

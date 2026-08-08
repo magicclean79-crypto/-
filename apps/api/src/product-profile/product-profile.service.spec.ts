@@ -17,6 +17,7 @@ const validFeatures = {
   components: ["매트 본체"],
   notes: null,
   confidence: 0.8,
+  photoTypes: ["DESIGN", "DESIGN"],
 };
 
 const validProfile = {
@@ -45,7 +46,7 @@ function createPrismaMock() {
 
   const prisma = {
     rows,
-    image: { findMany: jest.fn() },
+    image: { findMany: jest.fn(), update: jest.fn() },
     ocrResult: { findFirst: jest.fn() },
     productProfile: {
       create: jest.fn(

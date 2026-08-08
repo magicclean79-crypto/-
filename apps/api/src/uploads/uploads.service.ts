@@ -38,6 +38,7 @@ function toDto(image: Image): ImageDto {
     kind: image.kind as ImageDto["kind"],
     sourceImageId: image.sourceImageId,
     generationMetadata: image.generationMetadata as ImageDto["generationMetadata"],
+    photoType: image.photoType as ImageDto["photoType"],
   };
 }
 

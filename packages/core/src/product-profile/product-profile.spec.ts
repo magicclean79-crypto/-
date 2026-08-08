@@ -15,6 +15,7 @@ const imageFeatures: ImageFeatureAnalysis = {
   components: ["매트 본체", "고정 클립"],
   notes: null,
   confidence: 0.85,
+  photoTypes: ["DESIGN"],
 };
 
 const context: ProductProfileSynthesisContext = {

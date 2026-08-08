@@ -34,7 +34,13 @@ export const PRODUCT_FEATURE_VISION_TEMPLATE: PromptTemplate<ImageFeatureAnalysi
         "- 필드: material(재질, 문자열 또는 null) · color(색상, 문자열 또는 null) · " +
           "structure(구조/형태, 문자열 또는 null) · usage(용도, 문자열 또는 null) · " +
           "components(구성품 문자열 배열) · notes(그 외 특이사항, 문자열 또는 null) · " +
-          "confidence(0.0~1.0 숫자)",
+          "confidence(0.0~1.0 숫자) · photoTypes(문자열 배열)",
+        "- photoTypes는 첨부된 이미지 순서와 정확히 1:1 대응하는 배열이다(이미지 " +
+          "개수와 배열 길이가 같아야 한다). 각 이미지가 상세페이지에 실제로 쓸 " +
+          '"DESIGN"(제품 정면·측면·전체·디테일·구성품·사용장면 사진)인지, ' +
+          '정보 확인용 "INFO"(라벨·스펙표·설명서·포장박스·바코드·인증마크·원산지· ' +
+          "주의사항이 찍힌 사진 — 제품 자체보다 텍스트·표·마크 확인이 목적인 사진)인지 " +
+          "판단해서 순서대로 채운다.",
         "- 이미지에서 직접 확인되지 않는 정보는 절대로 만들어내지 않는다 — " +
           "불확실하면 해당 필드를 null(또는 빈 배열)로 두고 confidence를 낮춘다",
         "- 참고용 OCR 텍스트가 있으면 이미지 판단을 보강하는 데만 쓴다 — " +

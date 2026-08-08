@@ -165,6 +165,8 @@ export interface ImageDto {
   style?: string | null;
   /** 사용자가 이 카테고리의 최종 이미지로 직접 선택했는지 */
   selected?: boolean;
+  /** 사진 유형 자동 분류 결과 — 업로드 직후 미분류 상태면 null(=DESIGN으로 취급) */
+  photoType?: PhotoType | null;
 }
 
 export const IMAGE_CATEGORIES = [
@@ -177,13 +179,15 @@ export const IMAGE_CATEGORIES = [
 ] as const;
 export type ImageCategory = (typeof IMAGE_CATEGORIES)[number];
 
+/** 쇼핑몰 실무 용어로 통일(CTO 지시, 2026-08-08) — 개발자 용어(Hero/Lifestyle/
+ * Detail/Feature Shot 등) 대신 쇼핑몰 운영자가 바로 이해하는 이름을 쓴다. */
 export const IMAGE_CATEGORY_LABELS: Record<ImageCategory, string> = {
-  HERO: "Hero 이미지",
-  USAGE_SCENE: "사용 장면",
-  DETAIL: "제품 디테일",
-  FEATURE_HIGHLIGHT: "특징 강조",
-  COMPONENTS: "구성품",
-  OTHER: "기타",
+  HERO: "대표 썸네일",
+  USAGE_SCENE: "사용 장면 이미지",
+  DETAIL: "제품 디테일 이미지",
+  FEATURE_HIGHLIGHT: "특징 강조 이미지",
+  COMPONENTS: "구성품 이미지",
+  OTHER: "정보 설명 이미지",
 };
 
 /** 카테고리별 이미지 후보 여러 버전 생성 (AI 상세페이지 제작 플랫폼, 2026-08-08) */
@@ -486,7 +490,19 @@ export interface ImageFeatureAnalysis {
   /** 그 외 눈에 보이는 특이사항 (자유 서술) */
   notes: string | null;
   confidence: number; // 0.0 ~ 1.0
+  /**
+   * 사진 유형 자동 분류 (CTO 지시, 2026-08-08 — 최우선 기능). 첨부된
+   * 이미지 순서와 1:1 대응한다. DESIGN(제품 정면/측면/전체/디테일/구성품/
+   * 사용장면처럼 상세페이지에 실제 쓸 사진)과 INFO(라벨/스펙표/설명서/
+   * 포장박스/바코드/인증마크/원산지/주의사항처럼 정보 확인용 사진)를
+   * 구분한다 — INFO 사진은 OCR/Vision으로 정보만 뽑고 Gemini·Claude에는
+   * 전달하지 않는다(비용·생성시간·품질 개선).
+   */
+  photoTypes: PhotoType[];
 }
+
+export const PHOTO_TYPES = ["DESIGN", "INFO"] as const;
+export type PhotoType = (typeof PHOTO_TYPES)[number];
 
 /** Product Profile — OCR + 이미지 특징 분석을 통합한 상세페이지 재료 (STEP 4) */
 export interface ProductProfile {

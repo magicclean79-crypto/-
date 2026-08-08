@@ -97,7 +97,7 @@ export function ImageStudioView() {
         </div>
       </div>
 
-      <Card title="(참고) 단일 Hero 파이프라인 빠른 테스트 — 배경 제거→생성→합성을 한 번에">
+      <Card title="(참고) 대표 썸네일 빠른 테스트 — 배경 제거→생성→합성을 한 번에">
         <p className="mb-3 text-xs text-zinc-500">
           위 카테고리별 기능과 별개로, 예전에 만든 빠른 테스트용입니다.
         </p>
