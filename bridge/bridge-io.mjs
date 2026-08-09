@@ -209,7 +209,7 @@ const BACK_TO_QUEUE = {
   BLOCKED: ["REQUESTED"],
 };
 
-export function resetToRequested(taskId, reason, projectId = DEFAULT_PROJECT_ID) {
+export function resetToRequested(taskId, reason, projectId = DEFAULT_PROJECT_ID, decisionAnswer) {
   const task = readTask(taskId, projectId);
   if (!task) throw new Error(`등록되지 않은 작업입니다: ${taskId}`);
 
@@ -230,6 +230,12 @@ export function resetToRequested(taskId, reason, projectId = DEFAULT_PROJECT_ID)
     // 결정 요청은 대기열로 돌아갈 때 지운다 — 남겨 두면 이미 정해진 것을
     // 다시 물어보는 것처럼 보인다.
     decisionNeeded: null,
+    // **사람이 내린 답은 남긴다.** 이것이 없으면 다시 실행된 세션은 같은
+    // 자리에서 또 막힌다 — 물어보고 답을 받았는데 전달되지 않는 셈이다.
+    // 이전 답도 지우지 않고 쌓는다(결정 이력).
+    decisionAnswer: decisionAnswer
+      ? [...(previous.decisionAnswer ?? []), ...(Array.isArray(decisionAnswer) ? decisionAnswer : [decisionAnswer])]
+      : (previous.decisionAnswer ?? null),
     recoveredAt: new Date().toISOString(),
   };
   for (const step of path) {

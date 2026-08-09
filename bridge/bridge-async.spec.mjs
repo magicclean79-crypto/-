@@ -289,6 +289,53 @@ await test("통과 여부를 참/거짓으로 적으라고 시킨다 — 문장�
   assert.ok(prompt.includes("돌리지 않았다면"), "안 돌린 검사를 통과로 적지 못하게 해야 한다");
 });
 
+/* ---- BLOCKED: 사람이 내린 결정이 다음 실행까지 전달되는가 ---- */
+
+await test("사람이 내린 결정이 다음 실행의 지시문에 실린다 — 안 그러면 같은 자리에서 또 막힌다", () => {
+  io.createTask({ taskId: "SPEC-D", title: "결정 전달", request: "확인" });
+  io.writeResult({ taskId: "SPEC-D", state: "IN_PROGRESS" });
+  io.writeResult({
+    taskId: "SPEC-D",
+    state: "BLOCKED",
+    decisionNeeded: [{ question: "Git에 넣을까?", why: "정책 결정이라 스스로 못 정함" }],
+  });
+
+  const record = io.resetToRequested("SPEC-D", "결정 받음", undefined, {
+    question: "Git에 넣을까?",
+    answer: "넣는다. 단 비밀값은 제외한다.",
+  });
+  assert.equal(record.state, "REQUESTED");
+  assert.equal(record.decisionNeeded, null, "이미 답한 질문은 남아 있으면 안 된다");
+  assert.equal(record.decisionAnswer.length, 1);
+
+  const dry = exec.startNextTask({ cwd: sandbox, dryRun: true, taskId: "SPEC-D" });
+  assert.ok(dry.prompt.includes("이미 내려진 결정"), "결정 블록이 지시문에 있어야 한다");
+  assert.ok(dry.prompt.includes("넣는다. 단 비밀값은 제외한다."), "답 내용이 실려야 한다");
+  assert.ok(dry.prompt.includes("다시 적지 않는다"), "같은 것을 또 묻지 말라고 해야 한다");
+});
+
+await test("결정이 없으면 그 블록은 지시문에 없다 — 빈 자리를 만들지 않는다", () => {
+  io.createTask({ taskId: "SPEC-E", title: "결정 없음", request: "확인" });
+  const dry = exec.startNextTask({ cwd: sandbox, dryRun: true, taskId: "SPEC-E" });
+  assert.ok(!dry.prompt.includes("이미 내려진 결정"));
+});
+
+await test("결정은 쌓인다 — 두 번 막히고 두 번 답하면 둘 다 남는다", () => {
+  // 실제 실행 경로는 기록을 **덮어쓰지 않고 덧쓴다**(updateResult).
+  // 그래서 앞선 결정이 그대로 남은 채 다음 단계로 간다.
+  io.updateResult("SPEC-D", { state: "IN_PROGRESS" });
+  io.updateResult("SPEC-D", {
+    state: "BLOCKED",
+    decisionNeeded: [{ question: "두 번째 질문", why: "이유" }],
+  });
+  const record = io.resetToRequested("SPEC-D", "두 번째 결정", undefined, {
+    question: "두 번째 질문",
+    answer: "두 번째 답",
+  });
+  assert.equal(record.decisionAnswer.length, 2, "이전 결정을 지우면 안 된다");
+  assert.equal(record.decisionAnswer[0].answer, "넣는다. 단 비밀값은 제외한다.");
+});
+
 await test("완료된 작업은 되돌리지 않는다 — 종료 상태는 종료 상태다", () => {
   io.createTask({ taskId: "SPEC-4", title: "완료 보호", request: "확인" });
   io.writeResult({ taskId: "SPEC-4", state: "IN_PROGRESS" });

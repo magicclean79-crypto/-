@@ -290,7 +290,7 @@ pnpm --filter api exec prisma migrate deploy
 | 2 | DB 스키마가 git만으로 재현되는가 | **재현됨** — 로컬에서 `pnpm --filter api exec prisma migrate status` 실행 결과 "65 migrations found … Database schema is up to date" (마이그레이션 파일 65개가 전부 git에 있고, 새 DB에 `prisma migrate deploy`만 돌리면 같은 스키마가 나옵니다) |
 | 3 | 설치가 lockfile만으로 재현되는가 | **재현됨** — `pnpm-lock.yaml`·`pnpm-workspace.yaml` 둘 다 git 추적 확인. `pnpm install`이 이 파일 기준으로 정확히 같은 버전을 설치합니다 |
 | 4 | Claude Code 실행 파일 | VS Code 확장 안에 있음(`bridge/README.md` §1-1). **VS Code + 해당 확장을 새 PC에도 설치**해야 합니다 — git 저장소에 포함되지 않습니다 |
-| 5 | Bridge 시크릿·공개 주소 | `bridge/.secrets/bridge-token.txt`·`bridge/tunnel-url.txt`는 **의도적으로 git에서 제외**(`.gitignore`). 새 PC에서는 `bridge/start-bridge.ps1`이 토큰을 새로 만들고, 터널 주소는 항상 새로 발급됩니다(`bridge/README.md` §7 "임시 터널의 한계") — ChatGPT Actions에 새 주소를 다시 등록해야 합니다 |
+| 5 | Bridge 시크릿·공개 주소 | `bridge/.secrets/bridge-token.txt`·`bridge/tunnel-url.txt`·`bridge/openapi.live.yaml`은 **의도적으로 git에서 제외**(`.gitignore`). 새 PC에서는 `bridge/start-bridge.ps1`이 토큰을 새로 만들고, 터널 주소는 항상 새로 발급됩니다(`bridge/README.md` §7 "임시 터널의 한계") — ChatGPT Actions에 새 주소를 다시 등록해야 합니다. **Bridge 코드·작업 이력 자체는 이제 git에 포함되어 clone만으로 따라옵니다**(§9-6). 사람이 손으로 만들어야 하는 것 전체 목록은 §9-7 |
 
 ### 9-3. Bridge 프로젝트 등록 — 저장소 경로가 바뀌면
 
@@ -371,37 +371,76 @@ M-28에 기록된 대로 **이 워크트리에서 여러 Bridge 세션이 동시
 범위(문서화·표준 절차 마련)를 넘어 **상시 자동 실행 체계를 새로
 만드는 것**이라 임의로 만들지 않았습니다.
 
-### 9-6. 발견한 위험 — Bridge 데이터가 git에 없다
+### 9-6. Bridge 데이터를 git으로 영속화함 — 해결됨 (사장님 결정, 2026-08-09)
 
-**실측(2026-08-09)**: `git ls-files bridge/`가 **빈 결과**를 반환했고,
-`git status --porcelain bridge/`는 `?? bridge/`(전체가 미추적)를
-보였습니다. 즉 **`bridge/` 아래 전부**(코드 `.mjs` 파일들, 작업 지시
-(`tasks/`), 작업 결과(`results/`), 프로젝트 등록 정보(`projects/`),
-`STATUS.md`, `README.md`)가 **한 번도 git에 커밋된 적이 없습니다.**
+**있었던 문제**: `git ls-files bridge/`가 빈 결과를 반환했다 —
+`bridge/` 아래 전부(코드·작업 지시·결과·프로젝트 등록 정보)가 한
+번도 git에 커밋된 적이 없었다. 디스크가 손상되거나 워크트리를 지우고
+새로 clone하면 Bridge 이력이 통째로 사라지는 위험이었다.
 
-**왜 문제인가**: 지금 이 PC의 디스크가 손상되거나, 이 워크트리를
-지우고 새로 `git clone`하면 — Bridge 코드 자체와 그동안의 모든 작업
-이력(T1-21~T1-29의 지시·결과·BLOCKED 기록)이 **전부 사라집니다.**
-`docs/PROJECT_STATE.md` §3-4에 기록된 "`T1-30.json`이 0바이트로 잘려
-있었다"는 사고도 이 미추적 상태와 같은 종류의 취약점입니다 — git이
-지켜주지 않는 영역입니다.
+**사장님 결정**: bridge/를 Git에 넣는다. 단 토큰·API 키·인증정보·
+임시 터널 주소·개인정보 등 비밀/환경 종속 정보는 반드시 제외하고,
+Bridge 코드·작업 지시·결과 기록·프로젝트 등록 정보·상태 요약 및
+복구에 필요한 메타데이터만 영속화한다.
 
-**이번 세션이 하지 않은 것**: `bridge/`를 git에 추가하는 것은
-**"건드리면 안 되는 것"**(bridge/ 전부) 목록에 걸리고, 커밋 자체도
-사람이 시키지 않으면 하지 않는다는 원칙에 걸립니다. 그래서 **직접
-고치지 않고 사실만 기록합니다.** 이 작업(T1-30)의 결과 보고
-`decisionNeeded`에 "`bridge/`를 git에 포함할지"를 사람이 정할 항목으로
-남겼습니다 — 다른 프로젝트의 등록 정보·작업 이력이 함께 커밋될 수
-있어 사람 판단이 필요합니다.
+**실행한 것(커밋 `35b1ea5`, 83개 파일)**:
 
-**임시 대안(코드 변경 없이 지금 당장 쓸 수 있는 것)**: git에 넣기로
-결정하기 전까지는, `bridge/tasks`·`bridge/results`·
-`bridge/projects` 폴더를 **주기적으로 다른 드라이브(E:)에 복사해
-두는 것**만으로도 PC 교체 시 이력 유실을 막을 수 있습니다. 이 복사는
-`bridge/` 안의 파일을 고치는 것이 아니라 **밖으로 내보내는 것**이라
-가드레일에 걸리지 않지만, 이번 세션에서는 실행하지 않았습니다 —
-"정말 필요한 결정"은 사람이 git 포함 여부를 정한 뒤 하는 것이 순서에
-맞다고 판단했습니다.
+- `.gitignore`에 제외 규칙 추가 — `bridge/.secrets/` ·
+  `bridge/tunnel-url.txt` · `bridge/openapi.live.yaml` ·
+  `bridge/demo/` · `bridge/projects/demo-shop/` ·
+  `bridge/projects/demo-widget/` · `.claude/`
+- `bridge/check-secrets.mjs`(신규) — 커밋 전 비밀값 검사기. 토큰·
+  OpenAI/Gemini API 키·GitHub 토큰·개인 키·임시 터널 주소·DB 접속
+  문자열·Bearer 토큰을 정규식으로 찾는다. 걸리면 0이 아닌 값으로
+  끝난다. `node bridge/check-secrets.mjs`(스테이징만) ·
+  `node bridge/check-secrets.mjs --all`(추적 중인 파일 전체)
+- `bridge/openapi.yaml`의 터널 주소를 자리표시자(`CHANGE-ME`)로
+  바꾸고, 실제 주소가 채워진 `bridge/openapi.live.yaml`은
+  `start-bridge.ps1`이 실행할 때마다 새로 만들도록 분리(git에는
+  올리지 않음)
+- 비밀값 검사 통과 후 커밋 완료
+
+**이번 세션(T1-30 재실행)이 재확인한 것**:
+
+- `git ls-files bridge/` — **41개 파일**이 추적 중(작업 15건·결과
+  10건 포함). 더 이상 빈 결과가 아니다
+- `node bridge/check-secrets.mjs --all` — 저장소 전체 기준 59건이
+  걸렸으나 **전부 `bridge/` 밖의 기존 테스트 파일**(`ops.spec.ts`·
+  `api-key.spec.ts` 등의 가짜 API 키·DB 문자열 픽스처)이고
+  **`bridge/` 아래 파일은 0건** — 결과를 `grep '^  bridge/'`로 직접
+  걸러 확인했다. 이 59건은 이번 작업 범위 밖의 기존 코드이며 손대지
+  않았다
+- 새 환경 복구 검증(사장님 확인): 저장소만 clone한 곳에서 작업
+  15건·결과 10건이 그대로 보이고 Bridge 검사 86건이 전부 통과했다.
+  비밀값 4종(토큰·터널 주소 등)은 의도한 대로 따라가지 않았다
+
+**새 PC 온보딩이 무엇을 하지 않아도 되게 됐는가**: `git clone` 한
+번으로 Bridge 코드·작업 이력·프로젝트 등록 정보가 전부 함께
+따라온다. 예전처럼 "Bridge 이력이 이 PC에만 있다"는 걱정은
+해소됐다 — §9-7에 새 PC에서 **여전히 사람이 손으로 만들어야 하는
+것**만 남긴다.
+
+### 9-7. 새 PC에서 git clone만으로 되지 않는 것 — 사람이 직접 만들어야 함
+
+git으로 영속화된 것은 **코드·이력·설정**이다. **이 PC에서만 뜻이
+있는 값**(비밀값·이 순간에만 유효한 주소·이 디스크의 절대경로)은
+git에 없다 — 의도적으로 뺐다(§9-6). 새 PC에서 Bridge를 다시 쓰려면
+아래를 **사람이 직접** 만든다.
+
+| # | 무엇 | 왜 git에 없는가 | 어떻게 만드는가 |
+| --- | --- | --- | --- |
+| 1 | **Bridge 인증 토큰**(`bridge/.secrets/bridge-token.txt`, 64자) | 이 값이 있으면 누구나 Claude Code를 실행시킬 수 있다 | `bridge/start-bridge.ps1`을 실행하면 파일이 없을 때 **새로 만든다.** 예전 토큰을 그대로 쓰고 싶으면 옛 PC의 파일을 안전한 경로로(채팅·git이 **아닌** 곳으로) 옮겨 온다 |
+| 2 | **cloudflared 터널 공개 주소**(`bridge/tunnel-url.txt`) | 터널을 다시 띄울 때마다 새로 발급되는 임시 값 — 옛 주소는 그 순간 죽는다 | `start-bridge.ps1` 실행 시 자동 생성. 사람이 지어내지 않는다 |
+| 3 | **`bridge/openapi.live.yaml`**(실제 터널 주소가 채워진 명세) | 터널 주소가 바뀔 때마다 같이 바뀌는 파생 파일 | `start-bridge.ps1`이 `bridge/openapi.yaml`(자리표시자 `CHANGE-ME`)을 읽어 매번 새로 만든다 |
+| 4 | **ChatGPT 커스텀 GPT → Actions 재등록** | 외부 서비스(ChatGPT) 쪽 설정이라 이 저장소에 속하지 않는다 | `bridge/openapi.live.yaml`을 다시 붙여넣고, Authentication의 API Key를 새 토큰 파일 값으로 갱신(`bridge/README.md` §7) |
+| 5 | **`apps/api/.env`** 등 비밀 환경 변수 | `.gitignore`로 제외(§3-3와 동일한 이유) | `.env.example`을 복사해 실제 값을 채운다 |
+| 6 | **추가로 등록한 Bridge 프로젝트의 `repoPath`**(기본 프로젝트 `acos`는 해당 없음, §9-3 참고) | 그 프로젝트를 등록한 PC의 절대경로였을 뿐, 새 PC에서는 다른 경로다 | `node bridge/bridge-cli.mjs project register <등록JSON파일>`로 같은 `projectId`에 새 `repoPath`를 다시 등록(갱신) |
+| 7 | 로컬 DB(PostgreSQL)·MinIO 데이터 | 이 PC의 실행 중인 서비스 상태 — git이 다루는 대상이 아니다 | §3-4·§3-6(Benchmark) 순서대로 새로 구축 |
+
+**1~4번을 마치지 않으면 무엇이 안 되는가**: Bridge 서버(`bridge/
+bridge-server.mjs`)와 CLI(`bridge/bridge-cli.mjs`)는 로컬(같은 PC)
+에서는 토큰 없이도 동작한다 — **ChatGPT가 외부에서 부르는 경로만**
+1~4번이 필요하다. 로컬 검증(§4)만 할 때는 건너뛸 수 있다.
 
 ---
 

@@ -402,8 +402,10 @@ Sprint 2
 | `.env.example`·`pnpm-lock.yaml`·`pnpm-workspace.yaml`이 전부 git에 있다 | `git ls-files` | 2026-08-09 |
 | 로컬 DB 마이그레이션이 git만으로 재현된다 | `prisma migrate status` → "65 migrations … up to date" | 2026-08-09 |
 | 이 PC에 Bridge 자동 시작용 예약 작업이 없다 | `Get-ScheduledTask` — bridge·acos·claude 관련 항목 0건 | 2026-08-09 |
-| **`bridge/` 아래 전부가 git에 커밋된 적이 없다** | `git ls-files bridge/` → 빈 결과, `git status bridge/` → `?? bridge/` | 2026-08-09 |
+| **`bridge/`가 git으로 영속화되어 있다**(비밀값·터널 주소 등 환경 종속 값은 제외) | `git ls-files bridge/` → **41개 파일**(작업 15건·결과 10건 포함, 커밋 `35b1ea5`). `node bridge/check-secrets.mjs --all` 결과 59건 중 `bridge/` 안은 **0건** | 2026-08-09 (T1-30 재검증) |
 
-마지막 항목은 새 PC·디스크 교체 시 Bridge의 작업 이력이 통째로 사라질
-수 있다는 뜻이다. 고칠지(git에 포함)는 `bridge/`를 건드리는 결정이라
-**사람이 정해야 한다** — 자세한 것은 `RECOVERY_GUIDE.md` §9-6.
+**과거에는 이 표에 "`bridge/` 아래 전부가 git에 커밋된 적이 없다"는
+사실이 있었다.** 2026-08-09 사장님 결정으로 bridge/를 git에
+포함시켰고(비밀값·터널 주소 등만 `.gitignore`로 제외), 위 행이 그
+결과다. 새 PC에서 여전히 사람이 직접 만들어야 하는 것(토큰·터널
+주소 등)은 `RECOVERY_GUIDE.md` §9-7에 정리했다.

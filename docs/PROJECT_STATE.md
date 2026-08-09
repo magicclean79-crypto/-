@@ -347,6 +347,38 @@ PostgreSQL·MinIO 데이터 디렉터리 이전, Bridge 자동 시작 예약 작
 `pnpm turbo run test`는 이번 변경과 무관하게 통과해야 정상이며, 아래
 `RESULT_JSON`에 실측 결과를 기록한다.
 
+**후속 실행 (2026-08-09, 같은 T1-30 재실행) — decisionNeeded 반영·마무리**
+
+위 `decisionNeeded`("`bridge/`를 git에 포함할지")에 대해 사장님이
+결정했다: git에 넣는다, 단 토큰·API 키·인증정보·임시 터널 주소·
+개인정보는 반드시 제외한다. 이 결정은 **이미 실행되어 있었다**(커밋
+`35b1ea5`, 83개 파일 — `.gitignore` 제외 규칙 추가, `bridge/
+check-secrets.mjs` 신규, `openapi.yaml` 터널 주소 자리표시자화). 이번
+재실행에서 한 일은 **문서를 그 결과에 맞게 갱신하는 것**이다.
+
+- `docs/RECOVERY_GUIDE.md` §9-6을 "발견한 위험"에서 "해결됨"으로
+  다시 쓰고, §9-7(신규)에 새 PC에서 **여전히 사람이 손으로 만들어야
+  하는 것**(토큰 파일·터널 주소·`openapi.live.yaml`·ChatGPT Actions
+  재등록·추가 프로젝트 `repoPath` 재지정·`.env`·로컬 DB/MinIO)을
+  표로 정리했다
+- `docs/DEVELOPMENT_ENVIRONMENT.md` §11의 "`bridge/`가 git에 커밋된
+  적이 없다"는 낡은 사실 행을 최신 사실로 교체했다
+- `docs/PROJECT_MEMORY.md` M-31에 "지우지 않고 갱신" 원칙대로 해결
+  경위를 추가 문단으로 남겼다
+
+**이번 세션이 재확인한 것(재실행 없이 읽기·검사만)**:
+- `git ls-files bridge/` — 41개 파일(작업 15건·결과 10건), 이전
+  0건에서 바뀜
+- `node bridge/check-secrets.mjs --all` — 저장소 전체 기준 59건
+  걸렸으나 `grep '^  bridge/'`로 걸러보면 **`bridge/` 안은 0건** —
+  59건 전부 `bridge/`와 무관한 기존 테스트 픽스처(`ops.spec.ts`·
+  `api-key.spec.ts` 등의 가짜 API 키·DB 문자열)이며, 이번 작업
+  범위(bridge 영속화) 밖이라 손대지 않았다. **이 59건은 새로 발견한
+  기존 문제이지 이번 변경이 만든 것이 아니다** — 앱 코드를 이번
+  세션이 전혀 건드리지 않았다는 `git status`로 확인했다
+
+앱 코드는 이번에도 건드리지 않았다.
+
 ---
 
 ## 3. 오늘 완료한 작업 (2026-08-08)

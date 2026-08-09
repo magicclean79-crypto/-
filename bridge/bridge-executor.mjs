@@ -61,10 +61,11 @@ export function findClaudeBinary() {
  * 프로젝트 규칙을 매번 앞에 붙인다 — 호출된 Claude는 이 대화의 맥락을
  * 모르기 때문이다. 문서를 먼저 읽으라고 시키는 것이 핵심이다.
  */
-export function buildPrompt(task, project) {
+export function buildPrompt(task, project, prior) {
   const docs = project?.docs ?? [];
   const doNotTouch = project?.doNotTouch ?? [];
   const verify = project?.verifyCommands ?? [];
+  const answers = prior?.decisionAnswer ?? [];
 
   const lines = [
     `너는 프로젝트 "${project?.name ?? task.projectId ?? "이 저장소"}" 의 실행자다.`,
@@ -115,6 +116,17 @@ export function buildPrompt(task, project) {
 
   if (project?.scope) {
     lines.push("[이 프로젝트의 범위 — 사장님이 정한 것]", project.scope, "");
+  }
+
+  // 앞선 실행이 BLOCKED로 멈추고 사람이 답을 준 경우. **이미 정해진 것을
+  // 다시 묻지 않도록** 답을 그대로 실어 준다.
+  if (answers.length > 0) {
+    lines.push("[이미 내려진 결정 — 다시 묻지 않는다]");
+    for (const a of answers) {
+      lines.push(`- 물었던 것: ${a.question ?? "(기록 없음)"}`);
+      lines.push(`  사장님 결정: ${a.answer ?? "(기록 없음)"}`);
+    }
+    lines.push("이 결정을 그대로 따른다. 같은 것을 decisionNeeded 에 다시 적지 않는다.", "");
   }
 
   lines.push(
@@ -464,7 +476,7 @@ async function executeTask(task, runId, { project, browserUrl, userChecks }) {
   try {
     let outcome;
     try {
-      outcome = await callClaude(buildPrompt(task, project), {
+      outcome = await callClaude(buildPrompt(task, project, readResult(task.taskId, projectId)), {
         // **작업 폴더는 등록 정보에서 온다.** 부르는 쪽이 아무 경로나
         // 넣어 다른 저장소를 건드리는 일은 없어야 한다.
         cwd: project.repoPath,
@@ -642,7 +654,7 @@ export function startNextTask({
       dryRun: true,
       projectId,
       taskId: pending.taskId,
-      prompt: buildPrompt(pending, project),
+      prompt: buildPrompt(pending, project, readResult(pending.taskId, projectId)),
       recovered,
     };
   }

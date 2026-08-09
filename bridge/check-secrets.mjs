@@ -90,6 +90,46 @@ function rules() {
   return list.filter((r) => r.pattern);
 }
 
+/**
+ * **가짜 값을 걸러낸다.**
+ *
+ * 저장소에는 검사용·예제용 가짜 자격 증명이 정상적으로 들어 있다
+ * (`sk-xxxxxxxx`, `secret-value-1234`, `.env.example`의 로컬 DB 주소 등).
+ * 그것까지 경고하면 **진짜가 섞였을 때 묻힌다.** 59건 중 59건이 가짜였던
+ * 첫 실측(2026-08-09)에서 확인했다 — 다 걸리는 검사는 아무것도 안 거는
+ * 검사와 같다.
+ *
+ * 판단 기준은 **값 자체가 스스로 가짜라고 말하는가**이다. 파일 이름이나
+ * 폴더로 봐주지 않는다 — 진짜 키를 spec 파일에 적어도 잡혀야 한다.
+ */
+const FILLER =
+  /(x{4,}|\.{3,}|secret-value|placeholder|dummy|example|sample|changeme|change-me|your[-_]|fake|redacted|<[^>]+>|\$\{|abcdef|123456|qwerty|foobar|test[-_]?key|0{6,})/i;
+
+/**
+ * 자격 증명 자리가 **사람이 눈으로 봐도 가짜인** 접속 문자열.
+ *
+ * - `postgres:postgres@localhost` — 로컬 개발 기본값
+ * - `u:p@h` — 한 글자짜리. 검사 픽스처에서만 나온다
+ */
+const FAKE_DB =
+  /:\/\/([a-z]{1,2}:[a-z]{1,2}@|postgres:postgres@|root:root@|user:[a-z]+@|acos:acos@)|@(localhost|127\.0\.0\.1)\b/i;
+
+/**
+ * **줄 전체를 함께 본다.**
+ *
+ * 걸린 조각만 보면 판단할 수 없다 — 접속 문자열 규칙은 `@` 앞까지만
+ * 잡아내므로 `…@localhost` 라는 결정적인 단서가 조각에 안 들어온다
+ * (실측, 2026-08-09: 그래서 로컬 기본값이 계속 걸렸다).
+ */
+function looksFake(line, rule) {
+  const hit = line.match(rule.pattern)?.[0] ?? "";
+  if (FILLER.test(hit) || FILLER.test(line)) return true;
+  if (rule.name === "데이터베이스 접속 문자열" && (FAKE_DB.test(hit) || FAKE_DB.test(line))) return true;
+  // 같은 줄에 "가짜"라고 적어 둔 경우도 인정한다.
+  if (/(플레이스홀더|더미|가짜|예시|테스트용|placeholder|dummy|fixture)/i.test(line)) return true;
+  return false;
+}
+
 /** 지금 쓰이는 토큰 값 — 파일이 없으면 이 규칙은 건너뛴다 */
 function liveToken() {
   const file = join(HERE, ".secrets", "bridge-token.txt");
@@ -122,6 +162,7 @@ const checks = rules();
 console.log(`비밀값 검사 — ${all ? "추적 중인 파일 전체" : "커밋 대상"} ${files.length}개 · 규칙 ${checks.length}개\n`);
 
 const hits = [];
+let skipped = 0;
 for (const file of files) {
   const path = join(REPO, file);
   if (!existsSync(path)) continue;
@@ -134,15 +175,19 @@ for (const file of files) {
   const lines = text.split(/\r?\n/);
   for (const rule of checks) {
     lines.forEach((line, index) => {
-      if (rule.pattern.test(line)) {
-        hits.push({ file, line: index + 1, rule });
+      if (!rule.pattern.test(line)) return;
+      // 실제 토큰 값 대조는 절대 봐주지 않는다 — 그건 정의상 진짜다.
+      if (rule.name !== "Bridge 인증 토큰" && looksFake(line, rule)) {
+        skipped += 1;
+        return;
       }
+      hits.push({ file, line: index + 1, rule });
     });
   }
 }
 
 if (hits.length === 0) {
-  console.log("걸린 것 없음.");
+  console.log(`걸린 것 없음.${skipped > 0 ? ` (가짜로 판단해 넘긴 것 ${skipped}건)` : ""}`);
   process.exit(0);
 }
 

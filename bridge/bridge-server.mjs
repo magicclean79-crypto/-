@@ -300,9 +300,12 @@ const server = createServer(async (req, res) => {
         return send(res, 200, { result: record });
       }
       // 갇힌 작업 하나를 대기열로 되돌린다 — 중단된 실행의 복구 통로다.
+      //
+      // BLOCKED였다면 `decision` 으로 사람이 내린 답을 함께 넘긴다. 그 답은
+      // 다음 실행의 지시문에 실려, 같은 자리에서 또 막히는 것을 막는다.
       if (req.method === "POST" && sub === "/reset") {
         const body = await readBody(req);
-        const record = resetToRequested(taskId, body.reason, projectId);
+        const record = resetToRequested(taskId, body.reason, projectId, body.decision);
         renderStatus(projectId);
         return send(res, 200, { result: record });
       }
