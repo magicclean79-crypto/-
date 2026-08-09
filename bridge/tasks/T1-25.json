@@ -1,0 +1,8 @@
+{
+  "taskId": "T1-25",
+  "title": "Product Package 생성",
+  "request": "Gemini가 제품을 추측하지 않아도 될 정도의 정확한 제품 정보를 만든다.",
+  "requestedBy": "ChatGPT",
+  "state": "REQUESTED",
+  "createdAt": "2026-08-08T16:45:54.716Z"
+}

@@ -1,0 +1,8 @@
+{
+  "taskId": "T1-21",
+  "title": "제품 자동 분석 (Product Recognition Engine)",
+  "request": "OCR·Vision·바코드·QR·모델명·브랜드·제품특징을 하나의 단계에서 동시에 수집한다. OCR만 먼저 구현하지 않는다.",
+  "requestedBy": "ChatGPT",
+  "state": "REQUESTED",
+  "createdAt": "2026-08-08T16:43:36.426Z"
+}

@@ -11,11 +11,13 @@ import {
   type ImagePreprocessor,
 } from "../vision/image-guard";
 import type { VisionImageInput } from "../vision/vision-provider";
+import { crossVerifyProduct, type CrossVerificationResult } from "./cross-verification";
 import {
   parseImageFeatureAnalysisResponse,
   type ImageFeatureAnalysis,
   type ImageFeatureAnalysisContext,
 } from "./image-feature-analysis";
+import { identifyProduct, type ProductIdentification } from "./product-identification";
 import { parseProductPageCopyResponse, type ProductPageCopyContext } from "./product-page-copy";
 import { renderProductProfileHtml } from "./product-page-html";
 import {
@@ -57,7 +59,21 @@ export interface ProductProfileEngineInput {
 
 export interface ProductProfileEngineResult {
   imageFeatures: ImageFeatureAnalysis;
+  /**
+   * STEP 4가 실제로 답한 그대로의 Product Profile — GPT 분석값을 가공하지
+   * 않고 남긴다(사실과 평가를 구분한다, MASTER_GUIDE §2 철학 4). brand/model이
+   * 교차 검증과 다르면 그 차이 자체가 `crossVerification`에서 보인다.
+   */
   profile: ProductProfile;
+  /** 제품 자동 분석 (T1-21) — 이 실행의 OCR/Vision 텍스트에서 직접 뽑은 값 */
+  identification: ProductIdentification;
+  /**
+   * 교차 검증 결과 (T1-23) — `profile`(GPT 분석)과 `identification`(OCR
+   * 직접 추출)이 같은 항목에 다른 값을 말하면 자동으로 채우지 않는다.
+   * STEP 5(카피·HTML)는 `profile`이 아니라 **이 결과로 검증된 값**만 쓴다
+   * (T1-24, "Product Profile 생성은 교차 검증이 끝난 정보만 사용한다").
+   */
+  crossVerification: CrossVerificationResult;
   pageCopy: ProductPageCopy;
   html: string;
   css: string;
@@ -204,8 +220,26 @@ export class ProductProfileEngine {
     });
     const profile = parseProductProfileResponse(synthesisCompletion.text);
 
-    // STEP 5a — 상세페이지 카피 생성 (텍스트 전용, Profile만 근거)
-    const copyContext: ProductPageCopyContext = { profile };
+    // 교차 검증 (T1-23) — OCR 직접 추출과 GPT 분석(STEP 3+4)이 같은 항목에
+    // 다른 값을 말하면 자동으로 채우지 않는다. `profile`(위 STEP 4 결과)은
+    // GPT가 실제로 답한 그대로 보존하고 — 아래 STEP 5(카피·HTML)에는 이
+    // 교차 검증으로 확정된 brand/model만 넘긴다(T1-24). 값을 가진 출처가
+    // 하나뿐이면 그 값을, 둘 다 있는데 다르면 null(사람 판단 대기)을 쓴다.
+    const identification = identifyProduct({
+      ocrText: input.ocrTexts.length > 0 ? input.ocrTexts.join("\n\n---\n\n") : null,
+      visionText: JSON.stringify(imageFeatures),
+    });
+    const crossVerification = crossVerifyProduct({ identification, profile });
+    const verifiedProfile: ProductProfile = {
+      ...profile,
+      brand:
+        crossVerification.fields.find((f) => f.field === "brand")?.resolvedValue ?? null,
+      model:
+        crossVerification.fields.find((f) => f.field === "model")?.resolvedValue ?? null,
+    };
+
+    // STEP 5a — 상세페이지 카피 생성 (텍스트 전용, 교차 검증된 Profile만 근거)
+    const copyContext: ProductPageCopyContext = { profile: verifiedProfile };
     const copyMessages = this.options.promptEngine.render(
       PRODUCT_PAGE_COPY_TEMPLATE_KEY,
       copyContext,
@@ -224,9 +258,9 @@ export class ProductProfileEngine {
     // Hero·특징 카드에 심는다 — "텍스트 생성"이 아니라 사진을 쓰는 상세페이지가
     // 되려면 STEP 3이 분석한 그 사진이 STEP 5의 결과물에도 보여야 한다.
     // 단, INFO로 분류된 사진(라벨/스펙표 등)은 여기서 제외한다 — 상세페이지에
-    // 실제로 쓸 사진이 아니다.
+    // 실제로 쓸 사진이 아니다. brand/model은 여기서도 교차 검증된 값을 쓴다.
     const { html, css } = renderProductProfileHtml(
-      profile,
+      verifiedProfile,
       imageFeatures.components,
       pageCopy,
       designImages,
@@ -236,6 +270,8 @@ export class ProductProfileEngine {
     return {
       imageFeatures,
       profile,
+      identification,
+      crossVerification,
       pageCopy,
       html,
       css,

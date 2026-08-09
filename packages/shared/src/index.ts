@@ -233,6 +233,20 @@ export interface ImageGenerationMetadata {
   backgroundImageId?: string;
   /** 실사용 장면 여러 샷 생성일 때 몇 번째 샷인지(0부터) */
   shotIndex?: number;
+  /** 이 이미지를 생성할 때 Gemini에 함께 전달된 Product Package 스냅샷 */
+  productPackage?: ProductPackage;
+  /** Gemini 응답의 텍스트 부분(이미지 외 응답이 있을 때만) */
+  rawResponseText?: string | null;
+  /**
+   * 이 이미지를 만들 때 **Gemini에 실제로 전달된 참조 이미지 목록**과
+   * **OCR 전용으로 분류되어 전달하지 않은 목록** (CTO 지시, 2026-08-08).
+   *
+   * 사람이 브라우저에서 "포장지가 Gemini로 잘못 넘어가지 않았는지"를 즉시
+   * 확인할 수 있어야 한다. 화면에 두 목록을 나눠 보여 준다.
+   */
+  referenceImages?: { id: string; role: string; photoType?: PhotoType | null }[];
+  /** 정보 추출 전용으로 분류되어 Gemini에 전달하지 않은 이미지 */
+  excludedInfoImages?: { id: string; originalName: string }[];
 }
 
 /** 배경 제거 → 배경 생성 → 합성 (Sprint 36 — Gemini 이미지 생성/편집) */
@@ -545,7 +559,39 @@ export interface ProductProfileDto {
   /** 실행 시점 OCR 텍스트 스냅샷(감사용) */
   ocrText: string | null;
   imageFeatures: ImageFeatureAnalysis | null;
+  /** STEP 4가 실제로 답한 그대로의 Product Profile — 가공하지 않은 원본(사실) */
   profile: ProductProfile | null;
+  /**
+   * 제품 자동 분석 (T1-21) — 이 실행의 OCR/Vision 텍스트에서 직접 뽑은 값.
+   * 타입은 `@acos/core`의 `ProductIdentification`과 같다(의존 방향 유지,
+   * `ProductPackage.identification`과 같은 이유로 구조만 옮겨 적는다).
+   */
+  identification: {
+    barcodes: { value: string; format: string; checkDigitValid: boolean }[];
+    urls: { value: string; kind: string }[];
+    officialProductLabel: string | null;
+    model: string | null;
+    brand: string | null;
+    origin: string | null;
+    customerServicePhone: string | null;
+    identified: boolean;
+    identifiedBy: string[];
+  } | null;
+  /**
+   * 교차 검증 결과 (T1-23/T1-24) — `profile`(GPT 분석)과 `identification`
+   * (OCR 직접 추출)이 같은 항목에 다른 값을 말하면 자동으로 채우지 않는다.
+   * STEP 5(`pageCopy`·`html`)는 `profile`이 아니라 이 결과로 검증된 값만
+   * 쓴다. 타입은 `@acos/core`의 `CrossVerificationResult`와 같다.
+   */
+  crossVerification: {
+    fields: {
+      field: string;
+      observations: { source: string; value: string }[];
+      status: "single-source" | "agreed" | "conflict" | "unknown";
+      resolvedValue: string | null;
+    }[];
+    hasConflict: boolean;
+  } | null;
   /** STEP 5 — LLM이 생성한 대표 문구·제품 설명 */
   pageCopy: ProductPageCopy | null;
   /** STEP 5 — Product Profile을 렌더링한 상세페이지 HTML(재사용 가능한 template 구조) */
@@ -561,6 +607,109 @@ export interface ProductProfileDto {
   completedAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * AI Product Package — GPT(OpenAI)가 만든 제품 정보를 Gemini(및 이후 Claude)가
+ * 공통으로 참고하는 데이터 구조 (CTO 지시, 2026-08-08).
+ *
+ * 1단계(현재): productProfile·ocrText·productName·features·specifications는
+ * 실제 Product Profile 실행 결과에서 채운다. 나머지 5개는 아직 코드로 만들어진
+ * 데이터 원천이 없어(문서로만 존재하거나 전혀 없음) 인터페이스만 정의하고
+ * 항상 빈 값(null 또는 빈 배열)으로 둔다 — 없는 것을 지어내지 않는다.
+ */
+export interface ProductPackage {
+  /** GPT가 생성한 Product Profile 전체 (아직 프로필이 없으면 null) */
+  productProfile: ProductProfile | null;
+  /** 실행 시점 OCR 텍스트 스냅샷 */
+  ocrText: string | null;
+  productName: string | null;
+  features: string[];
+  specifications: Record<string, string>;
+  /**
+   * 제품 식별 정보 (CTO 지시, 2026-08-08 — 제품 동일성 개선).
+   *
+   * 예전에는 제품명·특징·스펙만 프롬프트로 나갔고, 브랜드·모델·재질·사용
+   * 목적은 `productProfile` 안에 있어도 **Gemini에게 전달되지 않았다.**
+   * 제품을 알아보는 데 필요한 정보를 프롬프트가 못 받으면, Gemini는 그
+   * 빈자리를 상상으로 채우고 다른 제품을 그린다.
+   */
+  brand: string | null;
+  model: string | null;
+  material: string | null;
+  usage: string | null;
+  /**
+   * 제품 자동 분석 결과 (T1-21, 2026-08-09) — 바코드·URL·품명·원산지 등
+   * OCR 원문에서 직접 뽑아낸 식별자. 웹 자동 조사(T1-22)가 "어떤 제품을
+   * 조사할지" 판단하는 근거이며, 화면에서 사람이 검증하는 대상이다.
+   *
+   * 타입은 `@acos/core`의 `ProductIdentification`과 같다. shared는 core를
+   * 참조하지 않으므로(의존 방향 유지) 구조만 여기 옮겨 적는다.
+   */
+  identification?: {
+    barcodes: { value: string; format: string; checkDigitValid: boolean }[];
+    urls: { value: string; kind: string }[];
+    officialProductLabel: string | null;
+    model: string | null;
+    brand: string | null;
+    origin: string | null;
+    customerServicePhone: string | null;
+    identified: boolean;
+    identifiedBy: string[];
+  };
+  /**
+   * 교차 검증 결과 (T1-23, 2026-08-09) — OCR 직접 추출·GPT 분석(·공식 정보가
+   * 있으면 그것도)이 같은 항목에 다른 값을 말하면 자동으로 채우지 않는다.
+   * `status`가 `conflict`이면 `resolvedValue`는 항상 null이다 — 사람이
+   * 판단하기 전에는 아무 값도 확정하지 않는다.
+   *
+   * 타입은 `@acos/core`의 `CrossVerificationResult`와 같다. shared는 core를
+   * 참조하지 않으므로(의존 방향 유지) 구조만 여기 옮겨 적는다.
+   */
+  crossVerification?: {
+    fields: {
+      field: string;
+      observations: { source: string; value: string }[];
+      status: "single-source" | "agreed" | "conflict" | "unknown";
+      resolvedValue: string | null;
+    }[];
+    hasConflict: boolean;
+  };
+  /**
+   * 공식 웹 조사 결과 (T1-22, 2026-08-09) — 조사가 실행되어 결과가 넘어오면
+   * 그대로 옮겨 담는다. 지금은 이 자리를 채우는 실행 경로가 아직 없어 항상
+   * null이다(참고 URL과 같은 2단계 연결 방식 — T1-05).
+   *
+   * **값을 해석해 브랜드·모델 등 다른 필드에 자동으로 반영하지 않는다.**
+   * 검색 스니펫은 사람이 읽고 판단할 원문이지, 정규식으로 특정 값을
+   * 뽑아낼 수 있는 라벨 붙은 데이터가 아니다.
+   *
+   * 타입은 `@acos/core`의 `ProductResearchResult`와 같다. shared는 core를
+   * 참조하지 않으므로(의존 방향 유지) 구조만 여기 옮겨 적는다.
+   */
+  research?: {
+    status: "skipped" | "found" | "not_found";
+    reason: string;
+    targetsAttempted: { type: string; query: string; reason: string }[];
+    findings: {
+      targetType: string;
+      query: string;
+      sourceUrl: string;
+      sourceType: string;
+      snippet: string;
+    }[];
+    excluded: { targetType: string; url: string; reason: string }[];
+  } | null;
+  /** 2단계 예정 — 아직 실데이터 없음 */
+  referenceUrls: string[];
+  /** 2단계 예정 — 아직 실데이터 없음 */
+  benchmarkAnalysis: unknown | null;
+  /** 2단계 예정 — 아직 실데이터 없음 */
+  designRules: unknown | null;
+  /** 2단계 예정 — 아직 실데이터 없음 */
+  companyDesignPolicy: unknown | null;
+  /** 2단계 예정 — 아직 실데이터 없음 */
+  learningHistory: unknown | null;
 }
 
 export interface RunProductProfileRequest {

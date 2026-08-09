@@ -24,6 +24,7 @@ import { ReliabilityModule } from "./reliability/reliability.module";
 import { PrismaModule } from "./prisma/prisma.module";
 import { ProductObjectModule } from "./product-object/product-object.module";
 import { ProductProfileModule } from "./product-profile/product-profile.module";
+import { ProductResearchModule } from "./product-research/product-research.module";
 import { DesignReviewModule } from "./design-review/design-review.module";
 import { ImageGenModule } from "./image-gen/image-gen.module";
 import { ProductsModule } from "./products/products.module";
@@ -47,6 +48,7 @@ import { UploadsModule } from "./uploads/uploads.module";
     AnalysisModule,
     ProductObjectModule,
     ProductProfileModule,
+    ProductResearchModule,
     DesignReviewModule,
     ImageGenModule,
     ContentsModule,

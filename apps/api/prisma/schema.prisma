@@ -249,7 +249,7 @@ model ProductProfile {
   ocrText       String?
   // STEP 3 원본 결과 (ImageFeatureAnalysis)
   imageFeatures Json?
-  // STEP 4 최종 결과 (ProductProfile)
+  // STEP 4 최종 결과 (ProductProfile) — GPT가 실제로 답한 그대로(가공 없음)
   profile       Json?
   // STEP 5a 결과 (ProductPageCopy — 대표 문구·제품 설명, Sprint 35 Phase 2)
   pageCopy      Json?

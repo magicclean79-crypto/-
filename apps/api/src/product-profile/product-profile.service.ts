@@ -1,5 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException, Optional } from "@nestjs/common";
 import {
+  crossVerifyProduct,
+  identifyProduct,
   ProductProfileEngine,
   ProductProfileExecutionService,
   wrapProductProfileHtmlDocument,
@@ -12,7 +14,31 @@ import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
 import { PrismaProductProfileRunStore } from "./prisma-product-profile-run.store";
 
+/**
+ * 제품 자동 분석(T1-21)·교차 검증(T1-23) 결과를 다시 계산한다. (T1-24)
+ *
+ * DB에는 STEP 4가 실제로 답한 `profile`만 저장되어 있다 — 별도 컬럼을 두지
+ * 않고, `ocrText`·`profile`(둘 다 이미 저장된 스냅샷)로부터 매번 다시
+ * 계산한다. `identifyProduct`·`crossVerifyProduct`는 순수 함수라 같은
+ * 입력이면 항상 같은 결과이므로, 엔진 실행 시점에 계산한 값과 여기서
+ * 다시 계산한 값이 어긋나지 않는다 — 그리고 이 스냅샷 이전에 만들어진
+ * 실행 기록에도 그대로 적용된다(별도 마이그레이션·백필이 필요 없다).
+ */
 function toDto(record: ProductProfileRecord): ProductProfileDto {
+  const profile = record.profile as ProductProfileDto["profile"];
+  // 이 실행이 근거로 삼을 만한 것(OCR 텍스트든 이미지 특징이든)이 전혀
+  // 없으면(예: STEP 3 이전에 실패) 계산하지 않고 null로 둔다 — "찾지
+  // 못했다"와 "계산할 근거 자체가 없었다"를 구분한다.
+  const hasBasis = Boolean(record.ocrText || record.imageFeatures || profile);
+  const identification = hasBasis
+    ? identifyProduct({
+        ocrText: record.ocrText,
+        visionText: record.imageFeatures ? JSON.stringify(record.imageFeatures) : null,
+      })
+    : null;
+  const crossVerification = identification
+    ? crossVerifyProduct({ identification, profile })
+    : null;
   return {
     id: record.id,
     imageIds: record.imageIds,
@@ -20,7 +46,9 @@ function toDto(record: ProductProfileRecord): ProductProfileDto {
     status: record.status,
     ocrText: record.ocrText,
     imageFeatures: record.imageFeatures as ProductProfileDto["imageFeatures"],
-    profile: record.profile as ProductProfileDto["profile"],
+    profile,
+    identification,
+    crossVerification,
     pageCopy: record.pageCopy as ProductProfileDto["pageCopy"],
     html: record.html,
     css: record.css,

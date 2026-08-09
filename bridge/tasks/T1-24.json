@@ -1,0 +1,8 @@
+{
+  "taskId": "T1-24",
+  "title": "Product Profile 생성",
+  "request": "교차 검증이 끝난 정보만 사용한다.",
+  "requestedBy": "ChatGPT",
+  "state": "REQUESTED",
+  "createdAt": "2026-08-08T16:45:54.581Z"
+}

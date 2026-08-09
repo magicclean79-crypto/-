@@ -534,6 +534,44 @@ export function ProductProfileFlow() {
             </Card>
           )}
 
+          {profile.crossVerification && (
+            <Card title="교차 검증 결과 (T1-23/T1-24)">
+              <p className="mb-2 text-xs text-zinc-500">
+                OCR 직접 추출과 GPT 분석이 같은 항목에 다른 값을 말하면
+                자동으로 채우지 않습니다. 위 카드의 브랜드·모델은 GPT가 답한
+                그대로(가공 없음)이고, 아래 상세페이지 HTML·카피 생성에는
+                이 검증을 통과한 값만 쓰입니다 — 충돌이 있으면 사람이
+                판단해야 합니다.
+              </p>
+              <dl className="grid grid-cols-[7rem_1fr] gap-x-3 gap-y-1 rounded bg-rose-50 p-2 text-sm dark:bg-rose-950/40">
+                {profile.crossVerification.fields.map((field) => (
+                  <div key={field.field} className="contents">
+                    <dt className="text-zinc-500">{field.field}</dt>
+                    <dd
+                      className={
+                        field.status === "conflict"
+                          ? "font-medium text-rose-600 dark:text-rose-400"
+                          : field.status === "unknown"
+                            ? "text-zinc-400"
+                            : "font-medium"
+                      }
+                    >
+                      {field.status === "unknown" && "찾지 못함"}
+                      {field.status === "conflict" &&
+                        `충돌 — ${field.observations
+                          .map((o) => `${o.source}: ${o.value}`)
+                          .join(" / ")} (자동으로 채우지 않음, 사람 판단 필요)`}
+                      {(field.status === "agreed" || field.status === "single-source") &&
+                        `${field.resolvedValue} (${field.observations
+                          .map((o) => o.source)
+                          .join(", ")})`}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </Card>
+          )}
+
           {profile.status === "SUCCESS" && profile.html && (
             <div className="flex flex-col gap-3">
               <div className="flex flex-wrap items-center justify-between gap-2">

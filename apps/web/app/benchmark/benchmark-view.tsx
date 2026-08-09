@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import type { DesignReviewDto, ProductProfileDto } from "@acos/shared";
 import { Badge, Card } from "@acos/ui";

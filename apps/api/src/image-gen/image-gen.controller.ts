@@ -99,7 +99,7 @@ export class ImageGenController {
     return { results: await this.service.listCandidates(sourceImageId, category as ImageCategory) };
   }
 
-  /** 사용자가 카테고리별 최종 이미지를 직접 선택 */
+  /** 사용자가 이미지의 선택 상태를 토글 — 한 카테고리에서 여러 장을 선택할 수 있다 */
   @Post("select")
   async selectImage(@Body() body: SelectImageRequest): Promise<ImageDto> {
     if (!body?.imageId) {
