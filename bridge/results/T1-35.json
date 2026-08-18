@@ -1,0 +1,8 @@
+{
+  "taskId": "T1-35",
+  "state": "SUPERSEDED",
+  "supersededBy": "T1-30",
+  "supersededReason": "PC·SSD 이동과 재부팅 후 재개라는 같은 범위. T1-30이 READY_FOR_REVIEW이며 RECOVERY_GUIDE §9에 절차가 기록됐다.",
+  "projectId": "acos",
+  "updatedAt": "2026-08-09T07:43:26.215Z"
+}

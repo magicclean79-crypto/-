@@ -1,0 +1,8 @@
+{
+  "taskId": "T1-34",
+  "state": "SUPERSEDED",
+  "supersededBy": "T1-29",
+  "supersededReason": "중복 정리 대상이던 T1-29/T1-32가 이미 정리됐다. T1-29를 기준 작업으로 유지하고 T1-32를 SUPERSEDED로 닫았다.",
+  "projectId": "acos",
+  "updatedAt": "2026-08-09T07:43:26.213Z"
+}
