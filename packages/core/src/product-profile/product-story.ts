@@ -77,6 +77,13 @@ export interface ProductStoryContext {
   availableImages: ProductStoryAvailableImage[];
   /** 사용자 요구사항 (T1-92) — Story의 표현·섹션 우선순위에 반영하되 사실은 바꾸지 않는다 */
   userRequirement?: string | null;
+  /**
+   * 목적(카테고리)별 사용자 요구사항 (T1-99, Story 연결은 T1-147). Image
+   * Studio 카테고리 카드에서 입력한 값 — 해당 카테고리를 imageRole로 쓰는
+   * 섹션에만 반영한다. 값이 없는 카테고리는 이 필드에 아예 키로 존재하지
+   * 않는다.
+   */
+  userRequirementsByCategory?: Partial<Record<ImageCategory, string>> | null;
 }
 
 /** LLM 응답을 ProductStory로 해석할 수 없을 때 */
@@ -203,8 +210,17 @@ export interface AssignedStorySection {
   gallery?: StudioSelectedImage[];
 }
 
-/** 한 섹션에 대표 이미지 외에 추가로 붙일 수 있는 갤러리 사진의 상한(T1-144) */
-const MAX_GALLERY_PER_SECTION = 3;
+/**
+ * 한 섹션에 대표 이미지 외에 추가로 붙일 수 있는 갤러리 사진의 상한
+ * (T1-144 최초 3장 → T1-147에서 6장으로 확대). 승인된 레퍼런스 시안은
+ * lifestyle/사용 장면 섹션에서 제품 연출 이미지를 여러 장 한 줄/그리드로
+ * 크게 보여준다 — 3장은 그 밀도에 못 미쳐(레이아웃 하나에 1x3 그리드
+ * 정도만 가능) 2x3까지 채울 수 있게 늘렸다. 이렇게 늘려도 "동일 이미지
+ * 반복 최소화" 원칙(`assignStoryImages` 1차 패스)은 그대로 유지된다 —
+ * 상한은 "얼마나 많이 보여줄 수 있는가"이지 "억지로 채운다"는 뜻이
+ * 아니다.
+ */
+const MAX_GALLERY_PER_SECTION = 6;
 
 /**
  * 구성품(COMPONENTS) 역할은 실제 사진만 후보로 인정한다(T1-144 요청 사양
@@ -328,4 +344,49 @@ export function buildLeftoverMediaGallery(
     return true;
   });
   return unique.slice(0, MAX_LEFTOVER_GALLERY).map((image) => ({ image }));
+}
+
+/**
+ * `buildLeftoverMediaGallery`가 찾은, 어느 섹션에도 배정되지 못한 사진을
+ * "제품 더 보기"라는 별도 회수 섹션으로 모으는 대신, **같은 카테고리를
+ * 이미 쓰고 있는 섹션의 갤러리**에 합쳐 넣는다. (T1-147)
+ *
+ * 승인된 레퍼런스 시안에는 "더 보기" 같은 별도 잡동사니 섹션이 없다 —
+ * 제품 연출 이미지는 각자 의미 있는 섹션(사용 장면·디테일 등) 안에
+ * 크게/여러 장 배치된다. 그래서 카테고리가 일치하는 섹션이 있으면
+ * 거기로 합치고(그 섹션은 원래 같은 카테고리 사진을 쓰기로 이미 정해져
+ * 있으므로 맥락이 어긋나지 않는다), **일치하는 섹션이 하나도 없는
+ * 카테고리**(어떤 섹션도 그 imageRole을 쓰지 않은 경우)는 억지로 아무
+ * 섹션에나 끼워 넣지 않고 그대로 버린다 — 엉뚱한 섹션에 맥락이 안 맞는
+ * 사진을 넣는 것이 "몇 장 덜 보여주는 것"보다 나쁘다(요청 사양 "이미지가
+ * 섹션 목적과 맞지 않으면 renderer가 선택하지 못하게 한다").
+ *
+ * 카테고리가 일치하는 섹션이 여러 개면 그 중 **갤러리가 더 적게 찬
+ * 섹션**부터 채운다 — 한 섹션에만 몰리지 않고 고르게 퍼진다.
+ */
+export function foldLeftoverImagesIntoSections(
+  assigned: AssignedStorySection[],
+  leftovers: LeftoverGalleryEntry[],
+): AssignedStorySection[] {
+  if (leftovers.length === 0) return assigned;
+  const galleries = assigned.map((item) => [...(item.gallery ?? [])]);
+  const categoryToIndices = new Map<ImageCategory, number[]>();
+  assigned.forEach((item, index) => {
+    if (item.section.imageRole === "NONE") return;
+    const list = categoryToIndices.get(item.section.imageRole) ?? [];
+    list.push(index);
+    categoryToIndices.set(item.section.imageRole, list);
+  });
+
+  for (const { image } of leftovers) {
+    const candidateIndices = categoryToIndices.get(image.category);
+    if (!candidateIndices || candidateIndices.length === 0) continue;
+    let targetIndex = candidateIndices[0];
+    for (const index of candidateIndices) {
+      if (galleries[index].length < galleries[targetIndex].length) targetIndex = index;
+    }
+    galleries[targetIndex].push(image);
+  }
+
+  return assigned.map((item, index) => ({ ...item, gallery: galleries[index] }));
 }

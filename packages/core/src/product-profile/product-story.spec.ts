@@ -1,8 +1,10 @@
 import {
   assignStoryImages,
   buildLeftoverMediaGallery,
+  foldLeftoverImagesIntoSections,
   parseProductStoryResponse,
   ProductStoryParseError,
+  type AssignedStorySection,
   type ProductStory,
 } from "./product-story";
 import type { StudioSelectedImage } from "./product-page-images";
@@ -339,5 +341,84 @@ describe("buildLeftoverMediaGallery", () => {
     const assigned = assignStoryImages(story, available);
     const leftover = buildLeftoverMediaGallery(assigned, available);
     expect(leftover).toEqual([]);
+  });
+});
+
+describe("foldLeftoverImagesIntoSections", () => {
+  it("남은 이미지를 같은 카테고리를 쓰는 섹션의 갤러리로 합친다(T1-147) — 별도 회수 섹션을 만들지 않는다", () => {
+    const story: ProductStory = {
+      productName: "x",
+      narrativeSummary: "y",
+      sections: [
+        {
+          sectionId: "usage",
+          purpose: "사용 장면",
+          customerContext: "c",
+          productFacts: [],
+          keyMessage: "k",
+          imageRole: "USAGE_SCENE",
+          imageFactsShown: ["f"],
+          copy: "본문",
+          transitionToNext: "",
+        },
+      ],
+    };
+    // 대표 1장 + 섹션당 갤러리 상한(6장)을 넘는 수를 준비해 "진짜 leftover"가
+    // 생기게 한다 — 상한 이하면 assignStoryImages 2차 패스가 이미 다 흡수한다.
+    const available = Array.from({ length: 9 }, (_, i) => image(`u${i + 1}`, "USAGE_SCENE"));
+    const assigned = assignStoryImages(story, available);
+    const leftover = buildLeftoverMediaGallery(assigned, available);
+    expect(leftover.length).toBeGreaterThan(0);
+    const folded = foldLeftoverImagesIntoSections(assigned, leftover);
+    const allIds = new Set([
+      folded[0].image?.imageId,
+      ...(folded[0].gallery ?? []).map((img) => img.imageId),
+    ]);
+    // 카테고리가 일치하므로 전부 이 섹션 하나로 흡수된다 — 별도 섹션이 필요 없다
+    expect(allIds.size).toBe(9);
+  });
+
+  it("일치하는 섹션이 없는 카테고리의 남은 이미지는 억지로 끼워 넣지 않는다(T1-147)", () => {
+    const assigned: AssignedStorySection[] = [
+      {
+        section: {
+          sectionId: "usage",
+          purpose: "사용 장면",
+          customerContext: "c",
+          productFacts: [],
+          keyMessage: "k",
+          imageRole: "USAGE_SCENE",
+          imageFactsShown: [],
+          copy: "본문",
+          transitionToNext: "",
+        },
+        image: image("u1", "USAGE_SCENE"),
+        gallery: [],
+      },
+    ];
+    const leftover = [{ image: image("orphan", "COMPONENTS") }];
+    const folded = foldLeftoverImagesIntoSections(assigned, leftover);
+    expect(folded[0].gallery).toEqual([]);
+  });
+
+  it("남은 이미지가 없으면 배정을 그대로 반환한다", () => {
+    const assigned: AssignedStorySection[] = [
+      {
+        section: {
+          sectionId: "usage",
+          purpose: "p",
+          customerContext: "c",
+          productFacts: [],
+          keyMessage: "k",
+          imageRole: "USAGE_SCENE",
+          imageFactsShown: [],
+          copy: "본문",
+          transitionToNext: "",
+        },
+        image: image("u1", "USAGE_SCENE"),
+        gallery: [],
+      },
+    ];
+    expect(foldLeftoverImagesIntoSections(assigned, [])).toBe(assigned);
   });
 });

@@ -7,6 +7,8 @@ import {
   buildProductFactsPanel,
   buildProductPageViewModel,
   crossVerifyProduct,
+  dropRedundantNoticeSections,
+  foldLeftoverImagesIntoSections,
   identifyProduct,
   orderStudioImagesForPage,
   parseProductStoryResponse,
@@ -640,12 +642,17 @@ export class ProductProfileService {
 
     const userRequirement =
       userRequirementOverride !== undefined ? userRequirementOverride : record.userRequirement;
+    // 목적(카테고리)별 요구사항(T1-99)을 Story 프롬프트에도 연결한다
+    // (T1-147) — 지금까지는 Gemini 이미지 생성에만 쓰이고 Story(카피·
+    // 섹션 우선순위)에는 전달되지 않았다.
+    const userRequirementsByCategory = normalizeRequirementsByCategory(record.userRequirementsByCategory);
 
     const context: ProductStoryContext = {
       profile: verifiedProfile,
       productPackage: verifiedProfile,
       availableImages: availableImageSummary,
       userRequirement,
+      userRequirementsByCategory,
     };
     const baseMessages = this.promptEngine.render(PRODUCT_STORY_TEMPLATE_KEY, context);
     const availableCategories = availableImageSummary.map((item) => item.category);
@@ -684,16 +691,23 @@ export class ProductProfileService {
       );
 
       story = parseProductStoryResponse(completion.text, availableCategories);
+      // 주의사항/보증 섹션은 여기서 걸러낸다(T1-147) — 아래 `buildProductFactsPanel`이
+      // 검증된 값으로 같은 내용을 페이지 맨 아래에 항상 한 번 붙이므로,
+      // LLM이 만든 별도 주의사항 섹션을 그대로 두면 페이지에 두 번 나타난다.
+      story = dropRedundantNoticeSections(story);
       assigned = assignStoryImages(story, availableImages);
       // 디자인(레이아웃·타이포그래피·아이콘·강조색)은 LLM이 아니라 이 결정적
       // 함수가 정한다 — Story Section의 이미 검증된 필드에서만 도출한다
       // (T1-112, "누가 무엇을 결정하는가": 카피=LLM, 디자인=이 파이프라인).
       designPlan = planStoryDesign(story);
-      // 어느 섹션에도 배정되지 못한 선택 이미지를 맨 아래 갤러리로 살린다
-      // (T1-144 — 이미지 밀도 확대). 이후 재렌더링(생성형 자산 반영)에서도
-      // 같은 값을 그대로 재사용한다 — 이미지 배정 자체는 여기서 이미 끝났다.
+      // 어느 섹션에도 배정되지 못한 선택 이미지는 별도 "제품 더 보기"
+      // 섹션 대신, 같은 카테고리를 쓰는 섹션의 갤러리로 합친다(T1-147 —
+      // 레퍼런스 시안에는 별도 회수 섹션이 없다). 이후 재렌더링(생성형
+      // 자산 반영)에서도 같은 값을 그대로 재사용한다 — 이미지 배정 자체는
+      // 여기서 이미 끝났다.
       mediaGallery = buildLeftoverMediaGallery(assigned, availableImages);
-      rendered = renderProductStoryHtml(story, assigned, designPlan, undefined, undefined, mediaGallery);
+      assigned = foldLeftoverImagesIntoSections(assigned, mediaGallery);
+      rendered = renderProductStoryHtml(story, assigned, designPlan);
       // designPlan·html을 함께 넘겨 "Design Plan과 실제 HTML의 일치도"까지
       // 검사한다(T1-112) — 렌더러가 Design Plan을 무시해도 여기서 잡힌다.
       validation = validateProductStory(story, assigned, verifiedProfile, userRequirement, designPlan, rendered.html);
@@ -839,7 +853,7 @@ export class ProductProfileService {
     // — 실 과금은 위 Gemini 호출들에서 이미 끝났다).
     if (auxiliaryGeneratedAssets.length > 0 || Object.keys(generativeIconAssets).length > 0 || heroMotifAsset) {
       const generativeVisuals: GenerativeVisualBundle = { icons: generativeIconAssets, heroMotif: heroMotifAsset };
-      rendered = renderProductStoryHtml(story, assigned, designPlan, auxiliaryGeneratedAssets, generativeVisuals, mediaGallery);
+      rendered = renderProductStoryHtml(story, assigned, designPlan, auxiliaryGeneratedAssets, generativeVisuals);
     }
 
     // 제품 정보/법정 표시 패널 (T1-139) — Story Section의 productFacts는
@@ -862,17 +876,17 @@ export class ProductProfileService {
       };
     }
 
-    // 최종 페이지에 실제로 쓰인 시각 asset 수 집계 (T1-144). `assigned`
-    // (대표+갤러리)와 `mediaGallery`(남은 이미지)가 이미 최종 HTML을 만든
-    // 그 값이므로, 여기서 다시 세는 것이지 새 값을 만드는 게 아니다 —
-    // 완료 보고에 "몇 장을 실제로 썼는지"를 사실로 남기기 위함이다.
+    // 최종 페이지에 실제로 쓰인 시각 asset 수 집계 (T1-144, T1-147에서
+    // 갱신). 남은 이미지는 이제 별도 "제품 더 보기" 섹션이 아니라
+    // `foldLeftoverImagesIntoSections`가 이미 `assigned[i].gallery`로
+    // 합쳐 놓았으므로, `assigned` 한 곳만 세면 실제로 렌더링된 장수와
+    // 정확히 일치한다 — 카테고리가 맞지 않아 폴드되지 못하고 버려진
+    // 이미지(`mediaGallery`에는 남아 있지만 `assigned`에는 없는 것)는
+    // 화면에 없으므로 "실제로 쓰인" 집계에도 넣지 않는다.
     const usedImages = new Map<string, StudioSelectedImage>();
     for (const item of assigned) {
       if (item.image) usedImages.set(item.image.imageId, item.image);
       for (const galleryImage of item.gallery ?? []) usedImages.set(galleryImage.imageId, galleryImage);
-    }
-    for (const entry of mediaGallery) {
-      usedImages.set(entry.image.imageId, entry.image);
     }
     const byCategory: Partial<Record<ImageCategory, number>> = {};
     let realProductPhotos = 0;

@@ -1,5 +1,5 @@
 import type { ProductStory } from "./product-story";
-import type { AssignedStorySection, LeftoverGalleryEntry } from "./product-story";
+import type { AssignedStorySection } from "./product-story";
 import type { StudioSelectedImage } from "./product-page-images";
 import { planStoryDesign, type SectionDesignSpec, type StoryDesignPlan } from "./product-story-design";
 import { iconMarkup, type StoryIconId } from "./product-page-icons";
@@ -232,10 +232,16 @@ function renderSection(
           `<img src="${dataUri(image)}" alt="${escapeHtml(section.keyMessage)}" loading="lazy" ${assetDataAttrs(image, section.sectionId, design.layout)}>`,
         )
       : "";
-  // 대표 이미지가 실제로 화면에 보일 때만 갤러리도 함께 보여준다(T1-144) —
-  // hideMedia로 대표 사진 자체를 생략한 섹션(Hero 중복 방지)에 갤러리만
-  // 남으면 "왜 이 섹션엔 큰 사진이 없는데 작은 사진들만 있지"처럼 어색하다.
-  const gallery = showMedia ? galleryStrip(item.gallery ?? [], section.sectionId, design.layout) : "";
+  // 갤러리는 대표 사진의 표시 여부(showMedia)와 무관하게 내용이 있으면
+  // 항상 보여준다(T1-147). T1-144 당시엔 갤러리가 96px 작은 썸네일이라
+  // "대표 사진 없이 작은 사진들만" 남으면 어색했지만, 지금은 lifestyle
+  // 이미지 밀도 요청에 맞춰 갤러리 자체가 180px 이상 큰 사진 행/그리드로
+  // 커졌다 — 대표 사진이 Hero로 이미 쓰였어도(hideMedia) 갤러리에 담긴
+  // 사진은 대표 사진과 다른 실제 사진이므로 그대로 보여주는 것이 이미지
+  // 밀도·"제품 더보기 섹션 금지"(남은 이미지를 섹션 갤러리로 흡수하는
+  // 대신 숨기지 않는다) 요청 사양에 맞다.
+  const gallery =
+    (item.gallery ?? []).length > 0 ? galleryStrip(item.gallery ?? [], section.sectionId, design.layout) : "";
   const aux = image ? "" : auxiliaryVisualLayer(auxiliaryVisual);
   const toneClass = design.toneIndex === 1 ? " pde-story-section--tone-b" : "";
   const layoutClass = `pde-story-section--${design.layout}`;
@@ -325,6 +331,7 @@ ${wrapClose}`;
       ${section.productFacts.length > 0 ? factList(section.productFacts, false) : ""}
     </figcaption>
   </figure>
+  ${gallery}
 ${wrapClose}`;
     }
 
@@ -338,6 +345,7 @@ ${wrapClose}`;
       <p class="pde-story-copy">${escapeHtml(section.copy)}</p>
     </figcaption>
   </figure>
+  ${gallery}
 ${wrapClose}`;
     }
 
@@ -366,34 +374,39 @@ ${wrapClose}`;
   }
 }
 
-const GALLERY_SOURCE_LABEL: Record<"real" | "generated", string> = {
-  real: "실제 제품 사진",
-  generated: "AI 생성 연출",
-};
-
 /**
- * 어느 Story Section에도 배정되지 못하고 남은 선택 이미지를 상세페이지
- * 맨 아래 "제품 더 보기" 구획으로 보여준다(T1-144 — 이미지 밀도 확대,
- * `buildLeftoverMediaGallery` 참고). Story Section 레이아웃과는 별개의
- * 새 레이아웃이다 — 카피 없이 사진만 촘촘히 보여주는 것이 목적이라
- * 억지로 "섹션"인 척 카피를 지어내지 않는다.
+ * 이 섹션 헤드라인 아래에 붙는 최대 4개의 "핵심 기능" 아이콘 행. (T1-147)
+ *
+ * 승인된 레퍼런스 시안의 Hero는 "왼쪽 텍스트/아이콘, 오른쪽 대형 제품
+ * 이미지" 구조이고, 텍스트 쪽에는 의미가 분명한 아이콘 4개짜리 기능
+ * 요약 행이 있다. 새 아이콘을 지어내지 않는다 — 이미 각 Story Section에
+ * 결정적으로 배정된 아이콘(`design.icon`)과 그 섹션의 실제 헤드라인
+ * (`keyMessage`, LLM이 이미 검증된 사실로 쓴 짧은 카피)만 재사용한다.
+ * 주의사항(notice)·마무리(closing)는 "핵심 기능" 성격이 아니라서 뺀다.
  */
-function renderMediaGallerySection(entries: LeftoverGalleryEntry[]): string {
-  if (entries.length === 0) return "";
-  const items = entries
-    .map(({ image }) => {
-      const source = image.source ?? "generated";
-      return `<li>${zoomLink(
-        image,
-        `<img src="${dataUri(image)}" alt="" loading="lazy" ${assetDataAttrs(image, "media-gallery", "gallery")}>` +
-          `<span class="pde-media-gallery-badge" data-asset-source="${source}">${GALLERY_SOURCE_LABEL[source]}</span>`,
-      )}</li>`;
+function heroFeatureRow(
+  assignedSections: AssignedStorySection[],
+  designBySectionId: Map<string, SectionDesignSpec>,
+  generativeIcons: Partial<Record<StoryIconId, GenerativeVisualAsset>>,
+): string {
+  const items = assignedSections
+    .map((item) => {
+      const design = designBySectionId.get(item.section.sectionId);
+      return design ? { section: item.section, design } : null;
     })
+    .filter(
+      (entry): entry is { section: AssignedStorySection["section"]; design: SectionDesignSpec } =>
+        entry !== null && entry.design.icon !== "none" && entry.design.layout !== "notice" && entry.design.layout !== "closing",
+    )
+    .slice(0, 4);
+  if (items.length === 0) return "";
+  const chips = items
+    .map(
+      ({ section, design }) =>
+        `<li class="pde-hero-feature" style="--pde-story-accent:${design.accentColor};">${iconBadge(design, generativeIcons)}<span>${escapeHtml(section.keyMessage)}</span></li>`,
+    )
     .join("");
-  return `<section class="pde-media-gallery" data-section-id="media-gallery" data-layout="media-gallery">
-  <p class="pde-media-gallery-heading">제품 더 보기</p>
-  <ul class="pde-media-gallery-grid" data-gallery-count="${entries.length}">${items}</ul>
-</section>`;
+  return `<ul class="pde-hero-features" data-feature-count="${items.length}">${chips}</ul>`;
 }
 
 /**
@@ -408,7 +421,6 @@ export function renderProductStoryHtml(
   designPlan?: StoryDesignPlan,
   auxiliaryVisuals?: AuxiliaryVisualAsset[],
   generativeVisuals?: GenerativeVisualBundle,
-  mediaGallery?: LeftoverGalleryEntry[],
 ): ProductStoryHtmlResult {
   const plan = designPlan ?? planStoryDesign(story);
   const designBySectionId = new Map(plan.sections.map((s) => [s.sectionId, s]));
@@ -436,12 +448,17 @@ export function renderProductStoryHtml(
     ? `<p class="pde-hero-subheadline">${escapeHtml(heroSubheadline)}</p>`
     : "";
   const heroAssetAttrs = heroImage && heroSourceItem ? assetDataAttrs(heroImage, heroSourceItem.section.sectionId, "hero") : "";
+  // HERO split layout(T1-147) — 왼쪽 텍스트+핵심 기능 아이콘, 오른쪽 대형
+  // 제품 이미지. 승인된 레퍼런스 시안 기준. 사진이 없는 경우(fallback)는
+  // 기존처럼 가운데 정렬 텍스트 Hero를 그대로 쓴다 — 보여줄 이미지가
+  // 없는데 split 레이아웃을 강제하면 오른쪽이 빈 채로 남아 더 어색하다.
+  const heroFeaturesHtml = heroFeatureRow(assignedSections, designBySectionId, generativeIcons);
   const heroBlock = heroImage
-    ? `<header class="pde-hero pde-hero--photo" style="background-image:url('${dataUri(heroImage)}')" ${heroAssetAttrs}>${heroMotifLayerHtml}${zoomLink(
+    ? `<header class="pde-hero pde-hero--photo">${heroMotifLayerHtml}<div class="pde-hero-grid"><div class="pde-hero-media">${zoomLink(
         heroImage,
-        `<div class="pde-hero-overlay"><h1>${escapeHtml(story.productName)}</h1>${heroSubheadlineHtml}</div>`,
-      )}</header>`
-    : `<header class="pde-hero">${heroMotifLayerHtml}<h1>${escapeHtml(story.productName)}</h1>${heroSubheadlineHtml}</header>`;
+        `<img src="${dataUri(heroImage)}" alt="${escapeHtml(story.productName)}" ${heroAssetAttrs}>`,
+      )}</div><div class="pde-hero-text"><h1>${escapeHtml(story.productName)}</h1>${heroSubheadlineHtml}${heroFeaturesHtml}</div></div></header>`
+    : `<header class="pde-hero">${heroMotifLayerHtml}<h1>${escapeHtml(story.productName)}</h1>${heroSubheadlineHtml}${heroFeaturesHtml}</header>`;
 
   const sectionsHtml = assignedSections
     .map((item, index) => {
@@ -474,7 +491,6 @@ export function renderProductStoryHtml(
     '<div class="pde-story-flow">',
     sectionsHtml,
     "</div>",
-    renderMediaGallerySection(mediaGallery ?? []),
     "</div>",
   ].join("");
 
@@ -502,7 +518,7 @@ export function renderProductStoryHtml(
   overflow: hidden;
 }
 
-/* -- Hero: full-bleed 대형 비주얼 + 강한 헤드라인 + 짧은 서브헤드라인 -- */
+/* -- Hero: 이미지가 없을 때(fallback)만 쓰는 가운데 정렬 텍스트 Hero -- */
 .pde-page--story .pde-hero {
   position: relative;
   padding: 96px 24px;
@@ -514,7 +530,7 @@ export function renderProductStoryHtml(
   margin: 0;
   font-family: var(--pde-font-display);
   font-size: clamp(34px, 10vw, 60px);
-  font-weight: 900;
+  font-weight: 800;
   letter-spacing: -0.02em;
   line-height: 1.1;
 }
@@ -522,7 +538,7 @@ export function renderProductStoryHtml(
   margin: 18px 0 0;
   font-family: var(--pde-font-emphasis);
   font-size: clamp(16px, 3.4vw, 21px);
-  font-weight: 700;
+  font-weight: 600;
   color: rgba(255, 255, 255, 0.9);
   letter-spacing: -0.01em;
 }
@@ -538,34 +554,77 @@ export function renderProductStoryHtml(
   pointer-events: none;
   z-index: 0;
 }
-.pde-page--story .pde-hero > a,
 .pde-page--story .pde-hero > h1,
-.pde-page--story .pde-hero > .pde-hero-subheadline {
+.pde-page--story .pde-hero > .pde-hero-subheadline,
+.pde-page--story .pde-hero > .pde-hero-features {
   position: relative;
   z-index: 1;
 }
+
+/* -- HERO split(T1-147): 왼쪽 텍스트+핵심 기능 아이콘, 오른쪽 대형 제품
+   이미지 — 승인된 레퍼런스 시안 기준. 모바일에서는 이미지를 위, 텍스트를
+   아래로 세로 스택한다(제품이 페이지의 주인공이라는 원칙은 그대로 유지
+   하되, 좁은 화면에서 좌우 분할은 각각의 폭이 너무 좁아져 읽기 어렵다). -- */
 .pde-page--story .pde-hero--photo {
-  min-height: 82vh;
   padding: 0;
-  display: flex;
-  align-items: flex-end;
-  background-size: cover;
-  background-position: center;
   text-align: left;
+  background: #ffffff;
+  color: #0f172a;
 }
-.pde-page--story .pde-hero--photo h1 {
-  font-size: clamp(30px, 9vw, 52px);
+.pde-page--story .pde-hero-grid {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
 }
-.pde-page--story .pde-hero--photo > a {
+.pde-page--story .pde-hero-media {
+  order: -1;
+}
+.pde-page--story .pde-hero-media > a {
+  display: block;
+}
+.pde-page--story .pde-hero-media img {
   display: block;
   width: 100%;
-  color: inherit;
-  text-decoration: none;
+  height: 58vh;
+  min-height: 340px;
+  max-height: 600px;
+  object-fit: cover;
 }
-.pde-page--story .pde-hero-overlay {
-  width: 100%;
-  padding: 140px 24px 40px;
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.9) 0%, rgba(0, 0, 0, 0.45) 55%, rgba(0, 0, 0, 0) 100%);
+.pde-page--story .pde-hero-text {
+  padding: 40px 24px 48px;
+}
+.pde-page--story .pde-hero--photo h1 {
+  font-family: var(--pde-font-display);
+  font-size: clamp(28px, 8vw, 46px);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  color: #0f172a;
+}
+.pde-page--story .pde-hero--photo .pde-hero-subheadline {
+  color: #334155;
+}
+.pde-page--story .pde-hero-features {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 22px;
+  margin: 28px 0 0;
+  padding: 20px 0 0;
+  list-style: none;
+  border-top: 1px solid #e4e4e7;
+}
+.pde-page--story .pde-hero-feature {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--pde-font-emphasis);
+  font-size: 14px;
+  font-weight: 700;
+  color: #18181b;
+}
+.pde-page--story .pde-hero-feature .pde-story-icon {
+  margin-right: 0;
 }
 
 /* -- 아이콘 배지: 기본은 인라인 SVG, 생성형 아이콘 자산이 있으면 --gen 변형(T1-142) -- */
@@ -1024,74 +1083,27 @@ export function renderProductStoryHtml(
   font-size: 17px;
 }
 
-/* -- 갤러리 스트립: 대표 이미지 하나로는 부족한 섹션(구성품 전부·디테일 여러 컷)에 붙는 보조 썸네일(T1-144) -- */
+/* -- 갤러리 스트립: 대표 이미지 하나로는 부족한 섹션(구성품·디테일·사용
+   장면 여러 컷)에 붙는 lifestyle 이미지 행(T1-144 최초 도입, T1-147에서
+   확대) — 상한이 6장으로 늘어난 만큼 썸네일이 아니라 실제로 "충분한
+   크기"로 보이도록 높이를 키운다. -- */
 .pde-page--story .pde-story-gallery-strip {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-  margin: 14px 0 0;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  margin: 20px 0 0;
   padding: 0;
   list-style: none;
 }
 .pde-page--story .pde-story-gallery-strip img {
   display: block;
   width: 100%;
-  height: 96px;
+  height: 180px;
   object-fit: cover;
   border-radius: 4px;
-}
-
-/* -- 제품 더 보기: Story Section에 배정되지 못한 선택 이미지를 모두 보여주는 마지막 갤러리(T1-144) -- */
-.pde-media-gallery {
-  padding: 48px 24px 72px;
-  background: #fafafa;
-}
-.pde-media-gallery-heading {
-  margin: 0 0 20px;
-  font-family: var(--pde-font-display, sans-serif);
-  font-size: 20px;
-  font-weight: 800;
-  color: #18181b;
-  text-align: center;
-}
-.pde-media-gallery-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 10px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.pde-media-gallery-grid a {
-  position: relative;
-  display: block;
-}
-.pde-media-gallery-grid img {
-  display: block;
-  width: 100%;
-  height: 200px;
-  object-fit: cover;
-  border-radius: 4px;
-}
-.pde-media-gallery-badge {
-  position: absolute;
-  left: 8px;
-  bottom: 8px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 700;
-  color: #fff;
-  background: rgba(15, 23, 42, 0.72);
-}
-.pde-media-gallery-badge[data-asset-source="real"] {
-  background: rgba(15, 118, 110, 0.85);
 }
 
 @media (min-width: 760px) {
-  .pde-media-gallery-grid {
-    grid-template-columns: repeat(4, 1fr);
-  }
   .pde-page.pde-page--story {
     font-size: 18px;
   }
@@ -1107,8 +1119,33 @@ export function renderProductStoryHtml(
   .pde-page--story .pde-hero {
     padding: 140px 64px;
   }
-  .pde-page--story .pde-hero-overlay {
-    padding: 180px 64px 64px;
+  /* HERO split: 데스크톱에서 좌(텍스트+기능 아이콘)/우(대형 제품 이미지) 2단 구성(T1-147) */
+  .pde-page--story .pde-hero-grid {
+    flex-direction: row;
+    align-items: stretch;
+    min-height: 640px;
+  }
+  .pde-page--story .pde-hero-media {
+    order: 0;
+    flex: 1 1 52%;
+  }
+  .pde-page--story .pde-hero-media img {
+    height: 100%;
+    min-height: 640px;
+    max-height: none;
+  }
+  .pde-page--story .pde-hero-text {
+    flex: 1 1 48%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 64px;
+  }
+  .pde-page--story .pde-story-gallery-strip {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .pde-page--story .pde-story-gallery-strip img {
+    height: 220px;
   }
   .pde-page--story .pde-story-figure img {
     width: calc(100% + 128px);

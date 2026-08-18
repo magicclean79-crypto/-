@@ -91,9 +91,9 @@ describe("renderProductStoryHtml", () => {
       { section: story.sections[1], image: null },
     ];
     const { html } = renderProductStoryHtml(story, assigned);
-    // Hero 배경(인라인 style)에는 한 번, 본문 <img> 태그에는 한 번도 나오면 안 된다
-    expect(html).toContain(`background-image:url('data:image/jpeg;base64,${image.base64}')`);
-    expect(html).not.toContain(`<img src="data:image/jpeg;base64,${image.base64}"`);
+    // Hero(pde-hero-media)에는 한 번만 나오고, 본문(pde-story-figure)에는 다시 나오면 안 된다
+    expect(html).toContain(`<div class="pde-hero-media">`);
+    expect(html.match(new RegExp(`<img src="data:image/jpeg;base64,${image.base64}"`, "g"))).toHaveLength(1);
     // 본문 텍스트는 그대로 유지된다(사진만 생략, 카피는 유지)
     expect(html).toContain("s1 섹션 본문 내용입니다.");
   });
@@ -108,6 +108,47 @@ describe("renderProductStoryHtml", () => {
     const { html } = renderProductStoryHtml(story, assigned);
     expect(html).not.toContain("pde-hero--photo");
     expect(html).toContain("<h1>베란다 호스</h1>");
+  });
+
+  it("Hero는 왼쪽 텍스트/오른쪽 대형 이미지 split 마크업(pde-hero-grid)으로 렌더링한다(T1-147)", () => {
+    const story: ProductStory = {
+      productName: "베란다 호스",
+      narrativeSummary: "요약",
+      sections: [section("s1", "USAGE_SCENE")],
+    };
+    const assigned: AssignedStorySection[] = [{ section: story.sections[0], image }];
+    const { html } = renderProductStoryHtml(story, assigned);
+    expect(html).toContain('<div class="pde-hero-grid">');
+    expect(html).toContain('<div class="pde-hero-media">');
+    expect(html).toContain('<div class="pde-hero-text">');
+  });
+
+  it("Hero 텍스트 영역에 의미 있는 아이콘이 있는 섹션 최대 4개를 핵심 기능 행으로 보여준다(T1-147)", () => {
+    const withFacts = (id: string, role: AssignedStorySection["section"]["imageRole"]) => ({
+      ...section(id, role),
+      productFacts: ["사실1", "사실2"],
+    });
+    const story: ProductStory = {
+      productName: "베란다 호스",
+      narrativeSummary: "요약",
+      sections: [
+        section("hero", "USAGE_SCENE"),
+        withFacts("f1", "NONE"),
+        withFacts("f2", "NONE"),
+        withFacts("f3", "NONE"),
+        withFacts("f4", "NONE"),
+        withFacts("f5", "NONE"),
+      ],
+    };
+    const assigned: AssignedStorySection[] = story.sections.map((s) => ({
+      section: s,
+      image: s.sectionId === "hero" ? image : null,
+    }));
+    const { html } = renderProductStoryHtml(story, assigned);
+    expect(html).toContain("pde-hero-features");
+    const chipCount = (html.match(/pde-hero-feature"/g) ?? []).length;
+    expect(chipCount).toBeLessThanOrEqual(4);
+    expect(chipCount).toBeGreaterThan(0);
   });
 });
 
@@ -496,7 +537,7 @@ describe("renderProductStoryHtml — 생성형 아이콘/kicker/Hero 모티프 (
     expect(html).toContain('data-asset-section-id="components"');
   });
 
-  it("대표 이미지가 Hero 중복으로 숨겨지면 갤러리도 함께 생략한다(T1-144)", () => {
+  it("대표 이미지가 Hero 중복으로 숨겨져도 갤러리는 그대로 보여준다(T1-147) — 갤러리 사진은 Hero와 다른 실제 사진이라 이미지 밀도를 위해 유지한다", () => {
     const story: ProductStory = {
       productName: "베란다 호스",
       narrativeSummary: "요약",
@@ -507,32 +548,17 @@ describe("renderProductStoryHtml — 생성형 아이콘/kicker/Hero 모티프 (
     const assigned: AssignedStorySection[] = [{ section: story.sections[0], image: heroImage, gallery }];
     const plan = planStoryDesign(story);
     const { html } = renderProductStoryHtml(story, assigned, plan);
-    // c1이 Hero로도 쓰이므로 본문에서는 대표 사진 자체가 숨겨진다 —
-    // 그렇다면 딸린 갤러리도 "큰 사진 없이 작은 사진들만" 어색하게
-    // 남지 않아야 한다.
-    expect(html).not.toContain("pde-story-gallery-strip");
+    // c1이 Hero로도 쓰이므로 본문에서는 대표 사진 자체가 숨겨지지만,
+    // c2(갤러리)는 c1과 다른 실제 사진이므로 그대로 보여준다.
+    expect(html).toContain("pde-story-gallery-strip");
+    expect(html).toContain('data-asset-id="c2"');
   });
 
-  it("어느 섹션에도 배정되지 못한 남은 이미지는 '제품 더 보기' 갤러리로 렌더링한다(T1-144)", () => {
+  it("별도 '제품 더 보기' 회수 섹션을 렌더링하지 않는다(T1-147) — 남은 이미지는 assignStoryImages 단계에서 섹션 갤러리로 합쳐진다", () => {
     const story: ProductStory = { productName: "베란다 호스", narrativeSummary: "요약", sections: [noticeSection] };
     const assigned: AssignedStorySection[] = [{ section: story.sections[0], image: null }];
-    const mediaGallery = [
-      { image: { ...image, imageId: "extra-real", category: "USAGE_SCENE" as const, source: "real" as const } },
-      { image: { ...image, imageId: "extra-gen", category: "DETAIL" as const, source: "generated" as const } },
-    ];
-    const { html } = renderProductStoryHtml(story, assigned, undefined, undefined, undefined, mediaGallery);
-    expect(html).toContain("pde-media-gallery");
-    expect(html).toContain("제품 더 보기");
-    expect(html).toContain('data-asset-id="extra-real"');
-    expect(html).toContain("실제 제품 사진");
-    expect(html).toContain('data-asset-id="extra-gen"');
-    expect(html).toContain("AI 생성 연출");
-  });
-
-  it("남은 갤러리가 비어있으면 '제품 더 보기' 구획 자체를 렌더링하지 않는다(T1-144)", () => {
-    const story: ProductStory = { productName: "베란다 호스", narrativeSummary: "요약", sections: [noticeSection] };
-    const assigned: AssignedStorySection[] = [{ section: story.sections[0], image: null }];
-    const { html } = renderProductStoryHtml(story, assigned, undefined, undefined, undefined, []);
+    const { html } = renderProductStoryHtml(story, assigned);
     expect(html).not.toContain("pde-media-gallery");
+    expect(html).not.toContain("제품 더 보기");
   });
 });

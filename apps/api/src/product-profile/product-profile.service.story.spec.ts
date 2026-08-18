@@ -505,17 +505,17 @@ describe("ProductProfileService.generateStory — 이미지 밀도 확대 (T1-14
     expect(result.assetInventory.byCategory).toEqual({ USAGE_SCENE: 1, DETAIL: 1 });
   });
 
-  it("실제 업로드 원본(kind=ORIGINAL)이 선택돼 있으면 source=real로 실리고, 그 crop도 함께 실제 asset으로 집계된다", async () => {
-    // Story의 두 섹션(USAGE_SCENE·DETAIL)은 storyResponseText가 고정하므로
-    // 여기 추가하는 HERO 실제 원본은 어느 섹션에도 대표로 배정되지 않고
-    // "제품 더 보기" 남은 갤러리로 들어간다 — 그래도 assetInventory에는
-    // 실제로 최종 페이지에 쓰인 asset으로 정확히 집계돼야 한다.
+  it("실제 업로드 원본(kind=ORIGINAL)이 선택돼 있고 같은 카테고리를 쓰는 섹션이 있으면 source=real로 그 섹션 갤러리에 합쳐진다", async () => {
+    // Story의 두 섹션(USAGE_SCENE·DETAIL)은 storyResponseText가 고정한다 —
+    // 여기서는 그 중 하나와 같은 카테고리(USAGE_SCENE)의 실제 원본을
+    // 추가해, "카테고리가 일치하는 섹션의 갤러리로 합쳐진다"(T1-147)는
+    // 경로를 검증한다.
     const prisma = createPrismaMock({}, [
       {
-        id: "orig-hero-1",
-        key: "images/orig-hero-1.jpg",
+        id: "orig-usage-1",
+        key: "images/orig-usage-1.jpg",
         mimeType: "image/jpeg",
-        category: "HERO",
+        category: "USAGE_SCENE",
         groupVersion: 1,
         kind: "ORIGINAL",
       },
@@ -527,8 +527,28 @@ describe("ProductProfileService.generateStory — 이미지 밀도 확대 (T1-14
     // 텍스트라 sharp가 처리하지 못해 crop이 0장일 수도 있다 — crop은
     // 향상일 뿐 필수가 아니므로 실패해도 원본 자체는 반드시 남는다).
     expect(result.assetInventory.realProductPhotos).toBeGreaterThanOrEqual(1);
-    expect(result.assetInventory.byCategory.HERO).toBeGreaterThanOrEqual(1);
-    expect(result.html).toContain("pde-media-gallery");
+    expect(result.assetInventory.byCategory.USAGE_SCENE).toBeGreaterThanOrEqual(2);
     expect(result.html).toContain('data-asset-source="real"');
+  });
+
+  it("어느 섹션도 쓰지 않는 카테고리의 남은 실제 사진은 별도 회수 섹션 없이 조용히 빠진다(T1-147) — 맥락이 안 맞는 자리에 억지로 넣지 않는다", async () => {
+    // Story의 두 섹션은 USAGE_SCENE·DETAIL만 쓴다 — COMPONENTS를 쓰는
+    // 섹션이 없으므로 이 실제 원본은 폴드될 곳이 없다.
+    const prisma = createPrismaMock({}, [
+      {
+        id: "orig-components-1",
+        key: "images/orig-components-1.jpg",
+        mimeType: "image/jpeg",
+        category: "COMPONENTS",
+        groupVersion: 1,
+        kind: "ORIGINAL",
+      },
+    ]);
+    const { service } = await createService({ prisma });
+    const result = await service.generateStory("pp-1");
+
+    expect(result.html).not.toContain("pde-media-gallery");
+    expect(result.html).not.toContain("제품 더 보기");
+    expect(result.assetInventory.byCategory.COMPONENTS ?? 0).toBe(0);
   });
 });
