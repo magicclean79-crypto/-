@@ -121,3 +121,72 @@ describe("buildProductFactsPanel", () => {
     expect(result!.html).not.toContain("<Corp>");
   });
 });
+
+/**
+ * canonical 템플릿 회귀 테스트 (T1-146). 벤치마크(호스 세트)와 완전히
+ * 다른 카테고리 상품으로 같은 함수를 호출해, 데이터만 바뀌고 구조·
+ * CSS/layout token은 상품이 달라져도 그대로임을 고정한다 — 실제 유료
+ * 파이프라인을 새로 돌리지 않고(비용 없음) 순수 함수 입력만 바꿔
+ * 검증한다.
+ */
+describe("buildProductFactsPanel — 다른 카테고리 상품(mock)에서도 canonical 템플릿 유지", () => {
+  function secondProductInput(overrides: Partial<ProductFactsPanelInput> = {}): ProductFactsPanelInput {
+    return {
+      profile: {
+        brand: "우리손칼",
+        model: "WSC-7K",
+        material: "스테인리스 스틸, 폴리프로필렌",
+        specifications: { 칼날길이: "20cm", 무게: "180g" },
+        features: ["한 번 갈아 오래 쓰는 내구성", "손잡이 논슬립 그립"],
+        usage: "주방에서 육류·채소 손질에 사용",
+        warnings: ["날카로운 칼날에 베이지 않도록 주의하세요", "식기세척기 사용을 피하세요"],
+      },
+      identification: { origin: "대한민국" },
+      components: ["칼 본체", "칼집"],
+      ...overrides,
+    };
+  }
+
+  it("호스 세트(벤치마크)와 전혀 다른 상품이어도 4개 섹션 제목·순서가 동일하다", () => {
+    const benchmark = buildProductFactsPanel(baseInput());
+    const other = buildProductFactsPanel(secondProductInput());
+    expect(benchmark).not.toBeNull();
+    expect(other).not.toBeNull();
+
+    const headingOrder = (html: string) =>
+      Array.from(html.matchAll(/<h3 class="pde-facts-heading">(.*?)<\/h3>/g)).map((m) =>
+        m[1].replace(/<[^>]+>/g, "").trim(),
+      );
+    expect(headingOrder(other!.html)).toEqual(["제품 사양", "구성품", "주요 기능/용도", "사용상 주의사항"]);
+    expect(headingOrder(other!.html)).toEqual(headingOrder(benchmark!.html));
+  });
+
+  it("상품이 달라져도 CSS(layout token)는 완전히 동일하다 — 데이터만 바뀐다", () => {
+    const benchmark = buildProductFactsPanel(baseInput());
+    const other = buildProductFactsPanel(secondProductInput());
+    expect(other!.css).toBe(benchmark!.css);
+  });
+
+  it("2열 라벨/값 사양표 구조를 그대로 재사용한다", () => {
+    const other = buildProductFactsPanel(secondProductInput());
+    expect(other!.html).toContain('class="pde-facts-grid"');
+    expect(other!.html).toContain('class="pde-facts-row"');
+    expect(other!.html).toContain("칼날길이");
+    expect(other!.html).toContain("20cm");
+    expect(other!.html).toContain("우리손칼");
+    expect(other!.html).toContain("WSC-7K");
+  });
+
+  it("주의사항 강조 박스와 검증 안내 문구를 상품이 달라져도 동일하게 붙인다", () => {
+    const other = buildProductFactsPanel(secondProductInput());
+    expect(other!.html).toContain("pde-facts-block--warning");
+    expect(other!.html).toContain("날카로운 칼날에 베이지 않도록 주의하세요");
+    expect(other!.html).toContain("위 정보는 검증된 내용만 표시합니다");
+  });
+
+  it("모바일→데스크톱 반응형 breakpoint(760px)를 유지한다", () => {
+    const other = buildProductFactsPanel(secondProductInput());
+    expect(other!.css).toContain("@media (min-width: 760px)");
+    expect(other!.css).toContain(".pde-facts-row { grid-template-columns: 200px 1fr");
+  });
+});
