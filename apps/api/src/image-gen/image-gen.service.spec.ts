@@ -16,6 +16,8 @@ function createPrismaMock() {
     profile: unknown;
     ocrText: string | null;
     updatedAt: Date;
+    userRequirement?: string | null;
+    userRequirementsByCategory?: unknown;
   }[] = [];
   let sequence = 0;
   const seed = (row: Partial<ImageRecord> & { id: string }) => {
@@ -40,6 +42,8 @@ function createPrismaMock() {
     imageIds: string[];
     profile: unknown;
     ocrText?: string | null;
+    userRequirement?: string | null;
+    userRequirementsByCategory?: unknown;
   }) => {
     productProfiles.push({
       ocrText: null,
@@ -101,7 +105,7 @@ function createPrismaMock() {
           where: {
             projectId?: string | null;
             kind?: string;
-            id?: { not?: string };
+            id?: { not?: string; in?: string[] };
             photoType?: string;
           };
           take?: number;
@@ -111,6 +115,7 @@ function createPrismaMock() {
               (where.projectId === undefined || row.projectId === where.projectId) &&
               (where.kind === undefined || row.kind === where.kind) &&
               (where.id?.not === undefined || row.id !== where.id.not) &&
+              (where.id?.in === undefined || where.id.in.includes(row.id)) &&
               (where.photoType === undefined || row.photoType === where.photoType),
           );
           return matches.slice(0, take ?? matches.length).map((row) => ({ ...row }));
@@ -203,6 +208,60 @@ describe("ImageGenService (Service Test)", () => {
     }).compile();
     return moduleRef.get(ImageGenService);
   }
+
+  it("generateAuxiliaryVisual: 참조 이미지 없이(0장) Provider를 호출하고 결과를 저장하지 않는다 (T1-123)", async () => {
+    const prisma = createPrismaMock();
+    const edit = jest.fn<Promise<ImageEditResult>, [ImageEditRequest]>(async () => fakeResult);
+    const service = await createService(prisma, edit);
+
+    const result = await service.generateAuxiliaryVisual("추상 배경 그래픽을 만들어줘");
+
+    expect(edit).toHaveBeenCalledTimes(1);
+    expect(edit.mock.calls[0][0].prompt).toBe("추상 배경 그래픽을 만들어줘");
+    expect(edit.mock.calls[0][0].images).toEqual([]);
+    expect(result.imageBytes).toBe(fakeResult.imageBytes);
+    expect(result.mimeType).toBe(fakeResult.mimeType);
+    expect(prisma.image.create).not.toHaveBeenCalled();
+  });
+
+  it("generateAuxiliaryVisual: 호출 전에 비용 예산을 확인한다 (T1-123)", async () => {
+    const prisma = createPrismaMock();
+    const edit = jest.fn<Promise<ImageEditResult>, [ImageEditRequest]>(async () => fakeResult);
+    const budget = { assertWithinBudget: jest.fn() };
+    const service = await createService(prisma, edit, { budget });
+
+    await service.generateAuxiliaryVisual("추상 배경 그래픽을 만들어줘");
+
+    expect(budget.assertWithinBudget).toHaveBeenCalledWith({ what: "상세페이지 보조 그래픽 생성 (Gemini)" });
+  });
+
+  it("generateDesignAsset: 참조 이미지 없이(0장) Provider를 호출하고 결과를 저장하지 않는다 (T1-142)", async () => {
+    const prisma = createPrismaMock();
+    const edit = jest.fn<Promise<ImageEditResult>, [ImageEditRequest]>(async () => fakeResult);
+    const service = await createService(prisma, edit);
+
+    const result = await service.generateDesignAsset("주의사항 아이콘을 만들어줘");
+
+    expect(edit).toHaveBeenCalledTimes(1);
+    expect(edit.mock.calls[0][0].prompt).toBe("주의사항 아이콘을 만들어줘");
+    expect(edit.mock.calls[0][0].images).toEqual([]);
+    expect(result.imageBytes).toBe(fakeResult.imageBytes);
+    expect(result.mimeType).toBe(fakeResult.mimeType);
+    expect(prisma.image.create).not.toHaveBeenCalled();
+  });
+
+  it("generateDesignAsset: 호출 전에 비용 예산을 확인하며, generateAuxiliaryVisual과 다른 사유 문구를 쓴다 (T1-142)", async () => {
+    const prisma = createPrismaMock();
+    const edit = jest.fn<Promise<ImageEditResult>, [ImageEditRequest]>(async () => fakeResult);
+    const budget = { assertWithinBudget: jest.fn() };
+    const service = await createService(prisma, edit, { budget });
+
+    await service.generateDesignAsset("주의사항 아이콘을 만들어줘");
+
+    expect(budget.assertWithinBudget).toHaveBeenCalledWith({
+      what: "상세페이지 생성형 타이포그래피/아이콘 자산 생성 (Gemini)",
+    });
+  });
 
   it("removeBackground: 원본 이미지 1장을 Provider에 보내고 BACKGROUND_REMOVED 이미지를 새로 만든다", async () => {
     const prisma = createPrismaMock();
@@ -557,6 +616,126 @@ describe("ImageGenService (Service Test)", () => {
     expect(candidate.generationMetadata?.rawResponseText).toBe("생성 완료");
   });
 
+  it("generateImageCandidates: 저장된 사용자 요구사항(T1-92)을 Product Package에 실어 Gemini 프롬프트에 전달한다", async () => {
+    const prisma = createPrismaMock();
+    prisma.seed({ id: "img-1" });
+    prisma.seedProductProfile({
+      id: "profile-1",
+      imageIds: ["img-1"],
+      profile: {
+        productName: "매직클린 PVC 매트",
+        brand: null,
+        model: null,
+        material: "PVC",
+        features: [],
+        specifications: {},
+        usage: null,
+        advantages: [],
+        warnings: [],
+        keywords: [],
+        confidence: 0.8,
+      },
+      userRequirement: "더 고급스러운 느낌으로 만들어줘",
+    });
+    const edit = jest.fn<Promise<ImageEditResult>, [ImageEditRequest]>(async () => fakeResult);
+    const service = await createService(prisma, edit);
+
+    const result = await service.generateImageCandidates("img-1", "HERO", { count: 1 });
+
+    const lastCall = edit.mock.calls[edit.mock.calls.length - 1][0];
+    expect(lastCall.prompt).toContain("[사용자 요구사항 — 참고]");
+    expect(lastCall.prompt).toContain("더 고급스러운 느낌으로 만들어줘");
+    expect(result.candidates[0].generationMetadata?.productPackage?.userRequirement).toBe(
+      "더 고급스러운 느낌으로 만들어줘",
+    );
+  });
+
+  it("generateImageCandidates: 목적별 요구사항(T1-99)이 있으면 공용 요구사항 대신 그 카테고리의 값을 프롬프트에 실어 보낸다", async () => {
+    const prisma = createPrismaMock();
+    prisma.seed({ id: "img-1" });
+    prisma.seedProductProfile({
+      id: "profile-1",
+      imageIds: ["img-1"],
+      profile: {
+        productName: "매직클린 PVC 매트",
+        brand: null,
+        model: null,
+        material: "PVC",
+        features: [],
+        specifications: {},
+        usage: null,
+        advantages: [],
+        warnings: [],
+        keywords: [],
+        confidence: 0.8,
+      },
+      userRequirement: "공용 요구사항 — 전체 톤을 고급스럽게",
+      userRequirementsByCategory: { HERO: "대표 썸네일은 화이트 배경으로", DETAIL: "디테일샷은 이음새를 크게" },
+    });
+    const edit = jest.fn<Promise<ImageEditResult>, [ImageEditRequest]>(async () => fakeResult);
+    const service = await createService(prisma, edit);
+
+    const result = await service.generateImageCandidates("img-1", "HERO", { count: 1 });
+
+    const lastCall = edit.mock.calls[edit.mock.calls.length - 1][0];
+    expect(lastCall.prompt).toContain("대표 썸네일은 화이트 배경으로");
+    expect(lastCall.prompt).not.toContain("공용 요구사항 — 전체 톤을 고급스럽게");
+    expect(result.candidates[0].generationMetadata?.productPackage?.userRequirement).toBe(
+      "대표 썸네일은 화이트 배경으로",
+    );
+  });
+
+  it("generateImageCandidates: 이 카테고리에 목적별 요구사항이 없으면 공용 요구사항으로 폴백한다(하위 호환)", async () => {
+    const prisma = createPrismaMock();
+    prisma.seed({ id: "img-1" });
+    prisma.seedProductProfile({
+      id: "profile-1",
+      imageIds: ["img-1"],
+      profile: {
+        productName: "매직클린 PVC 매트",
+        brand: null,
+        model: null,
+        material: "PVC",
+        features: [],
+        specifications: {},
+        usage: null,
+        advantages: [],
+        warnings: [],
+        keywords: [],
+        confidence: 0.8,
+      },
+      userRequirement: "공용 요구사항 — 전체 톤을 고급스럽게",
+      userRequirementsByCategory: { DETAIL: "디테일샷은 이음새를 크게" },
+    });
+    const edit = jest.fn<Promise<ImageEditResult>, [ImageEditRequest]>(async () => fakeResult);
+    const service = await createService(prisma, edit);
+
+    const result = await service.generateImageCandidates("img-1", "HERO", { count: 1 });
+
+    const lastCall = edit.mock.calls[edit.mock.calls.length - 1][0];
+    expect(lastCall.prompt).toContain("공용 요구사항 — 전체 톤을 고급스럽게");
+    expect(result.candidates[0].generationMetadata?.productPackage?.userRequirement).toBe(
+      "공용 요구사항 — 전체 톤을 고급스럽게",
+    );
+  });
+
+  it("getImagesByIds: 지정한 id들의 메타데이터(photoType 포함)를 반환한다 — INFO/DESIGN 구분용(T1-99)", async () => {
+    const prisma = createPrismaMock();
+    prisma.seed({ id: "design-1", photoType: "DESIGN" });
+    prisma.seed({ id: "info-1", photoType: "INFO" });
+    prisma.seed({ id: "unclassified-1" });
+    const edit = jest.fn<Promise<ImageEditResult>, [ImageEditRequest]>(async () => fakeResult);
+    const service = await createService(prisma, edit);
+
+    const results = await service.getImagesByIds(["design-1", "info-1", "unclassified-1", "missing-1"]);
+
+    const byId = new Map(results.map((r) => [r.id, r]));
+    expect(byId.get("design-1")?.photoType).toBe("DESIGN");
+    expect(byId.get("info-1")?.photoType).toBe("INFO");
+    expect(byId.get("unclassified-1")?.photoType ?? null).toBeNull();
+    expect(byId.has("missing-1")).toBe(false);
+  });
+
   it("selectImage: 같은 카테고리에서 여러 장을 동시에 선택할 수 있다", async () => {
     const prisma = createPrismaMock();
     prisma.seed({ id: "cand-1", sourceImageId: "img-1", category: "HERO", selected: false });
@@ -591,5 +770,37 @@ describe("ImageGenService (Service Test)", () => {
     const service = await createService(prisma, edit);
 
     await expect(service.selectImage("img-1")).rejects.toThrow(BadRequestException);
+  });
+
+  it("selectOriginalAsAsset: 실제 업로드 원본을 Gemini 호출 없이 그대로 카테고리 asset으로 지정한다(T1-144)", async () => {
+    const prisma = createPrismaMock();
+    prisma.seed({ id: "orig-1", kind: "ORIGINAL", photoType: "DESIGN", category: null, selected: false });
+    const edit = jest.fn<Promise<ImageEditResult>, [ImageEditRequest]>(async () => fakeResult);
+    const service = await createService(prisma, edit);
+
+    const result = await service.selectOriginalAsAsset("orig-1", "COMPONENTS");
+
+    expect(result.category).toBe("COMPONENTS");
+    expect(result.selected).toBe(true);
+    expect(result.kind).toBe("ORIGINAL");
+    expect(edit).not.toHaveBeenCalled();
+  });
+
+  it("selectOriginalAsAsset: Gemini가 만든 이미지(ORIGINAL 아님)는 거부한다", async () => {
+    const prisma = createPrismaMock();
+    prisma.seed({ id: "gen-1", kind: "COMPOSITED", sourceImageId: "orig-1" });
+    const edit = jest.fn<Promise<ImageEditResult>, [ImageEditRequest]>(async () => fakeResult);
+    const service = await createService(prisma, edit);
+
+    await expect(service.selectOriginalAsAsset("gen-1", "COMPONENTS")).rejects.toThrow(BadRequestException);
+  });
+
+  it("selectOriginalAsAsset: 포장지·라벨(INFO) 원본은 거부한다", async () => {
+    const prisma = createPrismaMock();
+    prisma.seed({ id: "info-1", kind: "ORIGINAL", photoType: "INFO" });
+    const edit = jest.fn<Promise<ImageEditResult>, [ImageEditRequest]>(async () => fakeResult);
+    const service = await createService(prisma, edit);
+
+    await expect(service.selectOriginalAsAsset("info-1", "COMPONENTS")).rejects.toThrow(BadRequestException);
   });
 });

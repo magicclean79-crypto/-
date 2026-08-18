@@ -62,7 +62,10 @@ const storyResponseText = JSON.stringify({
   ],
 });
 
-function createPrismaMock(recordOverrides: Record<string, unknown> = {}) {
+function createPrismaMock(
+  recordOverrides: Record<string, unknown> = {},
+  extraImages: Record<string, unknown>[] = [],
+) {
   return {
     productProfile: {
       findUnique: jest.fn(async (): Promise<Record<string, unknown> | null> => ({
@@ -107,6 +110,7 @@ function createPrismaMock(recordOverrides: Record<string, unknown> = {}) {
           category: "DETAIL",
           groupVersion: 1,
         },
+        ...extraImages,
       ]),
     },
   };
@@ -126,7 +130,7 @@ async function createService(options: {
   llm?: { complete: jest.Mock };
   promptEngine?: { render: jest.Mock };
   budget?: { assertWithinBudget: jest.Mock };
-  imageGen?: { generateAuxiliaryVisual: jest.Mock };
+  imageGen?: { generateAuxiliaryVisual: jest.Mock; generateDesignAsset?: jest.Mock };
 } = {}) {
   const prisma = options.prisma ?? createPrismaMock();
   const storage = { getObject: jest.fn(async () => Buffer.from("fake-image-bytes")) };
@@ -425,5 +429,106 @@ describe("ProductProfileService.generateStory — 보조 그래픽 실 생성 (T
 
     expect(generateAuxiliaryVisual).not.toHaveBeenCalled();
     expect(result.auxiliaryVisuals).toEqual([]);
+  });
+});
+
+/**
+ * 생성형 아이콘/Hero 타이포그래피 모티프 실 생성 배선 (T1-142).
+ * `storyResponseText`(2섹션 — image-feature/icon "check", detail-callout/
+ * icon "info")를 그대로 쓴다 — 두 섹션이 서로 다른 아이콘을 배정받아
+ * "중복 없이 계획한다"를 실제로 검증할 수 있다.
+ */
+describe("ProductProfileService.generateStory — 생성형 아이콘/Hero 모티프 실 생성 (T1-142)", () => {
+  it("imageGen이 연결되지 않으면 생성형 자산을 시도하지 않고 그 사실을 보고하며, 기존 SVG 아이콘으로 렌더링된다", async () => {
+    const { service } = await createService();
+
+    const result = await service.generateStory("pp-1");
+
+    expect(result.generativeVisuals.length).toBeGreaterThan(0);
+    expect(result.generativeVisuals.every((v) => !v.generated)).toBe(true);
+    expect(result.generativeVisuals.every((v) => v.reason.includes("연결되지 않아"))).toBe(true);
+    expect(result.html).not.toContain("gemini-generative-design");
+    expect(result.html).toContain('data-icon-source="fallback-svg"');
+  });
+
+  it("imageGen이 연결되어 있으면 이번 Story가 실제로 쓰는 아이콘만 중복 없이 생성하고, Hero 모티프도 함께 생성해 최종 HTML에 반영한다", async () => {
+    const generateAuxiliaryVisual = jest.fn();
+    const generateDesignAsset = jest.fn(async () => ({
+      imageBytes: "ZmFrZS1nZW4tYnl0ZXM=",
+      mimeType: "image/png",
+      provider: "gemini",
+      model: "gemini-2.5-flash-image",
+    }));
+    const { service } = await createService({ imageGen: { generateAuxiliaryVisual, generateDesignAsset } });
+
+    const result = await service.generateStory("pp-1");
+
+    // storyResponseText의 두 섹션은 각각 "check"·"info" 아이콘으로
+    // 분류된다(image-feature/detail-callout) — 아이콘 2종 + Hero 모티프
+    // 1개 = 3회 호출.
+    expect(generateDesignAsset).toHaveBeenCalledTimes(3);
+    expect(result.generativeVisuals.filter((v) => v.generated)).toHaveLength(3);
+    expect(result.html).toContain('data-icon-source="gemini-generative-design"');
+    expect(result.html).toContain("ZmFrZS1nZW4tYnl0ZXM=");
+    expect(result.html).toContain("pde-hero-motif");
+  });
+
+  it("생성형 자산 생성이 실패해도 Story 생성 자체는 실패하지 않고, 실패한 아이콘은 기존 SVG로 되돌아간다", async () => {
+    const generateAuxiliaryVisual = jest.fn();
+    const generateDesignAsset = jest.fn(async () => {
+      throw new Error("Gemini가 정책상 이미지를 거부했습니다");
+    });
+    const { service } = await createService({ imageGen: { generateAuxiliaryVisual, generateDesignAsset } });
+
+    const result = await service.generateStory("pp-1");
+
+    expect(result.generativeVisuals.every((v) => !v.generated)).toBe(true);
+    expect(result.generativeVisuals.every((v) => v.reason === "Gemini가 정책상 이미지를 거부했습니다")).toBe(true);
+    expect(result.html).not.toContain("gemini-generative-design");
+    expect(result.html).toContain('data-icon-source="fallback-svg"');
+    expect(result.story.sections).toHaveLength(2);
+  });
+});
+
+describe("ProductProfileService.generateStory — 이미지 밀도 확대 (T1-144)", () => {
+  it("결과에 실제 페이지에 쓰인 시각 asset 수(assetInventory)를 사실대로 집계해 담는다", async () => {
+    const { service } = await createService();
+    const result = await service.generateStory("pp-1");
+
+    // 기본 픽스처(sel-1 USAGE_SCENE·sel-2 DETAIL)는 둘 다 kind 없음 →
+    // "generated"로 취급되고, 두 섹션 모두 대표 이미지로 배정된다.
+    // 이 테스트는 imageGen을 연결하지 않았으므로 생성형 아이콘/모티프는 0.
+    expect(result.assetInventory.realProductPhotos).toBe(0);
+    expect(result.assetInventory.generativeProductVisuals).toBe(2);
+    expect(result.assetInventory.generativeDesignAssets).toBe(0);
+    expect(result.assetInventory.totalVisualAssets).toBe(2);
+    expect(result.assetInventory.byCategory).toEqual({ USAGE_SCENE: 1, DETAIL: 1 });
+  });
+
+  it("실제 업로드 원본(kind=ORIGINAL)이 선택돼 있으면 source=real로 실리고, 그 crop도 함께 실제 asset으로 집계된다", async () => {
+    // Story의 두 섹션(USAGE_SCENE·DETAIL)은 storyResponseText가 고정하므로
+    // 여기 추가하는 HERO 실제 원본은 어느 섹션에도 대표로 배정되지 않고
+    // "제품 더 보기" 남은 갤러리로 들어간다 — 그래도 assetInventory에는
+    // 실제로 최종 페이지에 쓰인 asset으로 정확히 집계돼야 한다.
+    const prisma = createPrismaMock({}, [
+      {
+        id: "orig-hero-1",
+        key: "images/orig-hero-1.jpg",
+        mimeType: "image/jpeg",
+        category: "HERO",
+        groupVersion: 1,
+        kind: "ORIGINAL",
+      },
+    ]);
+    const { service } = await createService({ prisma });
+    const result = await service.generateStory("pp-1");
+
+    // 원본 1장 + crop 최대 2장(진짜 사진 바이트가 아니라 "fake-image-bytes"
+    // 텍스트라 sharp가 처리하지 못해 crop이 0장일 수도 있다 — crop은
+    // 향상일 뿐 필수가 아니므로 실패해도 원본 자체는 반드시 남는다).
+    expect(result.assetInventory.realProductPhotos).toBeGreaterThanOrEqual(1);
+    expect(result.assetInventory.byCategory.HERO).toBeGreaterThanOrEqual(1);
+    expect(result.html).toContain("pde-media-gallery");
+    expect(result.html).toContain('data-asset-source="real"');
   });
 });

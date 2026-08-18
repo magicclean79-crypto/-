@@ -3,6 +3,7 @@ import {
   applyCrossVerifiedProfile,
   assignStoryImages,
   attachStudioImageCaptions,
+  buildLeftoverMediaGallery,
   buildProductFactsPanel,
   buildProductPageViewModel,
   crossVerifyProduct,
@@ -10,6 +11,8 @@ import {
   orderStudioImagesForPage,
   parseProductStoryResponse,
   planAuxiliaryVisuals,
+  planGenerativeHeroMotif,
+  planGenerativeIcons,
   planStoryDesign,
   PRODUCT_STORY_TEMPLATE_KEY,
   ProductProfileEngine,
@@ -26,7 +29,11 @@ import {
 import type {
   AssignedStorySection,
   AuxiliaryVisualAsset,
+  GenerativeVisualAsset,
+  GenerativeVisualBundle,
+  LeftoverGalleryEntry,
   ProductStoryContext,
+  StoryIconId,
   StudioSelectedImage,
   VisionImageInput,
 } from "@acos/core";
@@ -48,6 +55,7 @@ import type { PromptEngine } from "@acos/core";
 import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
 import { PrismaProductProfileRunStore } from "./prisma-product-profile-run.store";
+import { buildRealDetailCrops } from "./real-photo-crop";
 
 /**
  * 제품 자동 분석(T1-21)·교차 검증(T1-23) 결과를 다시 계산한다. (T1-24)
@@ -516,23 +524,60 @@ export class ProductProfileService {
    * 것과 같은 판단).
    */
   private async loadSelectedDesignImages(imageIds: string[]): Promise<StudioSelectedImage[]> {
+    // `sourceImageId: { in: imageIds }`는 Gemini가 만든 파생 이미지만
+    // 잡는다 — 실제 업로드 원본 자체(kind=ORIGINAL)는 자기 자신이
+    // sourceImageId를 갖지 않으므로 `id: { in: imageIds }`로 함께
+    // 조회해야 한다(T1-144 — `selectOriginalAsAsset`으로 카테고리가
+    // 지정된 원본을 이 목록에 실제로 포함시키기 위함).
     const selected = await this.prisma.image.findMany({
       where: {
-        sourceImageId: { in: imageIds },
+        AND: [
+          { OR: [{ sourceImageId: { in: imageIds } }, { id: { in: imageIds } }] },
+          { OR: [{ photoType: null }, { photoType: "DESIGN" }] },
+        ],
         selected: true,
         category: { not: null },
-        OR: [{ photoType: null }, { photoType: "DESIGN" }],
       },
       orderBy: [{ groupVersion: "desc" }],
     });
     const bytesList = await Promise.all(selected.map((image) => this.storage.getObject(image.key)));
-    return selected.map((image, index) => ({
+    const base: StudioSelectedImage[] = selected.map((image, index) => ({
       imageId: image.id,
       category: image.category as unknown as StudioSelectedImage["category"],
       groupVersion: image.groupVersion,
       mimeType: image.mimeType,
       base64: bytesList[index].toString("base64"),
+      source: image.kind === "ORIGINAL" ? "real" : "generated",
     }));
+    return this.withRealDetailCrops(base);
+  }
+
+  /**
+   * 실제 원본 사진(source: "real")마다 순수 crop 최대 2장을 추가한다
+   * (T1-144 요청 사양 4 — "제품 디테일 crop/zoom asset을 추가해 12개
+   * 이상으로 확장"). Gemini를 부르지 않는다 — 같은 픽셀을 잘라 확대만
+   * 하므로 새 사실을 지어내지 않는다(`real-photo-crop.ts` 참고). crop
+   * 실패(손상된 이미지 등)는 조용히 생략한다 — 원본 자체는 이미 목록에
+   * 그대로 있으므로 crop이 없다고 전체가 실패하지 않는다.
+   */
+  private async withRealDetailCrops(images: StudioSelectedImage[]): Promise<StudioSelectedImage[]> {
+    const result: StudioSelectedImage[] = [...images];
+    for (const image of images) {
+      if (image.source !== "real") continue;
+      const buffer = Buffer.from(image.base64, "base64");
+      const crops = await buildRealDetailCrops(buffer, image.mimeType);
+      crops.forEach((crop, index) => {
+        result.push({
+          imageId: `${image.imageId}::crop-${index + 1}`,
+          category: image.category,
+          groupVersion: image.groupVersion,
+          mimeType: crop.mimeType,
+          base64: crop.base64,
+          source: "real",
+        });
+      });
+    }
+    return result;
   }
 
   /**
@@ -620,6 +665,7 @@ export class ProductProfileService {
     let story!: ReturnType<typeof parseProductStoryResponse>;
     let assigned!: AssignedStorySection[];
     let designPlan!: ReturnType<typeof planStoryDesign>;
+    let mediaGallery!: LeftoverGalleryEntry[];
     let rendered!: ReturnType<typeof renderProductStoryHtml>;
     let validation!: ReturnType<typeof validateProductStory>;
     let quality!: ReturnType<typeof scoreProductStory>;
@@ -643,7 +689,11 @@ export class ProductProfileService {
       // 함수가 정한다 — Story Section의 이미 검증된 필드에서만 도출한다
       // (T1-112, "누가 무엇을 결정하는가": 카피=LLM, 디자인=이 파이프라인).
       designPlan = planStoryDesign(story);
-      rendered = renderProductStoryHtml(story, assigned, designPlan);
+      // 어느 섹션에도 배정되지 못한 선택 이미지를 맨 아래 갤러리로 살린다
+      // (T1-144 — 이미지 밀도 확대). 이후 재렌더링(생성형 자산 반영)에서도
+      // 같은 값을 그대로 재사용한다 — 이미지 배정 자체는 여기서 이미 끝났다.
+      mediaGallery = buildLeftoverMediaGallery(assigned, availableImages);
+      rendered = renderProductStoryHtml(story, assigned, designPlan, undefined, undefined, mediaGallery);
       // designPlan·html을 함께 넘겨 "Design Plan과 실제 HTML의 일치도"까지
       // 검사한다(T1-112) — 렌더러가 Design Plan을 무시해도 여기서 잡힌다.
       validation = validateProductStory(story, assigned, verifiedProfile, userRequirement, designPlan, rendered.html);
@@ -671,12 +721,12 @@ export class ProductProfileService {
     // "필요 없는 곳에도 쓴다"는 뜻이 아니다.
     const auxiliarySpecs = planAuxiliaryVisuals(story, assigned, designPlan);
     const auxiliaryVisualReport: ProductStoryResultDto["auxiliaryVisuals"] = [];
+    const auxiliaryGeneratedAssets: AuxiliaryVisualAsset[] = [];
     if (auxiliarySpecs.length > 0 && this.imageGen) {
-      const generatedAssets: AuxiliaryVisualAsset[] = [];
       for (const spec of auxiliarySpecs) {
         try {
           const result = await this.imageGen.generateAuxiliaryVisual(spec.promptText);
-          generatedAssets.push({
+          auxiliaryGeneratedAssets.push({
             sectionId: spec.sectionId,
             role: spec.role,
             source: "gemini-auxiliary",
@@ -701,9 +751,6 @@ export class ProductProfileService {
           });
         }
       }
-      if (generatedAssets.length > 0) {
-        rendered = renderProductStoryHtml(story, assigned, designPlan, generatedAssets);
-      }
     } else if (auxiliarySpecs.length > 0) {
       for (const spec of auxiliarySpecs) {
         auxiliaryVisualReport.push({
@@ -713,6 +760,86 @@ export class ProductProfileService {
           reason: "이미지 생성 서비스가 연결되지 않아 시도하지 않았습니다.",
         });
       }
+    }
+
+    // 생성형 아이콘/Hero 타이포그래피 모티프 실 생성 (T1-142) — 위 보조
+    // 그래픽(섹션별 배경 장식)과는 목적이 다른 두 번째 종류의 생성형 자산.
+    // 이번 Story가 실제로 쓰는 아이콘만(중복 없이, 최대 6종) + Hero 모티프
+    // 1개만 시도한다 — "필요한 곳에는 반드시 쓰되 필요 없는 곳에는 쓰지
+    // 않는다"는 auxiliaryVisuals와 같은 비용 원칙.
+    const iconSpecs = planGenerativeIcons(designPlan);
+    const motifSpec = planGenerativeHeroMotif(story);
+    const generativeVisualReport: ProductStoryResultDto["generativeVisuals"] = [];
+    const generativeIconAssets: Partial<Record<StoryIconId, GenerativeVisualAsset>> = {};
+    let heroMotifAsset: GenerativeVisualAsset | null = null;
+    if (this.imageGen) {
+      for (const spec of iconSpecs) {
+        try {
+          const result = await this.imageGen.generateDesignAsset(spec.promptText);
+          generativeIconAssets[spec.id] = {
+            kind: "ICON",
+            id: spec.id,
+            source: "gemini-generative-design",
+            mimeType: result.mimeType,
+            base64: result.imageBytes,
+          };
+          generativeVisualReport.push({ kind: spec.kind, id: spec.id, generated: true, reason: spec.reason });
+        } catch (error) {
+          // 실패해도 렌더러가 기존 인라인 SVG 아이콘으로 되돌아간다 —
+          // 전체 Story 생성을 막지 않는다(auxiliaryVisuals와 같은 원칙).
+          generativeVisualReport.push({
+            kind: spec.kind,
+            id: spec.id,
+            generated: false,
+            reason: error instanceof Error ? error.message : "알 수 없는 오류",
+          });
+        }
+      }
+      if (motifSpec) {
+        try {
+          const result = await this.imageGen.generateDesignAsset(motifSpec.promptText);
+          heroMotifAsset = {
+            kind: "HERO_MOTIF",
+            id: motifSpec.id,
+            source: "gemini-generative-design",
+            mimeType: result.mimeType,
+            base64: result.imageBytes,
+          };
+          generativeVisualReport.push({ kind: motifSpec.kind, id: motifSpec.id, generated: true, reason: motifSpec.reason });
+        } catch (error) {
+          generativeVisualReport.push({
+            kind: motifSpec.kind,
+            id: motifSpec.id,
+            generated: false,
+            reason: error instanceof Error ? error.message : "알 수 없는 오류",
+          });
+        }
+      }
+    } else {
+      for (const spec of iconSpecs) {
+        generativeVisualReport.push({
+          kind: spec.kind,
+          id: spec.id,
+          generated: false,
+          reason: "이미지 생성 서비스가 연결되지 않아 시도하지 않았습니다.",
+        });
+      }
+      if (motifSpec) {
+        generativeVisualReport.push({
+          kind: motifSpec.kind,
+          id: motifSpec.id,
+          generated: false,
+          reason: "이미지 생성 서비스가 연결되지 않아 시도하지 않았습니다.",
+        });
+      }
+    }
+
+    // 보조 그래픽·생성형 아이콘/모티프 중 하나라도 실제로 생성됐으면
+    // 그 결과를 반영해 딱 한 번만 다시 렌더링한다(순수 함수라 비용 없음
+    // — 실 과금은 위 Gemini 호출들에서 이미 끝났다).
+    if (auxiliaryGeneratedAssets.length > 0 || Object.keys(generativeIconAssets).length > 0 || heroMotifAsset) {
+      const generativeVisuals: GenerativeVisualBundle = { icons: generativeIconAssets, heroMotif: heroMotifAsset };
+      rendered = renderProductStoryHtml(story, assigned, designPlan, auxiliaryGeneratedAssets, generativeVisuals, mediaGallery);
     }
 
     // 제품 정보/법정 표시 패널 (T1-139) — Story Section의 productFacts는
@@ -735,6 +862,29 @@ export class ProductProfileService {
       };
     }
 
+    // 최종 페이지에 실제로 쓰인 시각 asset 수 집계 (T1-144). `assigned`
+    // (대표+갤러리)와 `mediaGallery`(남은 이미지)가 이미 최종 HTML을 만든
+    // 그 값이므로, 여기서 다시 세는 것이지 새 값을 만드는 게 아니다 —
+    // 완료 보고에 "몇 장을 실제로 썼는지"를 사실로 남기기 위함이다.
+    const usedImages = new Map<string, StudioSelectedImage>();
+    for (const item of assigned) {
+      if (item.image) usedImages.set(item.image.imageId, item.image);
+      for (const galleryImage of item.gallery ?? []) usedImages.set(galleryImage.imageId, galleryImage);
+    }
+    for (const entry of mediaGallery) {
+      usedImages.set(entry.image.imageId, entry.image);
+    }
+    const byCategory: Partial<Record<ImageCategory, number>> = {};
+    let realProductPhotos = 0;
+    let generativeProductVisuals = 0;
+    for (const image of usedImages.values()) {
+      byCategory[image.category] = (byCategory[image.category] ?? 0) + 1;
+      if ((image.source ?? "generated") === "real") realProductPhotos += 1;
+      else generativeProductVisuals += 1;
+    }
+    const generativeDesignAssets =
+      Object.keys(generativeIconAssets).length + (heroMotifAsset ? 1 : 0);
+
     const result: ProductStoryResultDto = {
       story: {
         productName: story.productName,
@@ -752,8 +902,16 @@ export class ProductProfileService {
       attempts,
       availableImages: availableImageSummary,
       auxiliaryVisuals: auxiliaryVisualReport,
+      generativeVisuals: generativeVisualReport,
       provider: completion.provider,
       model: completion.model,
+      assetInventory: {
+        realProductPhotos,
+        generativeProductVisuals,
+        generativeDesignAssets,
+        totalVisualAssets: realProductPhotos + generativeProductVisuals + generativeDesignAssets,
+        byCategory,
+      },
     };
 
     // 캐노니컬 파이프라인 캐시 저장 (T1-131). best-effort — 저장이 실패해도

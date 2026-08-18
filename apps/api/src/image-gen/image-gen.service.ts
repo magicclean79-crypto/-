@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { BadRequestException, Inject, Injectable, NotFoundException, Optional } from "@nestjs/common";
+import { BadRequestException, Inject, Injectable, Logger, NotFoundException, Optional } from "@nestjs/common";
 import { buildImageGenerationPrompt, buildProductPackage, type ImageEditProvider } from "@acos/core";
 import type {
   GenerateHeroImageResult,
@@ -53,6 +53,8 @@ function toDto(image: Image): ImageDto {
  */
 @Injectable()
 export class ImageGenService {
+  private readonly logger = new Logger(ImageGenService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
@@ -93,9 +95,15 @@ export class ImageGenService {
    * 실행을 쓴다. Product Profile이 없으면 조용히 빈 Package로 넘어가지
    * 않고 명확히 실패한다 — GPT 단계가 먼저 끝나야 Gemini가 의미 있는
    * Package를 받을 수 있다.
+   *
+   * `category`(선택, T1-99) — 지정하면 그 카테고리(생성 목적)의 요구사항이
+   * 있는지 함께 확인해 우선 적용한다. `findProductPackage` 참고.
    */
-  private async getProductPackage(sourceImageId: string): Promise<ProductPackage> {
-    const found = await this.findProductPackage(sourceImageId);
+  private async getProductPackage(
+    sourceImageId: string,
+    category?: ImageCategory,
+  ): Promise<ProductPackage> {
+    const found = await this.findProductPackage(sourceImageId, category);
     if (!found) {
       throw new BadRequestException(
         "먼저 이 사진으로 Product Profile을 생성해야 이미지를 생성할 수 있습니다.",
@@ -109,8 +117,20 @@ export class ImageGenService {
    * 없이도 돌아야 하는 단계용이다. 이 단계들까지 프로필을 요구하면 예전에
    * 되던 흐름이 갑자기 막힌다. 대신 프로필이 있으면 그 정보를 함께 넘겨
    * 제품의 형태·재질이 더 정확하게 유지되도록 한다.
+   *
+   * `category`(선택, T1-99) — 카테고리별(대표 썸네일/디테일샷/사용 장면/
+   * 구성품 등) Gemini 이미지 생성 요구사항. 값이 있으면 범용
+   * `userRequirement`(T1-92) 대신 이 값을 쓴다 — 목적마다 다른 요구사항을
+   * 독립적으로 반영하기 위함이다(예: 대표 썸네일은 "배경을 화이트로",
+   * 구성품은 "패킹까지 전부 보이게" 처럼 서로 다른 지시가 같은 프롬프트에
+   * 섞이지 않는다). 해당 카테고리에 값이 없으면 범용 값으로 폴백한다
+   * (하위 호환 — 아직 목적별 입력을 쓰지 않는 실행은 예전과 동일하게
+   * 동작한다).
    */
-  private async findProductPackage(sourceImageId: string): Promise<ProductPackage | null> {
+  private async findProductPackage(
+    sourceImageId: string,
+    category?: ImageCategory,
+  ): Promise<ProductPackage | null> {
     const record = await this.prisma.productProfile.findFirst({
       where: { imageIds: { has: sourceImageId } },
       orderBy: { updatedAt: "desc" },
@@ -118,12 +138,21 @@ export class ImageGenService {
     if (!record) {
       return null;
     }
+    const categoryRequirement = category
+      ? readRequirementForCategory(record.userRequirementsByCategory, category)
+      : null;
     return buildProductPackage({
       profile: record.profile as ProductPackage["productProfile"],
       ocrText: record.ocrText,
       // Vision 분석 결과도 식별에 함께 쓴다 (T1-21, 2026-08-09).
       // OCR이 우선이며, Vision은 OCR이 못 읽은 것만 보완한다.
       visionText: record.imageFeatures ? JSON.stringify(record.imageFeatures) : null,
+      // 사용자 요구사항 기반 생성 (T1-92, 목적별 우선은 T1-99) — Image
+      // Studio에서 저장한 값을 그대로 실어 보낸다. `PATCH
+      // /product-profile/:id/user-requirement`로 재생성 없이 값만 바꿀 수
+      // 있으므로, 매번 이 실행 레코드에서 다시 읽는다(스냅샷을 따로 두지
+      // 않는다).
+      userRequirement: categoryRequirement ?? record.userRequirement,
     });
   }
 
@@ -289,6 +318,62 @@ export class ImageGenService {
   }
 
   /**
+   * Product Story 섹션 보조 그래픽(추상 배경/강조 아트) 생성. (T1-123)
+   *
+   * `product-story-auxiliary-visual.ts`(T1-112)가 이미 계획(어느 섹션에
+   * 왜 필요한지)과 프롬프트 문장까지 순수 함수로 만들어 두고 "실제 호출은
+   * 하지 않는다"고 의도적으로 비워 둔 자리를 이 메서드가 채운다.
+   *
+   * 실제 제품 사진이 아니라 텍스트 전용 섹션을 보완하는 추상 장식이므로
+   * **참조 이미지 없이(0장) 순수 텍스트→이미지로 생성한다** — `promptText`
+   * 자체에 이미 "제품 실물·사람·글자를 그리지 말라"는 금지 지시가 들어
+   * 있고(`buildAuxiliaryVisualPrompt`), 실제 제품 사진을 참조로 주면
+   * 오히려 그 형태를 베껴 그릴 위험이 생긴다. INFO(포장지·라벨·사양표)
+   * 사진은 물론 DESIGN 사진조차 이 경로에서는 아예 참조하지 않으므로,
+   * "OCR/INFO 사진을 생성 참조로 쓰지 않는다"는 원칙이 위반될 여지 자체가
+   * 없다.
+   *
+   * DB에 저장하지 않는다 — `ProductProfileService.generateStory()`와 같은
+   * 무상태 원칙(호출마다 다시 생성, 다시 과금)을 따른다.
+   */
+  async generateAuxiliaryVisual(
+    promptText: string,
+  ): Promise<{ imageBytes: string; mimeType: string; provider: string; model: string }> {
+    return this.generatePromptOnlyDesignAsset(promptText, "상세페이지 보조 그래픽 생성 (Gemini)");
+  }
+
+  /**
+   * Story 전체가 공유하는 생성형 아이콘/Hero 타이포그래피 모티프 생성.
+   * (T1-142)
+   *
+   * `product-story-generative-visuals.ts`가 계획(어느 아이콘·모티프가
+   * 필요한지, 프롬프트 문장)까지 순수 함수로 만들고 "실제 호출은 하지
+   * 않는다"고 비워 둔 자리를 채운다 — `generateAuxiliaryVisual`과 정확히
+   * 같은 형태의 호출(참조 이미지 없이 텍스트→이미지, 예산 게이트)이라
+   * 내부 구현을 공유하고 예산 사유 문구만 다르게 남겨 어떤 목적으로 얼마나
+   * 호출됐는지 예산 로그에서 구분할 수 있게 한다.
+   */
+  async generateDesignAsset(
+    promptText: string,
+  ): Promise<{ imageBytes: string; mimeType: string; provider: string; model: string }> {
+    return this.generatePromptOnlyDesignAsset(promptText, "상세페이지 생성형 타이포그래피/아이콘 자산 생성 (Gemini)");
+  }
+
+  private async generatePromptOnlyDesignAsset(
+    promptText: string,
+    budgetReason: string,
+  ): Promise<{ imageBytes: string; mimeType: string; provider: string; model: string }> {
+    await this.budget?.assertWithinBudget({ what: budgetReason });
+    const result = await this.provider.edit({ prompt: promptText, images: [] });
+    return {
+      imageBytes: result.imageBytes,
+      mimeType: result.mimeType,
+      provider: this.provider.name,
+      model: result.model,
+    };
+  }
+
+  /**
    * 배경 제거 → 배경 생성 → 합성을 한 번에 실행하는 Hero 이미지 파이프라인.
    *
    * Product Package를 **한 번만 조회해 세 단계에 그대로 넘긴다** (CTO 지시,
@@ -401,14 +486,14 @@ export class ImageGenService {
   async generateImageCandidates(
     imageId: string,
     category: ImageCategory,
-    options: { count?: number; style?: string; scenePrompt?: string },
+    options: { count?: number; style?: string; scenePrompt?: string; storySectionPurpose?: string },
   ): Promise<GenerateImageCandidatesResult> {
     const count = Math.min(6, Math.max(1, options.count ?? 4));
     const original = await this.getImage(imageId);
     // 포장지·라벨을 원본으로 골라 생성하면 Gemini가 포장 디자인을 제품으로
     // 그린다. (CTO 지시, 2026-08-08 — 입력 분리) 조용히 넘어가지 않고 막는다.
     this.assertNotInfoImage(original);
-    const productPackage = await this.getProductPackage(imageId);
+    const productPackage = await this.getProductPackage(imageId, category);
     const bgRemovedImage = await this.getOrCreateBackgroundRemoved(imageId, productPackage);
     const backgroundRemoved = toDto(bgRemovedImage);
 
@@ -421,6 +506,14 @@ export class ImageGenService {
 
     const baseInstruction = options.scenePrompt?.trim() || CATEGORY_PROMPTS[category];
     const styleSuffix = options.style?.trim() ? ` 스타일 방향: ${options.style.trim()}.` : "";
+    // Product Story 연결 (T1-94, 선택) — 이 이미지가 상세페이지의 어느
+    // Story Section 역할을 하는지 참고로 덧붙인다. 제품 동일성 규칙보다
+    // 뒤에 붙는 지시문 안에서만 쓰이므로, 실제 제품 사실과 충돌하는
+    // 요청으로 제품 자체가 바뀌지는 않는다(buildImageGenerationPrompt의
+    // 기존 우선순위 규칙 — 제품 동일성 > 제품 정보 > 이 지시문).
+    const storySuffix = options.storySectionPurpose?.trim()
+      ? ` 이 사진은 상세페이지에서 "${options.storySectionPurpose.trim()}" 역할을 하는 섹션에 쓰인다 — 그 역할에 맞는 장면으로 만들어줘.`
+      : "";
 
     // 참고 사진을 **여러 장** 보낸다. (CTO 지시, 2026-08-08 — 제품 동일성 개선)
     //
@@ -490,6 +583,7 @@ export class ImageGenService {
 
     const candidates: ImageDto[] = [];
     let failedCount = 0;
+    const errors: string[] = [];
     for (let i = 0; i < count; i++) {
       const framing = CANDIDATE_FRAMINGS[i % CANDIDATE_FRAMINGS.length];
       const extraNote =
@@ -500,7 +594,8 @@ export class ImageGenService {
         `${baseInstruction}${styleSuffix} ${framing} 사진처럼 자연스럽고 사실적으로 만들어줘. ` +
         "첫 번째 이미지는 배경을 지운 제품(윤곽 기준), 두 번째 이미지는 원본 사진(색상·재질·질감·디테일 기준)이다. " +
         extraNote +
-        "제공된 이미지는 모두 같은 하나의 제품이며, 생성 결과도 반드시 그 제품이어야 한다.";
+        "제공된 이미지는 모두 같은 하나의 제품이며, 생성 결과도 반드시 그 제품이어야 한다." +
+        storySuffix;
       const prompt = buildImageGenerationPrompt(productPackage, instruction);
       try {
         await this.budget?.assertWithinBudget({
@@ -527,12 +622,24 @@ export class ImageGenService {
           excludedInfoImages,
         });
         candidates.push(dto);
-      } catch {
+      } catch (error) {
         failedCount++;
+        // 실패를 조용히 삼키지 않는다 — 무인 실행에서 가장 위험한 것은
+        // "실패가 성공처럼 보이는 것"이다(PROJECT_MEMORY M-26). 서버
+        // 로그와 API 응답 양쪽에 원인을 남겨, 호출한 쪽(Image Studio·이
+        // 검증 자체)이 "생성 0장인데 왜인지 모른다"는 상태에 빠지지 않게
+        // 한다(T1-136/T1-138 — Gemini 생성이 화면에 안 보이는 문제의
+        // 근본 원인 중 하나가 이 catch였다).
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.error(
+          `이미지 후보 생성 실패 (category=${category}, v${groupVersion}, ${i + 1}/${count}): ${message}`,
+          error instanceof Error ? error.stack : undefined,
+        );
+        errors.push(message);
       }
     }
 
-    return { original: toDto(original), backgroundRemoved, category, groupVersion, candidates, failedCount };
+    return { original: toDto(original), backgroundRemoved, category, groupVersion, candidates, failedCount, errors };
   }
 
   /** 특정 원본 사진의 한 카테고리에 대해 지금까지 생성된 모든 버전을 최신순으로 돌려준다 */
@@ -562,6 +669,66 @@ export class ImageGenService {
     });
     return toDto(updated);
   }
+
+  /**
+   * 실제 업로드 원본 사진을 (Gemini 호출 없이) 그대로 상세페이지의 한
+   * 카테고리 asset으로 지정한다. (T1-144 — 이미지 밀도 확대)
+   *
+   * 기존 흐름은 원본을 항상 "생성 참조"로만 쓰고, 상세페이지에 실제로
+   * 쓰이는 건 Gemini가 새로 그린 결과(`category`/`selected`가 붙는 대상)
+   * 뿐이었다 — 실제 원본 사진 자체는 최종 페이지에 등장할 방법이 없었다.
+   * 요청 사양(T1-144)이 "최소 4~6개는 실제 검증된 제품 원본 사진"을
+   * 요구하므로, 이미 사람이 업로드해 검증한 원본을 그대로 그 카테고리의
+   * asset으로 쓸 수 있는 경로를 연다 — 새 픽셀을 만들지 않으므로 비용도
+   * 없고 제품 동일성 위험도 없다(원본 그 자체이므로).
+   */
+  async selectOriginalAsAsset(imageId: string, category: ImageCategory): Promise<ImageDto> {
+    const image = await this.getImage(imageId);
+    if (image.kind !== "ORIGINAL") {
+      throw new BadRequestException(
+        "실제 업로드 원본 사진만 이 방식으로 카테고리를 지정할 수 있습니다. Gemini가 만든 이미지는 기존 select 엔드포인트를 쓰세요.",
+      );
+    }
+    this.assertNotInfoImage(image);
+    const updated = await this.prisma.image.update({
+      where: { id: imageId },
+      data: { category, selected: true },
+    });
+    return toDto(updated);
+  }
+
+  /**
+   * 지정한 id들의 이미지 메타데이터를 조회한다 (T1-99) — Image Studio가
+   * "제품 시각 참조용(DESIGN)"과 "상품 분석 전용(INFO)"을 구분해 보여줄
+   * 때 쓴다. 없는 id는 조용히 결과에서 빠진다(존재하는 것만 보여주면
+   * 충분하고, 하나가 없다고 나머지 조회까지 막을 이유가 없다).
+   */
+  async getImagesByIds(ids: string[]): Promise<ImageDto[]> {
+    const unique = [...new Set(ids.map((id) => id.trim()).filter((id) => id.length > 0))];
+    if (unique.length === 0) {
+      return [];
+    }
+    const images = await this.prisma.image.findMany({ where: { id: { in: unique } } });
+    return images.map(toDto);
+  }
+}
+
+/**
+ * `ProductProfile.userRequirementsByCategory`(Json)에서 특정 카테고리의
+ * 요구사항만 안전하게 읽는다 (T1-99). 저장 형태가 예상과 다르면(과거
+ * 데이터·수동 조작 등) null로 취급한다 — 잘못된 값을 프롬프트에 그대로
+ * 흘려보내지 않는다.
+ */
+function readRequirementForCategory(raw: unknown, category: ImageCategory): string | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
+  const value = (raw as Record<string, unknown>)[category];
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 /**
