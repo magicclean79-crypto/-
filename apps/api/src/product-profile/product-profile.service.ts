@@ -45,6 +45,7 @@ import type {
   ProductPageCopy,
   ProductProfileDto,
   ProductProfileFinalPageDto,
+  ProductStoryDto,
   ProductStoryResultDto,
 } from "@acos/shared";
 import { IMAGE_CATEGORIES } from "@acos/shared";
@@ -57,7 +58,21 @@ import type { PromptEngine } from "@acos/core";
 import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
 import { PrismaProductProfileRunStore } from "./prisma-product-profile-run.store";
+import { autoTrimIsolatedProductImage } from "./product-isolated-auto-trim";
 import { buildRealDetailCrops } from "./real-photo-crop";
+
+/**
+ * Master Creative Brief(T1-153)가 없는 Story(과거 데이터·`masterBrief`를
+ * 모르는 테스트 픽스처 등)를 API 응답으로 내보낼 때 쓰는 빈 값 — 없는 것을
+ * 지어내지 않고, "이 실행에는 Master Brief가 없다"는 사실을 빈 문자열
+ * 그대로 드러낸다.
+ */
+const EMPTY_MASTER_BRIEF: ProductStoryDto["masterBrief"] = {
+  targetAudience: "",
+  coreMessage: "",
+  emotionalArc: "",
+  visualConcept: "",
+};
 
 /**
  * 제품 자동 분석(T1-21)·교차 검증(T1-23) 결과를 다시 계산한다. (T1-24)
@@ -551,7 +566,57 @@ export class ProductProfileService {
       base64: bytesList[index].toString("base64"),
       source: image.kind === "ORIGINAL" ? "real" : "generated",
     }));
-    return this.withRealDetailCrops(base);
+    const trimmed = await this.autoTrimIsolatedProducts(base);
+    return this.withRealDetailCrops(trimmed);
+  }
+
+  /**
+   * 고립형(화이트 배경) 제품 단독 사진의 실제 여백을 안전하게 잘라낸다
+   * (T1-166). `USAGE_SCENE`(연출/lifestyle)에는 절대 적용하지 않고,
+   * `source: "real"`(사람이 업로드한 원본)에도 적용하지 않는다 — 배경이
+   * 흰색이라는 보장이 있는 건 GPT Image 2 Art Direction Contract를 따른
+   * 생성 이미지뿐이다(가장 보수적인 조합, `product-isolated-auto-trim.ts`
+   * 상단 주석 참고). 모든 이미지에 `imageRole`은 채운다(트림 성공 여부와
+   * 무관하게 사실 그대로의 분류) — 트림은 실패해도 안전하게 원본을 그대로
+   * 쓰므로 실패 자체가 전체를 막지 않는다.
+   *
+   * **트림된 이미지는 `imageId`에 `::auto-trim`을 붙인다.** 브라우저용
+   * `/product-profile/:id/final-html` 경로(Web, T1-158)는
+   * `rewriteEmbeddedImageAssetUrls()`(`packages/core`)로 인라인 base64를
+   * `GET /uploads/images/:id/file`(원본 저장 바이트를 그대로 서빙) URL로
+   * 되돌려 문서 크기를 줄인다 — 이 함수는 원본과 이 함수가 만든 트림
+   * 결과가 다르다는 사실을 모르므로, 아무 표시 없이 그대로 두면 브라우저는
+   * 트림 전 원본을 다시 불러와 **트림 자체가 화면에 반영되지 않는다**
+   * (실측: 이 처리 없이 배포했을 때 대표 상세페이지의 14장 중 1장만
+   * 트림된 채로 남고 나머지는 URL 치환으로 원본으로 되돌아갔다). 이
+   * 파일이 `withRealDetailCrops`가 이미 쓰던 것과 같은 규칙(`"::"`가 있는
+   * id는 `Image` 테이블에 없는 합성 자산이라 URL로 바꿀 수 없다고 보고
+   * 원본 base64를 그대로 남긴다, `product-story-final-html-assets.ts`
+   * 상단 주석)을 그대로 재사용한다 — 새 예외 처리를 만들지 않는다.
+   */
+  private async autoTrimIsolatedProducts(images: StudioSelectedImage[]): Promise<StudioSelectedImage[]> {
+    return Promise.all(
+      images.map(async (image) => {
+        const imageRole: StudioSelectedImage["imageRole"] =
+          image.category === "USAGE_SCENE" ? "lifestyle" : "product-isolated";
+        if (imageRole !== "product-isolated" || image.source !== "generated") {
+          return { ...image, imageRole };
+        }
+        const buffer = Buffer.from(image.base64, "base64");
+        const trimResult = await autoTrimIsolatedProductImage(buffer, image.mimeType);
+        if (!trimResult) {
+          return { ...image, imageRole, autoTrimMarginRatio: null };
+        }
+        return {
+          ...image,
+          imageId: `${image.imageId}::auto-trim`,
+          imageRole,
+          mimeType: trimResult.mimeType,
+          base64: trimResult.base64,
+          autoTrimMarginRatio: trimResult.marginRatio,
+        };
+      }),
+    );
   }
 
   /**
@@ -576,6 +641,7 @@ export class ProductProfileService {
           mimeType: crop.mimeType,
           base64: crop.base64,
           source: "real",
+          imageRole: image.imageRole,
         });
       });
     }
@@ -903,6 +969,7 @@ export class ProductProfileService {
       story: {
         productName: story.productName,
         narrativeSummary: story.narrativeSummary,
+        masterBrief: story.masterBrief ?? EMPTY_MASTER_BRIEF,
         sections: story.sections.map((section, index) => ({
           ...section,
           assignedImageId: assigned[index]?.image?.imageId ?? null,

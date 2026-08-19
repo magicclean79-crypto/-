@@ -34,6 +34,26 @@ export interface StudioSelectedImage {
    * 곳에 잘못 쓰지 않도록).
    */
   source?: "real" | "generated";
+  /**
+   * 이 사진이 고립형 제품 단독 사진인지, 실제 사용 공간이 배경인
+   * 연출/lifestyle 사진인지 (T1-166). `category !== "USAGE_SCENE"`이면
+   * "product-isolated"(화이트~소프트 뉴트럴 스튜디오 배경이 전제,
+   * `product-composition-art-direction.ts`의 Art Direction Contract가
+   * 그렇게 지시한다), `USAGE_SCENE`이면 "lifestyle"이다 — 지어낸 값이
+   * 아니라 이미 있는 category에서 결정적으로 도출한다. 렌더러가 DOM에
+   * `data-image-role`로 노출해, 어떤 사진에 자동 여백 정리(auto-trim)가
+   * 적용될 수 있었는지 사람이 검증할 수 있게 한다. 선택 필드다 — 값이
+   * 없으면(기존 호출부·테스트 픽스처) 아무 것도 표시하지 않는다.
+   */
+  imageRole?: "product-isolated" | "lifestyle";
+  /**
+   * 이 사진이 실제로 자동 여백 정리(auto-trim, T1-166)를 거쳤는지 —
+   * 거쳤으면 안전 여백 비율(0~1)을, 아니면 null을 담는다. 트림이 적용되지
+   * 않은 이유(원본이 이미 프레임을 채우고 있었거나, 판별이 불확실해
+   * 안전하게 건너뛴 경우 등)까지는 구분하지 않는다 — "실제로 잘랐는가"만
+   * 사실로 기록한다.
+   */
+  autoTrimMarginRatio?: number | null;
 }
 
 /**
