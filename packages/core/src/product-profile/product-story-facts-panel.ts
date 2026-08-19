@@ -1,6 +1,7 @@
 import type { ProductProfile } from "@acos/shared";
 import type { ProductIdentification } from "./product-identification";
 import { iconMarkup } from "./product-page-icons";
+import { buildStoryVisualTokens } from "./product-composition-art-direction";
 
 /**
  * 제품 정보/법정 표시 패널 — 검증된 값만 결정적으로 렌더링한다. (T1-139,
@@ -54,9 +55,14 @@ function specRow(label: string, value: string): string {
   return `<div class="pde-facts-row"><span class="pde-facts-label">${esc(label)}</span><span class="pde-facts-value">${esc(value)}</span></div>`;
 }
 
+/**
+ * 아이콘을 원형 light-blue 배지 안에 넣는다(T1-164 — 레퍼런스 시안의
+ * "round icon" 요청 사양). 아이콘 자체는 이미 `product-page-icons.ts`의
+ * 검증된 SVG 세트를 그대로 재사용한다 — 새 아이콘을 만들지 않는다.
+ */
 function factsBlock(heading: string, icon: "info" | "box" | "warning" | "spec", inner: string, variant?: "warning"): string {
   const blockClass = variant === "warning" ? "pde-facts-block pde-facts-block--warning" : "pde-facts-block";
-  return `<div class="${blockClass}"><h3 class="pde-facts-heading">${iconMarkup(icon)}${esc(heading)}</h3>${inner}</div>`;
+  return `<div class="${blockClass}"><h3 class="pde-facts-heading"><span class="pde-facts-icon-badge">${iconMarkup(icon)}</span>${esc(heading)}</h3>${inner}</div>`;
 }
 
 /**
@@ -72,15 +78,19 @@ export function buildProductFactsPanel(input: ProductFactsPanelInput): ProductFa
   if (profile.model) specRows.push(specRow("모델명/품번", profile.model));
   if (profile.material) specRows.push(specRow("주요 재질", profile.material));
   if (identification.origin) specRows.push(specRow("원산지/제조국", identification.origin));
-  // "구성품"은 별도 섹션(아래 componentsBlock)에서 이미 다룬다 —
-  // specifications에도 같은 키가 있으면(실측: STEP 4가 구성품 목록을
-  // specifications["구성품"]에도 중복해 채운 사례가 있었다) 사양 표에서
-  // 한 번 더 반복하지 않는다. 같은 사실을 여러 자리에 반복하지 않는
-  // 원칙은 `buildImageGenerationPrompt`(product-story.ts)가 이미 쓰고
-  // 있는 것과 같다.
+  // "구성품"·"원산지/제조국"은 위에서 이미 전용 행으로 한 번 표시한다 —
+  // specifications에도 같은 의미의 키가 있으면(실측: STEP 4가 구성품
+  // 목록을 specifications["구성품"]에, 원산지를 specifications["원산지"]/
+  // ["제조국"]에도 중복해 채운 사례가 있었다, T1-162) 사양 표에서 한 번
+  // 더 반복하지 않는다. 같은 사실을 여러 자리에 반복하지 않는 원칙은
+  // `buildImageGenerationPrompt`(product-package.ts)가 이미 쓰고 있는
+  // 것과 같다.
   const componentsKeyPattern = /^구성품?$|^구성\s?품목$/;
+  const originKeyPattern = /^원산지|제조국|제조\s?및\s?판매원|생산국/;
   for (const [key, value] of Object.entries(profile.specifications)) {
-    if (components.length > 0 && componentsKeyPattern.test(key.trim())) continue;
+    const trimmedKey = key.trim();
+    if (components.length > 0 && componentsKeyPattern.test(trimmedKey)) continue;
+    if (identification.origin && originKeyPattern.test(trimmedKey)) continue;
     if (value?.trim()) specRows.push(specRow(key, value));
   }
   const specBlock =
@@ -130,16 +140,25 @@ export function buildProductFactsPanel(input: ProductFactsPanelInput): ProductFa
     "</section>",
   ].join("");
 
+  // 같은 Master Art Direction에서 파생된 토큰(T1-162, T1-163에서 밝은
+  // 팔레트로 갱신) — product-story-html.ts와 같은 함수를 호출해 항상
+  // 같은 값을 얻는다("같은 visual system의 light premium specification
+  // panel" 요청 사양). 이 파일은 이 팬텀 셸(밝은 오프화이트)이 story
+  // 렌더러 뒤에 문자열로 붙는다는 사실을 몰라도 되게, 값을 CSS 변수
+  // cascade가 아니라 리터럴로 직접 갖는다 — 두 조각이 문서에서 어떤
+  // 순서로 합쳐지든 항상 같은 색이 나온다(product-story-html.ts와
+  // 동일한 설계 이유).
+  const tokens = buildStoryVisualTokens();
   const css = `
 .pde-facts-panel {
   max-width: 980px;
   margin: 0 auto;
   padding: 64px 24px 96px;
-  background: #ffffff;
-  color: #18181b;
+  background: ${tokens.surfaceBackgroundA};
+  color: ${tokens.textPrimary};
   font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
   word-break: keep-all;
-  border-top: 1px solid #e4e4e7;
+  border-top: 1px solid ${tokens.borderColor};
 }
 .pde-facts-title {
   margin: 0 0 32px;
@@ -147,7 +166,14 @@ export function buildProductFactsPanel(input: ProductFactsPanelInput): ProductFa
   font-weight: 800;
   letter-spacing: -0.02em;
 }
-.pde-facts-block { margin: 0 0 40px; }
+.pde-facts-block {
+  margin: 0 0 32px;
+  padding: 24px;
+  background: ${tokens.panelBackground};
+  border: 1px solid ${tokens.borderColor};
+  border-radius: ${tokens.radiusMd};
+  box-shadow: ${tokens.shadowCard};
+}
 .pde-facts-block:last-of-type { margin-bottom: 24px; }
 .pde-facts-heading {
   display: flex;
@@ -156,38 +182,53 @@ export function buildProductFactsPanel(input: ProductFactsPanelInput): ProductFa
   margin: 0 0 18px;
   font-size: 19px;
   font-weight: 800;
-  color: #18181b;
+  color: ${tokens.textPrimary};
 }
-.pde-facts-heading svg { flex: none; color: #0e7490; }
+.pde-facts-icon-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  color: #2563eb;
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.16), rgba(14, 165, 233, 0.10));
+  border: 1px solid rgba(37, 99, 235, 0.18);
+}
+.pde-facts-icon-badge svg { width: 16px; height: 16px; }
+.pde-facts-block--warning .pde-facts-icon-badge {
+  color: #b45309;
+  background: linear-gradient(135deg, rgba(180, 83, 9, 0.16), rgba(217, 119, 6, 0.10));
+  border-color: rgba(180, 83, 9, 0.18);
+}
 .pde-facts-grid {
   display: grid;
   grid-template-columns: 1fr;
-  border-top: 1px solid #e4e4e7;
+  border-top: 1px solid ${tokens.borderColor};
 }
 .pde-facts-row {
   display: grid;
   grid-template-columns: 140px 1fr;
   gap: 16px;
   padding: 16px 4px;
-  border-bottom: 1px solid #e4e4e7;
+  border-bottom: 1px solid ${tokens.borderColor};
   font-size: 16px;
   line-height: 1.6;
 }
-.pde-facts-label { font-weight: 700; color: #52525b; }
-.pde-facts-value { color: #18181b; font-weight: 600; white-space: pre-wrap; }
-.pde-facts-usage { margin: 0 0 12px; font-size: 16px; line-height: 1.75; color: #27272a; }
-.pde-facts-list { margin: 0; padding-left: 20px; font-size: 16px; line-height: 1.85; color: #27272a; }
+.pde-facts-label { font-weight: 700; color: ${tokens.textMuted}; }
+.pde-facts-value { color: ${tokens.textPrimary}; font-weight: 600; white-space: pre-wrap; }
+.pde-facts-usage { margin: 0 0 12px; font-size: 16px; line-height: 1.75; color: ${tokens.textSecondary}; }
+.pde-facts-list { margin: 0; padding-left: 20px; font-size: 16px; line-height: 1.85; color: ${tokens.textSecondary}; }
 .pde-facts-list li { margin-bottom: 6px; }
 .pde-facts-block--warning {
-  padding: 20px;
-  background: #fffbeb;
   border-left: 6px solid #b45309;
 }
-.pde-facts-block--warning .pde-facts-list { color: #78350f; }
+.pde-facts-block--warning .pde-facts-list { color: #92400e; }
 .pde-facts-disclaimer {
   margin: 32px 0 0;
   font-size: 13px;
-  color: #a1a1aa;
+  color: ${tokens.textMuted};
 }
 @media (min-width: 760px) {
   .pde-facts-panel { padding: 96px 64px 128px; }

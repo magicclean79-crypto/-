@@ -5,6 +5,7 @@ import { planStoryDesign, type SectionDesignSpec, type StoryDesignPlan } from ".
 import { iconMarkup, type StoryIconId } from "./product-page-icons";
 import type { AuxiliaryVisualAsset } from "./product-story-auxiliary-visual";
 import type { GenerativeVisualAsset } from "./product-story-generative-visuals";
+import { buildStoryVisualTokens } from "./product-composition-art-direction";
 
 /**
  * Product Story → HTML/CSS 렌더러. (T1-94, 2026-08-12 / T1-97, Design Spec 반영
@@ -184,10 +185,38 @@ function iconBadge(design: SectionDesignSpec, generativeIcons: Partial<Record<St
   return `<span class="pde-story-icon" data-icon-source="fallback-svg" aria-hidden="true">${iconMarkup(design.icon)}</span>`;
 }
 
-/** 레이아웃 의미를 나타내는 짧은 영문 kicker 라벨(accent 폰트, 순수 텍스트) — 빈 문자열이면 아무것도 그리지 않는다(T1-142) */
-function kickerLabel(design: SectionDesignSpec): string {
+/**
+ * 레이아웃 의미를 나타내는 짧은 영문 kicker 라벨(accent 폰트, 순수 텍스트) —
+ * 빈 문자열이면 아무것도 그리지 않는다(T1-142). kicker가 있는 섹션에만
+ * (근거 없는 레이아웃에는 장식을 붙이지 않는다는 원칙 그대로) 섹션의 실제
+ * 순서(`index`)를 2자리 번호로 함께 보여준다(T1-163 요청 사양 "번호/eyebrow"
+ * — 지어낸 값이 아니라 이미 `data-section-index`로 노출되던 값을 눈에
+ * 보이는 editorial eyebrow로 재사용할 뿐이다).
+ */
+function kickerLabel(design: SectionDesignSpec, index: number): string {
   if (!design.kicker) return "";
-  return `<span class="pde-story-kicker">${escapeHtml(design.kicker)}</span>`;
+  const orderNumber = String(index + 1).padStart(2, "0");
+  return `<span class="pde-story-kicker"><span class="pde-story-kicker-index" aria-hidden="true">${orderNumber}</span><span class="pde-story-kicker-text">${escapeHtml(design.kicker)}</span></span>`;
+}
+
+/**
+ * 헤드라인 전체가 아니라 마지막 한 어절만 accent gradient로 강조한다
+ * (T1-164 — 이전엔 헤드라인 전체가 gradient라 "단조로운 색" 지적을
+ * 받았다, 레퍼런스 시안은 핵심 단어 하나만 강조한다). 어떤 단어가
+ * "핵심"인지 지어내지 않는다 — 문장 마지막 어절을 결정적으로 고른다
+ * (한국어 문장은 핵심 명사·수식어가 문미에 오는 경우가 많다). 한
+ * 단어뿐이면 그 단어 전체를 강조한다.
+ */
+function highlightHeadline(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return "";
+  const words = trimmed.split(/\s+/);
+  if (words.length === 1) {
+    return `<span class="pde-story-headline-accent">${escapeHtml(words[0])}</span>`;
+  }
+  const lead = words.slice(0, -1).join(" ");
+  const last = words[words.length - 1];
+  return `${escapeHtml(lead)} <span class="pde-story-headline-accent">${escapeHtml(last)}</span>`;
 }
 
 /**
@@ -216,7 +245,7 @@ function renderSection(
   generativeIcons: Partial<Record<StoryIconId, GenerativeVisualAsset>>,
 ): string {
   const { section, image } = item;
-  const kicker = kickerLabel(design);
+  const kicker = kickerLabel(design, index);
   // `image`는 이 섹션에 실제로 배정된 사진(있는지 여부)을 나타낸다 —
   // 보조 그래픽 억제(aux)는 이 값을 기준으로 판단해야 한다("실제 제품
   // 사진이 있는 섹션에는 보조 그래픽을 그리지 않는다"). `hideMedia`는
@@ -280,7 +309,7 @@ ${wrapClose}`;
     case "feature-highlight":
       return `${wrapOpen}
   ${kicker}
-  <p class="pde-story-key-message">${iconBadge(design, generativeIcons)}${escapeHtml(section.keyMessage)}</p>
+  <p class="pde-story-key-message">${iconBadge(design, generativeIcons)}${highlightHeadline(section.keyMessage)}</p>
   ${factList(section.productFacts, false)}
   <p class="pde-story-copy">${escapeHtml(section.copy)}</p>
 ${wrapClose}`;
@@ -326,7 +355,7 @@ ${wrapClose}`;
     ${media}
     <figcaption>
       ${kicker}
-      <p class="pde-story-key-message">${iconBadge(design, generativeIcons)}${escapeHtml(section.keyMessage)}</p>
+      <p class="pde-story-key-message">${iconBadge(design, generativeIcons)}${highlightHeadline(section.keyMessage)}</p>
       <p class="pde-story-copy">${escapeHtml(section.copy)}</p>
       ${section.productFacts.length > 0 ? factList(section.productFacts, false) : ""}
     </figcaption>
@@ -375,14 +404,24 @@ ${wrapClose}`;
 }
 
 /**
- * 이 섹션 헤드라인 아래에 붙는 최대 4개의 "핵심 기능" 아이콘 행. (T1-147)
+ * 이 섹션 헤드라인 아래에 붙는 최대 2개의 "premium feature row" 카드.
+ * (T1-147, T1-162에서 레퍼런스 시안 기준 카드 스타일로 개편)
  *
- * 승인된 레퍼런스 시안의 Hero는 "왼쪽 텍스트/아이콘, 오른쪽 대형 제품
- * 이미지" 구조이고, 텍스트 쪽에는 의미가 분명한 아이콘 4개짜리 기능
- * 요약 행이 있다. 새 아이콘을 지어내지 않는다 — 이미 각 Story Section에
+ * 승인된 ChatGPT 레퍼런스 시안의 Hero는 "왼쪽 대형 제품 이미지, 오른쪽
+ * 텍스트+기능 카드" 구조이고, 텍스트 쪽에는 원형 아이콘·화살표
+ * affordance가 있는 카드 2개가 있다(요청 사양 "2개의 premium feature
+ * rows/cards"). 새 아이콘을 지어내지 않는다 — 이미 각 Story Section에
  * 결정적으로 배정된 아이콘(`design.icon`)과 그 섹션의 실제 헤드라인
  * (`keyMessage`, LLM이 이미 검증된 사실로 쓴 짧은 카피)만 재사용한다.
  * 주의사항(notice)·마무리(closing)는 "핵심 기능" 성격이 아니라서 뺀다.
+ * 화살표(→)는 사실을 나타내지 않는 순수 구조적 affordance라 Unicode
+ * 문자가 아니라 `product-page-icons.ts`의 SVG(`arrow`)를 쓴다.
+ *
+ * T1-164 — 카드마다 "POINT 01"/"POINT 02" 작은 blue eyebrow 라벨을
+ * 카드 안에 추가한다(레퍼런스 시안 요청 사양). 지어낸 값이 아니라 이
+ * 카드가 이미 갖고 있는 순서(`items`의 인덱스, 최대 2개)를 그대로
+ * 번호로 보여줄 뿐이다 — `kickerLabel`이 섹션 순서 번호를 재사용하는
+ * 것과 같은 원칙.
  */
 function heroFeatureRow(
   assignedSections: AssignedStorySection[],
@@ -398,13 +437,13 @@ function heroFeatureRow(
       (entry): entry is { section: AssignedStorySection["section"]; design: SectionDesignSpec } =>
         entry !== null && entry.design.icon !== "none" && entry.design.layout !== "notice" && entry.design.layout !== "closing",
     )
-    .slice(0, 4);
+    .slice(0, 2);
   if (items.length === 0) return "";
   const chips = items
-    .map(
-      ({ section, design }) =>
-        `<li class="pde-hero-feature" style="--pde-story-accent:${design.accentColor};">${iconBadge(design, generativeIcons)}<span>${escapeHtml(section.keyMessage)}</span></li>`,
-    )
+    .map(({ section, design }, index) => {
+      const point = `POINT ${String(index + 1).padStart(2, "0")}`;
+      return `<li class="pde-hero-feature" style="--pde-story-accent:${design.accentColor};">${iconBadge(design, generativeIcons)}<span class="pde-hero-feature-body"><span class="pde-hero-feature-point">${point}</span><span class="pde-hero-feature-label">${escapeHtml(section.keyMessage)}</span></span><span class="pde-hero-feature-arrow" aria-hidden="true">${iconMarkup("arrow")}</span></li>`;
+    })
     .join("");
   return `<ul class="pde-hero-features" data-feature-count="${items.length}">${chips}</ul>`;
 }
@@ -423,6 +462,13 @@ export function renderProductStoryHtml(
   generativeVisuals?: GenerativeVisualBundle,
 ): ProductStoryHtmlResult {
   const plan = designPlan ?? planStoryDesign(story);
+  // Master Art Direction Contract에서 파생된 HTML 디자인 토큰(T1-162,
+  // T1-163에서 밝은 premium editorial 팔레트로 갱신) — 페이지 셸의
+  // 유일한 값 출처. 순수 함수라 호출 비용이 없고, `product-story-facts-
+  // panel.ts`도 같은 함수를 불러 항상 같은 값을 얻는다(단일 출처, 문서
+  // 순서에 의존하는 CSS 변수 cascade가 아니라 각자 리터럴 값을 갖는다 —
+  // 두 조각이 문서에서 어떤 순서로 합쳐지든 항상 같은 색이 나온다).
+  const tokens = buildStoryVisualTokens();
   const designBySectionId = new Map(plan.sections.map((s) => [s.sectionId, s]));
   const auxiliaryBySectionId = new Map((auxiliaryVisuals ?? []).map((asset) => [asset.sectionId, asset]));
   const generativeIcons = generativeVisuals?.icons ?? {};
@@ -457,7 +503,7 @@ export function renderProductStoryHtml(
     ? `<header class="pde-hero pde-hero--photo">${heroMotifLayerHtml}<div class="pde-hero-grid"><div class="pde-hero-media">${zoomLink(
         heroImage,
         `<img src="${dataUri(heroImage)}" alt="${escapeHtml(story.productName)}" ${heroAssetAttrs}>`,
-      )}</div><div class="pde-hero-text"><h1>${escapeHtml(story.productName)}</h1>${heroSubheadlineHtml}${heroFeaturesHtml}</div></div></header>`
+      )}</div><div class="pde-hero-text"><h1>${highlightHeadline(story.productName)}</h1>${heroSubheadlineHtml}${heroFeaturesHtml}</div></div></header>`
     : `<header class="pde-hero">${heroMotifLayerHtml}<h1>${escapeHtml(story.productName)}</h1>${heroSubheadlineHtml}${heroFeaturesHtml}</header>`;
 
   const sectionsHtml = assignedSections
@@ -496,10 +542,20 @@ export function renderProductStoryHtml(
 
   const css = `
 /* ============================================================
-   Product Story — 광고 크리에이티브 렌더러 (T1-126)
-   원칙: 카드/얇은 테두리로 구획을 나누지 않는다. 섹션마다 배경 색
-   블록·큰 비주얼·큰 타이포로 스크롤 리듬을 만든다. 자세한 배경은
-   이 파일 상단 주석 참고.
+   Product Story — 밝은 premium editorial commerce 렌더러 (T1-126,
+   다크 네이비 팔레트 T1-162 → 밝은 팔레트로 전환 T1-163: 화면이 너무
+   어둡다는 판단에 따라 warm/cool off-white·white·very light blue-gray를
+   주 배경으로 쓰고, navy는 타이포그래피·강조·closing 패널에만 제한한다.
+   T1-164: 제품 사진 표시 영역을 확대(HERO 52%에서 58%로, split
+   1.05fr에서 1.2fr로, letterbox padding 축소)하고, 헤드라인은 전체
+   gradient 대신 마지막 핵심 어절만 강조하며, Hero feature 카드에
+   "POINT 01/02" 라벨을 추가한다 — contain fit(잘림 없음)은 그대로
+   유지한다.)
+   원칙: 카드/얇은 테두리로 구획을 나누지 않는다. 섹션마다 배경 톤·큰
+   비주얼·큰 타이포로 스크롤 리듬을 만든다. 자세한 배경은 이 파일 상단
+   주석 참고. 모든 색·배경·테두리·반경·그림자 값은 ${tokens.tokensId}
+   (buildStoryVisualTokens, product-composition-art-direction.ts)에서
+   온다 — 이 파일이 임의로 색을 지어내지 않는다.
    ============================================================ */
 .pde-page.pde-page--story {
   --pde-font-display: ${plan.typography.display};
@@ -507,15 +563,36 @@ export function renderProductStoryHtml(
   --pde-font-emphasis: ${plan.typography.emphasis};
   --pde-font-number: ${plan.typography.numeric};
   --pde-font-accent: ${plan.typography.accent};
+  --pde-bg-page: ${tokens.pageBackground};
+  --pde-bg-surface-a: ${tokens.surfaceBackgroundA};
+  --pde-bg-surface-b: ${tokens.surfaceBackgroundB};
+  --pde-bg-panel: ${tokens.panelBackground};
+  --pde-bg-image-frame: ${tokens.imageFrameBackground};
+  --pde-border: ${tokens.borderColor};
+  --pde-border-strong: ${tokens.borderColorStrong};
+  --pde-text-primary: ${tokens.textPrimary};
+  --pde-text-secondary: ${tokens.textSecondary};
+  --pde-text-muted: ${tokens.textMuted};
+  --pde-text-on-accent: ${tokens.textOnAccent};
+  --pde-accent-gradient: ${tokens.accentGradient};
+  --pde-accent-gradient-soft: ${tokens.accentGradientSoft};
+  --pde-radius-sm: ${tokens.radiusSm};
+  --pde-radius-md: ${tokens.radiusMd};
+  --pde-radius-lg: ${tokens.radiusLg};
+  --pde-radius-xl: ${tokens.radiusXl};
+  --pde-shadow-card: ${tokens.shadowCard};
+  --pde-shadow-glow: ${tokens.shadowGlow};
+  --pde-icon-border: ${tokens.iconBadgeBorder};
   max-width: 980px;
   margin: 0 auto;
-  background: #ffffff;
+  background: var(--pde-bg-page);
   font-family: var(--pde-font-body);
-  color: #18181b;
+  color: var(--pde-text-primary);
   font-size: 17px;
   line-height: 1.7;
   word-break: keep-all;
   overflow: hidden;
+  border-radius: var(--pde-radius-xl);
 }
 
 /* -- Hero: 이미지가 없을 때(fallback)만 쓰는 가운데 정렬 텍스트 Hero -- */
@@ -523,8 +600,8 @@ export function renderProductStoryHtml(
   position: relative;
   padding: 96px 24px;
   text-align: center;
-  background: linear-gradient(135deg, #1e293b, #0f172a);
-  color: #fff;
+  background: var(--pde-bg-page);
+  color: var(--pde-text-primary);
 }
 .pde-page--story .pde-hero h1 {
   margin: 0;
@@ -542,15 +619,19 @@ export function renderProductStoryHtml(
   color: rgba(255, 255, 255, 0.9);
   letter-spacing: -0.01em;
 }
-/* -- 생성형 Hero 타이포그래피 모티프: 헤드라인 뒤에 은은하게 깔리는 브러시/스월 그래픽(T1-142) -- */
+/* -- 생성형 Hero 타이포그래피 모티프: 헤드라인 뒤에 은은하게 깔리는 브러시/스월 그래픽(T1-142) --
+   T1-163: 페이지 배경이 밝아지면서 screen blend는 밝은 색을 더 밝게(거의
+   투명하게) 만들어 버려 모티프가 사실상 안 보인다 — 밝은 배경 위에서
+   자연스럽게 어우러지는 multiply로 바꾸고, 낮은 opacity로 "은은하게"를
+   유지한다. -- */
 .pde-page--story .pde-hero-motif {
   position: absolute;
   inset: 0;
   background-repeat: no-repeat;
   background-position: center;
   background-size: contain;
-  opacity: 0.35;
-  mix-blend-mode: screen;
+  opacity: 0.14;
+  mix-blend-mode: multiply;
   pointer-events: none;
   z-index: 0;
 }
@@ -568,8 +649,8 @@ export function renderProductStoryHtml(
 .pde-page--story .pde-hero--photo {
   padding: 0;
   text-align: left;
-  background: #ffffff;
-  color: #0f172a;
+  background: var(--pde-bg-page);
+  color: var(--pde-text-primary);
 }
 .pde-page--story .pde-hero-grid {
   position: relative;
@@ -577,19 +658,38 @@ export function renderProductStoryHtml(
   display: flex;
   flex-direction: column;
 }
+/* -- HERO 제품 사진: contain + letterbox 프레임(T1-162) — 레퍼런스
+   시안이 요구한 "제품이 잘리지 않는 안전 crop"을 CSS만으로 보장한다.
+   기존 object-fit:cover는 프레임 비율과 실제 사진 비율이 다르면 제품
+   본체를 그대로 잘라낼 수 있었다(완료 기준 "제품 사진이 잘리지
+   않는다"). contain은 절대 자르지 않는 대신 남는 여백이 생기는데, 그
+   여백을 페이지 배경과 같은 계열의 그라디언트(--pde-bg-image-frame)로
+   채워 "빈 여백"이 아니라 "의도된 프레임"처럼 보이게 한다 — 새 이미지
+   생성 없이(비용 없음) 기존 asset 그대로 안전하게 담는다. -- */
 .pde-page--story .pde-hero-media {
   order: -1;
+  padding: 16px;
+  background: var(--pde-bg-image-frame);
+  border-radius: var(--pde-radius-lg);
+  box-sizing: border-box;
 }
 .pde-page--story .pde-hero-media > a {
   display: block;
+  height: 100%;
+  border-radius: var(--pde-radius-md);
+  overflow: hidden;
 }
+/* T1-164 — 프레임 padding을 줄이고 실제 표시 영역(height/min/max)을
+   키운다: 레퍼런스 시안 대비 제품 사진이 작다는 지적에 따라, contain
+   fit(잘림 없음)은 그대로 유지한 채 프레임 자체를 크게 잡는다. */
 .pde-page--story .pde-hero-media img {
   display: block;
   width: 100%;
-  height: 58vh;
-  min-height: 340px;
-  max-height: 600px;
-  object-fit: cover;
+  height: 62vh;
+  min-height: 380px;
+  max-height: 660px;
+  object-fit: contain;
+  background: var(--pde-bg-image-frame);
 }
 .pde-page--story .pde-hero-text {
   padding: 40px 24px 48px;
@@ -600,31 +700,74 @@ export function renderProductStoryHtml(
   font-weight: 800;
   letter-spacing: -0.02em;
   line-height: 1.15;
-  color: #0f172a;
+  color: var(--pde-text-primary);
+}
+/* T1-164 — 헤드라인 전체가 아니라 마지막 핵심 어절만 gradient accent로
+   강조한다(지원하지 않는 브라우저는 --pde-text-primary가 그대로 보이는
+   안전한 fallback). feature-highlight/image-feature 섹션의 핵심 카피
+   헤드라인도 같은 규칙을 공유한다. */
+.pde-page--story .pde-story-headline-accent {
+  background: var(--pde-accent-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 .pde-page--story .pde-hero--photo .pde-hero-subheadline {
-  color: #334155;
+  color: var(--pde-text-secondary);
 }
+/* -- premium feature row 카드(T1-162) — 원형 아이콘+glow, 얇은 border, 화살표 affordance -- */
 .pde-page--story .pde-hero-features {
   display: flex;
-  flex-wrap: wrap;
-  gap: 12px 22px;
-  margin: 28px 0 0;
-  padding: 20px 0 0;
+  flex-direction: column;
+  gap: 14px;
+  margin: 32px 0 0;
+  padding: 0;
   list-style: none;
-  border-top: 1px solid #e4e4e7;
 }
 .pde-page--story .pde-hero-feature {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-family: var(--pde-font-emphasis);
-  font-size: 14px;
-  font-weight: 700;
-  color: #18181b;
+  gap: 18px;
+  padding: 20px 22px;
+  border: 1px solid var(--pde-border);
+  border-radius: var(--pde-radius-lg);
+  background: var(--pde-bg-panel);
+  box-shadow: var(--pde-shadow-card);
 }
 .pde-page--story .pde-hero-feature .pde-story-icon {
   margin-right: 0;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  box-shadow: var(--pde-shadow-glow);
+}
+/* T1-164 — "POINT 01/02" eyebrow 라벨 + 굵은 제목 2단 구성(레퍼런스 시안 요청 사양) */
+.pde-page--story .pde-hero-feature-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pde-page--story .pde-hero-feature-point {
+  font-family: var(--pde-font-accent);
+  font-size: 11px;
+  font-weight: 700;
+  font-style: italic;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--pde-story-accent, #2563eb);
+}
+.pde-page--story .pde-hero-feature-label {
+  font-family: var(--pde-font-emphasis);
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.4;
+  color: var(--pde-text-primary);
+}
+.pde-page--story .pde-hero-feature-arrow {
+  flex: none;
+  display: inline-flex;
+  color: var(--pde-story-accent, #94a3b8);
 }
 
 /* -- 아이콘 배지: 기본은 인라인 SVG, 생성형 아이콘 자산이 있으면 --gen 변형(T1-142) -- */
@@ -636,26 +779,39 @@ export function renderProductStoryHtml(
   height: 26px;
   margin-right: 10px;
   border-radius: 999px;
-  color: var(--pde-story-accent, #334155);
-  background: color-mix(in srgb, var(--pde-story-accent, #334155) 16%, white);
+  border: 1px solid var(--pde-icon-border);
+  color: var(--pde-story-accent, #94a3b8);
+  background: color-mix(in srgb, var(--pde-story-accent, #94a3b8) 22%, var(--pde-bg-panel));
   vertical-align: -7px;
 }
 .pde-page--story .pde-story-icon--gen {
   width: 34px;
   height: 34px;
-  padding: 5px;
-  background: color-mix(in srgb, var(--pde-story-accent, #334155) 10%, white);
+  padding: 0;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--pde-story-accent, #94a3b8) 16%, var(--pde-bg-panel));
 }
 .pde-page--story .pde-story-icon--gen img {
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  /* object-fit:contain 인 채로 padding까지 있으면, gpt-image-2가 만드는
+     아이콘 이미지는 항상 불투명 배경(투명 PNG 미지원 모델, T1-156 실측 —
+     colorType=2/RGB, 알파 채널 없음)이라 원형 배지 안에서 이미지 자신의
+     사각형 배경 모서리가 그대로 드러나 "깨진 아이콘"처럼 보였다.
+     object-fit:cover + 부모 overflow:hidden으로 원 안을 이미지로 완전히
+     채우고 남는 사각형 모서리를 원형으로 잘라낸다 — 새 이미지 생성 없이
+     기존 자산 그대로 깨끗한 원형 배지로 보이게 한다. */
+  object-fit: cover;
   border-radius: 0;
 }
 
-/* -- kicker 라벨: 레이아웃 의미를 나타내는 짧은 영문 accent 텍스트(이미지 아님, T1-142) -- */
+/* -- kicker 라벨: 레이아웃 의미를 나타내는 짧은 영문 accent 텍스트(이미지 아님, T1-142) --
+   T1-163: eyebrow 번호(섹션의 실제 순서, 지어낸 값 아님)를 kicker 텍스트
+   앞에 함께 보여준다 — "번호/eyebrow" editorial detail 요청 사양. -- */
 .pde-page--story .pde-story-kicker {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   margin: 0 0 10px;
   font-family: var(--pde-font-accent);
   font-size: 13px;
@@ -665,9 +821,28 @@ export function renderProductStoryHtml(
   text-transform: uppercase;
   color: var(--pde-story-accent, #334155);
 }
+.pde-page--story .pde-story-kicker-index {
+  font-family: var(--pde-font-number);
+  font-variant-numeric: tabular-nums;
+  font-style: normal;
+  opacity: 0.5;
+}
+.pde-page--story .pde-story-kicker-index::after {
+  content: "";
+  display: inline-block;
+  width: 14px;
+  height: 1px;
+  margin-left: 10px;
+  background: currentColor;
+  opacity: 0.5;
+  vertical-align: middle;
+}
 .pde-page--story .pde-story-section--spec-panel .pde-story-kicker,
 .pde-page--story .pde-story-section--closing .pde-story-kicker {
-  color: var(--pde-story-accent, #38bdf8);
+  color: var(--pde-story-accent, #0369a1);
+}
+.pde-page--story .pde-story-section--closing .pde-story-kicker {
+  color: rgba(248, 250, 252, 0.7);
 }
 
 /* -- Gemini 보조 그래픽: 실제 배경 비주얼로 쓴다(장식용 워터마크가 아니다) -- */
@@ -676,14 +851,14 @@ export function renderProductStoryHtml(
   inset: 0;
   background-size: cover;
   background-position: center;
-  opacity: 0.55;
+  opacity: 0.4;
   pointer-events: none;
 }
 .pde-page--story .pde-story-aux-visual::after {
   content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.92));
+  background: linear-gradient(180deg, rgba(5, 8, 16, 0.55), rgba(5, 8, 16, 0.88));
 }
 
 /* -- Story intro: 요약 문단이 아니라 큰 pull-quote 헤드라인처럼 -- */
@@ -692,7 +867,7 @@ export function renderProductStoryHtml(
   overflow: hidden;
   padding: 64px 24px;
   text-align: center;
-  background: #fafafa;
+  background: var(--pde-bg-surface-b);
 }
 .pde-page--story .pde-story-summary p {
   position: relative;
@@ -704,7 +879,7 @@ export function renderProductStoryHtml(
   font-weight: 700;
   line-height: 1.5;
   letter-spacing: -0.01em;
-  color: #18181b;
+  color: var(--pde-text-primary);
   white-space: pre-wrap;
 }
 /* Hero와 같은 생성형 모티프 자산을 재사용하는 구분선 액센트(T1-142 — "재사용 가능한 디자인 토큰") */
@@ -724,19 +899,34 @@ export function renderProductStoryHtml(
   flex-direction: column;
 }
 
-/* -- 섹션: 얇은 테두리 구분선을 쓰지 않는다. 배경 색 블록으로만 리듬을 만든다 -- */
+/* -- 섹션: 배경 색 블록(surface A/B 교차)으로 큰 리듬을 만들고, 그 위에
+   얇은 그래픽 divider 하나로 섹션 경계를 정리한다(T1-163 "섹션 사이에
+   얇은 그래픽 divider" 요청 사양) — 두꺼운 카드 테두리가 아니라 폭
+   전체가 아닌 중앙 hairline이라 절제된 editorial 톤을 유지한다. -- */
 .pde-page--story .pde-story-section {
   position: relative;
   padding: 56px 24px;
+}
+.pde-page--story .pde-story-section:not(:first-of-type)::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 24px;
+  right: 24px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--pde-border-strong) 50%, transparent);
 }
 .pde-page--story .pde-story-section:last-child {
   padding-bottom: 80px;
 }
 .pde-page--story .pde-story-section--tone-b {
-  background: #f7f7f8;
+  background: var(--pde-bg-surface-b);
 }
 
-/* -- 공통 figure/이미지: 카드가 아니라 full-bleed 비주얼 -- */
+/* -- 공통 figure/이미지: 둥근 대형 container(레퍼런스 시안 요청 사양) —
+   T1-126 당시엔 edge-to-edge full-bleed였으나, 프레임 없는 cover crop이
+   제품 본체를 잘라내는 문제가 있어(T1-162 완료 기준) contain +
+   letterbox 프레임 + 둥근 모서리 카드로 바꾼다. -- */
 .pde-page--story .pde-story-figure {
   margin: 0;
 }
@@ -745,13 +935,17 @@ export function renderProductStoryHtml(
 }
 .pde-page--story .pde-story-figure img {
   display: block;
-  width: calc(100% + 48px);
-  margin: 0 -24px 28px;
+  width: 100%;
+  margin: 0 0 28px;
   max-width: none;
-  object-fit: cover;
-  border-radius: 0;
-  min-height: 260px;
-  max-height: 440px;
+  object-fit: contain;
+  background: var(--pde-bg-image-frame);
+  border: 1px solid var(--pde-border);
+  border-radius: var(--pde-radius-lg);
+  box-sizing: border-box;
+  padding: 14px;
+  min-height: 280px;
+  max-height: 480px;
 }
 .pde-page--story .pde-story-figure--text-only {
   max-width: 46ch;
@@ -760,8 +954,9 @@ export function renderProductStoryHtml(
   margin: 0;
   max-width: 38ch;
   font-size: 17px;
-  line-height: 1.75;
-  color: #27272a;
+  font-weight: 500;
+  line-height: 1.8;
+  color: var(--pde-text-secondary);
   white-space: pre-wrap;
 }
 .pde-page--story .pde-story-key-message {
@@ -771,9 +966,13 @@ export function renderProductStoryHtml(
   font-weight: 800;
   letter-spacing: -0.02em;
   line-height: 1.2;
-  color: #18181b;
+  color: var(--pde-text-primary);
   max-width: 20ch;
 }
+/* -- FEATURE 섹션 헤드라인 — kicker(FEATURE) + 강한 headline + 핵심
+   어절만 gradient text 조합(T1-162 요청 사양, T1-164에서 전체 텍스트
+   gradient를 마지막 어절만 강조하도록 조정 — pde-story-headline-accent
+   span이 실제 강조를 담당하므로 이 선택자는 더 이상 필요 없다). -- */
 
 /* -- split layout: 이미지와 카피를 데스크톱에서 좌우로 교차 배치(image-feature/image-text/text-only) -- */
 .pde-page--story .pde-story-figure--split figcaption {
@@ -781,9 +980,6 @@ export function renderProductStoryHtml(
 }
 
 /* -- feature-highlight: 근거를 3/4-card 비주얼 그리드로 -- */
-.pde-page--story .pde-story-section--feature-highlight {
-  background: #ecfeff;
-}
 .pde-page--story .pde-story-section--feature-highlight .pde-story-key-message {
   max-width: none;
 }
@@ -796,14 +992,14 @@ export function renderProductStoryHtml(
   gap: 12px;
 }
 .pde-page--story .pde-story-section--feature-highlight .pde-story-facts li {
-  background: #0d9488;
-  color: #ffffff;
+  background: var(--pde-story-accent, #0f766e);
+  color: var(--pde-text-on-accent);
   font-family: var(--pde-font-emphasis);
   font-size: 17px;
   font-weight: 800;
   line-height: 1.35;
   padding: 24px 18px;
-  border-radius: 4px;
+  border-radius: var(--pde-radius-md);
 }
 
 /* -- step-by-step: 카드가 아니라 번호+연결선으로 이어지는 시퀀스 다이어그램 -- */
@@ -829,7 +1025,7 @@ export function renderProductStoryHtml(
   align-items: center;
   font-size: 17px;
   font-weight: 600;
-  color: #18181b;
+  color: var(--pde-text-primary);
 }
 .pde-page--story .pde-story-section--step-by-step .pde-story-facts li::before {
   content: counter(pde-step);
@@ -840,8 +1036,8 @@ export function renderProductStoryHtml(
   width: 40px;
   height: 40px;
   border-radius: 50%;
-  background: var(--pde-story-accent, #1e293b);
-  color: #fff;
+  background: var(--pde-story-accent, #4338ca);
+  color: var(--pde-text-on-accent);
   font-family: var(--pde-font-number);
   font-variant-numeric: tabular-nums;
   font-size: 16px;
@@ -858,20 +1054,30 @@ export function renderProductStoryHtml(
   top: 44px;
   bottom: -28px;
   width: 2px;
-  background: color-mix(in srgb, var(--pde-story-accent, #1e293b) 30%, white);
+  background: color-mix(in srgb, var(--pde-story-accent, #4338ca) 40%, transparent);
 }
 
-/* -- spec-panel: 어두운 full-bleed 밴드 위에 큰 숫자 + 짧은 라벨 그리드 -- */
+/* -- spec-panel: 밝은 오프화이트 패널 위에 큰 숫자 + 짧은 라벨 그리드.
+   절제된 대각선 hairline 모티프를 함께 깔아 "subtle grid/noise/line
+   motif" editorial detail 요청을 만족한다(T1-163) — 값을 가리지 않도록
+   아주 낮은 불투명도. -- */
 .pde-page--story .pde-story-section--spec-panel {
-  background: #0f172a;
-  color: #fff;
+  background-color: var(--pde-bg-panel);
+  background-image: repeating-linear-gradient(
+    135deg,
+    rgba(15, 23, 42, 0.035) 0px,
+    rgba(15, 23, 42, 0.035) 1px,
+    transparent 1px,
+    transparent 28px
+  );
+  color: var(--pde-text-primary);
 }
 .pde-page--story .pde-story-section--spec-panel .pde-story-key-message {
-  color: #fff;
+  color: var(--pde-text-primary);
   max-width: none;
 }
 .pde-page--story .pde-story-section--spec-panel .pde-story-copy {
-  color: rgba(255, 255, 255, 0.78);
+  color: var(--pde-text-secondary);
 }
 .pde-page--story .pde-story-spec-grid {
   margin: 28px 0;
@@ -903,24 +1109,24 @@ export function renderProductStoryHtml(
   margin-top: 6px;
   font-size: 13px;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.6);
+  color: var(--pde-text-muted);
   letter-spacing: 0.02em;
 }
 
-/* -- notice: 두꺼운 컬러 바 + 큰 글씨의 확인 안내 밴드 -- */
-.pde-page--story .pde-story-section--notice {
-  background: #fffbeb;
-}
+/* -- notice: 흰 카드 + 좌측 amber 컬러 바의 확인 안내 밴드 (T1-163: 밝은 배경 위에서도 대비가 살도록 진한 amber 사용) -- */
 .pde-page--story .pde-story-section--notice .pde-story-notice {
-  border-left: 8px solid var(--pde-story-accent, #b45309);
-  padding: 2px 0 2px 24px;
+  background: var(--pde-bg-panel);
+  border: 1px solid var(--pde-border);
+  border-left: 6px solid var(--pde-story-accent, #92400e);
+  border-radius: var(--pde-radius-md);
+  padding: 24px 24px 24px 22px;
 }
 .pde-page--story .pde-story-notice-label {
   margin: 0 0 10px;
   font-family: var(--pde-font-emphasis);
   font-size: 14px;
   font-weight: 800;
-  color: var(--pde-story-accent, #b45309);
+  color: var(--pde-story-accent, #92400e);
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -928,18 +1134,17 @@ export function renderProductStoryHtml(
   max-width: 42ch;
   font-size: 18px;
   font-weight: 600;
-  color: #292524;
+  color: var(--pde-text-primary);
 }
 .pde-page--story .pde-story-section--notice .pde-story-facts {
   margin: 16px 0 0;
   padding-left: 20px;
   font-size: 15px;
-  color: #78350f;
+  color: var(--pde-text-secondary);
 }
 
 /* -- problem-empathy: 큰 스테이트먼트형 헤드카피, 인용부호 대신 굵은 타이포로 -- */
 .pde-page--story .pde-story-section--problem-empathy {
-  background: #f4f4f5;
   text-align: center;
 }
 .pde-page--story .pde-story-quote {
@@ -955,11 +1160,15 @@ export function renderProductStoryHtml(
   font-weight: 700;
   font-style: normal;
   line-height: 1.4;
-  color: #18181b;
+  color: var(--pde-text-primary);
   letter-spacing: -0.01em;
 }
 
-/* -- image-feature: 근거를 채워진 강조 필(pill)로 -- 얇은 테두리 없음 */
+/* -- image-feature: 근거를 outline chip으로 — feature-highlight의 채워진
+   카드(solid fill)와 accent treatment를 다르게 가져가 "섹션마다 동일한
+   pill만 반복하지 않는다"는 요청 사양을 만족한다(T1-163). 옅은 accent
+   틴트 배경 + accent 테두리/텍스트로, 밝은 페이지 배경 위에서 절제된
+   느낌을 유지한다. -- */
 .pde-page--story .pde-story-section--image-feature .pde-story-facts {
   margin: 18px 0 0;
   padding: 0;
@@ -969,9 +1178,9 @@ export function renderProductStoryHtml(
   gap: 10px;
 }
 .pde-page--story .pde-story-section--image-feature .pde-story-facts li {
-  border: none;
-  color: #fff;
-  background: var(--pde-story-accent, #0e7490);
+  border: 1px solid color-mix(in srgb, var(--pde-story-accent, #0f766e) 45%, transparent);
+  color: var(--pde-story-accent, #0f766e);
+  background: color-mix(in srgb, var(--pde-story-accent, #0f766e) 10%, var(--pde-bg-panel));
   font-size: 14px;
   font-weight: 700;
   padding: 9px 18px;
@@ -979,9 +1188,6 @@ export function renderProductStoryHtml(
 }
 
 /* -- components-grid: 구성품을 카드형 그리드로 나열 (T1-138) — image-feature의 필(pill) 나열과 달리 번호 카드로 "몇 개가 들어있는지"를 한 눈에 센다 -- */
-.pde-page--story .pde-story-section--components-grid {
-  background: #f5f3ff;
-}
 .pde-page--story .pde-story-components-grid {
   margin: 20px 0 0;
   padding: 0;
@@ -994,10 +1200,11 @@ export function renderProductStoryHtml(
   display: flex;
   align-items: center;
   gap: 12px;
-  background: #ffffff;
-  border-radius: 4px;
+  background: var(--pde-bg-panel);
+  border: 1px solid var(--pde-border);
+  border-radius: var(--pde-radius-md);
   padding: 16px;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  box-shadow: var(--pde-shadow-card);
 }
 .pde-page--story .pde-story-components-index {
   flex: none;
@@ -1007,8 +1214,8 @@ export function renderProductStoryHtml(
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  background: var(--pde-story-accent, #7c3aed);
-  color: #fff;
+  background: var(--pde-story-accent, #6d28d9);
+  color: var(--pde-text-on-accent);
   font-family: var(--pde-font-number);
   font-variant-numeric: tabular-nums;
   font-size: 13px;
@@ -1017,53 +1224,51 @@ export function renderProductStoryHtml(
 .pde-page--story .pde-story-components-label {
   font-size: 14px;
   font-weight: 700;
-  color: #18181b;
+  color: var(--pde-text-primary);
   line-height: 1.4;
 }
 
 /* -- detail-callout: 클로즈업 사진을 full-bleed로, 캡션은 이미지 위 오버레이로 -- */
 .pde-page--story .pde-story-figure--callout {
   position: relative;
-  margin: 0 -24px;
-  width: calc(100% + 48px);
 }
 .pde-page--story .pde-story-figure--callout img {
-  margin: 0;
-  width: 100%;
   min-height: 320px;
   max-height: 520px;
 }
+/* -- 캡션은 더 이상 이미지 위 오버레이가 아니다(T1-162) — contain 프레임
+   이미지는 letterbox 여백이 생겨, 그 위에 그라디언트 오버레이 텍스트를
+   얹으면 여백 위에 붕 떠 보인다. 프레임 아래 다크 패널로 붙여 같은
+   정보 밀도를 유지하면서 "안전 crop" 요구와 충돌하지 않게 한다. -- */
 .pde-page--story .pde-story-figure--callout figcaption {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  padding: 32px 24px;
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.78), rgba(0, 0, 0, 0));
+  padding: 24px 4px 0;
 }
 .pde-page--story .pde-story-copy--caption {
   margin: 0;
   max-width: none;
   font-size: 19px;
   font-weight: 700;
-  color: #fff;
+  color: var(--pde-text-primary);
 }
 
-/* -- closing: 캠페인 사인오프 — 어두운 full-bleed 밴드로 확실히 다른 톤 -- */
+/* -- closing: 캠페인 사인오프 — 페이지 전체는 밝지만(T1-163), closing만은
+   요청 사양이 명시적으로 허용한 "일부 feature panel"의 제한된 navy
+   사용처다 — 페이지가 끝나는 지점에 확실히 다른 무게감을 준다. 이 안의
+   색은 페이지 공용 밝은 토큰(--pde-text-primary 등)을 쓰지 않고 이
+   패널 전용 값을 직접 갖는다(밝은 텍스트가 밝은 토큰과 이름이 겹치면
+   안 되므로 리터럴로 분리). 낮은 불투명도 dot-grid 모티프를 더해
+   "subtle grid/noise/line motif" 요청 사양을 여기서도 만족한다. -- */
 .pde-page--story .pde-story-section--closing {
   text-align: center;
   padding: 96px 24px 112px;
-  background: linear-gradient(180deg, #0f172a, #1e293b);
-  color: #fff;
-}
-.pde-page--story .pde-story-closing-media {
-  margin: 0 -24px 32px;
+  background-color: #0f172a;
+  background-image:
+    radial-gradient(rgba(248, 250, 252, 0.06) 1px, transparent 1px),
+    linear-gradient(160deg, #0f172a 0%, #111c34 100%);
+  background-size: 18px 18px, auto;
+  color: #f8fafc;
 }
 .pde-page--story .pde-story-closing-media img {
-  width: 100%;
-  display: block;
-  object-fit: cover;
-  border-radius: 0;
   max-height: 460px;
 }
 .pde-page--story .pde-story-closing-message {
@@ -1074,19 +1279,24 @@ export function renderProductStoryHtml(
   font-weight: 900;
   letter-spacing: -0.02em;
   line-height: 1.2;
-  color: #fff;
+  color: #f8fafc;
+  background: linear-gradient(120deg, #5eead4 0%, #38bdf8 55%, #818cf8 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 .pde-page--story .pde-story-copy--closing {
   max-width: 42ch;
   margin: 0 auto;
-  color: rgba(255, 255, 255, 0.78);
+  color: rgba(248, 250, 252, 0.72);
   font-size: 17px;
 }
 
 /* -- 갤러리 스트립: 대표 이미지 하나로는 부족한 섹션(구성품·디테일·사용
    장면 여러 컷)에 붙는 lifestyle 이미지 행(T1-144 최초 도입, T1-147에서
    확대) — 상한이 6장으로 늘어난 만큼 썸네일이 아니라 실제로 "충분한
-   크기"로 보이도록 높이를 키운다. -- */
+   크기"로 보이도록 높이를 키운다. contain + 프레임 배경(T1-162)으로
+   작은 썸네일이라도 제품이 잘리지 않는다. -- */
 .pde-page--story .pde-story-gallery-strip {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -1099,8 +1309,12 @@ export function renderProductStoryHtml(
   display: block;
   width: 100%;
   height: 180px;
-  object-fit: cover;
-  border-radius: 4px;
+  object-fit: contain;
+  background: var(--pde-bg-image-frame);
+  border: 1px solid var(--pde-border);
+  border-radius: var(--pde-radius-sm);
+  box-sizing: border-box;
+  padding: 8px;
 }
 
 @media (min-width: 760px) {
@@ -1125,17 +1339,20 @@ export function renderProductStoryHtml(
     align-items: stretch;
     min-height: 640px;
   }
+  /* T1-164 — 제품 이미지 컬럼 비중을 52%→58%로 키운다(레퍼런스 시안
+     대비 제품 사진이 작다는 지적). contain fit은 그대로라 잘림은
+     생기지 않는다 — 프레임 자체가 커질 뿐이다. */
   .pde-page--story .pde-hero-media {
     order: 0;
-    flex: 1 1 52%;
+    flex: 1 1 58%;
   }
   .pde-page--story .pde-hero-media img {
     height: 100%;
-    min-height: 640px;
+    min-height: 680px;
     max-height: none;
   }
   .pde-page--story .pde-hero-text {
-    flex: 1 1 48%;
+    flex: 1 1 42%;
     display: flex;
     flex-direction: column;
     justify-content: center;
@@ -1148,30 +1365,25 @@ export function renderProductStoryHtml(
     height: 220px;
   }
   .pde-page--story .pde-story-figure img {
-    width: calc(100% + 128px);
-    margin: 0 -64px 32px;
-    min-height: 320px;
-    max-height: 560px;
+    width: 100%;
+    margin: 0 0 32px;
+    min-height: 360px;
+    max-height: 620px;
   }
-  .pde-page--story .pde-story-figure--callout {
-    margin: 0 -64px;
-    width: calc(100% + 128px);
-  }
-  .pde-page--story .pde-story-closing-media {
-    margin: 0 -64px 40px;
-  }
-  /* split layout: 이미지 좌/우 교차 배치, negative-margin bleed는 grid column 안에서는 해제 */
+  /* split layout: 이미지 좌/우 교차 배치, negative-margin bleed는 grid column 안에서는 해제.
+     T1-164 — 이미지 컬럼 비중(1.05fr→1.2fr)과 표시 높이를 키운다 —
+     contain fit이라 잘림 없이 프레임만 커진다. */
   .pde-page--story .pde-story-figure--split {
     display: grid;
-    grid-template-columns: 1.05fr 1fr;
-    gap: 56px;
+    grid-template-columns: 1.2fr 1fr;
+    gap: 48px;
     align-items: center;
   }
   .pde-page--story .pde-story-figure--split img {
     width: 100%;
     margin: 0;
-    min-height: 420px;
-    max-height: 560px;
+    min-height: 460px;
+    max-height: 620px;
   }
   .pde-page--story .pde-story-section--tone-b .pde-story-figure--split {
     direction: rtl;
