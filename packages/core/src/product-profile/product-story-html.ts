@@ -666,33 +666,42 @@ export function renderProductStoryHtml(
    여백을 페이지 배경과 같은 계열의 그라디언트(--pde-bg-image-frame)로
    채워 "빈 여백"이 아니라 "의도된 프레임"처럼 보이게 한다 — 새 이미지
    생성 없이(비용 없음) 기존 asset 그대로 안전하게 담는다. -- */
+/* T1-165 — box-sizing:border-box를 명시한다. .pde-hero-media(패딩 0)와
+   .pde-hero-text(패딩 64px, 아래)는 데스크톱에서 flex-basis 58%/42%로
+   폭을 나눠 갖는데, box-sizing이 기본값(content-box)이면 .pde-hero-text의
+   padding 128px가 42% 몫 위에 추가로 더해져 두 컬럼의 실제 차지 폭 합이
+   컨테이너보다 커지고, flex-shrink가 두 컬럼을 함께 줄여 이미지가 58%
+   보다 훨씬 좁게(약 50%) 렌더링되는 원인이었다(실측: 980px 컨테이너에서
+   이미지 컬럼이 494px로 축소). border-box로 통일하면 58%/42%가 padding을
+   포함한 실제 차지 폭을 뜻하게 되어 그대로 유지된다. */
 .pde-page--story .pde-hero-media {
   order: -1;
-  padding: 16px;
+  padding: 0;
   background: var(--pde-bg-image-frame);
-  border-radius: var(--pde-radius-lg);
   box-sizing: border-box;
 }
 .pde-page--story .pde-hero-media > a {
   display: block;
-  height: 100%;
   border-radius: var(--pde-radius-md);
   overflow: hidden;
 }
-/* T1-164 — 프레임 padding을 줄이고 실제 표시 영역(height/min/max)을
-   키운다: 레퍼런스 시안 대비 제품 사진이 작다는 지적에 따라, contain
-   fit(잘림 없음)은 그대로 유지한 채 프레임 자체를 크게 잡는다. */
+/* T1-165 — 프레임 padding을 없애고, 컨테이너 높이를 이미지 실제 비율에
+   맞춰 동적으로 계산한다(height:auto) — 이전의 고정 height/min-height는
+   contain fit과 만나 실제 사진 비율과 다를 때 위아래에 큰 빈 여백
+   (letterbox)을 만들었다. max-height는 극단적으로 세로가 긴 사진에 대한
+   안전장치일 뿐, 일반적인 사진에서는 자연 비율 그대로 꽉 찬다. crop 0은
+   그대로 유지된다(object-fit:contain). */
 .pde-page--story .pde-hero-media img {
   display: block;
   width: 100%;
-  height: 62vh;
-  min-height: 380px;
-  max-height: 660px;
+  height: auto;
+  max-height: 70vh;
   object-fit: contain;
   background: var(--pde-bg-image-frame);
 }
 .pde-page--story .pde-hero-text {
   padding: 40px 24px 48px;
+  box-sizing: border-box;
 }
 .pde-page--story .pde-hero--photo h1 {
   font-family: var(--pde-font-display);
@@ -933,19 +942,23 @@ export function renderProductStoryHtml(
 .pde-page--story .pde-story-figure > a {
   display: block;
 }
+/* T1-165 — 이미지 자체의 내부 padding(매트 프레임)과 고정
+   min-height를 없앤다. height:auto라 컨테이너가 이미지의 실제 비율을
+   그대로 따라가므로, contain fit이 만드는 letterbox 여백이 거의 생기지
+   않는다(요청 사양 4 — "컨테이너 자체를 이미지 비율에 맞춰 동적으로
+   계산"). max-height는 극단적으로 세로가 긴 사진에 대한 안전장치일 뿐. */
 .pde-page--story .pde-story-figure img {
   display: block;
   width: 100%;
+  height: auto;
   margin: 0 0 28px;
   max-width: none;
+  max-height: 70vh;
   object-fit: contain;
   background: var(--pde-bg-image-frame);
   border: 1px solid var(--pde-border);
-  border-radius: var(--pde-radius-lg);
+  border-radius: var(--pde-radius-md);
   box-sizing: border-box;
-  padding: 14px;
-  min-height: 280px;
-  max-height: 480px;
 }
 .pde-page--story .pde-story-figure--text-only {
   max-width: 46ch;
@@ -1233,8 +1246,7 @@ export function renderProductStoryHtml(
   position: relative;
 }
 .pde-page--story .pde-story-figure--callout img {
-  min-height: 320px;
-  max-height: 520px;
+  max-height: 560px;
 }
 /* -- 캡션은 더 이상 이미지 위 오버레이가 아니다(T1-162) — contain 프레임
    이미지는 letterbox 여백이 생겨, 그 위에 그라디언트 오버레이 텍스트를
@@ -1305,16 +1317,18 @@ export function renderProductStoryHtml(
   padding: 0;
   list-style: none;
 }
+/* T1-165 — 고정 height와 내부 padding을 없애 각 셀이 자기 사진의 실제
+   비율만큼만 차지하게 한다("셀을 실제로 채운다" — 요청 사양 5). 크롭은
+   여전히 하지 않는다(object-fit:contain 유지, 제품 본체 crop 금지). */
 .pde-page--story .pde-story-gallery-strip img {
   display: block;
   width: 100%;
-  height: 180px;
+  height: auto;
   object-fit: contain;
   background: var(--pde-bg-image-frame);
   border: 1px solid var(--pde-border);
   border-radius: var(--pde-radius-sm);
   box-sizing: border-box;
-  padding: 8px;
 }
 
 @media (min-width: 760px) {
@@ -1333,23 +1347,36 @@ export function renderProductStoryHtml(
   .pde-page--story .pde-hero {
     padding: 140px 64px;
   }
-  /* HERO split: 데스크톱에서 좌(텍스트+기능 아이콘)/우(대형 제품 이미지) 2단 구성(T1-147) */
+  /* T1-165 — .pde-hero(사진 없을 때 fallback)와 .pde-hero--photo(사진
+     있을 때)는 같은 element가 두 클래스를 동시에 갖는다
+     (class="pde-hero pde-hero--photo"). 데스크톱에서 .pde-hero에만
+     padding을 다시 선언하고 .pde-hero--photo는 재선언하지 않으면,
+     동일 specificity에서 나중에 나온 .pde-hero 규칙이 이겨 사진 Hero의
+     padding이 0에서 140px 64px로 되돌아간다 — 화면 폭 128px가 아무도
+     의도하지 않은 채 사라지는 원인이었다(실측: 980px 페이지에서
+     hero-grid가 852px로 줄어듦). 사진이 있을 때는 그대로 0을 유지한다. */
+  .pde-page--story .pde-hero--photo {
+    padding: 0;
+  }
+  /* HERO split: 데스크톱에서 좌(텍스트+기능 아이콘)/우(대형 제품 이미지) 2단 구성(T1-147)
+     T1-165 — align-items를 stretch에서 center로 바꾼다. stretch는 텍스트
+     컬럼(가변 높이)에 맞춰 이미지 컬럼을 강제로 늘려, contain fit이 그
+     늘어난 높이만큼 위아래 여백을 만들었다. center는 각 컬럼이 자기
+     내용(이미지는 실제 비율, 텍스트는 실제 줄 수)만큼만 차지하게 한다. */
   .pde-page--story .pde-hero-grid {
     flex-direction: row;
-    align-items: stretch;
-    min-height: 640px;
+    align-items: center;
   }
-  /* T1-164 — 제품 이미지 컬럼 비중을 52%→58%로 키운다(레퍼런스 시안
-     대비 제품 사진이 작다는 지적). contain fit은 그대로라 잘림은
-     생기지 않는다 — 프레임 자체가 커질 뿐이다. */
+  /* 제품 이미지 컬럼 비중은 58%로 유지(T1-164)한다. contain fit은
+     그대로라 잘림은 생기지 않는다. */
   .pde-page--story .pde-hero-media {
     order: 0;
-    flex: 1 1 58%;
+    flex: 0 1 58%;
   }
   .pde-page--story .pde-hero-media img {
-    height: 100%;
-    min-height: 680px;
-    max-height: none;
+    width: 100%;
+    height: auto;
+    max-height: 78vh;
   }
   .pde-page--story .pde-hero-text {
     flex: 1 1 42%;
@@ -1361,18 +1388,15 @@ export function renderProductStoryHtml(
   .pde-page--story .pde-story-gallery-strip {
     grid-template-columns: repeat(3, 1fr);
   }
-  .pde-page--story .pde-story-gallery-strip img {
-    height: 220px;
-  }
   .pde-page--story .pde-story-figure img {
     width: 100%;
     margin: 0 0 32px;
-    min-height: 360px;
-    max-height: 620px;
+    max-height: 640px;
   }
   /* split layout: 이미지 좌/우 교차 배치, negative-margin bleed는 grid column 안에서는 해제.
-     T1-164 — 이미지 컬럼 비중(1.05fr→1.2fr)과 표시 높이를 키운다 —
-     contain fit이라 잘림 없이 프레임만 커진다. */
+     T1-165 — min-height를 없애 height:auto가 이미지 실제 비율을 그대로
+     따르게 한다(align-items:center는 그대로 유지 — 이미지 컬럼이 텍스트
+     컬럼 높이에 억지로 늘어나지 않는다). */
   .pde-page--story .pde-story-figure--split {
     display: grid;
     grid-template-columns: 1.2fr 1fr;
@@ -1382,7 +1406,6 @@ export function renderProductStoryHtml(
   .pde-page--story .pde-story-figure--split img {
     width: 100%;
     margin: 0;
-    min-height: 460px;
     max-height: 620px;
   }
   .pde-page--story .pde-story-section--tone-b .pde-story-figure--split {
