@@ -15,17 +15,16 @@
  * 배지)은 이 세트에 없다 — 그런 아이콘이 필요할 만큼의 근거를 이 파이프라인
  * 이 갖고 있지 않기 때문이다.
  *
- * T1-166 — 모든 아이콘이 같은 stroke language를 쓰도록 통일한다:
- * viewBox 24, 렌더 크기 14×14, `stroke-width:2`, `stroke-linecap:round`,
- * `stroke-linejoin:round`. 이전에는 `check`만 stroke-width 3, `arrow`만
- * 2.5로 미세하게 달라 나란히 놓으면 굵기가 어긋나 보였다(실측: 다른
- * 아이콘과 함께 쓰이는 hero feature row에서 확인) — 지금은 8개 아이콘
- * 전부 같은 값이다.
+ * T1-166이 한때 모든 아이콘을 stroke-width 2로 통일했으나(`check`=3,
+ * `arrow`=2.5였던 것을 2로), T1-169가 T1-165 baseline 정확 재현 요청에
+ * 따라 이 통일을 되돌렸다 — T1-165 시점에는 이 통일이 아직 없었다(T1-129
+ * 백업 아카이브의 2026-08-13 파일에 `check` stroke-width=3으로 실측 확인,
+ * `arrow`=2.5는 T1-166 자신의 작업 기록에 근거).
  */
 
 export const ICONS = {
   check:
-    '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 12 9 17 20 6"></polyline></svg>',
+    '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 12 9 17 20 6"></polyline></svg>',
   spec:
     '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"></line><line x1="4" y1="12" x2="20" y2="12"></line><line x1="4" y1="17" x2="14" y2="17"></line></svg>',
   box: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><path d="M3 8l9-5 9 5-9 5-9-5z"></path><path d="M3 8v9l9 5 9-5V8"></path><line x1="12" y1="13" x2="12" y2="22"></line></svg>',
@@ -44,7 +43,7 @@ export const ICONS = {
    * 아니라 `heroFeatureRow`(product-story-html.ts)가 고정 접미사로 쓴다.
    */
   arrow:
-    '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>',
+    '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>',
 } as const;
 
 export type StoryIconId = keyof typeof ICONS | "none";
