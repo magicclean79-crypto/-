@@ -681,7 +681,6 @@ export function renderProductStoryHtml(
    이미지 컬럼이 494px로 축소). border-box로 통일하면 58%/42%가 padding을
    포함한 실제 차지 폭을 뜻하게 되어 그대로 유지된다. */
 .pde-page--story .pde-hero-media {
-  position: relative;
   order: -1;
   padding: 0;
   background: var(--pde-bg-image-frame);
@@ -691,34 +690,6 @@ export function renderProductStoryHtml(
   display: block;
   border-radius: var(--pde-radius-md);
   overflow: hidden;
-}
-/* T1-166 — editorial "corner line" motif: 갤러리 프레임에서 흔히 쓰이는
-   절제된 코너 브래킷 한 쌍. 콘텐츠(제품 사진)를 가리지 않도록 프레임
-   바깥 모서리에만, 아주 옅은 accent 색으로 둔다 — 장식 3종(hairline
-   divider·spec-panel micro-grid·closing dot-grid) 외에 Hero 전용 4번째
-   motif로, section마다 motif를 2~3개로 제한하는 원칙은 섹션 단위로는
-   그대로 지킨다(Hero는 다른 motif를 쓰지 않는다). */
-.pde-page--story .pde-hero-media::before,
-.pde-page--story .pde-hero-media::after {
-  content: "";
-  position: absolute;
-  width: 28px;
-  height: 28px;
-  border: 1.5px solid color-mix(in srgb, var(--pde-story-accent, #2563eb) 55%, transparent);
-  pointer-events: none;
-  z-index: 2;
-}
-.pde-page--story .pde-hero-media::before {
-  top: 14px;
-  left: 14px;
-  border-right: none;
-  border-bottom: none;
-}
-.pde-page--story .pde-hero-media::after {
-  bottom: 14px;
-  right: 14px;
-  border-left: none;
-  border-top: none;
 }
 /* T1-165 — 프레임 padding을 없애고, 컨테이너 높이를 이미지 실제 비율에
    맞춰 동적으로 계산한다(height:auto) — 이전의 고정 height/min-height는
@@ -814,11 +785,7 @@ export function renderProductStoryHtml(
   color: var(--pde-story-accent, #94a3b8);
 }
 
-/* -- 아이콘 배지: 기본은 인라인 SVG, 생성형 아이콘 자산이 있으면 --gen 변형(T1-142) --
-   T1-166 — "옅은 blue gradient/white surface + subtle shadow + 1px border"
-   요청 사양(요청 D)에 맞춰 단색 tint 배경을 흰 표면 위 옅은 gradient로
-   바꾸고 은은한 그림자를 더한다. 아이콘 자체가 텍스트보다 튀지 않도록
-   크기(26px)·굵기(stroke-width 2, product-page-icons.ts)는 그대로 둔다. */
+/* -- 아이콘 배지: 기본은 인라인 SVG, 생성형 아이콘 자산이 있으면 --gen 변형(T1-142) -- */
 .pde-page--story .pde-story-icon {
   display: inline-flex;
   align-items: center;
@@ -829,9 +796,7 @@ export function renderProductStoryHtml(
   border-radius: 999px;
   border: 1px solid var(--pde-icon-border);
   color: var(--pde-story-accent, #94a3b8);
-  background:
-    linear-gradient(145deg, var(--pde-bg-surface-a) 0%, color-mix(in srgb, var(--pde-story-accent, #94a3b8) 20%, var(--pde-bg-surface-a)) 100%);
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 4px 10px -6px color-mix(in srgb, var(--pde-story-accent, #94a3b8) 45%, transparent);
+  background: color-mix(in srgb, var(--pde-story-accent, #94a3b8) 22%, var(--pde-bg-panel));
   vertical-align: -7px;
 }
 .pde-page--story .pde-story-icon--gen {
@@ -957,9 +922,6 @@ export function renderProductStoryHtml(
   position: relative;
   padding: 56px 24px;
 }
-/* T1-166 — hairline divider에 아주 옅은 blue tint를 섞는다("subtle blue
-   gradient" 요청 D) — 순수 회색 hairline보다 페이지의 blue accent 언어와
-   더 잘 어울리면서도 여전히 절제된 톤을 유지한다(불투명도는 그대로). */
 .pde-page--story .pde-story-section:not(:first-of-type)::before {
   content: "";
   position: absolute;
@@ -967,12 +929,7 @@ export function renderProductStoryHtml(
   left: 24px;
   right: 24px;
   height: 1px;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    color-mix(in srgb, #2563eb 30%, var(--pde-border-strong)) 50%,
-    transparent
-  );
+  background: linear-gradient(90deg, transparent, var(--pde-border-strong) 50%, transparent);
 }
 .pde-page--story .pde-story-section:last-child {
   padding-bottom: 80px;

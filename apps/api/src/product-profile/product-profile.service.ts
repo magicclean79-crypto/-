@@ -58,7 +58,6 @@ import type { PromptEngine } from "@acos/core";
 import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
 import { PrismaProductProfileRunStore } from "./prisma-product-profile-run.store";
-import { autoTrimIsolatedProductImage } from "./product-isolated-auto-trim";
 import { buildRealDetailCrops } from "./real-photo-crop";
 
 /**
@@ -571,52 +570,20 @@ export class ProductProfileService {
   }
 
   /**
-   * 고립형(화이트 배경) 제품 단독 사진의 실제 여백을 안전하게 잘라낸다
-   * (T1-166). `USAGE_SCENE`(연출/lifestyle)에는 절대 적용하지 않고,
-   * `source: "real"`(사람이 업로드한 원본)에도 적용하지 않는다 — 배경이
-   * 흰색이라는 보장이 있는 건 GPT Image 2 Art Direction Contract를 따른
-   * 생성 이미지뿐이다(가장 보수적인 조합, `product-isolated-auto-trim.ts`
-   * 상단 주석 참고). 모든 이미지에 `imageRole`은 채운다(트림 성공 여부와
-   * 무관하게 사실 그대로의 분류) — 트림은 실패해도 안전하게 원본을 그대로
-   * 쓰므로 실패 자체가 전체를 막지 않는다.
-   *
-   * **트림된 이미지는 `imageId`에 `::auto-trim`을 붙인다.** 브라우저용
-   * `/product-profile/:id/final-html` 경로(Web, T1-158)는
-   * `rewriteEmbeddedImageAssetUrls()`(`packages/core`)로 인라인 base64를
-   * `GET /uploads/images/:id/file`(원본 저장 바이트를 그대로 서빙) URL로
-   * 되돌려 문서 크기를 줄인다 — 이 함수는 원본과 이 함수가 만든 트림
-   * 결과가 다르다는 사실을 모르므로, 아무 표시 없이 그대로 두면 브라우저는
-   * 트림 전 원본을 다시 불러와 **트림 자체가 화면에 반영되지 않는다**
-   * (실측: 이 처리 없이 배포했을 때 대표 상세페이지의 14장 중 1장만
-   * 트림된 채로 남고 나머지는 URL 치환으로 원본으로 되돌아갔다). 이
-   * 파일이 `withRealDetailCrops`가 이미 쓰던 것과 같은 규칙(`"::"`가 있는
-   * id는 `Image` 테이블에 없는 합성 자산이라 URL로 바꿀 수 없다고 보고
-   * 원본 base64를 그대로 남긴다, `product-story-final-html-assets.ts`
-   * 상단 주석)을 그대로 재사용한다 — 새 예외 처리를 만들지 않는다.
+   * 고립형(화이트 배경) 제품 단독 사진의 `imageRole`만 분류한다 — 실제
+   * crop(`autoTrimIsolatedProductImage`, `product-isolated-auto-trim.ts`)은
+   * canonical render path(final-html)에서 **끈다** (T1-168). T1-166이 이
+   * 경로를 켰다가 제품 사진이 이상하게 잘리는 회귀가 발견되어(요청 사양
+   * "제품 사진을 잘라서 해결하지 않는다"), 안전성을 우선해 T1-165처럼
+   * 원본 이미지 sizing을 그대로 쓰는 쪽으로 되돌렸다. auto-trim 로직
+   * 자체(`product-isolated-auto-trim.ts`와 그 테스트)는 지우지 않았다 —
+   * 다시 켤 때는 이 함수 안에서만 배선하면 된다.
    */
   private async autoTrimIsolatedProducts(images: StudioSelectedImage[]): Promise<StudioSelectedImage[]> {
-    return Promise.all(
-      images.map(async (image) => {
-        const imageRole: StudioSelectedImage["imageRole"] =
-          image.category === "USAGE_SCENE" ? "lifestyle" : "product-isolated";
-        if (imageRole !== "product-isolated" || image.source !== "generated") {
-          return { ...image, imageRole };
-        }
-        const buffer = Buffer.from(image.base64, "base64");
-        const trimResult = await autoTrimIsolatedProductImage(buffer, image.mimeType);
-        if (!trimResult) {
-          return { ...image, imageRole, autoTrimMarginRatio: null };
-        }
-        return {
-          ...image,
-          imageId: `${image.imageId}::auto-trim`,
-          imageRole,
-          mimeType: trimResult.mimeType,
-          base64: trimResult.base64,
-          autoTrimMarginRatio: trimResult.marginRatio,
-        };
-      }),
-    );
+    return images.map((image) => ({
+      ...image,
+      imageRole: image.category === "USAGE_SCENE" ? "lifestyle" : "product-isolated",
+    }));
   }
 
   /**
