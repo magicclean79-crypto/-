@@ -1,4 +1,9 @@
-import { GeminiAnalysisError, GeminiAnalysisGenerator, type GeminiAnalysisClient } from "./gemini-analysis.client";
+import {
+  GeminiAnalysisError,
+  GeminiAnalysisGenerator,
+  fallbackSectionDescription,
+  type GeminiAnalysisClient,
+} from "./gemini-analysis.client";
 
 function makeClient(response: { text?: string; finishReason?: string; modelVersion?: string }): GeminiAnalysisClient {
   return {
@@ -95,6 +100,28 @@ describe("GeminiAnalysisGenerator", () => {
     await expect(generator.analyze([{ base64: "AA==", mimeType: "image/jpeg" }])).rejects.toBeInstanceOf(
       GeminiAnalysisError,
     );
+  });
+
+  it("sectionDescription을 그대로 전달하고, 모델이 빠뜨리면 보수적 fallback을 채운다(T1-196)", async () => {
+    const payload = {
+      verifiedProductFacts: {},
+      assetRoles: [],
+      pagePlan: [
+        { pageIndex: 1, pageRole: "HERO", title: "대표", designBrief: "x", sectionDescription: "제품 전체를 보여주는 대표 이미지입니다." },
+        { pageIndex: 2, pageRole: "FEATURES", title: "특징", designBrief: "y" }, // sectionDescription 누락
+        { pageIndex: 3, pageRole: "USE", title: "사용", designBrief: "z", sectionDescription: "   " }, // 공백만
+        { pageIndex: 4, pageRole: "COMPONENTS", title: "구성품", designBrief: "w", sectionDescription: "구성품을 펼쳐 보여줍니다." },
+      ],
+    };
+    const client = makeClient({ text: JSON.stringify(payload) });
+    const generator = new GeminiAnalysisGenerator({ apiKey: "k", client });
+
+    const result = await generator.analyze([{ base64: "AA==", mimeType: "image/jpeg" }]);
+
+    expect(result.result.pagePlan[0].sectionDescription).toBe("제품 전체를 보여주는 대표 이미지입니다.");
+    expect(result.result.pagePlan[1].sectionDescription).toBe(fallbackSectionDescription("FEATURES", "특징"));
+    expect(result.result.pagePlan[2].sectionDescription).toBe(fallbackSectionDescription("USE", "사용"));
+    expect(result.result.pagePlan[3].sectionDescription).toBe("구성품을 펼쳐 보여줍니다.");
   });
 
   it("페이지 계획이 최소 4장 미만이면 GeminiAnalysisError를 던진다", async () => {

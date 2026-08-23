@@ -117,6 +117,16 @@ function parseAssetRoles(raw: unknown, assetCount: number): AssetRoleClassificat
   return out;
 }
 
+/**
+ * 모델이 sectionDescription을 빠뜨리면 이 자리를 채운다 — **제품 정보를
+ * 지어내지 않는다**는 요청 사양을 여기서도 지켜야 하므로, 역할 이름에서
+ * 나오는 일반적인 문구만 쓰고 구체적인 사실(소재·수치 등)은 넣지 않는다
+ * (`ensureMandatoryPagePlan`의 fallback과 같은 보수적 원칙).
+ */
+export function fallbackSectionDescription(pageRole: string, title: string): string {
+  return `${title || pageRole} — 이 섹션의 이미지를 보여줍니다.`;
+}
+
 function parsePagePlan(raw: unknown): PagePlanItem[] {
   if (!Array.isArray(raw)) return [];
   const out: PagePlanItem[] = [];
@@ -130,7 +140,11 @@ function parsePagePlan(raw: unknown): PagePlanItem[] {
         : "FEATURES";
     const title = typeof entry.title === "string" && entry.title.trim() ? entry.title : `페이지 ${pageIndex}`;
     const designBrief = typeof entry.designBrief === "string" ? entry.designBrief : "";
-    out.push({ pageIndex, pageRole, title, designBrief });
+    const sectionDescription =
+      typeof entry.sectionDescription === "string" && entry.sectionDescription.trim()
+        ? entry.sectionDescription.trim()
+        : fallbackSectionDescription(pageRole, title);
+    out.push({ pageIndex, pageRole, title, designBrief, sectionDescription });
   });
   // 페이지 수 상한/하한은 모델이 지키지 않을 수 있어 코드로도 강제한다.
   return out.slice(0, MAX_PAGES);

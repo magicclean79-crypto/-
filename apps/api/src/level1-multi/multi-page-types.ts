@@ -53,6 +53,14 @@ export interface PagePlanItem {
   pageRole: string;
   title: string;
   designBrief: string;
+  /**
+   * 이 섹션이 무엇을 보여주는지 사람이 읽는 한국어 설명(T1-196 요청
+   * 사양 2) — 실제 사진과 검증된 verifiedProductFacts에 근거해야 하고,
+   * 사진에 없는 기능·성능·수치를 만들어내지 않는다. designBrief(이미지
+   * 생성 지시문)와는 다른 필드다 — designBrief는 Gemini 이미지 생성
+   * 호출에, sectionDescription은 화면에 사람이 읽는 텍스트로 쓰인다.
+   */
+  sectionDescription: string;
 }
 
 /** 분석 호출(Call A) 응답 계약 — JSON 텍스트 하나로 전부 받는다. */
@@ -98,22 +106,29 @@ export function findMissingMandatoryRoles(pagePlan: { pageRole: string }[]): Man
  * 장면 설명만 쓴다(AI가 이미 낸 계획을 우선하고, 이건 최후의 보수적
  * fallback이다).
  */
-const MANDATORY_ROLE_FALLBACK: Record<MandatoryPageRole, { title: string; designBrief: string }> = {
+const MANDATORY_ROLE_FALLBACK: Record<
+  MandatoryPageRole,
+  { title: string; designBrief: string; sectionDescription: string }
+> = {
   HERO: {
     title: "대표 이미지",
     designBrief: "제품 전체가 또렷이 보이는 대표 이미지 — 실제 제품의 형태·색상·구성을 그대로 유지한 채 보기 좋은 배경과 조명으로 표현하세요.",
+    sectionDescription: "제품 전체 모습을 보여주는 대표 이미지입니다.",
   },
   FEATURES: {
     title: "핵심 특징",
     designBrief: "제품의 핵심 특징이 잘 드러나는 클로즈업/디테일 샷 — 실제 제품의 구조와 디테일을 있는 그대로 강조하세요.",
+    sectionDescription: "제품의 디테일을 가까이서 보여주는 이미지입니다.",
   },
   USE: {
     title: "사용 장면",
     designBrief: "이 제품을 실제로 사용하는 자연스러운 장면 — 제품의 형태·구성을 바꾸지 않고 실제 사용 맥락만 보여주세요.",
+    sectionDescription: "이 제품을 실제로 사용하는 장면입니다.",
   },
   COMPONENTS: {
     title: "구성품",
     designBrief: "제품의 구성품을 가지런히 펼쳐 놓고 한눈에 보여주는 장면 — 구성품을 추가하거나 빼지 말고 실제 그대로 배치하세요.",
+    sectionDescription: "제품의 구성품을 펼쳐 놓고 보여주는 이미지입니다.",
   },
 };
 
@@ -131,7 +146,13 @@ export function ensureMandatoryPagePlan(pagePlan: PagePlanItem[]): {
   const withFallback = [...pagePlan];
   for (const role of missing) {
     const fallback = MANDATORY_ROLE_FALLBACK[role];
-    withFallback.push({ pageIndex: 0, pageRole: role, title: fallback.title, designBrief: fallback.designBrief });
+    withFallback.push({
+      pageIndex: 0,
+      pageRole: role,
+      title: fallback.title,
+      designBrief: fallback.designBrief,
+      sectionDescription: fallback.sectionDescription,
+    });
   }
 
   const priority = (role: string): number => {

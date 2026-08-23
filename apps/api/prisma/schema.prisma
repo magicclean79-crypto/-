@@ -1871,6 +1871,23 @@ model Level1MultiGeneration {
   /// 모든 페이지 이미지 생성이 공통으로 사용하는 reference.
   actualProductAssetIds String[] @default([])
 
+  /// OCR을 실제로 실행한 Level1Asset id 전체(T1-196) — 업로드된 모든
+  /// 사진에 대해 OCR을 별도 단계로 돌렸다는 근거. 결과 자체는
+  /// Level1AssetOcrResult에 있고, 여기는 "무엇을 대상으로 했는가"만
+  /// 남긴다.
+  ocrAssetIds String[] @default([])
+
+  /// OCR 원문에서 정규식으로 뽑아낸 Product Facts 후보(T1-196) — 사람이
+  /// 검증하지 않은 값이므로 verifiedProductFacts와 분리해 둔다. 구조:
+  /// {assetId, field, value, confidence}[] (OcrFactCandidate[], JSON).
+  ocrFactsCandidates Json?
+
+  /// OCR 후보와 Gemini Vision 분석(verifiedProductFacts)을 필드별로
+  /// 교차 검증한 결과(T1-196) — cross-verification.ts(T1-23)와 같은
+  /// 패턴: 출처가 둘 이상인데 값이 다르면 자동으로 고르지 않고
+  /// "conflict"로 남긴다. 구조: FieldVerification[] (JSON).
+  factsVerification Json?
+
   errorMessage String?
 
   pages Level1DetailPage[]
@@ -1880,6 +1897,40 @@ model Level1MultiGeneration {
 
   @@index([productId])
   @@map("level1_multi_generations")
+}
+
+/// 업로드된 사진 1장의 OCR 실행 기록(T1-196) — OcrResult(Image용)와 같은
+/// 목적이지만 Level1Asset을 대상으로 한다. Level1Asset(T1-188)는 다른
+/// 작업 소유라 수정하지 않고, FK는 이 마이그레이션이 직접 건다(기존
+/// Level1MultiGeneration.productId와 같은 패턴).
+model Level1AssetOcrResult {
+  id     String @id @default(cuid())
+  assetId String
+
+  provider String
+  status   OcrStatus @default(PENDING)
+
+  /// 0.0~1.0 — Provider가 주지 않으면 null(지어내지 않는다, OcrResult와 동일 원칙)
+  confidence Float?
+
+  extractedText String?
+  /// Provider 원본 응답 전체(감사·재분석용)
+  rawJson Json?
+  /// rawJson에서 뽑아낸 블록 단위 bounding box(가능한 provider만) —
+  /// [{text, boundingBox: {vertices:[{x,y}...]}}, ...] 형태(JSON).
+  boundingBoxes Json?
+
+  error    String?
+  attempts Int     @default(0)
+
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([assetId])
+  @@map("level1_asset_ocr_results")
 }
 
 /// 상세페이지를 구성하는 개별 섹션 이미지 1장 — HERO/FEATURES/USAGE/SPEC 등
@@ -1909,6 +1960,21 @@ model Level1DetailPage {
   /// 이 페이지 생성에 실제로 사용한 원본 실물 제품 사진(Level1Asset id) —
   /// packaging/label/spec/manual/barcode는 절대 포함하지 않는다.
   referenceAssetIds String[] @default([])
+
+  /// 이 섹션이 무엇을 보여주는지 사람이 읽는 한국어 설명(T1-196) — 실제
+  /// 사진과 검증된 Product Facts에 근거해야 하고, 이미지 안에는 한글을
+  /// 그리지 않는 대신 화면에 텍스트로 표시한다.
+  sectionDescription String?
+
+  /// sectionDescription의 근거가 된 사진 id — 시각적 근거(referenceAssetIds)와
+  /// OCR로 정보가 확인된 사진(포장/라벨/사양표 등)을 합친 값이다. 이미지
+  /// reference와 정보 근거가 다를 수 있어 별도로 둔다.
+  evidenceAssetIds String[] @default([])
+
+  /// sectionDescription 신뢰도(T1-196) — AI 주관 평가가 아니라 코드가
+  /// 결정한 값이다: AI가 설명을 직접 냈는지(대 fallback 문구인지), 이
+  /// 제품에 미해결 conflict(factsVerification)가 있는지로 계산한다.
+  descriptionConfidence Float?
 
   outputObjectKey String?
   outputMimeType  String?

@@ -5,6 +5,7 @@ import {
   MultiApiError,
   fetchMultiGeneration,
   fetchPageImageUrl,
+  type FieldVerificationDto,
   type Level1DetailPageDto,
   type Level1MultiGenerationDto,
   type VerifiedProductFacts,
@@ -35,6 +36,15 @@ const ROLE_LABEL: Record<string, string> = {
   USE: "사용 장면",
   COMPONENTS: "구성품",
   GALLERY: "갤러리",
+};
+
+/** factsVerification의 field 이름(VerifiedProductFacts 키)을 화면 라벨로 바꾼다(T1-196). */
+const VERIFICATION_FIELD_LABEL: Record<string, string> = {
+  brand: "브랜드",
+  model: "모델명",
+  manufacturer: "제조사",
+  originCountry: "제조국/원산지",
+  dimensions: "규격/크기",
 };
 
 function formatFact(value: string | string[] | null): string {
@@ -139,6 +149,8 @@ export default function DetailPageView({ generationId }: { generationId: string 
   const failedCount = generation.pages.filter((p) => p.status === "FAILED").length;
   const aiCallCount = (generation.analysisProvider ? 1 : 0) + generation.pages.length;
 
+  const conflicts = generation.factsVerification.filter((f) => f.status === "conflict");
+
   const productInfoSection = facts ? (
     <section
       key="product-info"
@@ -166,6 +178,20 @@ export default function DetailPageView({ generationId }: { generationId: string 
           </>
         )}
       </dl>
+      {conflicts.length > 0 && (
+        <div
+          data-testid="detail-page-facts-conflict"
+          className="mt-2 flex flex-col gap-1 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800"
+        >
+          <p className="font-semibold">OCR 원문과 AI 분석이 다르게 말하는 항목이 있습니다 — 사람이 원문을 직접 확인해야 합니다.</p>
+          {conflicts.map((f: FieldVerificationDto) => (
+            <p key={f.field}>
+              {VERIFICATION_FIELD_LABEL[f.field] ?? f.field}:{" "}
+              {f.observations.map((o) => `${o.source === "vision-analysis" ? "AI 분석" : o.source} = "${o.value}"`).join(" / ")}
+            </p>
+          ))}
+        </div>
+      )}
     </section>
   ) : null;
 
@@ -191,8 +217,16 @@ export default function DetailPageView({ generationId }: { generationId: string 
               이미지를 불러올 수 없습니다
             </div>
           )}
+          {page.sectionDescription && (
+            <p data-testid="detail-page-section-description" className="text-sm text-zinc-700">
+              {page.sectionDescription}
+            </p>
+          )}
           <figcaption className="text-xs text-zinc-400">
             {page.pageIndex}. {page.title ?? roleLabel(page.pageRole)} ({roleLabel(page.pageRole)})
+            {page.descriptionConfidence !== null && (
+              <> · 설명 신뢰도 {Math.round(page.descriptionConfidence * 100)}%</>
+            )}
           </figcaption>
         </figure>,
       );
@@ -227,6 +261,29 @@ export default function DetailPageView({ generationId }: { generationId: string 
       </header>
 
       <div className="flex flex-col gap-6">{sections}</div>
+
+      {generation.ocrResults.length > 0 && (
+        <section
+          data-testid="detail-page-ocr-results"
+          className="flex flex-col gap-3 rounded border border-zinc-200 p-4"
+        >
+          <h2 className="text-sm font-semibold">OCR 원문 (업로드 사진 전체)</h2>
+          {generation.ocrResults.map((r) => (
+            <div key={r.assetId} className="flex flex-col gap-1 border-t border-zinc-100 pt-2 text-xs first:border-t-0 first:pt-0">
+              <p className="text-zinc-500">
+                사진 {r.assetId} · {r.status ?? "미실행"}
+                {r.confidence !== null && <> · 신뢰도 {Math.round(r.confidence * 100)}%</>}
+                {r.boundingBoxCount > 0 && <> · 텍스트 블록 {r.boundingBoxCount}개</>}
+              </p>
+              {r.extractedText ? (
+                <pre className="whitespace-pre-wrap rounded bg-zinc-50 p-2 text-zinc-700">{r.extractedText}</pre>
+              ) : (
+                <p className="text-zinc-400">{r.error ?? "인식된 글자가 없습니다."}</p>
+              )}
+            </div>
+          ))}
+        </section>
+      )}
 
       <footer
         data-testid="detail-page-metadata"

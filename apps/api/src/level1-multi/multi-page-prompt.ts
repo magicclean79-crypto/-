@@ -25,6 +25,7 @@ export function buildAnalysisPrompt(assetCount: number): string {
     `   - 전체 페이지 수는 ${MIN_PAGES}~${MAX_PAGES}장 사이에서 정하세요. 필수 4종 외 남는 자리는 FEATURES를 여러 장으로 나누거나 GALLERY를 추가해 채우세요.`,
     "   - 각 페이지에 제목(title)과, 그 페이지에 어떤 장면·구도·강조점을 담을지 설명하는 designBrief를 정하세요.",
     "   - designBrief는 다음 이미지 생성 단계에 그대로 전달되는 지시문입니다 — 구체적으로 쓰세요(예: 어떤 각도, 어떤 사용 장면, 어떤 디테일을 보여줄지). 제품명·스펙·문구 같은 텍스트를 이미지에 그리라는 지시는 절대 포함하지 마세요.",
+    "   - 각 페이지에 sectionDescription(한국어 1~2문장)도 함께 정하세요 — 이 섹션이 무엇을 보여주는지 화면에 텍스트로 표시됩니다(이미지 안에 글자를 그리는 것과 다릅니다). 반드시 이 사진들에서 실제로 확인되는 사실과 위 verifiedProductFacts에 근거해서만 쓰고, 사진에 없는 기능·성능·수치·효과를 만들어내지 마세요.",
     "   - pageIndex는 1부터 시작하는 표시 순서이며, 위 역할 순서(HERO → FEATURES → USE → COMPONENTS → GALLERY)를 그대로 따라야 합니다.",
     "",
     "[반드시 지켜야 할 것]",
@@ -48,7 +49,13 @@ export function buildAnalysisPrompt(assetCount: number): string {
         },
         assetRoles: [{ assetIndex: 0, role: "ACTUAL_PRODUCT" }],
         pagePlan: [
-          { pageIndex: 1, pageRole: "HERO", title: "string", designBrief: "string" },
+          {
+            pageIndex: 1,
+            pageRole: "HERO",
+            title: "string",
+            designBrief: "string",
+            sectionDescription: "string (한국어 1~2문장, 사진과 verifiedProductFacts에만 근거)",
+          },
         ],
       },
       null,

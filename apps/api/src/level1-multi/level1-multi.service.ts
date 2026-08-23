@@ -8,8 +8,10 @@ import {
 import { randomUUID } from "node:crypto";
 import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
-import { GeminiAnalysisError, GeminiAnalysisGenerator } from "./gemini-analysis.client";
+import { type FieldVerification, verifyFields, type FieldObservation } from "./facts-verification";
+import { fallbackSectionDescription, GeminiAnalysisError, GeminiAnalysisGenerator } from "./gemini-analysis.client";
 import { GeminiPageImageError, GeminiPageImageGenerator } from "./gemini-page-image.client";
+import { Level1AssetOcrService } from "./level1-asset-ocr.service";
 import { buildPageImagePrompt } from "./multi-page-prompt";
 import {
   EMPTY_VERIFIED_PRODUCT_FACTS,
@@ -18,6 +20,12 @@ import {
   type PagePlanItem,
   type VerifiedProductFacts,
 } from "./multi-page-types";
+import {
+  extractOcrArrayFactCandidates,
+  extractOcrFactCandidates,
+  OCR_FACT_FIELDS,
+  type OcrFactCandidate,
+} from "./ocr-facts-extraction";
 
 export interface Level1DetailPageDto {
   id: string;
@@ -28,11 +36,28 @@ export interface Level1DetailPageDto {
   provider: string | null;
   model: string | null;
   referenceAssetIds: string[];
+  /** 이 섹션이 무엇을 보여주는지 사람이 읽는 설명(T1-196) — 화면 텍스트용, 이미지 안에는 글자를 그리지 않는다. */
+  sectionDescription: string | null;
+  /** sectionDescription의 근거 사진(시각 reference + OCR로 정보가 확인된 사진, T1-196) */
+  evidenceAssetIds: string[];
+  /** sectionDescription 신뢰도 — AI가 직접 냈는지·전역 Product Facts 충돌 여부로 코드가 계산한 값(T1-196) */
+  descriptionConfidence: number | null;
   outputObjectKey: string | null;
   outputMimeType: string | null;
   errorMessage: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** 업로드 사진 1장의 OCR 실행 요약(T1-196) — 원문 전체를 그대로 보여준다(요약·발췌하지 않는다, "OCR 결과 실제 원문 확인" 요청 사양). */
+export interface Level1AssetOcrSummaryDto {
+  assetId: string;
+  provider: string | null;
+  status: "SUCCESS" | "FAILED" | "PENDING" | "RUNNING" | null;
+  extractedText: string | null;
+  confidence: number | null;
+  boundingBoxCount: number;
+  error: string | null;
 }
 
 /**
@@ -56,6 +81,10 @@ export interface Level1MultiGenerationDto {
   analysisModel: string | null;
   verifiedProductFacts: VerifiedProductFacts | null;
   productFactsProvenance: ProductFactsProvenanceDto | null;
+  /** 업로드된 사진 전체의 OCR 실행 결과(T1-196) — 실제 제품 사진도, 포장/라벨/사양표도 전부 포함한다. */
+  ocrResults: Level1AssetOcrSummaryDto[];
+  /** OCR 원문 ↔ Gemini Vision 분석 교차 검증 결과(T1-196) — 필드별 conflict를 그대로 보여준다. */
+  factsVerification: FieldVerification[];
   errorMessage: string | null;
   pages: Level1DetailPageDto[];
   createdAt: string;
@@ -93,6 +122,7 @@ export class Level1MultiService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
+    private readonly ocrService: Level1AssetOcrService,
   ) {}
 
   private requireApiKey(): string {
@@ -153,6 +183,35 @@ export class Level1MultiService {
   ): Promise<void> {
     const apiKey = this.requireApiKey();
 
+    // OCR 먼저(T1-196 요청 사양 3의 실행 순서: OCR → Product Facts 후보 →
+    // Gemini 분석/교차검증) — 업로드된 모든 사진이 대상이다(실제 제품
+    // 사진도, 포장/라벨/사양표/설명서/바코드도 전부 포함). OCR 실패가
+    // 있어도 전체 생성을 막지 않는다(Level1AssetOcrService 헤더 주석
+    // 참고) — Gemini Vision 분석은 OCR 없이도 동작해 왔고, 이 항목이
+    // 새로 추가하는 정보는 "보강"이지 필수 관문이 아니다.
+    const ocrOutcomes = await this.ocrService.runForAssets(
+      assets.map((asset) => ({ id: asset.id, objectKey: asset.objectKey, mimeType: asset.mimeType })),
+    );
+    const ocrAssetIds = assets.map((asset) => asset.id);
+    const successfulOcr = ocrOutcomes.filter((o) => o.status === "SUCCESS" && o.text.trim());
+    const ocrFactCandidates = extractOcrFactCandidates(
+      successfulOcr.map((o) => ({ assetId: o.assetId, text: o.text, confidence: o.confidence })),
+    );
+    const ocrArrayCandidates = extractOcrArrayFactCandidates(
+      successfulOcr.map((o) => ({ assetId: o.assetId, text: o.text })),
+    );
+    // 1차 저장(OCR만으로 계산) — 아래 분석 호출이 실패해도 OCR 근거·후보는
+    // 남는다. 분석이 성공하면 verifiedProductFacts를 더해 다시 계산해
+    // 덮어쓴다.
+    await this.prisma.level1MultiGeneration.update({
+      where: { id: generationId },
+      data: {
+        ocrAssetIds,
+        ocrFactsCandidates: { scalar: ocrFactCandidates, arrays: ocrArrayCandidates } as unknown as object,
+        factsVerification: this.buildFactsVerification(ocrFactCandidates, null) as unknown as object,
+      },
+    });
+
     let analysis;
     try {
       const images = await Promise.all(
@@ -174,6 +233,11 @@ export class Level1MultiService {
       }
       analysis.result.pagePlan = ensuredPagePlan;
 
+      const factsVerification = this.buildFactsVerification(
+        ocrFactCandidates,
+        analysis.result.verifiedProductFacts,
+      );
+
       await this.prisma.level1MultiGeneration.update({
         where: { id: generationId },
         data: {
@@ -183,6 +247,7 @@ export class Level1MultiService {
           analysisRawText: analysis.rawText,
           analysisAssetIds: assets.map((asset) => asset.id),
           verifiedProductFacts: analysis.result.verifiedProductFacts as unknown as object,
+          factsVerification: factsVerification as unknown as object,
         },
       });
     } catch (error) {
@@ -248,6 +313,16 @@ export class Level1MultiService {
     let succeededCount = 0;
     let failedCount = 0;
     const totalPages = analysis.result.pagePlan.length;
+    // 섹션 설명의 근거(evidenceAssetIds, T1-196) — 시각 reference(실제
+    // 제품 사진) + OCR로 정보가 확인된 사진(포장/라벨/사양표 등) 전체를
+    // 합친다. 특정 문장이 어느 필드에서 왔는지까지 정밀 매핑하지는
+    // 않는다 — "이 섹션 설명을 뒷받침하는 사진 전체"라는 보수적인 뜻으로
+    // 쓴다(완료 보고에 그대로 밝힌다).
+    const evidenceAssetIds = [...new Set([...actualProductAssetIds, ...ocrAssetIds])];
+    const hasFactConflict = this.buildFactsVerification(
+      ocrFactCandidates,
+      analysis.result.verifiedProductFacts,
+    ).some((f) => f.status === "conflict");
 
     for (const page of analysis.result.pagePlan) {
       const succeeded = await this.generateOnePage({
@@ -258,6 +333,8 @@ export class Level1MultiService {
         apiKey,
         referenceImages,
         referenceAssetIds: actualProductAssetIds,
+        evidenceAssetIds,
+        hasFactConflict,
       });
       if (succeeded) succeededCount += 1;
       else failedCount += 1;
@@ -277,6 +354,50 @@ export class Level1MultiService {
     });
   }
 
+  /**
+   * OCR 원문 후보 ↔ Gemini Vision 분석(verifiedProductFacts)을 필드별로
+   * 교차 검증한다(T1-196). `visionFacts`가 null이면(분석 실패·아직 실행
+   * 전) OCR 관측만으로 계산한다 — 그래도 OCR 후보끼리 서로 다르면
+   * conflict가 나올 수 있다(예: 서로 다른 사진에서 다른 제조사가 읽힘).
+   */
+  private buildFactsVerification(
+    ocrCandidates: OcrFactCandidate[],
+    visionFacts: VerifiedProductFacts | null,
+  ): FieldVerification[] {
+    const observationsByField: Record<string, FieldObservation[]> = {};
+    for (const field of OCR_FACT_FIELDS) {
+      const observations: FieldObservation[] = [];
+      const visionValue = visionFacts?.[field];
+      if (typeof visionValue === "string" && visionValue.trim()) {
+        observations.push({ source: "vision-analysis", value: visionValue });
+      }
+      for (const candidate of ocrCandidates) {
+        if (candidate.field === field) {
+          observations.push({ source: `ocr:${candidate.assetId}`, value: candidate.value });
+        }
+      }
+      observationsByField[field] = observations;
+    }
+    return verifyFields(observationsByField);
+  }
+
+  /**
+   * descriptionConfidence 계산(T1-196) — AI 주관 평가가 아니라 코드가
+   * 결정하는 두 가지 사실만 반영한다: ① AI가 sectionDescription을 직접
+   * 냈는지(대 보수적 fallback 문구인지) ② 이 생성 전체에 미해결
+   * Product Facts conflict(factsVerification)가 있는지. "품질이
+   * 좋다·정확하다"는 평가를 흉내 내지 않는다 — 이 값이 낮다고 설명이
+   * 틀렸다는 뜻이 아니라, 확인해야 할 근거가 더 필요하다는 신호일 뿐이다.
+   */
+  private buildDescriptionConfidence(args: {
+    isAiProvided: boolean;
+    hasFactConflict: boolean;
+  }): number {
+    let score = args.isAiProvided ? 0.9 : 0.5;
+    if (args.hasFactConflict) score -= 0.2;
+    return Math.max(0, Math.min(1, score));
+  }
+
   private async generateOnePage(args: {
     generationId: string;
     productId: string;
@@ -285,10 +406,23 @@ export class Level1MultiService {
     apiKey: string;
     referenceImages: { base64: string; mimeType: string }[];
     referenceAssetIds: string[];
+    evidenceAssetIds: string[];
+    hasFactConflict: boolean;
   }): Promise<boolean> {
-    const { generationId, page, totalPages, apiKey, referenceImages, referenceAssetIds } = args;
+    const {
+      generationId,
+      page,
+      totalPages,
+      apiKey,
+      referenceImages,
+      referenceAssetIds,
+      evidenceAssetIds,
+      hasFactConflict,
+    } = args;
     const promptText = buildPageImagePrompt(page, totalPages);
     const generator = new GeminiPageImageGenerator({ apiKey });
+    const isAiProvided = page.sectionDescription !== fallbackSectionDescription(page.pageRole, page.title);
+    const descriptionConfidence = this.buildDescriptionConfidence({ isAiProvided, hasFactConflict });
 
     try {
       const result = await generator.generate(promptText, referenceImages);
@@ -307,6 +441,9 @@ export class Level1MultiService {
           model: result.model,
           promptText,
           referenceAssetIds,
+          sectionDescription: page.sectionDescription,
+          evidenceAssetIds,
+          descriptionConfidence,
           outputObjectKey: outputKey,
           outputMimeType: result.mimeType,
         },
@@ -328,6 +465,9 @@ export class Level1MultiService {
           pageIndex: page.pageIndex,
           pageRole: page.pageRole,
           title: page.title,
+          sectionDescription: page.sectionDescription,
+          evidenceAssetIds,
+          descriptionConfidence,
           status: "FAILED",
           provider: "gemini",
           promptText,
@@ -347,7 +487,49 @@ export class Level1MultiService {
     if (!generation) {
       throw new NotFoundException(`생성 결과를 찾을 수 없습니다: ${id}`);
     }
-    return this.toDto(generation);
+    const ocrResults = await this.loadOcrSummaries(generation.ocrAssetIds);
+    return this.toDto(generation, ocrResults);
+  }
+
+  /**
+   * OCR 실행 이력 중 asset별 **최신** 결과만 골라 요약한다(T1-196). 원문
+   * 전체를 그대로 노출한다("OCR 결과 실제 원문 확인" 요청 사양) —
+   * 요약·발췌하지 않는다.
+   */
+  private async loadOcrSummaries(assetIds: string[]): Promise<Level1AssetOcrSummaryDto[]> {
+    if (assetIds.length === 0) return [];
+    const records = await this.prisma.level1AssetOcrResult.findMany({
+      where: { assetId: { in: assetIds } },
+      orderBy: { createdAt: "desc" },
+    });
+    const latestByAsset = new Map<string, (typeof records)[number]>();
+    for (const record of records) {
+      if (!latestByAsset.has(record.assetId)) latestByAsset.set(record.assetId, record);
+    }
+    return assetIds.map((assetId) => {
+      const record = latestByAsset.get(assetId);
+      if (!record) {
+        return {
+          assetId,
+          provider: null,
+          status: null,
+          extractedText: null,
+          confidence: null,
+          boundingBoxCount: 0,
+          error: null,
+        };
+      }
+      const boundingBoxes = record.boundingBoxes as unknown[] | null;
+      return {
+        assetId,
+        provider: record.provider,
+        status: record.status,
+        extractedText: record.extractedText,
+        confidence: record.confidence,
+        boundingBoxCount: Array.isArray(boundingBoxes) ? boundingBoxes.length : 0,
+        error: record.error,
+      };
+    });
   }
 
   async getPageFile(pageId: string): Promise<{ buffer: Buffer; mimeType: string }> {
@@ -359,34 +541,41 @@ export class Level1MultiService {
     return { buffer, mimeType: page.outputMimeType };
   }
 
-  private toDto(generation: {
-    id: string;
-    productId: string;
-    status: string;
-    analysisProvider: string | null;
-    analysisModel: string | null;
-    verifiedProductFacts: unknown;
-    analysisAssetIds: string[];
-    actualProductAssetIds: string[];
-    errorMessage: string | null;
-    pages?: {
+  private toDto(
+    generation: {
       id: string;
-      pageIndex: number;
-      pageRole: string;
-      title: string | null;
+      productId: string;
       status: string;
-      provider: string | null;
-      model: string | null;
-      referenceAssetIds: string[];
-      outputObjectKey: string | null;
-      outputMimeType: string | null;
+      analysisProvider: string | null;
+      analysisModel: string | null;
+      verifiedProductFacts: unknown;
+      analysisAssetIds: string[];
+      actualProductAssetIds: string[];
+      factsVerification: unknown;
       errorMessage: string | null;
+      pages?: {
+        id: string;
+        pageIndex: number;
+        pageRole: string;
+        title: string | null;
+        status: string;
+        provider: string | null;
+        model: string | null;
+        referenceAssetIds: string[];
+        sectionDescription: string | null;
+        evidenceAssetIds: string[];
+        descriptionConfidence: number | null;
+        outputObjectKey: string | null;
+        outputMimeType: string | null;
+        errorMessage: string | null;
+        createdAt: Date;
+        updatedAt: Date;
+      }[];
       createdAt: Date;
       updatedAt: Date;
-    }[];
-    createdAt: Date;
-    updatedAt: Date;
-  }): Level1MultiGenerationDto {
+    },
+    ocrResults: Level1AssetOcrSummaryDto[] = [],
+  ): Level1MultiGenerationDto {
     return {
       id: generation.id,
       productId: generation.productId,
@@ -407,6 +596,8 @@ export class Level1MultiService {
             actualProductAssetIds: generation.actualProductAssetIds,
           }
         : null,
+      ocrResults,
+      factsVerification: (generation.factsVerification as FieldVerification[] | null) ?? [],
       errorMessage: generation.errorMessage,
       pages: (generation.pages ?? []).map((page) => ({
         id: page.id,
@@ -417,6 +608,9 @@ export class Level1MultiService {
         provider: page.provider,
         model: page.model,
         referenceAssetIds: page.referenceAssetIds,
+        sectionDescription: page.sectionDescription,
+        evidenceAssetIds: page.evidenceAssetIds,
+        descriptionConfidence: page.descriptionConfidence,
         outputObjectKey: page.outputObjectKey,
         outputMimeType: page.outputMimeType,
         errorMessage: page.errorMessage,

@@ -81,6 +81,12 @@ export interface Level1DetailPageDto {
   provider: string | null;
   model: string | null;
   referenceAssetIds: string[];
+  /** 이 섹션이 무엇을 보여주는지 사람이 읽는 설명(T1-196) */
+  sectionDescription: string | null;
+  /** sectionDescription의 근거가 된 사진(시각 reference + OCR로 정보가 확인된 사진, T1-196) */
+  evidenceAssetIds: string[];
+  /** sectionDescription 신뢰도 — 코드가 계산한 값(T1-196) */
+  descriptionConfidence: number | null;
   outputObjectKey: string | null;
   outputMimeType: string | null;
   errorMessage: string | null;
@@ -96,6 +102,26 @@ export interface ProductFactsProvenanceDto {
   actualProductAssetIds: string[];
 }
 
+/** 업로드 사진 1장의 OCR 실행 요약(T1-196) — 원문 전체를 그대로 담는다. */
+export interface Level1AssetOcrSummaryDto {
+  assetId: string;
+  provider: string | null;
+  status: "SUCCESS" | "FAILED" | "PENDING" | "RUNNING" | null;
+  extractedText: string | null;
+  confidence: number | null;
+  boundingBoxCount: number;
+  error: string | null;
+}
+
+export type FieldVerificationStatus = "single-source" | "agreed" | "conflict" | "unknown";
+
+export interface FieldVerificationDto {
+  field: string;
+  observations: { source: string; value: string }[];
+  status: FieldVerificationStatus;
+  resolvedValue: string | null;
+}
+
 export interface Level1MultiGenerationDto {
   id: string;
   productId: string;
@@ -104,6 +130,10 @@ export interface Level1MultiGenerationDto {
   analysisModel: string | null;
   verifiedProductFacts: VerifiedProductFacts | null;
   productFactsProvenance: ProductFactsProvenanceDto | null;
+  /** 업로드된 사진 전체의 OCR 실행 결과(T1-196) */
+  ocrResults: Level1AssetOcrSummaryDto[];
+  /** OCR 원문 ↔ Gemini Vision 분석 교차 검증 결과(T1-196) */
+  factsVerification: FieldVerificationDto[];
   errorMessage: string | null;
   pages: Level1DetailPageDto[];
   createdAt: string;
