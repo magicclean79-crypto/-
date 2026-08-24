@@ -8,6 +8,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
+import { selectDesignTemplate, type DesignSelection } from "./design-system";
 import { type FieldVerification, verifyFields, type FieldObservation } from "./facts-verification";
 import { fallbackSectionDescription, GeminiAnalysisError, GeminiAnalysisGenerator } from "./gemini-analysis.client";
 import { GeminiPageImageError, GeminiPageImageGenerator } from "./gemini-page-image.client";
@@ -81,6 +82,8 @@ export interface Level1MultiGenerationDto {
   analysisModel: string | null;
   verifiedProductFacts: VerifiedProductFacts | null;
   productFactsProvenance: ProductFactsProvenanceDto | null;
+  /** 선택된 상세페이지 layout template + design token (T1-197) — 렌더러는 이 값을 그대로 구현한다 */
+  designSystem: DesignSelection;
   /** 업로드된 사진 전체의 OCR 실행 결과(T1-196) — 실제 제품 사진도, 포장/라벨/사양표도 전부 포함한다. */
   ocrResults: Level1AssetOcrSummaryDto[];
   /** OCR 원문 ↔ Gemini Vision 분석 교차 검증 결과(T1-196) — 필드별 conflict를 그대로 보여준다. */
@@ -139,7 +142,7 @@ export class Level1MultiService {
   async startGeneration(productId: string): Promise<Level1MultiGenerationDto> {
     const product = await this.prisma.level1Product.findUnique({
       where: { id: productId },
-      select: { id: true },
+      select: { id: true, category: true },
     });
     if (!product) {
       throw new NotFoundException(`제품을 찾을 수 없습니다: ${productId}`);
@@ -173,7 +176,7 @@ export class Level1MultiService {
       );
     });
 
-    return this.toDto(generation);
+    return this.toDto(generation, [], product.category ?? null);
   }
 
   private async runPipeline(
@@ -488,7 +491,11 @@ export class Level1MultiService {
       throw new NotFoundException(`생성 결과를 찾을 수 없습니다: ${id}`);
     }
     const ocrResults = await this.loadOcrSummaries(generation.ocrAssetIds);
-    return this.toDto(generation, ocrResults);
+    const product = await this.prisma.level1Product.findUnique({
+      where: { id: generation.productId },
+      select: { category: true },
+    });
+    return this.toDto(generation, ocrResults, product?.category ?? null);
   }
 
   /**
@@ -575,18 +582,26 @@ export class Level1MultiService {
       updatedAt: Date;
     },
     ocrResults: Level1AssetOcrSummaryDto[] = [],
+    productCategory: string | null = null,
   ): Level1MultiGenerationDto {
+    const resolvedFacts = generation.verifiedProductFacts
+      ? (generation.verifiedProductFacts as VerifiedProductFacts)
+      : null;
     return {
       id: generation.id,
       productId: generation.productId,
       status: generation.status as Level1MultiGenerationDto["status"],
       analysisProvider: generation.analysisProvider,
       analysisModel: generation.analysisModel,
-      verifiedProductFacts: generation.verifiedProductFacts
-        ? (generation.verifiedProductFacts as VerifiedProductFacts)
-        : generation.status === "PENDING" || generation.status === "ANALYZING"
+      verifiedProductFacts:
+        resolvedFacts ??
+        (generation.status === "PENDING" || generation.status === "ANALYZING"
           ? null
-          : { ...EMPTY_VERIFIED_PRODUCT_FACTS },
+          : { ...EMPTY_VERIFIED_PRODUCT_FACTS }),
+      designSystem: selectDesignTemplate({
+        category: productCategory,
+        materials: resolvedFacts?.materials ?? [],
+      }),
       productFactsProvenance: generation.verifiedProductFacts
         ? {
             method: "vision-analysis",

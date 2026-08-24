@@ -94,6 +94,34 @@ export interface Level1DetailPageDto {
   updatedAt: string;
 }
 
+export type DesignTemplateId = "commercial-editorial" | "technical-commerce" | "minimal-product";
+
+export interface DesignTokens {
+  templateId: DesignTemplateId;
+  background: string;
+  surface: string;
+  text: string;
+  mutedText: string;
+  accent: string;
+  accentSoft: string;
+  headingScale: { hero: string; h2: string; h3: string; label: string };
+  bodyScale: { base: string; small: string };
+  maxWidth: string;
+  sectionSpacing: { mobile: string; desktop: string };
+  imageRadius: string;
+  imageTreatment: "natural" | "flush" | "framed";
+  grid: { benefitColumns: number; detailColumns: number };
+  dividerStyle: string;
+  fontHeading: string;
+  fontBody: string;
+}
+
+export interface DesignSelectionDto {
+  templateId: DesignTemplateId;
+  tokens: DesignTokens;
+  reason: string;
+}
+
 export interface ProductFactsProvenanceDto {
   method: "vision-analysis";
   provider: string | null;
@@ -129,6 +157,7 @@ export interface Level1MultiGenerationDto {
   analysisProvider: string | null;
   analysisModel: string | null;
   verifiedProductFacts: VerifiedProductFacts | null;
+  designSystem: DesignSelectionDto;
   productFactsProvenance: ProductFactsProvenanceDto | null;
   /** 업로드된 사진 전체의 OCR 실행 결과(T1-196) */
   ocrResults: Level1AssetOcrSummaryDto[];
@@ -180,6 +209,23 @@ export async function fetchPageImageUrl(pageId: string): Promise<string> {
   const response = await fetch(url, authFetchInit());
   if (!response.ok) {
     throw new MultiApiError(`페이지 이미지를 불러올 수 없습니다 (HTTP ${response.status})`, response.status);
+  }
+  const blob = await response.blob();
+  return URL.createObjectURL(blob);
+}
+
+/**
+ * 원본 업로드 사진(가공되지 않은 실제 제품 사진) 원본 바이트를 그대로
+ * 가져온다(T1-197 HERO/GALLERY — Gemini 생성물이 아니라 원본을 그대로
+ * 보여줘야 하는 자리에 쓴다). 기존 `level1.controller.ts`의
+ * `GET assets/:id/file`(T1-188, 읽기 전용 · 이번 작업이 수정하지 않음)을
+ * 재사용한다.
+ */
+export async function fetchAssetImageUrl(assetId: string): Promise<string> {
+  const url = `${API_URL}/level1/assets/${assetId}/file`;
+  const response = await fetch(url, authFetchInit());
+  if (!response.ok) {
+    throw new MultiApiError(`원본 사진을 불러올 수 없습니다 (HTTP ${response.status})`, response.status);
   }
   const blob = await response.blob();
   return URL.createObjectURL(blob);
