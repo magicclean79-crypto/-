@@ -9,6 +9,17 @@
 
 **마지막 업데이트: 2026-08-09**
 
+> **T1-103(2026-08-13) 실측 확인**: 이 문서는 Sprint 1(GPT → Product
+> Package → Gemini)의 작업 목록만 다룬다. 그 이후 Bridge를 통해
+> 진행된 작업(T1-77 이후 — Product Story·템플릿 자동 선택·카테고리별
+> 사용자 요구사항·Image Studio 무인증 접근 등, `bridge/STATUS.md`
+> 참고)은 이 Sprint 구조 밖에서 CTO가 직접 발주·진행한 것으로
+> 보이며, 이 문서에는 반영돼 있지 않다. "지금 무엇까지 완료됐는가"는
+> 이 문서가 아니라 `bridge/STATUS.md`·`docs/PROJECT_STATE.md`가
+> 더 최신이다(`AGENTS.md` §0 Source of Truth 우선순위와 같은 원칙).
+> 이번 작업(T1-103)은 Sprint 재정의·TASKS 재작성이 요청 범위 밖이라
+> 이 사실만 기록하고 목록 자체는 고치지 않았다.
+
 ---
 
 ## 현재 Sprint — Sprint 1 (2026-08-09 재정의)
