@@ -43,6 +43,11 @@ export default tseslint.config(
         // Bridge 비동기 실행의 심장박동에 쓴다 (2026-08-09)
         setInterval: "readonly",
         clearInterval: "readonly",
+        // 현황판 실시간 상태 창의 SSE 검사가 쓴다 (T1-43, 2026-08-09)
+        AbortController: "readonly",
+        TextDecoder: "readonly",
+        // Push Gateway가 웹훅 호출에 타임아웃을 건다 (T1-53, 2026-08-09)
+        AbortSignal: "readonly",
       },
     },
   },
