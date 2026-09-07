@@ -5,57 +5,66 @@ import type {
   GenerateImageCandidatesResult,
   ImageCategory,
   ImageDto,
+  ProductProfileDto,
 } from "@acos/shared";
-import { IMAGE_CATEGORY_LABELS } from "@acos/shared";
+import {
+  IMAGE_CATEGORY_LABELS,
+  USER_REQUIREMENT_MAX_LENGTH,
+  validateUserRequirementText,
+} from "@acos/shared";
 import { Badge, Card } from "@acos/ui";
-import { authFetchInit } from "../../lib/auth-client";
 import { AuthImage } from "../product-profile/auth-image";
+import { imageStudioFetch } from "./api-client";
+import { findProfileForSourceImage } from "./product-profile-lookup";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+/**
+ * 이 카테고리(생성 목적)만의 요구사항을 저장한다 (T1-99) — 비용 없음(DB
+ * 값만 갱신). 다른 카테고리의 요구사항은 건드리지 않는다(부분 갱신,
+ * `PATCH /product-profile/:id/user-requirement`의 `userRequirementsByCategory`).
+ */
+async function saveCategoryRequirement(
+  profileId: string,
+  category: ImageCategory,
+  text: string,
+): Promise<ProductProfileDto> {
+  return imageStudioFetch<ProductProfileDto>(`/product-profile/${profileId}/user-requirement`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      userRequirementsByCategory: { [category]: text.trim() || null },
+    }),
+  });
+}
 
 async function generateCandidates(
   imageId: string,
   category: ImageCategory,
   style: string,
 ): Promise<GenerateImageCandidatesResult> {
-  const response = await fetch(
-    `${API_URL}/image-gen/candidates`,
-    authFetchInit({
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ imageId, category, style: style || undefined }),
-    }),
-  );
-  const body = (await response.json()) as GenerateImageCandidatesResult & {
-    message?: string | string[];
-  };
-  if (!response.ok) {
-    const message = Array.isArray(body.message) ? body.message.join(", ") : body.message;
-    throw new Error(message ?? `생성 실패 (HTTP ${response.status})`);
-  }
-  return body;
+  return imageStudioFetch<GenerateImageCandidatesResult>("/image-gen/candidates", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ imageId, category, style: style || undefined }),
+  });
 }
 
 async function fetchCandidates(sourceImageId: string, category: ImageCategory): Promise<ImageDto[]> {
-  const response = await fetch(
-    `${API_URL}/image-gen/candidates?sourceImageId=${sourceImageId}&category=${category}`,
-    authFetchInit(),
-  );
-  if (!response.ok) return [];
-  const body = (await response.json()) as { results: ImageDto[] };
-  return body.results;
+  try {
+    const body = await imageStudioFetch<{ results: ImageDto[] }>(
+      `/image-gen/candidates?sourceImageId=${sourceImageId}&category=${category}`,
+    );
+    return body.results;
+  } catch {
+    return [];
+  }
 }
 
 async function selectImage(imageId: string): Promise<ImageDto> {
-  const response = await fetch(
-    `${API_URL}/image-gen/select`,
-    authFetchInit({
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ imageId }),
-    }),
-  );
-  return response.json();
+  return imageStudioFetch<ImageDto>("/image-gen/select", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ imageId }),
+  });
 }
 
 const STYLE_PRESETS = [
@@ -77,6 +86,15 @@ export function CategoryPanel({ category, sourceImageId }: { category: ImageCate
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
+  // 이 카테고리(생성 목적)만의 요구사항 (T1-99) — 대표 썸네일은 배경/구도,
+  // 디테일샷은 강조할 부위, 사용 이미지는 상황, 구성품은 배치처럼 목적마다
+  // 다른 요구사항을 독립적으로 입력한다.
+  const [profileId, setProfileId] = useState<string | null>(null);
+  const [requirementText, setRequirementText] = useState("");
+  const [requirementSaving, setRequirementSaving] = useState(false);
+  const [requirementSaved, setRequirementSaved] = useState(false);
+  const [requirementError, setRequirementError] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     const results = await fetchCandidates(sourceImageId, category);
     setAllVersions(results);
@@ -87,6 +105,35 @@ export function CategoryPanel({ category, sourceImageId }: { category: ImageCate
     void load();
   }, [load]);
 
+  useEffect(() => {
+    setRequirementSaved(false);
+    setRequirementError(null);
+    void findProfileForSourceImage(sourceImageId).then((profile) => {
+      setProfileId(profile?.id ?? null);
+      setRequirementText(profile?.userRequirementsByCategory?.[category] ?? "");
+    });
+  }, [sourceImageId, category]);
+
+  const saveRequirement = async () => {
+    if (!profileId) return;
+    const validation = validateUserRequirementText(requirementText);
+    if (!validation.ok) {
+      setRequirementError(validation.reason ?? "요구사항을 확인해 주세요");
+      return;
+    }
+    setRequirementSaving(true);
+    setRequirementError(null);
+    setRequirementSaved(false);
+    try {
+      await saveCategoryRequirement(profileId, category, requirementText);
+      setRequirementSaved(true);
+    } catch (err) {
+      setRequirementError(err instanceof Error ? err.message : "요구사항 저장 실패");
+    } finally {
+      setRequirementSaving(false);
+    }
+  };
+
   const versionNumbers = [...new Set(allVersions.map((v) => v.groupVersion ?? 0))].sort((a, b) => b - a);
   const currentVersion = versionNumbers[versionIndex];
   const currentCandidates = allVersions.filter((v) => v.groupVersion === currentVersion);
@@ -96,7 +143,18 @@ export function CategoryPanel({ category, sourceImageId }: { category: ImageCate
     setRunning(true);
     setError(null);
     try {
-      await generateCandidates(sourceImageId, category, style);
+      const result = await generateCandidates(sourceImageId, category, style);
+      // HTTP 200이어도 AI 호출 자체가 실패했을 수 있다 — 이전에는
+      // 이 경우 candidates가 빈 채로 조용히 끝나(예외가 없어 catch를
+      // 타지 않음) "아직 생성되지 않음"만 보여, 무엇이 실패했는지 알
+      // 방법이 없었다(T1-136/T1-138, PROJECT_MEMORY M-26 "실패가
+      // 성공처럼 보이는 것이 가장 위험하다"). 생성된 후보가 하나도
+      // 없는데 실패가 기록됐으면 그 원인을 그대로 보여준다.
+      if (result.candidates.length === 0 && result.failedCount > 0) {
+        setError(
+          `이미지 생성 ${result.failedCount}건 모두 실패: ${result.errors[0] ?? "원인 미상"}`,
+        );
+      }
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "생성 실패");
@@ -106,13 +164,65 @@ export function CategoryPanel({ category, sourceImageId }: { category: ImageCate
   };
 
   const pick = async (imageId: string) => {
-    await selectImage(imageId);
-    await load();
+    try {
+      await selectImage(imageId);
+      await load();
+    } catch (err) {
+      // 이전에는 selectImage가 실패해도 결과를 검사하지 않아 조용히
+      // 무시되었다(T1-119) — 이제 기존 오류 배너에 원인을 보여준다.
+      setError(err instanceof Error ? err.message : "선택 실패");
+    }
   };
 
   return (
     <Card title={IMAGE_CATEGORY_LABELS[category]}>
       <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-1.5 rounded-lg border border-zinc-200 p-2 dark:border-zinc-800">
+          <p className="text-[11px] text-zinc-400">
+            이 목적({IMAGE_CATEGORY_LABELS[category]})만의 요구사항 — 예:{" "}
+            {category === "HERO" && "배경/구도/분위기"}
+            {category === "DETAIL" && "강조할 제품 부위/촬영 거리/구도"}
+            {category === "USAGE_SCENE" && "사용 상황/환경"}
+            {category === "COMPONENTS" && "확인된 구성품의 배치/표현"}
+            {category === "FEATURE_HIGHLIGHT" && "강조할 기능/시각적 표현 방식"}
+            {category === "OTHER" && "필요한 보조 설명 방식"}
+            . 실제 제품과 충돌하면 반영되지 않습니다.
+          </p>
+          {profileId ? (
+            <>
+              <textarea
+                value={requirementText}
+                onChange={(e) => setRequirementText(e.target.value)}
+                rows={2}
+                maxLength={USER_REQUIREMENT_MAX_LENGTH}
+                placeholder="예: 화이트 배경에 은은한 그림자만"
+                className="w-full rounded-lg border border-zinc-300 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-900"
+              />
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void saveRequirement()}
+                  disabled={requirementSaving}
+                  className="rounded-lg border border-zinc-300 px-2 py-1 text-[11px] font-medium hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                >
+                  {requirementSaving ? "저장 중…" : "이 목적 요구사항 저장"}
+                </button>
+                {requirementSaved && <Badge tone="ok">저장됨</Badge>}
+              </div>
+              {requirementError && (
+                <p className="text-[11px] text-red-600 dark:text-red-400">{requirementError}</p>
+              )}
+            </>
+          ) : (
+            <p className="text-[11px] text-amber-700 dark:text-amber-400">
+              이 사진에 대해 검증된 Product Profile이 아직 없어 목적별 요구사항을 저장할 수
+              없습니다 — 먼저 Product Profile을 생성하세요.
+            </p>
+          )}
+        </div>
+        <p className="text-[11px] text-zinc-400">
+          ② AI 이미지 생성 — 아래 버튼으로 이 카테고리의 후보를 만듭니다.
+        </p>
         <div className="flex flex-wrap items-center gap-2">
           <select
             value={style}
@@ -163,7 +273,15 @@ export function CategoryPanel({ category, sourceImageId }: { category: ImageCate
             아직 생성되지 않음
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <>
+            <p className="text-[11px] text-zinc-400">
+              ③ 상세페이지에 쓸 이미지 선택 — 썸네일을 클릭하면 선택/해제됩니다(✓ 선택됨 =
+              상세페이지에 포함). &quot;자동 선택됨&quot;은 검증을 통과한 최신 생성 결과가
+              사람 확인 없이 파이프라인에 의해 골라진 것이고, &quot;선택됨(고정)&quot;은 이
+              썸네일을 직접 클릭해 사람이 명시적으로 고른 것 — 이후 새로 생성해도 자동으로
+              바뀌지 않습니다(다시 클릭해 해제하기 전까지).
+            </p>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             {currentCandidates.map((candidate, i) => (
               <div key={candidate.id} className="flex flex-col items-center gap-1">
                 <button
@@ -180,7 +298,10 @@ export function CategoryPanel({ category, sourceImageId }: { category: ImageCate
                   />
                   <div className="flex items-center gap-1">
                     <span className="text-xs font-medium">{String.fromCharCode(65 + i)}</span>
-                    {candidate.selected && <Badge tone="ok">선택됨</Badge>}
+                    {candidate.selected && candidate.locked && <Badge tone="ok">선택됨(고정)</Badge>}
+                    {candidate.selected && !candidate.locked && (
+                      <Badge tone="info">자동 선택됨</Badge>
+                    )}
                   </div>
                 </button>
                 <button
@@ -192,7 +313,8 @@ export function CategoryPanel({ category, sourceImageId }: { category: ImageCate
                 </button>
               </div>
             ))}
-          </div>
+            </div>
+          </>
         )}
 
         {expandedCandidate && (
@@ -227,7 +349,7 @@ export function CategoryPanel({ category, sourceImageId }: { category: ImageCate
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
                 <p className="mb-1 font-medium text-emerald-700 dark:text-emerald-400">
-                  Gemini에 전달된 참조 이미지
+                  AI에 전달된 참조 이미지
                   {expandedCandidate.generationMetadata?.referenceImages
                     ? ` (${expandedCandidate.generationMetadata.referenceImages.length}장)`
                     : ""}
@@ -248,7 +370,7 @@ export function CategoryPanel({ category, sourceImageId }: { category: ImageCate
               </div>
               <div>
                 <p className="mb-1 font-medium text-amber-700 dark:text-amber-400">
-                  OCR 전용 — Gemini에 전달하지 않음
+                  OCR 전용 — AI에 전달하지 않음
                   {expandedCandidate.generationMetadata?.excludedInfoImages
                     ? ` (${expandedCandidate.generationMetadata.excludedInfoImages.length}장)`
                     : ""}
@@ -409,8 +531,19 @@ export function CategoryPanel({ category, sourceImageId }: { category: ImageCate
               </div>
             )}
 
+            {expandedCandidate.generationMetadata?.productPackage?.userRequirement && (
+              <div>
+                <p className="mb-1 font-medium text-purple-700 dark:text-purple-400">
+                  사용자 요구사항 (이 목적에 저장된 값이 있으면 그 값, 없으면 공용 요구사항)
+                </p>
+                <p className="rounded bg-purple-50 p-2 whitespace-pre-wrap dark:bg-purple-950/40">
+                  {expandedCandidate.generationMetadata.productPackage.userRequirement}
+                </p>
+              </div>
+            )}
+
             <div>
-              <p className="mb-1 font-medium">Gemini에 실제 전달된 Prompt</p>
+              <p className="mb-1 font-medium">AI에 실제 전달된 Prompt</p>
               <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-zinc-100 p-2 dark:bg-zinc-800">
                 {expandedCandidate.generationMetadata?.prompt ?? "(기록된 Prompt가 없습니다)"}
               </pre>
@@ -418,7 +551,7 @@ export function CategoryPanel({ category, sourceImageId }: { category: ImageCate
 
             {expandedCandidate.generationMetadata?.rawResponseText && (
               <div>
-                <p className="mb-1 font-medium">Gemini 응답 텍스트</p>
+                <p className="mb-1 font-medium">AI 응답 텍스트</p>
                 <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-zinc-100 p-2 dark:bg-zinc-800">
                   {expandedCandidate.generationMetadata.rawResponseText}
                 </pre>

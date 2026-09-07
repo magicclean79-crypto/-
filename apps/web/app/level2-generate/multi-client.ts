@@ -25,12 +25,22 @@ function extractErrorMessage(body: unknown, status: number): string {
   return `요청 실패 (HTTP ${status})`;
 }
 
+/**
+ * API가 죽지 않고 응답만 멈춘 경우(연결은 되지만 끝나지 않는 요청) 브라우저
+ * fetch에는 기본 타임아웃이 없어 화면이 "불러오는 중…" 상태로 무한 대기할
+ * 수 있었다(T1-201). 20초로 끊어 반드시 에러 상태로 넘어가게 한다.
+ */
+const REQUEST_TIMEOUT_MS = 20_000;
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const url = `${API_URL}${path}`;
   let response: Response;
   try {
-    response = await fetch(url, authFetchInit(init));
+    response = await fetch(url, { ...authFetchInit(init), signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
   } catch (err) {
+    if (err instanceof DOMException && err.name === "TimeoutError") {
+      throw new MultiApiError(`서버 응답이 없습니다 (${REQUEST_TIMEOUT_MS / 1000}초 초과)`);
+    }
     const detail = err instanceof Error ? err.message : String(err);
     throw new MultiApiError(`서버에 연결할 수 없습니다: ${detail}`);
   }
@@ -206,7 +216,13 @@ export function fetchMultiGeneration(generationId: string): Promise<Level1MultiG
 
 export async function fetchPageImageUrl(pageId: string): Promise<string> {
   const url = `${API_URL}/level1/multi-generations/pages/${pageId}/file`;
-  const response = await fetch(url, authFetchInit());
+  let response: Response;
+  try {
+    response = await fetch(url, { ...authFetchInit(), signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new MultiApiError(`페이지 이미지를 불러올 수 없습니다: ${detail}`);
+  }
   if (!response.ok) {
     throw new MultiApiError(`페이지 이미지를 불러올 수 없습니다 (HTTP ${response.status})`, response.status);
   }
@@ -223,7 +239,13 @@ export async function fetchPageImageUrl(pageId: string): Promise<string> {
  */
 export async function fetchAssetImageUrl(assetId: string): Promise<string> {
   const url = `${API_URL}/level1/assets/${assetId}/file`;
-  const response = await fetch(url, authFetchInit());
+  let response: Response;
+  try {
+    response = await fetch(url, { ...authFetchInit(), signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new MultiApiError(`원본 사진을 불러올 수 없습니다: ${detail}`);
+  }
   if (!response.ok) {
     throw new MultiApiError(`원본 사진을 불러올 수 없습니다 (HTTP ${response.status})`, response.status);
   }

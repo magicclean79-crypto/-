@@ -8,6 +8,7 @@ import {
   type ImageDto,
   type OcrResultDto,
   type ProductProfileDto,
+  type ProductProfileFinalPageDto,
 } from "@acos/shared";
 import { Badge, Card } from "@acos/ui";
 import { authFetchInit, getAuthToken } from "../../lib/auth-client";
@@ -123,24 +124,41 @@ async function runProductProfile(imageIds: string[]): Promise<ProductProfileDto>
 }
 
 /** STEP 5 결과 다운로드 — 서버에 저장된 완전한 HTML 문서를 그대로 받아 파일로 저장한다 */
-async function downloadHtml(id: string, productName: string): Promise<void> {
-  const response = await fetch(
-    `${API_URL}/product-profile/${id}/html`,
-    authFetchInit({ method: "GET" }),
-  );
+async function downloadHtmlFrom(url: string, productName: string): Promise<void> {
+  const response = await fetch(url, authFetchInit({ method: "GET" }));
   if (!response.ok) {
     throw new Error(`다운로드 실패 (HTTP ${response.status})`);
   }
   const html = await response.text();
   const blob = new Blob([html], { type: "text/html;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
+  const objectUrl = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
-  anchor.href = url;
+  anchor.href = objectUrl;
   anchor.download = `${productName.replace(/[\\/:*?"<>|]/g, "_") || "product-page"}.html`;
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
-  URL.revokeObjectURL(url);
+  URL.revokeObjectURL(objectUrl);
+}
+
+/**
+ * STEP 6 — 최종 상세페이지 (T1-75). Image Studio에서 이 실행이 쓴 원본
+ * 사진들에 대해 사람이 카테고리별로 선택(검증)해 둔 이미지가 있으면 그것으로
+ * 다시 조립한 결과를 돌려준다. 추가 과금 없음(LLM 재호출 없이 순수 렌더링).
+ */
+async function fetchFinalPage(id: string): Promise<ProductProfileFinalPageDto> {
+  const response = await fetch(
+    `${API_URL}/product-profile/${id}/final`,
+    authFetchInit({ method: "GET" }),
+  );
+  const body = (await response.json()) as ProductProfileFinalPageDto & {
+    message?: string | string[];
+  };
+  if (!response.ok) {
+    const message = Array.isArray(body.message) ? body.message.join(", ") : body.message;
+    throw new Error(message ?? `최종 상세페이지 조회 실패 (HTTP ${response.status})`);
+  }
+  return body;
 }
 
 export function ProductProfileFlow() {
@@ -153,6 +171,9 @@ export function ProductProfileFlow() {
   const [profile, setProfile] = useState<ProductProfileDto | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [finalPage, setFinalPage] = useState<ProductProfileFinalPageDto | null>(null);
+  const [loadingFinalPage, setLoadingFinalPage] = useState(false);
+  const [finalPageError, setFinalPageError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const updateItem = useCallback((id: string, patch: Partial<UploadItem>) => {
@@ -257,6 +278,8 @@ export function ProductProfileFlow() {
     setAnalyzeError(null);
     setDownloadError(null);
     setProfile(null);
+    setFinalPage(null);
+    setFinalPageError(null);
     try {
       const result = await runProductProfile(doneItems.map((item) => item.image!.id));
       setProfile(result);
@@ -274,7 +297,10 @@ export function ProductProfileFlow() {
     setDownloading(true);
     setDownloadError(null);
     try {
-      await downloadHtml(profile.id, profile.profile?.productName ?? "product-page");
+      await downloadHtmlFrom(
+        `${API_URL}/product-profile/${profile.id}/html`,
+        profile.profile?.productName ?? "product-page",
+      );
     } catch (error) {
       setDownloadError(
         error instanceof Error ? error.message : "다운로드에 실패했습니다.",
@@ -283,6 +309,41 @@ export function ProductProfileFlow() {
       setDownloading(false);
     }
   }, [profile]);
+
+  /** STEP 6 — Image Studio 선택 이미지 기준으로 최종 상세페이지를 새로 불러온다 */
+  const loadFinalPage = useCallback(async () => {
+    if (!profile) return;
+    setLoadingFinalPage(true);
+    setFinalPageError(null);
+    try {
+      const page = await fetchFinalPage(profile.id);
+      setFinalPage(page);
+    } catch (error) {
+      setFinalPageError(
+        error instanceof Error ? error.message : "최종 상세페이지 조회에 실패했습니다.",
+      );
+    } finally {
+      setLoadingFinalPage(false);
+    }
+  }, [profile]);
+
+  const downloadFinalHtml = useCallback(async () => {
+    if (!profile || !finalPage) return;
+    setDownloading(true);
+    setDownloadError(null);
+    try {
+      await downloadHtmlFrom(
+        `${API_URL}/product-profile/${profile.id}/final-html`,
+        finalPage.productName,
+      );
+    } catch (error) {
+      setDownloadError(
+        error instanceof Error ? error.message : "다운로드에 실패했습니다.",
+      );
+    } finally {
+      setDownloading(false);
+    }
+  }, [profile, finalPage]);
 
   return (
     <div className="flex flex-col gap-8">
@@ -607,6 +668,88 @@ export function ProductProfileFlow() {
                 로 나중에 다시 열어볼 수 있습니다.
               </p>
             </div>
+          )}
+
+          {/* STEP 6 — Image Studio 선택 이미지로 최종 상세페이지 */}
+          {profile.status === "SUCCESS" && profile.html && (
+            <section className="flex flex-col gap-3 rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-base font-semibold">
+                  STEP 6 · 최종 상세페이지 (Image Studio 선택 이미지 반영)
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => void loadFinalPage()}
+                  disabled={loadingFinalPage}
+                  className="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                >
+                  {loadingFinalPage
+                    ? "불러오는 중…"
+                    : finalPage
+                      ? "새로고침"
+                      : "Image Studio 선택 반영해서 보기"}
+                </button>
+              </div>
+              <p className="text-sm text-zinc-500">
+                위 STEP 5는 원본 업로드 사진만 씁니다. Image Studio(
+                <code className="rounded bg-zinc-100 px-1 py-0.5 dark:bg-zinc-800">
+                  /image-studio
+                </code>
+                )에서 이 사진들로 만든 AI 생성 이미지를 카테고리별로
+                선택해 두었다면, 여기서 그 이미지로 다시 조립한 최종
+                상세페이지를 볼 수 있습니다 — 추가 과금 없음(LLM을 다시
+                부르지 않습니다). 라벨·포장지·설명서·사양표 사진은 정보
+                확인용일 뿐 상세페이지 사진으로 쓰이지 않습니다.
+              </p>
+              {finalPageError && (
+                <p className="text-sm text-red-600 dark:text-red-400">{finalPageError}</p>
+              )}
+              {finalPage && (
+                <div className="flex flex-col gap-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {finalPage.imageSource === "studio-selected" ? (
+                      <Badge tone="ok">
+                        Image Studio 선택 이미지 {finalPage.selectedImageCount}장 사용 중
+                      </Badge>
+                    ) : (
+                      <Badge tone="warn">
+                        아직 Image Studio 선택 없음 — 원본 업로드 사진 사용 중
+                      </Badge>
+                    )}
+                    <Badge tone="ok">템플릿: {finalPage.templateKey}</Badge>
+                  </div>
+                  {finalPage.validation && !finalPage.validation.ok && (
+                    <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+                      <p className="font-semibold">
+                        렌더 검증에서 확인이 필요한 항목이 있습니다 (T1-77) — 아래는
+                        기계적으로 감지된 신호일 뿐이며, 최종 판단은 사람이 합니다.
+                      </p>
+                      <ul className="mt-1 list-disc pl-4">
+                        {finalPage.validation.issues.map((issue, index) => (
+                          <li key={index}>{issue.message}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void downloadFinalHtml()}
+                      disabled={downloading}
+                      className="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                    >
+                      {downloading ? "다운로드 중…" : "이 결과 HTML로 다운로드"}
+                    </button>
+                  </div>
+                  <iframe
+                    title="최종 상세페이지 미리보기"
+                    srcDoc={`<style>${finalPage.css}</style>${finalPage.html}`}
+                    sandbox=""
+                    className="h-[640px] w-full rounded-xl border border-zinc-200 bg-white dark:border-zinc-800"
+                  />
+                </div>
+              )}
+            </section>
           )}
 
           <details className="rounded-xl border border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950">
