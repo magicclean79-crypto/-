@@ -1,6 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { BadRequestException, Inject, Injectable, Logger, NotFoundException, Optional } from "@nestjs/common";
-import { buildImageGenerationPrompt, buildProductPackage, type ImageEditProvider } from "@acos/core";
+import {
+  buildCompositionContract,
+  buildCompositionPrompt,
+  buildImageGenerationPrompt,
+  buildProductIdentityPack,
+  buildProductPackage,
+  rankReferenceImages,
+  validateSectionCompositionAssetMetadata,
+  type ImageEditProvider,
+  type ProductStoryMasterBrief,
+  type ReferenceCandidate,
+  type SectionCompositionAssetMetadata,
+} from "@acos/core";
 import type {
   GenerateHeroImageResult,
   GenerateImageCandidatesResult,
@@ -13,6 +25,7 @@ import type { Image, Prisma } from "@prisma/client";
 import { LlmBudgetService } from "../llm/llm-budget.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
+import { GeneratedCompositionValidatorService } from "./generated-composition-validator.service";
 import { IMAGE_EDIT_PROVIDER } from "./image-gen.constants";
 
 function toDto(image: Image): ImageDto {
@@ -33,6 +46,7 @@ function toDto(image: Image): ImageDto {
     groupVersion: image.groupVersion,
     style: image.style,
     selected: image.selected,
+    locked: image.locked,
     photoType: image.photoType as ImageDto["photoType"],
   };
 }
@@ -60,6 +74,7 @@ export class ImageGenService {
     private readonly storage: StorageService,
     @Inject(IMAGE_EDIT_PROVIDER) private readonly provider: ImageEditProvider,
     @Optional() private readonly budget?: LlmBudgetService,
+    @Optional() private readonly compositionValidator?: GeneratedCompositionValidatorService,
   ) {}
 
   private async getImage(id: string): Promise<Image> {
@@ -156,6 +171,53 @@ export class ImageGenService {
     });
   }
 
+  /**
+   * 이 원본 사진이 속한 Product Profile 실행 id를 찾는다 (T1-149 —
+   * Section Composition asset metadata의 `productId`). `findProductPackage`와
+   * 같은 조회를 쓰되 레코드 id만 돌려준다 — 이 파이프라인에서 "제품"의
+   * 정체는 `Image.productId`(선택 값, 비어 있을 수 있다)가 아니라 실제로
+   * 이 사진으로 만들어진 Product Profile 실행이다.
+   */
+  private async findProductProfileId(sourceImageId: string): Promise<string | null> {
+    const record = await this.prisma.productProfile.findFirst({
+      where: { imageIds: { has: sourceImageId } },
+      orderBy: { updatedAt: "desc" },
+      select: { id: true },
+    });
+    return record?.id ?? null;
+  }
+
+  /**
+   * 이미 생성된 Product Story(있으면)의 Master Creative Brief를 찾는다.
+   * (T1-153) Story Planner가 "이 페이지 전체가 무엇을 위한 것인가"를 먼저
+   * 결정해 `ProductProfile.storyResult`에 저장해 두면(캐시, T1-131), 개별
+   * 카테고리 이미지 생성이 그 결정을 그대로 물려받아 섹션마다 서로 다른
+   * 방향으로 튀지 않게 한다. Story가 아직 한 번도 생성되지 않았으면(가장
+   * 흔한 경우 — 이미지 생성이 Story보다 먼저 일어날 수도 있다) null —
+   * 없는 것을 지어내지 않는다. 저장 형태가 예상과 다르면(과거 데이터 등)
+   * 조용히 null로 취급한다.
+   */
+  private async findMasterCreativeBrief(sourceImageId: string): Promise<ProductStoryMasterBrief | null> {
+    const record = await this.prisma.productProfile.findFirst({
+      where: { imageIds: { has: sourceImageId } },
+      orderBy: { updatedAt: "desc" },
+      select: { storyResult: true },
+    });
+    const stored = record?.storyResult as { story?: { masterBrief?: unknown } } | null | undefined;
+    const brief = stored?.story?.masterBrief;
+    if (!brief || typeof brief !== "object") {
+      return null;
+    }
+    const record2 = brief as Record<string, unknown>;
+    const asStr = (value: unknown) => (typeof value === "string" ? value : "");
+    return {
+      targetAudience: asStr(record2.targetAudience),
+      coreMessage: asStr(record2.coreMessage),
+      emotionalArc: asStr(record2.emotionalArc),
+      visualConcept: asStr(record2.visualConcept),
+    };
+  }
+
   private async storeResult(options: {
     imageBytes: string;
     mimeType: string;
@@ -172,6 +234,8 @@ export class ImageGenService {
     rawResponseText?: string | null;
     referenceImages?: { id: string; role: string; photoType?: "DESIGN" | "INFO" | null }[];
     excludedInfoImages?: { id: string; originalName: string }[];
+    /** Section Composition asset metadata (T1-149 요청 사양 8) — 있을 때만 기록·검증한다 */
+    compositionMetadata?: SectionCompositionAssetMetadata;
   }): Promise<ImageDto> {
     const extension = options.mimeType === "image/png" ? "png" : "jpg";
     const now = new Date();
@@ -204,6 +268,7 @@ export class ImageGenService {
           ...(options.excludedInfoImages
             ? { excludedInfoImages: options.excludedInfoImages }
             : {}),
+          ...(options.compositionMetadata ? { compositionMetadata: options.compositionMetadata } : {}),
         } as unknown as Prisma.InputJsonValue,
       },
     });
@@ -364,7 +429,12 @@ export class ImageGenService {
     budgetReason: string,
   ): Promise<{ imageBytes: string; mimeType: string; provider: string; model: string }> {
     await this.budget?.assertWithinBudget({ what: budgetReason });
-    const result = await this.provider.edit({ prompt: promptText, images: [] });
+    // T1-152: 장식용 보조 그래픽/아이콘/모티프는 "low"로 호출한다 — 주
+    // 상품 사진(Hero/사용 장면/후보 이미지)의 quality:"high"는 그대로 둔다.
+    // GPT Image 2가 quality:"high"에서 장당 100초 이상 걸려(실측), Story
+    // 하나에 최대 10장(보조 2 + 아이콘 7 + Hero 모티프 1)을 순차 호출하면
+    // 전체 요청이 응답 없이 멈춘 것처럼 보이는 원인이었다("Failed to fetch").
+    const result = await this.provider.edit({ prompt: promptText, images: [], quality: "low" });
     return {
       imageBytes: result.imageBytes,
       mimeType: result.mimeType,
@@ -494,26 +564,7 @@ export class ImageGenService {
     // 그린다. (CTO 지시, 2026-08-08 — 입력 분리) 조용히 넘어가지 않고 막는다.
     this.assertNotInfoImage(original);
     const productPackage = await this.getProductPackage(imageId, category);
-    const bgRemovedImage = await this.getOrCreateBackgroundRemoved(imageId, productPackage);
-    const backgroundRemoved = toDto(bgRemovedImage);
-
-    const lastVersion = await this.prisma.image.findFirst({
-      where: { sourceImageId: imageId, category },
-      orderBy: { groupVersion: "desc" },
-      select: { groupVersion: true },
-    });
-    const groupVersion = (lastVersion?.groupVersion ?? 0) + 1;
-
-    const baseInstruction = options.scenePrompt?.trim() || CATEGORY_PROMPTS[category];
-    const styleSuffix = options.style?.trim() ? ` 스타일 방향: ${options.style.trim()}.` : "";
-    // Product Story 연결 (T1-94, 선택) — 이 이미지가 상세페이지의 어느
-    // Story Section 역할을 하는지 참고로 덧붙인다. 제품 동일성 규칙보다
-    // 뒤에 붙는 지시문 안에서만 쓰이므로, 실제 제품 사실과 충돌하는
-    // 요청으로 제품 자체가 바뀌지는 않는다(buildImageGenerationPrompt의
-    // 기존 우선순위 규칙 — 제품 동일성 > 제품 정보 > 이 지시문).
-    const storySuffix = options.storySectionPurpose?.trim()
-      ? ` 이 사진은 상세페이지에서 "${options.storySectionPurpose.trim()}" 역할을 하는 섹션에 쓰인다 — 그 역할에 맞는 장면으로 만들어줘.`
-      : "";
+    const productProfileId = (await this.findProductProfileId(imageId)) ?? original.projectId ?? original.id;
 
     // 참고 사진을 **여러 장** 보낸다. (CTO 지시, 2026-08-08 — 제품 동일성 개선)
     //
@@ -522,8 +573,6 @@ export class ImageGenService {
     // 한 장만으로도 구성품과 뒷면 디테일은 알 수 없다.
     //
     // 그래서 같은 프로젝트의 다른 제품 사진(구성품·디테일)도 함께 넘긴다.
-    // 순서가 의미를 가진다 — 프롬프트가 "첫 번째는 윤곽, 두 번째는 기준"이라고
-    // 설명하므로 배경 제거본·원본을 반드시 앞 두 자리에 둔다.
     //
     // **INFO 사진은 절대 넘기지 않는다.** (CTO 지시, 2026-08-08 — 입력 분리)
     // 포장지·라벨·스펙표·설명서·바코드는 정보를 뽑기 위한 문서이지 제품
@@ -534,7 +583,18 @@ export class ImageGenService {
     // 분류는 Product Profile 실행 시 AI가 자동으로 한다(DESIGN/INFO).
     // 아직 분류되지 않은 사진(null)은 제품 사진인지 알 수 없으므로 넘기지
     // 않는다 — 모르는 것을 통과시키지 않는다.
-    const extraImages = await this.prisma.image.findMany({
+    //
+    // 실제 제품 reference hierarchy (T1-149) — 후보를 전부 모은 뒤 순수
+    // 함수(`rankReferenceImages`)로 우선순위를 매긴다: 실제 원본 + HERO
+    // (본체) → DETAIL(디테일/호스) → COMPONENTS(검증된 구성품) → 카테고리
+    // 미지정 실제 원본 순. `take`를 이 쿼리에서 빼고 순위를 매긴 뒤에
+    // 자른다 — DB의 `createdAt asc` 순서만으로는 "본체가 먼저"라는 우선
+    // 순위를 표현할 수 없다.
+    //
+    // 이 조회·순위 계산은 background 제거 호출(아래) **이전에** 끝낸다 —
+    // COMPONENTS 발명 방지 가드(바로 아래)가 실제 예산을 쓰기 전에
+    // 먼저 막아야 하기 때문이다.
+    const extraImageCandidates = await this.prisma.image.findMany({
       where: {
         projectId: original.projectId,
         kind: "ORIGINAL",
@@ -542,8 +602,102 @@ export class ImageGenService {
         photoType: "DESIGN",
       },
       orderBy: { createdAt: "asc" },
-      take: MAX_EXTRA_REFERENCE_IMAGES,
     });
+    const referenceCandidates: ReferenceCandidate[] = extraImageCandidates.map((image, index) => ({
+      id: image.id,
+      category: image.category as ImageCategory | null,
+      isReal: true,
+      order: index,
+    }));
+    const rankedReferences = rankReferenceImages(referenceCandidates);
+    const rankedIds = rankedReferences.map((ranked) => ranked.id);
+    const extraImagesById = new Map(extraImageCandidates.map((image) => [image.id, image]));
+    const extraImages = rankedIds
+      .slice(0, MAX_EXTRA_REFERENCE_IMAGES)
+      .map((id) => extraImagesById.get(id)!)
+      .filter(Boolean);
+
+    // Product Identity Pack (T1-153) — 실제 참조 후보(포장/OCR은 이미
+    // 제외됨) 중 무엇이 이 제품의 정체성 근거(Ground Truth)인지 명시적으로
+    // 정리한다. 원본(original)도 실제 원본 사진이므로 후보에 포함한다 —
+    // rankedReferences는 extraImageCandidates만 담고 있어 original을
+    // 별도로 앞에 추가한다.
+    const identityPack = buildProductIdentityPack(productPackage, [
+      { id: original.id, category: original.category as ImageCategory | null, isReal: true, order: -1, priority: 0, reason: "원본 대표 사진" },
+      ...rankedReferences,
+    ]);
+
+    // 구성품 발명 방지(T1-149 요청 사양 14) — 실제로 검증된 구성품 근거
+    // (참조 사진 또는 Product Package 사실)가 하나도 없는 상태로 COMPONENTS
+    // 이미지를 생성하면, Gemini가 "그럴듯한 구성품"을 새로 지어낼 수밖에
+    // 없다. 근거가 전혀 없으면 비용을 쓰기 전에(배경 제거 호출조차 하기
+    // 전에) 명확히 막는다.
+    if (category === "COMPONENTS") {
+      const hasRealComponentReference = extraImages.some((image) => image.category === "COMPONENTS");
+      const packageText = [
+        ...productPackage.features,
+        ...Object.entries(productPackage.specifications).map(([key, value]) => `${key} ${value}`),
+      ].join(" ");
+      const hasComponentFact = /구성품?/.test(packageText);
+      if (!hasRealComponentReference && !hasComponentFact) {
+        throw new BadRequestException(
+          "실제로 검증된 구성품 참조 사진이나 Product Profile의 구성품 사실이 없어 구성품 이미지를 생성할 수 없습니다 — " +
+            "Gemini가 확인되지 않은 구성품을 새로 발명하는 것을 막기 위한 안전장치입니다. " +
+            "먼저 실제 구성품 사진을 COMPONENTS 카테고리로 지정하거나 Product Profile에 구성품 정보를 반영해 주세요.",
+        );
+      }
+    }
+
+    const bgRemovedImage = await this.getOrCreateBackgroundRemoved(imageId, productPackage);
+    const backgroundRemoved = toDto(bgRemovedImage);
+
+    const lastVersion = await this.prisma.image.findFirst({
+      where: { sourceImageId: imageId, category },
+      orderBy: { groupVersion: "desc" },
+      select: { groupVersion: true },
+    });
+    const groupVersion = (lastVersion?.groupVersion ?? 0) + 1;
+
+    // Art Direction Contract (T1-149) — 카테고리마다 한 줄짜리 지시
+    // (`CATEGORY_PROMPTS`) 대신, canvas 비율·초점·배치·조명·배경·팔레트·
+    // 타이포그래피/아이콘 자리·여백·참조 우선순위까지 명시한 계약을
+    // instruction으로 쓴다. `options.scenePrompt`(호출자가 직접 준 문장)가
+    // 있으면 기존처럼 그것을 우선한다 — 이 계약은 "기본값을 더 구체적으로"
+    // 만드는 것이지 명시적 호출자 지시를 덮어쓰지 않는다.
+    // Master Creative Brief (T1-153) — 이미 이 제품의 Story가 생성되어
+    // 있으면(Story Planner가 이미 페이지 전체의 목적/핵심 메시지/시각
+    // 컨셉을 정해 두었으면) 그 결정을 이번 composition에도 물려받는다.
+    // 아직 Story가 없으면(이미지 생성이 Story보다 먼저 일어난 경우) null —
+    // 없는 결정을 지어내지 않는다.
+    const masterCreativeBrief = await this.findMasterCreativeBrief(imageId);
+    const compositionContract = buildCompositionContract(category, {
+      storySectionPurpose: options.storySectionPurpose,
+      userRequirement: productPackage.userRequirement,
+      requiredReferenceIds: identityPack.identityReferences.map((ref) => ref.id),
+      masterCreativeBrief: masterCreativeBrief?.coreMessage || masterCreativeBrief?.visualConcept
+        ? { coreMessage: masterCreativeBrief.coreMessage, visualConcept: masterCreativeBrief.visualConcept }
+        : null,
+    });
+    // 사용자 요구사항은 여기서 다시 붙이지 않는다 — `buildImageGenerationPrompt`가
+    // productPackage.userRequirement를 "[사용자 요구사항 — 참고]" 블록으로
+    // instruction 뒤에 이미 한 번 붙인다(아래 `buildImageGenerationPrompt`
+    // 호출). 여기서 또 넣으면 같은 요구사항이 두 번 나타난다(product-package.ts
+    // "같은 사실을 여러 줄에 반복하지 않는다" 원칙과 동일한 이유).
+    const baseInstruction = options.scenePrompt?.trim() || buildCompositionPrompt(compositionContract);
+    const styleSuffix = options.style?.trim() ? ` 스타일 방향: ${options.style.trim()}.` : "";
+    // Product Story 연결 (T1-94, 선택) — 이 이미지가 상세페이지의 어느
+    // Story Section 역할을 하는지 참고로 덧붙인다. 제품 동일성 규칙보다
+    // 뒤에 붙는 지시문 안에서만 쓰이므로, 실제 제품 사실과 충돌하는
+    // 요청으로 제품 자체가 바뀌지는 않는다(buildImageGenerationPrompt의
+    // 기존 우선순위 규칙 — 제품 동일성 > 제품 정보 > 이 지시문).
+    const storySuffix = options.storySectionPurpose?.trim()
+      ? ` 이 사진은 상세페이지에서 "${options.storySectionPurpose.trim()}" 역할을 하는 섹션에 쓰인다 — 그 역할에 맞는 장면으로 만들어줘.`
+      : "";
+
+    // `extraImages`(reference hierarchy로 이미 순위가 매겨진 실제 참조
+    // 사진)는 위에서 COMPONENTS 발명 방지 가드와 함께 이미 계산됐다 —
+    // 순서가 의미를 가진다: 프롬프트가 "첫 번째는 윤곽, 두 번째는 기준"
+    // 이라고 설명하므로 배경 제거본·원본을 반드시 앞 두 자리에 둔다.
 
     // 전달하지 않은 INFO 사진 목록 — 화면에서 "OCR 전용"으로 보여 준다.
     const excludedInfoImages = await this.prisma.image.findMany({
@@ -584,6 +738,7 @@ export class ImageGenService {
     const candidates: ImageDto[] = [];
     let failedCount = 0;
     const errors: string[] = [];
+    const autoSelection: GenerateImageCandidatesResult["autoSelection"] = [];
     for (let i = 0; i < count; i++) {
       const framing = CANDIDATE_FRAMINGS[i % CANDIDATE_FRAMINGS.length];
       const extraNote =
@@ -601,10 +756,96 @@ export class ImageGenService {
         await this.budget?.assertWithinBudget({
           what: `이미지 후보 생성 (Gemini, ${category} v${groupVersion} ${i + 1}/${count})`,
         });
-        const result = await this.provider.edit({
+        let result = await this.provider.edit({
           prompt,
           images: referenceImages,
         });
+
+        // 생성 후 Vision 검증 + 원인별 재생성 (T1-153, 비용 게이트).
+        // 이 검증은 "글자를 그렸는가"·"Product Identity Pack의 절대 규칙과
+        // 어긋나는가" 두 가지 사실만 확인한다 — 미감·완성도 판단은 하지
+        // 않는다(사람의 몫). 매 이미지마다 Vision 호출이 하나 더 추가되어
+        // 비용이 늘어나므로 기본값은 꺼짐(off)이고, 켤 때도 재시도는
+        // 합리적 상한(1회)만 둔다 — 무한 재시도로 비용이 새지 않는다.
+        //
+        // 이 값은 아래 자동 선택 승격(T1-155)의 조건이기도 하다 — 검증이
+        // 꺼져 있으면(기본값) 항상 통과로 취급한다(검증 자체를 하지 않은
+        // 것이지 실패한 것이 아니다). 검증을 켰는데 재시도 후에도 실패로
+        // 남으면 이 후보는 자동으로 최종 이미지로 승격하지 않는다 —
+        // "product identity/validation을 통과하면"이라는 요청 사양을
+        // 그대로 따른다.
+        let identityValidationPassed = true;
+        if (process.env.IMAGE_VALIDATION_ENABLED === "true" && this.compositionValidator) {
+          for (let retry = 0; retry <= MAX_VALIDATION_RETRIES; retry++) {
+            const validation = await this.compositionValidator.validate({
+              imageBase64: result.imageBytes,
+              mimeType: result.mimeType,
+              category,
+              narrativeRole: compositionContract.narrativeRole,
+              purpose: compositionContract.purpose,
+              prohibitedVariations: identityPack.prohibitedVariations,
+              projectId: original.projectId ?? undefined,
+            });
+            identityValidationPassed = validation.ok;
+            if (validation.ok || retry === MAX_VALIDATION_RETRIES) {
+              if (!validation.ok) {
+                this.logger.warn(
+                  `생성된 composition이 사후 검증을 통과하지 못했으나 재시도 상한(${MAX_VALIDATION_RETRIES})에 도달해 그대로 저장합니다 ` +
+                    `(category=${category}, v${groupVersion}, ${i + 1}/${count}): ` +
+                    `text=${validation.textFound.join(",")} mismatch=${validation.mismatchNotes.join(";")}`,
+                );
+              }
+              break;
+            }
+            const reinforcement =
+              " [재생성 지시 — 직전 생성 결과에서 문제가 발견됨] " +
+              (validation.textFound.length > 0
+                ? `이미지 안에 글자가 그려져 있었다(${validation.textFound.join(", ")}) — 절대 글자·숫자·로고를 그리지 마라. `
+                : "") +
+              (validation.mismatchNotes.length > 0
+                ? `제품 정체성 규칙 위반이 발견됐다: ${validation.mismatchNotes.join("; ")} — 실제 참조 사진에 있는 것만 그려라.`
+                : "");
+            this.logger.warn(
+              `생성된 composition 사후 검증 실패 — 재생성 시도 ${retry + 1}/${MAX_VALIDATION_RETRIES} (category=${category}, v${groupVersion}, ${i + 1}/${count})`,
+            );
+            await this.budget?.assertWithinBudget({
+              what: `이미지 후보 재생성 (검증 실패, ${category} v${groupVersion} ${i + 1}/${count})`,
+            });
+            result = await this.provider.edit({
+              prompt: `${prompt}${reinforcement}`,
+              images: referenceImages,
+            });
+          }
+        }
+        // Section Composition asset metadata (T1-149 요청 사양 8) — 이
+        // asset이 어느 제품·어느 카테고리·어느 Art Direction Contract·
+        // 어느 참조 사진으로 만들어졌는지 못 박는다. 자체 검증까지 통과한
+        // 값만 저장한다 — 다른 섹션의 asset이 잘못 섞여 들어오는 배선
+        // 실수를 생성 시점에 잡는다.
+        const compositionMetadata: SectionCompositionAssetMetadata = {
+          productId: productProfileId,
+          category,
+          purpose: compositionContract.purpose,
+          referenceIds: referenceImageList.map((ref) => ref.id),
+          version: groupVersion,
+          artDirectionContractId: compositionContract.contractId,
+          // T1-150 — Provider 교체(OpenAI GPT Image 2 / Gemini)를 asset
+          // 단위로 추적한다. `this.provider.name`은 factory가 고른 Provider,
+          // `result.model`은 실제 응답이 밝힌 모델 id(요청 모델과 다를 수
+          // 있어 result 쪽을 남긴다 — Gemini 어댑터의 `response.modelVersion`
+          // 폴백과 같은 이유).
+          provider: this.provider.name,
+          model: result.model,
+        };
+        const metadataCheck = validateSectionCompositionAssetMetadata(compositionMetadata, {
+          expectedProductId: productProfileId,
+          expectedCategory: category,
+          expectedArtDirectionContractId: compositionContract.contractId,
+          requireReferenceEvidence: category === "COMPONENTS",
+        });
+        if (!metadataCheck.valid) {
+          throw new Error(`Section Composition asset metadata 검증 실패: ${metadataCheck.reasons.join("; ")}`);
+        }
         const dto = await this.storeResult({
           imageBytes: result.imageBytes,
           mimeType: result.mimeType,
@@ -620,7 +861,21 @@ export class ImageGenService {
           rawResponseText: result.text,
           referenceImages: referenceImageList,
           excludedInfoImages,
+          compositionMetadata,
         });
+        // 최신 생성 결과 자동 승격 (T1-155) — 사람이 Image Studio에서 다시
+        // 선택하지 않아도, 정체성/검증을 통과한 이 후보를 그 카테고리의
+        // 최종(selected) 이미지로 자동 승격한다. 사람이 이미 이 카테고리의
+        // 다른 이미지를 명시적으로 고정(locked)해 두었으면 승격을
+        // 건너뛴다 — 사람의 선택을 무조건 덮어쓰지 않는다는 요청 사양.
+        const autoSelectStatus = identityValidationPassed
+          ? await this.autoPromoteSelection(original.id, category, dto.id)
+          : "skipped_validation_failed";
+        if (autoSelectStatus === "auto_selected") {
+          dto.selected = true;
+          dto.locked = false;
+        }
+        autoSelection.push({ imageId: dto.id, status: autoSelectStatus });
         candidates.push(dto);
       } catch (error) {
         failedCount++;
@@ -639,7 +894,48 @@ export class ImageGenService {
       }
     }
 
-    return { original: toDto(original), backgroundRemoved, category, groupVersion, candidates, failedCount, errors };
+    return {
+      original: toDto(original),
+      backgroundRemoved,
+      category,
+      groupVersion,
+      candidates,
+      failedCount,
+      errors,
+      autoSelection,
+    };
+  }
+
+  /**
+   * 새로 생성된 후보를 그 카테고리의 최종(selected) 이미지로 자동
+   * 승격한다 (T1-155 — "최신 생성 결과 자동 승격, 선택 상태 단절 방지").
+   *
+   * `getFinalPage`/`loadSelectedDesignImages`가 쓰는 대표 이미지 선정
+   * (`selectRepresentativeStudioImages`)은 이미 같은 카테고리의 여러
+   * `selected: true` 중 `groupVersion`이 가장 큰 것을 우선한다 — 그래서
+   * 이 메서드는 예전 버전의 `selected`를 끄지 않고 새 후보만 켠다. 다만
+   * 사람이 명시적으로 고정(`locked: true`)한 이미지가 이 카테고리에 이미
+   * 있으면, 새 후보의 `groupVersion`이 더 높아도 대표 선정에서 밀려나면
+   * 안 되므로(고정을 실질적으로 무시하게 된다) 이 경우엔 아예 승격을
+   * 건너뛴다 — 사람의 선택이 항상 이긴다.
+   */
+  private async autoPromoteSelection(
+    sourceImageId: string,
+    category: ImageCategory,
+    candidateId: string,
+  ): Promise<"auto_selected" | "skipped_locked"> {
+    const lockedSelection = await this.prisma.image.findFirst({
+      where: { sourceImageId, category, selected: true, locked: true },
+      select: { id: true },
+    });
+    if (lockedSelection) {
+      return "skipped_locked";
+    }
+    await this.prisma.image.update({
+      where: { id: candidateId },
+      data: { selected: true, locked: false },
+    });
+    return "auto_selected";
   }
 
   /** 특정 원본 사진의 한 카테고리에 대해 지금까지 생성된 모든 버전을 최신순으로 돌려준다 */
@@ -663,9 +959,15 @@ export class ImageGenService {
     if (!image.category || !image.sourceImageId) {
       throw new BadRequestException("카테고리가 없는 이미지는 선택할 수 없습니다.");
     }
+    const nextSelected = !image.selected;
+    // 사람이 이 버튼을 직접 눌렀다는 것 자체가 명시적 선택이다 (T1-155 —
+    // "최신 생성 결과 자동 승격"). 켤 때는 `locked`도 함께 켜서 이후 새
+    // 생성이 이 카테고리를 자동 승격할 때 이 선택을 덮어쓰지 않게 하고,
+    // 끌 때는 `locked`도 함께 풀어 이 카테고리를 다시 자동 승격 대상으로
+    // 되돌린다 — "고정을 해제한다"는 것도 사람의 명시적 의사이기 때문이다.
     const updated = await this.prisma.image.update({
       where: { id: imageId },
-      data: { selected: !image.selected },
+      data: { selected: nextSelected, locked: nextSelected },
     });
     return toDto(updated);
   }
@@ -690,9 +992,11 @@ export class ImageGenService {
       );
     }
     this.assertNotInfoImage(image);
+    // 이 호출 자체가 사람의 명시적 선택이다(원본을 어느 카테고리에 쓸지
+    // 직접 지정) — T1-155 규칙과 동일하게 `locked`도 함께 켠다.
     const updated = await this.prisma.image.update({
       where: { id: imageId },
-      data: { category, selected: true },
+      data: { category, selected: true, locked: true },
     });
     return toDto(updated);
   }
@@ -741,6 +1045,14 @@ function readRequirementForCategory(raw: unknown, category: ImageCategory): stri
  */
 const MAX_EXTRA_REFERENCE_IMAGES = 6;
 
+/**
+ * 생성 후 Vision 검증 실패 시 재생성 상한 (T1-153). `IMAGE_VALIDATION_ENABLED`
+ * 로 검증 자체를 켰을 때만 의미가 있다 — 무한 재시도로 비용이 새지 않게
+ * 딱 1회로 제한한다(Product Story 품질 재시도와 같은 원칙, `MAX_ATTEMPTS`
+ * in product-profile.service.ts).
+ */
+const MAX_VALIDATION_RETRIES = 1;
+
 /** 카메라 거리별 지시 — 실측(2026-08-08)으로 확인된 "원거리/근거리 여러 컷" 조합 */
 const USAGE_SHOT_FRAMINGS = [
   "원거리 와이드샷 — 공간 전체와 제품, 사용하는 사람이 함께 보이도록.",
@@ -756,13 +1068,3 @@ const CANDIDATE_FRAMINGS = [
   "근접 샷.",
   "클로즈업.",
 ];
-
-/** 카테고리별 기본 생성 프롬프트 (AI 상세페이지 제작 플랫폼, 2026-08-08) */
-const CATEGORY_PROMPTS: Record<ImageCategory, string> = {
-  HERO: "이 제품의 대표 Hero 이미지를 만들어줘 — 제품이 가장 매력적으로 보이는 각도와 조명, 제품과 어울리는 배경.",
-  USAGE_SCENE: "이 제품이 실제로 사용되는 자연스러운 모습을 보여주는 장면을 만들어줘.",
-  DETAIL: "이 제품의 재질과 디테일이 잘 보이는 클로즈업 사진을 만들어줘 — 표면 질감과 마감 처리가 선명하게 보이도록.",
-  FEATURE_HIGHLIGHT: "이 제품의 핵심 기능이 시각적으로 강조되어 보이는 이미지를 만들어줘.",
-  COMPONENTS: "이 제품의 구성품을 깔끔하게 펼쳐놓은 플랫레이 사진을 만들어줘.",
-  OTHER: "이 제품의 상세페이지에 필요한 보조 이미지를 만들어줘(사용방법, 사이즈 비교, 인포그래픽 등).",
-};

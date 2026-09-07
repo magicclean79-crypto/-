@@ -17,10 +17,12 @@ import {
 } from "@acos/core";
 import { USER_ROLES } from "@acos/shared";
 import type {
+  ChangeEmailRequest,
   ChangePasswordRequest,
   CreateUserRequest,
   LoginRequest,
   LoginResponseDto,
+  SignupRequest,
   UpdateUserRequest,
   UserAuditAction,
   UserAuditLogDto,
@@ -32,6 +34,7 @@ import {
   lockoutConfig,
   loginRateLimitConfig,
   sessionTtlMs,
+  signupRateLimitConfig,
 } from "./session-config";
 
 function toDto(user: User): UserDto {
@@ -110,6 +113,27 @@ export class AuthService implements OnModuleInit {
     return this.limiter;
   }
 
+  // 회원가입 Rate Limit (T1-215) — 로그인과 별도 인스턴스·설정
+  private signupLimiter: SlidingWindowRateLimiter | null = null;
+  private signupLimiterConfig: { limit: number; windowMs: number } | null =
+    null;
+
+  private signupRateLimiterInstance(): SlidingWindowRateLimiter {
+    const config = signupRateLimitConfig();
+    if (
+      !this.signupLimiter ||
+      this.signupLimiterConfig?.limit !== config.limit ||
+      this.signupLimiterConfig?.windowMs !== config.windowMs
+    ) {
+      this.signupLimiter = new SlidingWindowRateLimiter(
+        config.limit,
+        config.windowMs,
+      );
+      this.signupLimiterConfig = config;
+    }
+    return this.signupLimiter;
+  }
+
   /**
    * 로그인 (TASK-0804 보호 순서):
    * Rate Limit(429) → 잠금 검사 → 비밀번호 검증(실패 시 카운트·임계 도달 시
@@ -160,6 +184,60 @@ export class AuthService implements OnModuleInit {
       });
     }
     this.rateLimiter().reset(email);
+
+    const session = await this.prisma.authSession.create({
+      data: {
+        token: generateSessionToken(),
+        userId: user.id,
+        expiresAt: new Date(Date.now() + sessionTtlMs()),
+      },
+    });
+    return {
+      token: session.token,
+      expiresAt: session.expiresAt.toISOString(),
+      user: toDto(user),
+    };
+  }
+
+  /**
+   * 자체 회원가입 (T1-215, 공개 API) — 항상 VIEWER 역할로 계정을 만들고
+   * 즉시 로그인시킨다(로그인과 동일한 세션 발급 경로). 관리자 권한은
+   * 이 경로로 절대 부여되지 않는다(`POST /auth/users`만 role을 받음,
+   * ADMIN 전용).
+   */
+  async signup(request: SignupRequest): Promise<LoginResponseDto> {
+    const email = request.email?.trim().toLowerCase();
+    const name = request.name?.trim();
+    if (!email || !name || !request.password) {
+      throw new BadRequestException("email·name·password는 필수입니다.");
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new BadRequestException("올바른 이메일 형식이 아닙니다.");
+    }
+    if (!this.signupRateLimiterInstance().attempt(email).allowed) {
+      throw new HttpException(
+        "가입 시도가 너무 많습니다. 잠시 후 다시 시도해 주세요.",
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+    const violation = validatePasswordComplexity(request.password);
+    if (violation) {
+      throw new BadRequestException(violation);
+    }
+    const exists = await this.prisma.user.findUnique({ where: { email } });
+    if (exists) {
+      throw new ConflictException(`이미 존재하는 이메일입니다: ${email}`);
+    }
+
+    const user = await this.prisma.user.create({
+      data: {
+        email,
+        name,
+        passwordHash: await hashPassword(request.password),
+        role: "VIEWER",
+      },
+    });
+    await this.recordAudit("USER_SIGNED_UP", email, email);
 
     const session = await this.prisma.authSession.create({
       data: {
@@ -332,6 +410,61 @@ export class AuthService implements OnModuleInit {
       where: { userId, token: { not: currentToken } },
     });
     await this.recordAudit("PASSWORD_CHANGED", user.email, user.email);
+  }
+
+  /**
+   * 로그인 ID(이메일) 변경 (T1-215) — 본인 셀프 서비스, 모든 역할.
+   * 현재 비밀번호를 확인해야만 바꿀 수 있고(계정 탈취 방지), 대상
+   * 이메일이 이미 다른 계정에서 쓰이고 있으면 거부한다. 비밀번호
+   * 변경과 동일하게 현재 세션만 남기고 나머지 세션은 전부 폐기한다 —
+   * 로그인 ID가 곧 다른 기기의 세션이 아직 신뢰할 이유가 되지 않는다.
+   */
+  async changeEmail(
+    userId: string,
+    request: ChangeEmailRequest,
+    currentToken: string,
+  ): Promise<UserDto> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new UnauthorizedException("로그인이 필요합니다.");
+    }
+    if (
+      !request.currentPassword ||
+      !(await verifyPassword(request.currentPassword, user.passwordHash))
+    ) {
+      throw new BadRequestException("현재 비밀번호가 올바르지 않습니다.");
+    }
+    const newEmail = request.newEmail?.trim().toLowerCase();
+    if (!newEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) {
+      throw new BadRequestException("올바른 이메일 형식이 아닙니다.");
+    }
+    if (newEmail === user.email) {
+      throw new BadRequestException(
+        "새 이메일이 현재 이메일과 동일합니다.",
+      );
+    }
+    const exists = await this.prisma.user.findUnique({
+      where: { email: newEmail },
+    });
+    if (exists) {
+      throw new ConflictException(`이미 사용 중인 이메일입니다: ${newEmail}`);
+    }
+
+    const previousEmail = user.email;
+    const updated = await this.prisma.user.update({
+      where: { id: userId },
+      data: { email: newEmail },
+    });
+    await this.prisma.authSession.deleteMany({
+      where: { userId, token: { not: currentToken } },
+    });
+    await this.recordAudit(
+      "EMAIL_CHANGED",
+      previousEmail,
+      newEmail,
+      `${previousEmail} → ${newEmail}`,
+    );
+    return toDto(updated);
   }
 
   /**

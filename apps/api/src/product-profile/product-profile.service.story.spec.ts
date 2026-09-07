@@ -33,6 +33,46 @@ const profile = {
   confidence: 0.9,
 };
 
+/** Design Director(T1-176)가 호출될 때 돌려주는 유효한 DESIGN_PROFILE 응답 — 기본 mock이 이 값을 쓴다 */
+const designProfileResponseText = JSON.stringify({
+  visualStyle: "industrial-premium",
+  colorway: "harbor-steel",
+  rationale: "금속/플라스틱 소재의 실용적 청소 도구라 industrial-premium 톤을 선택함",
+  typography: { headingWeight: "700", letterSpacing: "tight", lineHeight: "comfortable", numericStyle: "tabular", accentTypeface: "technical-grotesk" },
+  iconStyle: { family: "technical-outline", strokeWidth: "regular", cornerStyle: "sharp", opticalSize: "standard" },
+  cardStyle: { variant: "soft-shadow", radius: "soft" },
+  graphicMotif: { family: "dot-grid", intensity: "subtle" },
+  spacingDensity: "standard",
+  imageTreatment: { backgroundTreatment: "letterbox-neutral" },
+  accentUsage: "balanced",
+  avoid: [],
+});
+
+/**
+ * `feature` 옵션으로 Story 호출과 Design Director 호출을 구분해 서로 다른
+ * 응답을 돌려주는 mock(T1-176). 기존 테스트 다수가 `llm.complete`를 단일
+ * 응답(`storyResponseText`)으로만 stub했는데, 이제 `generateStory` 안에서
+ * Design Director 호출이 하나 더 나가므로(캐시 없는 최초 호출 기준) 그
+ * 호출도 유효한 JSON을 받아야 조용히 fallback(null)으로 빠지지 않고 실제
+ * 경로를 검증할 수 있다.
+ */
+function featureAwareComplete(storyText: string) {
+  return jest.fn(
+    async (
+      _request: unknown,
+      options?: { feature?: string },
+    ): Promise<{ provider: string; model: string; text: string }> =>
+      options?.feature === "product-profile-design-director"
+        ? { provider: "openai", model: "gpt-4o", text: designProfileResponseText }
+        : { provider: "openai", model: "gpt-4o", text: storyText },
+  );
+}
+
+/** `llm.complete` mock 호출 중 주어진 feature로 호출된 call을 찾는다(T1-176 — Design Director 호출이 하나 더 섞여 있으므로 인덱스 대신 feature로 찾는다) */
+function findCallByFeature(mock: jest.Mock, feature: string): unknown[] | undefined {
+  return mock.mock.calls.find((call) => (call[1] as { feature?: string } | undefined)?.feature === feature);
+}
+
 const storyResponseText = JSON.stringify({
   productName: profile.productName,
   narrativeSummary: "베란다 청소가 번거로운 상황과 호스 길이의 관계를 설명한다.",
@@ -134,7 +174,7 @@ async function createService(options: {
 } = {}) {
   const prisma = options.prisma ?? createPrismaMock();
   const storage = { getObject: jest.fn(async () => Buffer.from("fake-image-bytes")) };
-  const llm = options.llm ?? { complete: jest.fn(async () => ({ provider: "openai", model: "gpt-4o", text: storyResponseText })) };
+  const llm = options.llm ?? { complete: featureAwareComplete(storyResponseText) };
   const promptEngine = options.promptEngine ?? { render: jest.fn(() => [{ role: "user", content: "x" }]) };
   const budget = options.budget ?? { assertWithinBudget: jest.fn() };
 
@@ -173,7 +213,8 @@ describe("ProductProfileService.generateStory (T1-94)", () => {
         { category: "DETAIL", count: 1 },
       ]),
     );
-    expect(llm.complete).toHaveBeenCalledTimes(1);
+    // T1-176: Design Director(캐시 없는 최초 호출) 1회 + Story Copywriter 1회 = 2회
+    expect(llm.complete).toHaveBeenCalledTimes(2);
   });
 
   it("검증된 브랜드·모델·재질·규격·주요 기능이 Story 카피와 무관하게 항상 제품 정보 패널로 렌더링된다 (T1-139)", async () => {
@@ -202,7 +243,8 @@ describe("ProductProfileService.generateStory (T1-94)", () => {
     expect(result.attempts).toBe(1);
     expect(result.quality.grade).not.toBe("fail");
     expect(result.quality.score).toBeGreaterThanOrEqual(70);
-    expect(llm.complete).toHaveBeenCalledTimes(1);
+    // T1-176: Design Director(캐시 없는 최초 호출) 1회 + Story Copywriter 1회 = 2회
+    expect(llm.complete).toHaveBeenCalledTimes(2);
   });
 
   it("품질 검사에서 fail(70점 미만)이면 딱 1회 재생성하고, 재생성 결과가 좋으면 그것을 쓴다 (T1-97)", async () => {
@@ -223,19 +265,34 @@ describe("ProductProfileService.generateStory (T1-94)", () => {
         },
       ],
     });
-    const complete = jest
-      .fn()
-      .mockResolvedValueOnce({ provider: "openai", model: "gpt-4o", text: badResponseText })
-      .mockResolvedValueOnce({ provider: "openai", model: "gpt-4o", text: storyResponseText });
+    // T1-176: Design Director 호출은 캐시 없는 최초 호출이라 먼저 1회
+    // 나가고, 그 다음 Story Copywriter가 bad → good 순으로 재시도한다.
+    let storyCallCount = 0;
+    const complete = jest.fn(async (_request: unknown, options?: { feature?: string }) => {
+      if (options?.feature === "product-profile-design-director") {
+        return { provider: "openai", model: "gpt-4o", text: designProfileResponseText };
+      }
+      storyCallCount += 1;
+      return {
+        provider: "openai",
+        model: "gpt-4o",
+        text: storyCallCount === 1 ? badResponseText : storyResponseText,
+      };
+    });
     const { service } = await createService({ llm: { complete } });
 
     const result = await service.generateStory("pp-1");
 
-    expect(complete).toHaveBeenCalledTimes(2);
+    // Design Director 1회 + Story 2회(bad → 재시도 good) = 3회
+    expect(complete).toHaveBeenCalledTimes(3);
     expect(result.attempts).toBe(2);
     expect(result.quality.grade).not.toBe("fail");
-    // 두 번째 호출에는 첫 시도의 block 이슈가 피드백으로 포함되어야 한다
-    const secondCallMessages = complete.mock.calls[1][0].messages;
+    // 두 번째 Story 호출에는 첫 시도의 block 이슈가 피드백으로 포함되어야 한다
+    const storyCalls = complete.mock.calls.filter(
+      (call) => (call[1] as { feature?: string } | undefined)?.feature === "product-profile-story",
+    );
+    expect(storyCalls).toHaveLength(2);
+    const secondCallMessages = (storyCalls[1][0] as { messages: { content: string }[] }).messages;
     const feedbackMessage = secondCallMessages[secondCallMessages.length - 1];
     expect(feedbackMessage.content).toContain("generic-copy");
   });
@@ -246,8 +303,9 @@ describe("ProductProfileService.generateStory (T1-94)", () => {
     try {
       const { service, llm } = await createService();
       await service.generateStory("pp-1");
-      const callOptions = (llm.complete as jest.Mock).mock.calls[0][1];
-      expect(callOptions.provider).toBe("anthropic");
+      const storyCall = findCallByFeature(llm.complete as jest.Mock, "product-profile-story");
+      const callOptions = storyCall?.[1] as { provider?: string } | undefined;
+      expect(callOptions?.provider).toBe("anthropic");
     } finally {
       if (previous === undefined) {
         delete process.env.ANTHROPIC_API_KEY;
@@ -263,8 +321,9 @@ describe("ProductProfileService.generateStory (T1-94)", () => {
     try {
       const { service, llm } = await createService();
       await service.generateStory("pp-1");
-      const callOptions = (llm.complete as jest.Mock).mock.calls[0][1];
-      expect(callOptions.provider).toBeUndefined();
+      const storyCall = findCallByFeature(llm.complete as jest.Mock, "product-profile-story");
+      const callOptions = storyCall?.[1] as { provider?: string } | undefined;
+      expect(callOptions?.provider).toBeUndefined();
     } finally {
       if (previous !== undefined) {
         process.env.ANTHROPIC_API_KEY = previous;
@@ -305,11 +364,16 @@ describe("ProductProfileService.generateStory (T1-94)", () => {
     const { service, prisma } = await createService();
     const result = await service.generateStory("pp-1");
 
-    expect(prisma.productProfile.update).toHaveBeenCalledTimes(1);
-    const call = (prisma.productProfile.update as jest.Mock).mock.calls[0][0];
-    expect(call.where).toEqual({ id: "pp-1" });
-    expect(call.data.storyResult).toEqual(result);
-    expect(call.data.storyGeneratedAt).toBeInstanceOf(Date);
+    // T1-176: designProfile 캐시 저장(1회) + storyResult 저장(1회) = 2회
+    expect(prisma.productProfile.update).toHaveBeenCalledTimes(2);
+    const calls = (prisma.productProfile.update as jest.Mock).mock.calls as { 0: { where: unknown; data: Record<string, unknown> } }[];
+    const storyCall = calls.map((c) => c[0]).find((c) => "storyResult" in c.data);
+    expect(storyCall?.where).toEqual({ id: "pp-1" });
+    expect(storyCall?.data.storyResult).toEqual(result);
+    expect(storyCall?.data.storyGeneratedAt).toBeInstanceOf(Date);
+    const designProfileCall = calls.map((c) => c[0]).find((c) => "designProfile" in c.data);
+    expect(designProfileCall?.where).toEqual({ id: "pp-1" });
+    expect(designProfileCall?.data.designProfileGeneratedAt).toBeInstanceOf(Date);
   });
 
   it("저장이 실패해도 이번 호출의 결과는 그대로 반환한다", async () => {
@@ -433,13 +497,21 @@ describe("ProductProfileService.generateStory — 보조 그래픽 실 생성 (T
 });
 
 /**
- * 생성형 아이콘/Hero 타이포그래피 모티프 실 생성 배선 (T1-142).
- * `storyResponseText`(2섹션 — image-feature/icon "check", detail-callout/
- * icon "info")를 그대로 쓴다 — 두 섹션이 서로 다른 아이콘을 배정받아
- * "중복 없이 계획한다"를 실제로 검증할 수 있다.
+ * Hero 타이포그래피 모티프 실 생성 배선 (T1-142, T1-185에서 아이콘 생성
+ * 제거). `storyResponseText`(2섹션 — image-feature/icon "check",
+ * detail-callout/icon "info")를 그대로 쓴다.
+ *
+ * T1-185: 아이콘은 T1-177 이후 항상 DESIGN_PROFILE.iconStyle의 canonical
+ * SVG(`data-icon-source="design-profile-svg"`)로만 렌더링되고
+ * `renderProductStoryHtml`은 `generativeVisuals.icons`를 읽지 않는다
+ * (`product-story-html.ts` 참고). 그런데도 이 서비스는 계속 Story마다
+ * Gemini `generateDesignAsset`를 아이콘 종류 수만큼 호출해 결과를 버리고
+ * 있었다 — 실측으로 확인한 순수 비용 낭비라 호출 자체를 제거했다. 아래
+ * 테스트는 그 제거 후의 실제 동작(Hero 모티프만 생성 시도, 아이콘은
+ * `imageGen` 연결 여부와 무관하게 항상 canonical SVG)을 검증한다.
  */
-describe("ProductProfileService.generateStory — 생성형 아이콘/Hero 모티프 실 생성 (T1-142)", () => {
-  it("imageGen이 연결되지 않으면 생성형 자산을 시도하지 않고 그 사실을 보고하며, 기존 SVG 아이콘으로 렌더링된다", async () => {
+describe("ProductProfileService.generateStory — Hero 모티프 실 생성 (T1-142/T1-185)", () => {
+  it("imageGen이 연결되지 않으면 Hero 모티프를 시도하지 않고 그 사실을 보고하며, 아이콘은 항상 canonical SVG로 렌더링된다", async () => {
     const { service } = await createService();
 
     const result = await service.generateStory("pp-1");
@@ -448,10 +520,10 @@ describe("ProductProfileService.generateStory — 생성형 아이콘/Hero 모�
     expect(result.generativeVisuals.every((v) => !v.generated)).toBe(true);
     expect(result.generativeVisuals.every((v) => v.reason.includes("연결되지 않아"))).toBe(true);
     expect(result.html).not.toContain("gemini-generative-design");
-    expect(result.html).toContain('data-icon-source="fallback-svg"');
+    expect(result.html).toContain('data-icon-source="design-profile-svg"');
   });
 
-  it("imageGen이 연결되어 있으면 이번 Story가 실제로 쓰는 아이콘만 중복 없이 생성하고, Hero 모티프도 함께 생성해 최종 HTML에 반영한다", async () => {
+  it("imageGen이 연결되어 있으면 Hero 모티프만 1회 생성해 최종 HTML에 반영하고, 아이콘 생성은 시도하지 않는다", async () => {
     const generateAuxiliaryVisual = jest.fn();
     const generateDesignAsset = jest.fn(async () => ({
       imageBytes: "ZmFrZS1nZW4tYnl0ZXM=",
@@ -463,17 +535,21 @@ describe("ProductProfileService.generateStory — 생성형 아이콘/Hero 모�
 
     const result = await service.generateStory("pp-1");
 
-    // storyResponseText의 두 섹션은 각각 "check"·"info" 아이콘으로
-    // 분류된다(image-feature/detail-callout) — 아이콘 2종 + Hero 모티프
-    // 1개 = 3회 호출.
-    expect(generateDesignAsset).toHaveBeenCalledTimes(3);
-    expect(result.generativeVisuals.filter((v) => v.generated)).toHaveLength(3);
-    expect(result.html).toContain('data-icon-source="gemini-generative-design"');
+    // Hero 모티프 1개만 시도한다 — 아이콘 생성 호출은 T1-185에서 제거됐다.
+    expect(generateDesignAsset).toHaveBeenCalledTimes(1);
+    expect(result.generativeVisuals.filter((v) => v.generated)).toHaveLength(1);
+    // 아이콘은 여전히 canonical SVG로만 그려진다 — Gemini 생성 자산이
+    // 아이콘 자리에 등장하지 않는다(T1-177 회귀 방지, 이제 애초에 아이콘
+    // 생성 자체를 시도하지 않으므로 이중으로 보장된다).
+    expect(result.html).toContain('data-icon-source="design-profile-svg"');
+    // Hero 모티프는 story-summary 구분선 배경으로 재사용된다(T1-173).
+    expect(result.html).toContain("gemini-generative-design");
     expect(result.html).toContain("ZmFrZS1nZW4tYnl0ZXM=");
-    expect(result.html).toContain("pde-hero-motif");
+    expect(result.html).not.toContain("pde-hero-motif");
+    expect(result.html).toContain("pde-story-summary-motif");
   });
 
-  it("생성형 자산 생성이 실패해도 Story 생성 자체는 실패하지 않고, 실패한 아이콘은 기존 SVG로 되돌아간다", async () => {
+  it("Hero 모티프 생성이 실패해도 Story 생성 자체는 실패하지 않는다", async () => {
     const generateAuxiliaryVisual = jest.fn();
     const generateDesignAsset = jest.fn(async () => {
       throw new Error("Gemini가 정책상 이미지를 거부했습니다");
@@ -485,7 +561,7 @@ describe("ProductProfileService.generateStory — 생성형 아이콘/Hero 모�
     expect(result.generativeVisuals.every((v) => !v.generated)).toBe(true);
     expect(result.generativeVisuals.every((v) => v.reason === "Gemini가 정책상 이미지를 거부했습니다")).toBe(true);
     expect(result.html).not.toContain("gemini-generative-design");
-    expect(result.html).toContain('data-icon-source="fallback-svg"');
+    expect(result.html).toContain('data-icon-source="design-profile-svg"');
     expect(result.story.sections).toHaveLength(2);
   });
 });

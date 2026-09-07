@@ -3,10 +3,13 @@ import {
   applyCrossVerifiedProfile,
   assignStoryImages,
   attachStudioImageCaptions,
+  buildDesignDirectorInput,
+  buildDesignDirectorPrompt,
   buildLeftoverMediaGallery,
   buildProductFactsPanel,
   buildProductPageViewModel,
   crossVerifyProduct,
+  DesignProfileParseError,
   dropRedundantNoticeSections,
   foldLeftoverImagesIntoSections,
   identifyProduct,
@@ -14,13 +17,15 @@ import {
   parseProductStoryResponse,
   planAuxiliaryVisuals,
   planGenerativeHeroMotif,
-  planGenerativeIcons,
+  parseDesignDirectorResponse,
   planStoryDesign,
   PRODUCT_STORY_TEMPLATE_KEY,
   ProductProfileEngine,
   ProductProfileExecutionService,
   renderProductProfileHtml,
   renderProductStoryHtml,
+  resolveDesignProfile,
+  selectCompositionFamily,
   scoreProductStory,
   selectProductPageTemplate,
   selectRepresentativeStudioImages,
@@ -35,7 +40,7 @@ import type {
   GenerativeVisualBundle,
   LeftoverGalleryEntry,
   ProductStoryContext,
-  StoryIconId,
+  ResolvedDesignProfile,
   StudioSelectedImage,
   VisionImageInput,
 } from "@acos/core";
@@ -570,20 +575,30 @@ export class ProductProfileService {
   }
 
   /**
-   * 고립형(화이트 배경) 제품 단독 사진의 `imageRole`만 분류한다 — 실제
+   * 고립형(화이트 배경) 제품 단독 사진의 `imageRole`을 분류한다 — 실제
    * crop(`autoTrimIsolatedProductImage`, `product-isolated-auto-trim.ts`)은
-   * canonical render path(final-html)에서 **끈다** (T1-168). T1-166이 이
-   * 경로를 켰다가 제품 사진이 이상하게 잘리는 회귀가 발견되어(요청 사양
+   * canonical render path(final-html)에서 여전히 **끈다** (T1-168). T1-166이
+   * 이 경로를 켰다가 제품 사진이 이상하게 잘리는 회귀가 발견되어(요청 사양
    * "제품 사진을 잘라서 해결하지 않는다"), 안전성을 우선해 T1-165처럼
    * 원본 이미지 sizing을 그대로 쓰는 쪽으로 되돌렸다. auto-trim 로직
    * 자체(`product-isolated-auto-trim.ts`와 그 테스트)는 지우지 않았다 —
    * 다시 켤 때는 이 함수 안에서만 배선하면 된다.
+   *
+   * **배경색 자동 통합(`frameBackgroundColor`, T1-174)도 T1-175에서 canonical
+   * render path에서 껐다** — 사진 자신의 배경색을 분석해 letterbox 프레임에
+   * CSS로 입히는 방식이 화면을 오히려 불안정하게 만든다는 판단(요청 사양
+   * "사진/템플릿 경계를 억지로 숨기는 효과보다 원본 제품 사진의 자연스러운
+   * 흰 배경을 우선한다")에 따른 것이다. 측정 함수(`measureIsolatedImageBackgroundColor`)
+   * 자체는 지우지 않았다 — auto-trim과 같은 원칙으로, 다시 켤 때는 이 함수
+   * 안에서만 배선하면 된다.
    */
   private async autoTrimIsolatedProducts(images: StudioSelectedImage[]): Promise<StudioSelectedImage[]> {
-    return images.map((image) => ({
-      ...image,
-      imageRole: image.category === "USAGE_SCENE" ? "lifestyle" : "product-isolated",
-    }));
+    return Promise.all(
+      images.map(async (image) => {
+        const imageRole = image.category === "USAGE_SCENE" ? "lifestyle" : "product-isolated";
+        return { ...image, imageRole };
+      }),
+    );
   }
 
   /**
@@ -696,6 +711,16 @@ export class ProductProfileService {
     // 그대로 진행한다 — 없는 Provider를 강제해 호출을 실패시키지 않는다.
     const preferredProvider = process.env.ANTHROPIC_API_KEY ? "anthropic" : undefined;
 
+    // Design Director (T1-176) — 검증된 verifiedProfile 필드만 근거로 이
+    // 제품의 시각 시스템(DESIGN_PROFILE)을 결정한다. 위 모든 가드(실행
+    // 존재·검증된 profile 존재·선택 이미지 존재)를 통과한 뒤에만 호출한다
+    // — 실패할 요청 때문에 비용이 나가는 LLM 호출을 하지 않는다. 캐시가
+    // 있으면 LLM을 다시 부르지 않는다("API 비용 최소화" 제약, T1-131의
+    // 캐시 원칙과 동일). 실패해도 Story 생성 자체는 막지 않는다 —
+    // `visualProfile`이 null이면 아래 렌더링이 기존 baseline으로
+    // graceful fallback한다(`renderProductStoryHtml`/`planStoryDesign` 참고).
+    const visualProfile = await this.resolveOrCreateDesignProfile(record, verifiedProfile);
+
     // Quality Critic이 fail(70점 미만)로 판정하면 Story Planner/Copywriter
     // 단계로 한 번만 되돌려 재생성한다(요청 사양) — 비용을 통제하기 위해
     // 무한 재시도가 아니라 딱 1회로 제한한다.
@@ -732,7 +757,15 @@ export class ProductProfileService {
       // 디자인(레이아웃·타이포그래피·아이콘·강조색)은 LLM이 아니라 이 결정적
       // 함수가 정한다 — Story Section의 이미 검증된 필드에서만 도출한다
       // (T1-112, "누가 무엇을 결정하는가": 카피=LLM, 디자인=이 파이프라인).
-      designPlan = planStoryDesign(story);
+      // 디자인(레이아웃)은 여전히 이 결정적 함수가 정한다 — visualProfile은
+      // "그 레이아웃을 어떤 색/폰트로 그릴지"만 override한다(T1-176). 어떤
+      // 레이아웃을 쓸지(classifySection)는 profile과 무관하게 항상 Story
+      // Section 내용에서만 도출된다 — geometry는 AI가 바꿀 수 없다는
+      // 요청 사양 그대로.
+      designPlan = planStoryDesign(
+        story,
+        visualProfile ? { typography: visualProfile.typography, layoutAccent: visualProfile.layoutAccent } : undefined,
+      );
       // 어느 섹션에도 배정되지 못한 선택 이미지는 별도 "제품 더 보기"
       // 섹션 대신, 같은 카테고리를 쓰는 섹션의 갤러리로 합친다(T1-147 —
       // 레퍼런스 시안에는 별도 회수 섹션이 없다). 이후 재렌더링(생성형
@@ -740,7 +773,7 @@ export class ProductProfileService {
       // 여기서 이미 끝났다.
       mediaGallery = buildLeftoverMediaGallery(assigned, availableImages);
       assigned = foldLeftoverImagesIntoSections(assigned, mediaGallery);
-      rendered = renderProductStoryHtml(story, assigned, designPlan);
+      rendered = renderProductStoryHtml(story, assigned, designPlan, undefined, undefined, visualProfile);
       // designPlan·html을 함께 넘겨 "Design Plan과 실제 HTML의 일치도"까지
       // 검사한다(T1-112) — 렌더러가 Design Plan을 무시해도 여기서 잡힌다.
       validation = validateProductStory(story, assigned, verifiedProfile, userRequirement, designPlan, rendered.html);
@@ -809,39 +842,20 @@ export class ProductProfileService {
       }
     }
 
-    // 생성형 아이콘/Hero 타이포그래피 모티프 실 생성 (T1-142) — 위 보조
-    // 그래픽(섹션별 배경 장식)과는 목적이 다른 두 번째 종류의 생성형 자산.
-    // 이번 Story가 실제로 쓰는 아이콘만(중복 없이, 최대 6종) + Hero 모티프
-    // 1개만 시도한다 — "필요한 곳에는 반드시 쓰되 필요 없는 곳에는 쓰지
-    // 않는다"는 auxiliaryVisuals와 같은 비용 원칙.
-    const iconSpecs = planGenerativeIcons(designPlan);
+    // Hero 타이포그래피 모티프 실 생성 (T1-142). 같은 자리에서 함께
+    // 계획하던 "생성형 아이콘"(T1-142)은 T1-185에서 제거했다 — T1-177이
+    // 렌더러를 "아이콘은 항상 DESIGN_PROFILE.iconStyle의 canonical SVG만
+    // 쓴다"로 바꾼 뒤로 `renderProductStoryHtml`이 `generativeVisuals.icons`를
+    // 전혀 읽지 않는데도(`product-story-html.ts` 주석 참고) 이 자리는 계속
+    // Story마다 최대 6~7회 Gemini `generateDesignAsset`를 호출해 왔다 —
+    // 결과가 항상 버려지는 순수 비용 낭비였다(T1-185 감사에서 실측 확인).
+    // `planGenerativeIcons`/`buildGenerativeIconPrompt`(product-story-
+    // generative-visuals.ts)는 더 이상 어느 프로덕션 경로에서도 호출되지
+    // 않는다.
     const motifSpec = planGenerativeHeroMotif(story);
     const generativeVisualReport: ProductStoryResultDto["generativeVisuals"] = [];
-    const generativeIconAssets: Partial<Record<StoryIconId, GenerativeVisualAsset>> = {};
     let heroMotifAsset: GenerativeVisualAsset | null = null;
     if (this.imageGen) {
-      for (const spec of iconSpecs) {
-        try {
-          const result = await this.imageGen.generateDesignAsset(spec.promptText);
-          generativeIconAssets[spec.id] = {
-            kind: "ICON",
-            id: spec.id,
-            source: "gemini-generative-design",
-            mimeType: result.mimeType,
-            base64: result.imageBytes,
-          };
-          generativeVisualReport.push({ kind: spec.kind, id: spec.id, generated: true, reason: spec.reason });
-        } catch (error) {
-          // 실패해도 렌더러가 기존 인라인 SVG 아이콘으로 되돌아간다 —
-          // 전체 Story 생성을 막지 않는다(auxiliaryVisuals와 같은 원칙).
-          generativeVisualReport.push({
-            kind: spec.kind,
-            id: spec.id,
-            generated: false,
-            reason: error instanceof Error ? error.message : "알 수 없는 오류",
-          });
-        }
-      }
       if (motifSpec) {
         try {
           const result = await this.imageGen.generateDesignAsset(motifSpec.promptText);
@@ -862,31 +876,21 @@ export class ProductProfileService {
           });
         }
       }
-    } else {
-      for (const spec of iconSpecs) {
-        generativeVisualReport.push({
-          kind: spec.kind,
-          id: spec.id,
-          generated: false,
-          reason: "이미지 생성 서비스가 연결되지 않아 시도하지 않았습니다.",
-        });
-      }
-      if (motifSpec) {
-        generativeVisualReport.push({
-          kind: motifSpec.kind,
-          id: motifSpec.id,
-          generated: false,
-          reason: "이미지 생성 서비스가 연결되지 않아 시도하지 않았습니다.",
-        });
-      }
+    } else if (motifSpec) {
+      generativeVisualReport.push({
+        kind: motifSpec.kind,
+        id: motifSpec.id,
+        generated: false,
+        reason: "이미지 생성 서비스가 연결되지 않아 시도하지 않았습니다.",
+      });
     }
 
-    // 보조 그래픽·생성형 아이콘/모티프 중 하나라도 실제로 생성됐으면
-    // 그 결과를 반영해 딱 한 번만 다시 렌더링한다(순수 함수라 비용 없음
-    // — 실 과금은 위 Gemini 호출들에서 이미 끝났다).
-    if (auxiliaryGeneratedAssets.length > 0 || Object.keys(generativeIconAssets).length > 0 || heroMotifAsset) {
-      const generativeVisuals: GenerativeVisualBundle = { icons: generativeIconAssets, heroMotif: heroMotifAsset };
-      rendered = renderProductStoryHtml(story, assigned, designPlan, auxiliaryGeneratedAssets, generativeVisuals);
+    // 보조 그래픽·Hero 모티프 중 하나라도 실제로 생성됐으면 그 결과를
+    // 반영해 딱 한 번만 다시 렌더링한다(순수 함수라 비용 없음 — 실 과금은
+    // 위 Gemini 호출들에서 이미 끝났다).
+    if (auxiliaryGeneratedAssets.length > 0 || heroMotifAsset) {
+      const generativeVisuals: GenerativeVisualBundle = { icons: {}, heroMotif: heroMotifAsset };
+      rendered = renderProductStoryHtml(story, assigned, designPlan, auxiliaryGeneratedAssets, generativeVisuals, visualProfile);
     }
 
     // 제품 정보/법정 표시 패널 (T1-139) — Story Section의 productFacts는
@@ -929,8 +933,7 @@ export class ProductProfileService {
       if ((image.source ?? "generated") === "real") realProductPhotos += 1;
       else generativeProductVisuals += 1;
     }
-    const generativeDesignAssets =
-      Object.keys(generativeIconAssets).length + (heroMotifAsset ? 1 : 0);
+    const generativeDesignAssets = heroMotifAsset ? 1 : 0;
 
     const result: ProductStoryResultDto = {
       story: {
@@ -978,6 +981,74 @@ export class ProductProfileService {
     }
 
     return result;
+  }
+
+  /**
+   * Design Director (T1-176) — 검증된 `verifiedProfile`만 근거로 이 실행의
+   * DESIGN_PROFILE을 만들거나(첫 호출) 캐시에서 재사용한다(재호출).
+   *
+   * - **입력**: `buildDesignDirectorInput`이 `verifiedProfile`(OCR 원문·
+   *   포장지 이미지가 아니라 GPT가 이미 검증한 productName/brand/material/
+   *   features/specifications/usage/advantages/keywords)에서만 값을
+   *   골라낸다 — 이 함수 자체는 `record.ocrText`·이미지 바이트를 아예
+   *   받지 않는다.
+   * - **결정성**: 이 프로젝트의 LLM Gateway는 temperature/seed를 지원하지
+   *   않는다(실측, `design-profile.ts` 상단 주석) — 그래서 "같은 제품 →
+   *   같은 DESIGN_PROFILE"은 `ProductProfile.designProfile` 캐시로
+   *   보장한다. 캐시가 있으면 LLM을 다시 부르지 않는다.
+   * - **실패 시**: 파싱/검증 실패(`DesignProfileParseError`)나 LLM 호출
+   *   자체가 실패하면 `null`을 반환한다 — 호출자는 이걸 "기존 baseline
+   *   렌더링을 그대로 쓰라"는 신호로 쓴다(요청 사양: "DESIGN_PROFILE이
+   *   없거나 validation 실패하면 현재 안정적인 default premium profile로
+   *   fallback"). Story 생성 자체를 막지 않는다.
+   */
+  private async resolveOrCreateDesignProfile(
+    record: ProductProfileRecord,
+    verifiedProfile: ProductProfileDto["profile"],
+  ): Promise<ResolvedDesignProfile | null> {
+    if (record.designProfile) {
+      return record.designProfile as unknown as ResolvedDesignProfile;
+    }
+    if (!this.llm || !verifiedProfile) {
+      return null;
+    }
+    try {
+      await this.budget?.assertWithinBudget({ what: "DESIGN_PROFILE 생성 (Design Director)" });
+      const input = buildDesignDirectorInput(verifiedProfile);
+      const messages = buildDesignDirectorPrompt(input);
+      const completion = await this.llm.complete(
+        { messages, responseFormat: "json", maxTokens: 1024 },
+        { feature: "product-profile-design-director", projectId: record.projectId ?? undefined },
+      );
+      const choice = parseDesignDirectorResponse(completion.text);
+      // T1-183 — composition family(hero/gallery/split 구조)는 LLM이 아니라
+      // 이미 만든 `input`(검증된 ProductProfile 필드)에서 결정적 규칙으로
+      // 고른다 — 추가 LLM 호출 없음.
+      const compositionFamily = selectCompositionFamily(input);
+      const resolved = resolveDesignProfile(choice, compositionFamily);
+      try {
+        await this.prisma.productProfile.update({
+          where: { id: record.id },
+          data: {
+            designProfile: resolved as unknown as Prisma.InputJsonValue,
+            designProfileGeneratedAt: new Date(),
+          },
+        });
+      } catch {
+        // 저장 실패해도 이번 호출 결과(resolved)는 그대로 쓴다 — 다음
+        // 호출에서 캐시가 없으니 다시 생성될 뿐이다(storyResult와 같은
+        // best-effort 원칙).
+      }
+      return resolved;
+    } catch (error) {
+      if (error instanceof DesignProfileParseError) {
+        return null;
+      }
+      // LLM 호출 자체 실패(네트워크·인증·예산 초과 등) — Story 생성을
+      // 막지 않고 baseline으로 fallback한다. 원인은 감추지 않되(철학 7),
+      // 이 메서드의 반환 계약(null=fallback)은 그대로 유지한다.
+      return null;
+    }
   }
 
   async list(take: number): Promise<ProductProfileDto[]> {

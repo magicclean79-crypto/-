@@ -18,6 +18,15 @@ describe("buildAnalysisPrompt", () => {
     expect(prompt).toContain("sectionDescription");
     expect(prompt).toContain("사진에 없는 기능·성능·수치·효과를 만들어내지 마세요");
   });
+
+  it("name·materials 등 상단 표시용 텍스트는 한국어로, brand·model은 원문 그대로 유지하라고 지시한다(T1-206)", () => {
+    const prompt = buildAnalysisPrompt(3);
+
+    expect(prompt).toContain("자연스러운 한국어로 쓰세요");
+    expect(prompt).toContain("brand(브랜드명)와 model(모델명)");
+    expect(prompt).toContain("원문 표기(로마자·숫자·기호)를 그대로 정확히 유지");
+    expect(prompt).toContain("title은 반드시 자연스러운 한국어로 쓰세요");
+  });
 });
 
 describe("buildPageImagePrompt", () => {

@@ -1,5 +1,5 @@
 import sharp from "sharp";
-import { autoTrimIsolatedProductImage } from "./product-isolated-auto-trim";
+import { autoTrimIsolatedProductImage, measureIsolatedImageBackgroundColor } from "./product-isolated-auto-trim";
 
 /** 흰 배경 캔버스 중앙에 짙은 사각형("제품")을 얹은 합성 이미지 — 실제
  * 벤치마크에서 실측한 것과 같은 모양(가운데 제품 + 사방 흰 여백)을 재현한다. */
@@ -167,5 +167,83 @@ describe("autoTrimIsolatedProductImage", () => {
     expect(top).toBeGreaterThanOrEqual(0);
     expect(left + width).toBeLessThanOrEqual(1);
     expect(top + height).toBeLessThanOrEqual(1);
+  });
+});
+
+describe("measureIsolatedImageBackgroundColor (T1-174)", () => {
+  it("순백 배경 사진은 (255,255,255)에 가까운 배경색을 돌려준다 — 픽셀은 바꾸지 않는다", async () => {
+    const bytes = await whiteBackgroundWithCenteredProduct(1000, 500);
+    const before = bytes.length;
+    const color = await measureIsolatedImageBackgroundColor(bytes);
+    expect(color).not.toBeNull();
+    expect(color!.r).toBeGreaterThanOrEqual(250);
+    expect(color!.g).toBeGreaterThanOrEqual(250);
+    expect(color!.b).toBeGreaterThanOrEqual(250);
+    // 입력 버퍼 자체가 함수 호출로 변형되지 않는다(같은 참조·같은 길이).
+    expect(bytes.length).toBe(before);
+  });
+
+  it("연한 뉴트럴 회색 배경 사진은 그 회색에 가까운 배경색을 돌려준다(순백으로 임의 반올림하지 않는다)", async () => {
+    const bytes = await sharp({
+      create: { width: 400, height: 400, channels: 3, background: { r: 238, g: 238, b: 238 } },
+    })
+      .composite([
+        {
+          input: await sharp({
+            create: { width: 200, height: 200, channels: 3, background: { r: 20, g: 30, b: 80 } },
+          })
+            .png()
+            .toBuffer(),
+          left: 100,
+          top: 100,
+        },
+      ])
+      .png()
+      .toBuffer();
+    const color = await measureIsolatedImageBackgroundColor(bytes);
+    expect(color).not.toBeNull();
+    expect(color!.r).toBeGreaterThanOrEqual(230);
+    expect(color!.r).toBeLessThanOrEqual(245);
+  });
+
+  it("손상된 이미지는 예외를 던지지 않고 null을 돌려준다", async () => {
+    const garbage = Buffer.from("이건 이미지가 아닙니다");
+    const color = await measureIsolatedImageBackgroundColor(garbage);
+    expect(color).toBeNull();
+  });
+
+  it("너무 작은 이미지는 null을 돌려준다", async () => {
+    const tiny = await sharp({
+      create: { width: 4, height: 4, channels: 3, background: { r: 255, g: 255, b: 255 } },
+    })
+      .png()
+      .toBuffer();
+    const color = await measureIsolatedImageBackgroundColor(tiny);
+    expect(color).toBeNull();
+  });
+
+  it("테두리가 균일한 배경이 아닌(여러 색이 뒤섞인 실제 장면) 사진은 imageRole 라벨과 무관하게 null을 돌려준다 — 카테고리 오분류로 lifestyle 사진이 product-isolated로 잘못 넘어와도 안전하게 거른다(T1-174 실측 회귀)", async () => {
+    // 좌우로 완전히 다른 색(하늘색 vs 짙은 녹색)이 섞인 테두리 — 실제
+    // 연출 사진(발코니 배경+식물 등)의 테두리 변동폭을 재현한다.
+    const width = 400;
+    const height = 400;
+    const raw = Buffer.alloc(width * height * 3);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const idx = (y * width + x) * 3;
+        if (x < width / 2) {
+          raw[idx] = 135;
+          raw[idx + 1] = 180;
+          raw[idx + 2] = 210; // 하늘색
+        } else {
+          raw[idx] = 30;
+          raw[idx + 1] = 90;
+          raw[idx + 2] = 40; // 짙은 녹색
+        }
+      }
+    }
+    const bytes = await sharp(raw, { raw: { width, height, channels: 3 } }).png().toBuffer();
+    const color = await measureIsolatedImageBackgroundColor(bytes);
+    expect(color).toBeNull();
   });
 });

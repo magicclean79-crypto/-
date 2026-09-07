@@ -63,6 +63,13 @@ export interface AutoTrimResult {
   marginRatio: number;
 }
 
+/** 이미지 테두리에서 샘플링한 실제 배경 평균색(RGB, 0~255 정수) */
+export interface IsolatedImageBackgroundColor {
+  r: number;
+  g: number;
+  b: number;
+}
+
 /** 테두리 링 샘플링 간격(픽셀) — 4장 변을 촘촘히 다 훑을 필요는 없다 */
 const BORDER_SAMPLE_STRIDE = 4;
 /** 배경 판별 허용 오차의 최소·표준편차 배수·상한 — 순백 배경은 좁게, 그라디언트/그림자 배경은 그 변동폭만큼 넓게 */
@@ -83,6 +90,9 @@ interface BackgroundReference {
   meanG: number;
   meanB: number;
   tolerance: number;
+  /** 테두리 링 샘플의 표준편차(T1-174) — 균일한 스튜디오 배경인지, 실제
+   * 장면(다양한 색·재질이 섞인 테두리)인지 구분하는 데 쓴다. */
+  std: number;
 }
 
 /** 이미지 자신의 테두리 링을 샘플링해 배경의 실제 평균색·허용 오차를 측정한다 */
@@ -125,7 +135,78 @@ function measureBackgroundReference(
   }
   const std = Math.sqrt(varianceSum / (n * 3));
   const tolerance = Math.max(TOLERANCE_MIN, Math.min(TOLERANCE_MAX, std * TOLERANCE_STD_MULTIPLIER));
-  return { meanR, meanG, meanB, tolerance };
+  return { meanR, meanG, meanB, tolerance, std };
+}
+
+/**
+ * 고립형(스튜디오 화이트~소프트 뉴트럴 배경) 제품 사진의 실제 배경색을
+ * 측정만 한다 — 픽셀을 자르거나 지우지 않는다. (T1-174)
+ *
+ * **왜 필요한가**: 렌더러(`product-story-html.ts`)는 `object-fit:contain`
+ * 프레임 안에 이미지를 담고, 이미지가 프레임을 꽉 채우지 못하면 남는
+ * letterbox 여백을 CSS 배경(`--pde-bg-image-frame`, 고정된 회백색
+ * 그라디언트)으로 채운다. 이 사진의 실제 배경(소프트박스 조명이 만드는
+ * 흰색~연한 뉴트럴 톤)이 그 고정 그라디언트와 정확히 같은 색일 보장이
+ * 없어, 프레임 경계가 "사진의 흰 사각형"으로 도드라져 보일 수 있다(사람이
+ * 지적한 문제). 이 함수는 `autoTrimIsolatedProductImage`가 이미 쓰는
+ * 테두리 링 샘플링(`measureBackgroundReference`)을 그대로 재사용해 **그
+ * 사진 자신의 실제 배경 평균색**을 구하고, 호출자가 그 색을 프레임
+ * 배경으로 그대로 써서 사진과 프레임의 경계가 사라지게 한다 — 이미지
+ * 파일 자체는 바이트 하나도 바꾸지 않는다(픽셀 삭제·threshold 마스킹
+ * 없음, 제품 가장자리를 지울 위험이 구조적으로 없다).
+ *
+ * **왜 lifestyle(USAGE_SCENE) 사진에는 쓰면 안 되는가**: 이 함수는 "이
+ * 사진의 네 테두리가 균일한 배경"이라는 전제(고립형 스튜디오 사진에서만
+ * 성립)로 평균·표준편차를 계산한다 — 연출 사진은 테두리에 실제 사용
+ * 공간(바닥·벽·가구 등)이 걸쳐 있어 이 전제가 성립하지 않는다. 호출자가
+ * `imageRole === "product-isolated"`인 사진에만 이 함수를 불러야 한다
+ * (`product-page-images.ts`의 `StudioSelectedImage.imageRole` 문서 참고).
+ *
+ * **`imageRole` 라벨을 그대로 믿지 않고 한 번 더 실측으로 검증한다**
+ * (T1-174 실측으로 발견해 추가한 안전장치): `imageRole`은 이미지
+ * `category`(사람이 Image Studio에서 고른 값)에서만 결정적으로 도출되므로,
+ * 카테고리 자체가 잘못 배정된 사진(예: 실제로는 발코니에서 호스를 쓰는
+ * 연출 사진인데 `USAGE_SCENE`이 아닌 다른 카테고리로 분류된 경우)에는
+ * "product-isolated"라는 라벨이 붙어도 실제 테두리는 균일한 배경이 아닐 수
+ * 있다 — 이번 벤치마크 실측에서 실제로 이런 사진 한 장을 발견했다(테두리
+ * 표준편차가 매우 커서 배경 판정이 회백색이 아니라 뒤섞인 회색으로
+ * 나왔다). 그래서 테두리 링의 표준편차(`bg.std`)가
+ * `MAX_UNIFORM_BACKGROUND_STD`를 넘으면 — "이 테두리는 균일한 스튜디오
+ * 배경이 아니다"로 판단해 라벨과 무관하게 `null`을 돌려준다(안전한 쪽으로
+ * fail). 순백~소프트 그라디언트 배경(`autoTrimIsolatedProductImage`가
+ * 이미 다루는 실측 변동폭)은 이 문턱 아래에 있어 정상적으로 통과한다.
+ *
+ * 측정 실패(손상된 이미지·비균일 테두리 등)는 조용히 `null`을 돌려준다 —
+ * 프레임 배경은 향상이지 필수 의존성이 아니며, 실패 시 기존 고정 CSS
+ * 색으로 그대로 안전하게 fallback한다.
+ */
+/** 이 값을 넘는 테두리 표준편차는 "균일한 스튜디오 배경"으로 보지 않는다
+ * — 위 함수 주석 참고. `TOLERANCE_MAX`(45) 계산에 쓰이는 `std`가 그
+ * 상한(45/2.2≈20)을 넘어 계속 커지는 지점은 이미 트림 로직도 "배경이
+ * 아니라 콘텐츠"로 판정하기 시작하는 영역이다 — 그보다 넉넉한 여유를
+ * 두어 실제 소프트 그라디언트 배경은 통과시키고, 명백히 뒤섞인(연출 사진
+ * 등) 테두리만 걸러낸다. */
+const MAX_UNIFORM_BACKGROUND_STD = 35;
+
+export async function measureIsolatedImageBackgroundColor(bytes: Buffer): Promise<IsolatedImageBackgroundColor | null> {
+  try {
+    const image = sharp(bytes).rotate();
+    const metadata = await image.metadata();
+    const width = metadata.width;
+    const height = metadata.height;
+    if (!width || !height || width < 8 || height < 8) return null;
+
+    const { data, info } = await image.raw().ensureAlpha().toBuffer({ resolveWithObject: true });
+    const bg = measureBackgroundReference(data, width, height, info.channels);
+    if (bg.std > MAX_UNIFORM_BACKGROUND_STD) return null;
+    return {
+      r: Math.round(Math.min(255, Math.max(0, bg.meanR))),
+      g: Math.round(Math.min(255, Math.max(0, bg.meanG))),
+      b: Math.round(Math.min(255, Math.max(0, bg.meanB))),
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**

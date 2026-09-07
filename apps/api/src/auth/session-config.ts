@@ -38,7 +38,8 @@ function envInt(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 }
 
-function isOperationalEnv(): boolean {
+/** 운영/스테이징 여부 — 이 값이 참이면 개발 전용 인증 우회를 전부 끈다 */
+export function isOperationalEnv(): boolean {
   return ["production", "staging"].includes(process.env.NODE_ENV ?? "");
 }
 
@@ -61,6 +62,22 @@ export function loginRateLimitConfig(): { limit: number; windowMs: number } {
   return {
     limit: envInt(process.env.AUTH_LOGIN_MAX_ATTEMPTS, 30),
     windowMs: envInt(process.env.AUTH_LOGIN_WINDOW_SEC, 60) * 1000,
+  };
+}
+
+/**
+ * 회원가입 Rate Limit 설정 (T1-215) — 이메일 키 슬라이딩 윈도우.
+ * 로그인과 같은 방식(core `SlidingWindowRateLimiter`)을 재사용한다.
+ * 리버스 프록시(nginx) 뒤에서 `X-Forwarded-For`를 신뢰하도록 설정돼
+ * 있지 않아(§ main.ts, 이번 작업이 건드리지 않음) IP 키는 쓰지 않는다 —
+ * IP 키를 쓰면 모든 사용자가 같은 프록시 IP로 묶여 서로를 막을 수
+ * 있다. 이메일 키는 같은 이메일로의 반복 가입 시도(무차별 계정 존재
+ * 확인 등)만 제한한다.
+ */
+export function signupRateLimitConfig(): { limit: number; windowMs: number } {
+  return {
+    limit: envInt(process.env.AUTH_SIGNUP_MAX_ATTEMPTS, 5),
+    windowMs: envInt(process.env.AUTH_SIGNUP_WINDOW_SEC, 300) * 1000,
   };
 }
 
