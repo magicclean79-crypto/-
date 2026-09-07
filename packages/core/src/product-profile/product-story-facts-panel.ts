@@ -172,7 +172,6 @@ export function buildProductFactsPanel(input: ProductFactsPanelInput): ProductFa
   background: ${tokens.panelBackground};
   border: 1px solid ${tokens.borderColor};
   border-radius: ${tokens.radiusMd};
-  box-shadow: ${tokens.shadowCard};
 }
 .pde-facts-block:last-of-type { margin-bottom: 24px; }
 .pde-facts-heading {

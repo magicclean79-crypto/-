@@ -14,6 +14,7 @@ const validFeatures = {
   notes: null,
   confidence: 0.8,
   photoTypes: ["DESIGN", "DESIGN"],
+  photoCaptions: ["접어서 세워 둔 모습", "펼쳐서 바닥에 깐 모습"],
 };
 
 const validProfile = {
@@ -232,5 +233,41 @@ describe("ProductProfileEngine", () => {
     // 반면 STEP 5b(HTML)의 스펙 표에는 충돌로 확정되지 않은(null) 브랜드가
     // 아예 나타나지 않는다 — "브랜드" 행 자체가 만들어지지 않는다.
     expect(result.html).not.toContain("브랜드");
+  });
+
+  it("사용자 요구사항(T1-92)을 넘기면 STEP 5a(카피) 프롬프트에 그대로 전달한다", async () => {
+    const calls: Parameters<ProductProfileLlmClient>[0][] = [];
+    const engine = new ProductProfileEngine({
+      promptEngine: createDefaultPromptEngine(),
+      llmProviderName: "openai",
+      complete: stubComplete({}, calls),
+    });
+
+    await engine.run({
+      images: [image("img-1", "image/png")],
+      ocrTexts: [],
+      userRequirement: "더 고급스러운 느낌으로 써줘",
+    });
+
+    expect(calls[2].step).toBe("copy");
+    const copyUserMessage = calls[2].messages.find((m) => m.role === "user");
+    expect(copyUserMessage?.content).toContain("더 고급스러운 느낌으로 써줘");
+  });
+
+  it("사용자 요구사항(T1-92)을 넘기지 않으면 STEP 5a 프롬프트에 그 섹션이 없다", async () => {
+    const calls: Parameters<ProductProfileLlmClient>[0][] = [];
+    const engine = new ProductProfileEngine({
+      promptEngine: createDefaultPromptEngine(),
+      llmProviderName: "openai",
+      complete: stubComplete({}, calls),
+    });
+
+    await engine.run({
+      images: [image("img-1", "image/png")],
+      ocrTexts: [],
+    });
+
+    const copyUserMessage = calls[2].messages.find((m) => m.role === "user");
+    expect(copyUserMessage?.content).not.toContain("사용자 요구사항");
   });
 });

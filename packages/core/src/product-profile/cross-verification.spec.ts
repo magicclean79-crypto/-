@@ -1,5 +1,5 @@
 import type { ProductProfile } from "@acos/shared";
-import { crossVerifyProduct } from "./cross-verification";
+import { applyCrossVerifiedProfile, crossVerifyProduct } from "./cross-verification";
 import { identifyProduct } from "./product-identification";
 
 const profile: ProductProfile = {
@@ -94,6 +94,38 @@ describe("crossVerifyProduct — 충돌하면 자동으로 채우지 않는다 (
     expect(brand?.status).toBe("agreed");
     expect(model?.status).toBe("conflict");
     expect(model?.resolvedValue).toBeNull();
+  });
+});
+
+describe("applyCrossVerifiedProfile — STEP 5(카피·HTML)는 검증된 값만 받는다 (T1-24/T1-75)", () => {
+  it("agreed면 그 값을 brand/model에 적용한다", () => {
+    const identification = identifyProduct({ ocrText: "제조 및 판매원 삼정크린마스터(주)" });
+    const crossVerification = crossVerifyProduct({ identification, profile });
+
+    const verified = applyCrossVerifiedProfile(profile, crossVerification);
+
+    expect(verified.brand).toBe("삼정크린마스터(주)");
+    expect(verified).not.toBe(profile); // 원본을 변경하지 않고 새 객체를 돌려준다
+  });
+
+  it("conflict면 STEP 4 원본 값이 있어도 null로 덮는다 — 사람 판단 전에는 확정하지 않는다", () => {
+    const identification = identifyProduct({ ocrText: "제조 및 판매원 다른회사(주)" });
+    const crossVerification = crossVerifyProduct({ identification, profile });
+
+    const verified = applyCrossVerifiedProfile(profile, crossVerification);
+
+    expect(profile.brand).toBe("삼정크린마스터(주)"); // 원본은 그대로 보존된다
+    expect(verified.brand).toBeNull();
+  });
+
+  it("brand/model 외의 필드는 그대로 보존한다", () => {
+    const identification = identifyProduct({ ocrText: null });
+    const crossVerification = crossVerifyProduct({ identification, profile });
+
+    const verified = applyCrossVerifiedProfile(profile, crossVerification);
+
+    expect(verified.productName).toBe(profile.productName);
+    expect(verified.material).toBe(profile.material);
   });
 });
 

@@ -148,6 +148,28 @@ describe("buildProductPackage", () => {
     expect(result.brand).toBe("Magic Clean");
     expect(result.model).toBe("MC-100");
   });
+
+  it("사용자 요구사항(T1-92)을 넘기지 않으면 null이다 — 지어내지 않는다", () => {
+    const result = buildProductPackage({ profile, ocrText: null });
+
+    expect(result.userRequirement).toBeNull();
+  });
+
+  it("사용자 요구사항(T1-92)을 넘기면 앞뒤 공백을 정리해 담는다", () => {
+    const result = buildProductPackage({
+      profile,
+      ocrText: null,
+      userRequirement: "  더 고급스러운 느낌으로  ",
+    });
+
+    expect(result.userRequirement).toBe("더 고급스러운 느낌으로");
+  });
+
+  it("사용자 요구사항(T1-92)이 빈 문자열/공백뿐이면 null로 담는다", () => {
+    const result = buildProductPackage({ profile, ocrText: null, userRequirement: "   " });
+
+    expect(result.userRequirement).toBeNull();
+  });
 });
 
 describe("buildImageGenerationPrompt", () => {
@@ -161,6 +183,7 @@ describe("buildImageGenerationPrompt", () => {
     model: profile.model,
     material: profile.material,
     usage: profile.usage,
+    userRequirement: null,
     referenceUrls: [],
     benchmarkAnalysis: null,
     designRules: null,
@@ -346,6 +369,7 @@ describe("buildImageGenerationPrompt", () => {
       model: null,
       material: null,
       usage: null,
+      userRequirement: null,
       referenceUrls: [],
       benchmarkAnalysis: null,
       designRules: null,
@@ -366,5 +390,35 @@ describe("buildImageGenerationPrompt", () => {
     expect(prompt).not.toContain("[제품 정보]");
     expect(prompt).toContain("스펙표·수치·단위를 이미지 안에 글자로 넣지 않는다");
     expect(prompt.endsWith("배경만 만들어줘.")).toBe(true);
+  });
+
+  it("사용자 요구사항(T1-92)이 없으면 그 블록을 만들지 않는다", () => {
+    const prompt = buildImageGenerationPrompt(fullPackage, "Hero 이미지를 만들어줘.");
+
+    expect(prompt).not.toContain("[사용자 요구사항");
+  });
+
+  it("사용자 요구사항(T1-92)이 있으면 그대로 전달하고, 지시문은 여전히 맨 마지막이다", () => {
+    const prompt = buildImageGenerationPrompt(
+      { ...fullPackage, userRequirement: "더 고급스러운 느낌으로 만들어줘" },
+      "Hero 이미지를 만들어줘.",
+    );
+
+    expect(prompt).toContain("[사용자 요구사항 — 참고]");
+    expect(prompt).toContain("더 고급스러운 느낌으로 만들어줘");
+    expect(prompt.endsWith("Hero 이미지를 만들어줘.")).toBe(true);
+    // 제품 동일성 규칙보다 뒤에 있어야 한다 — 충돌 시 제품 사실이 이긴다
+    expect(prompt.indexOf("[최우선 규칙 — 제품 동일성]")).toBeLessThan(
+      prompt.indexOf("[사용자 요구사항 — 참고]"),
+    );
+  });
+
+  it("사용자 요구사항(T1-92)이 있으면 제품 사실과 충돌 시 무시하라는 규칙을 함께 전달한다", () => {
+    const prompt = buildImageGenerationPrompt(
+      { ...fullPackage, userRequirement: "제품을 빨간색으로 바꿔줘" },
+      "Hero 이미지를 만들어줘.",
+    );
+
+    expect(prompt).toContain("요구사항을 무시하고 실제 제품 사실을 따른다");
   });
 });

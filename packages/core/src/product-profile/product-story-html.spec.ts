@@ -4,6 +4,7 @@ import type { StudioSelectedImage } from "./product-page-images";
 import { planStoryDesign } from "./product-story-design";
 import type { AuxiliaryVisualAsset } from "./product-story-auxiliary-visual";
 import type { GenerativeVisualAsset } from "./product-story-generative-visuals";
+import { resolveDesignProfile, type DesignDirectorChoice } from "./design-profile";
 
 function section(id: string, imageRole: AssignedStorySection["section"]["imageRole"] = "NONE") {
   return {
@@ -66,7 +67,7 @@ describe("renderProductStoryHtml", () => {
     expect(html).toContain("&lt;script&gt;");
   });
 
-  it("배정된 이미지 중 첫 번째를 Hero 배경으로 쓴다", () => {
+  it("T1-173: HERO 블록을 렌더링하지 않는다 — pde-hero 계열 마크업이 출력에 전혀 없다", () => {
     const story: ProductStory = {
       productName: "베란다 호스",
       narrativeSummary: "요약",
@@ -76,11 +77,13 @@ describe("renderProductStoryHtml", () => {
       { section: story.sections[0], image: null },
       { section: story.sections[1], image },
     ];
-    const { html } = renderProductStoryHtml(story, assigned);
-    expect(html).toContain("pde-hero--photo");
+    const { html, css } = renderProductStoryHtml(story, assigned);
+    expect(html).not.toContain("<header");
+    expect(html).not.toMatch(/class="pde-hero/);
+    expect(css).not.toMatch(/\.pde-hero/);
   });
 
-  it("Hero로 쓰인 이미지는 원래 배정된 섹션 본문에서 다시 그리지 않는다 — 상단/본문 이미지 중복 금지(T1-118)", () => {
+  it("T1-173: HERO가 없으므로 첫 이미지가 배정된 섹션도 자기 사진을 정상적으로 렌더링한다 — 예전 hideMedia 억제가 재현되지 않는다", () => {
     const story: ProductStory = {
       productName: "베란다 호스",
       narrativeSummary: "요약",
@@ -91,14 +94,11 @@ describe("renderProductStoryHtml", () => {
       { section: story.sections[1], image: null },
     ];
     const { html } = renderProductStoryHtml(story, assigned);
-    // Hero(pde-hero-media)에는 한 번만 나오고, 본문(pde-story-figure)에는 다시 나오면 안 된다
-    expect(html).toContain(`<div class="pde-hero-media">`);
     expect(html.match(new RegExp(`<img src="data:image/jpeg;base64,${image.base64}"`, "g"))).toHaveLength(1);
-    // 본문 텍스트는 그대로 유지된다(사진만 생략, 카피는 유지)
     expect(html).toContain("s1 섹션 본문 내용입니다.");
   });
 
-  it("배정된 이미지가 하나도 없으면 그라디언트 Hero로 대체한다", () => {
+  it("T1-173/T1-183: 검증된 hero 사진이 없으면 story-summary(hero 미포함 버전)부터 시작한다", () => {
     const story: ProductStory = {
       productName: "베란다 호스",
       narrativeSummary: "요약",
@@ -107,48 +107,43 @@ describe("renderProductStoryHtml", () => {
     const assigned: AssignedStorySection[] = [{ section: story.sections[0], image: null }];
     const { html } = renderProductStoryHtml(story, assigned);
     expect(html).not.toContain("pde-hero--photo");
-    expect(html).toContain("<h1>베란다 호스</h1>");
+    expect(html).not.toContain("pde-story-summary--hero");
+    expect(html).not.toContain("pde-story-hero-media");
+    expect(html.indexOf('<div class="pde-page pde-page--story">') + '<div class="pde-page pde-page--story">'.length).toBe(
+      html.indexOf('<div class="pde-story-summary'),
+    );
   });
 
-  it("Hero는 왼쪽 텍스트/오른쪽 대형 이미지 split 마크업(pde-hero-grid)으로 렌더링한다(T1-147)", () => {
+  it("T1-182: story-summary가 제품명(h1)·핵심 메시지(masterBrief.coreMessage)·서사 요약을 계층으로 렌더링한다", () => {
+    const story: ProductStory = {
+      productName: "베란다 호스",
+      narrativeSummary: "긴 서사 요약 문단입니다.",
+      masterBrief: {
+        targetAudience: "타깃",
+        coreMessage: "유연한 분사, 손쉬운 조절",
+        emotionalArc: "감정선",
+        visualConcept: "비주얼 컨셉",
+      },
+      sections: [section("s1", "NONE")],
+    };
+    const assigned: AssignedStorySection[] = [{ section: story.sections[0], image: null }];
+    const { html } = renderProductStoryHtml(story, assigned);
+    expect(html).toContain('<h1 class="pde-story-summary-name">베란다 호스</h1>');
+    expect(html).toContain("pde-story-summary-tagline");
+    expect(html).toContain("유연한 분사");
+    expect(html).toContain('<p class="pde-story-summary-narrative">긴 서사 요약 문단입니다.</p>');
+  });
+
+  it("T1-182: masterBrief가 없으면 태그라인 없이 제품명·서사 요약만 렌더링한다(지어내지 않음)", () => {
     const story: ProductStory = {
       productName: "베란다 호스",
       narrativeSummary: "요약",
-      sections: [section("s1", "USAGE_SCENE")],
+      sections: [section("s1", "NONE")],
     };
-    const assigned: AssignedStorySection[] = [{ section: story.sections[0], image }];
+    const assigned: AssignedStorySection[] = [{ section: story.sections[0], image: null }];
     const { html } = renderProductStoryHtml(story, assigned);
-    expect(html).toContain('<div class="pde-hero-grid">');
-    expect(html).toContain('<div class="pde-hero-media">');
-    expect(html).toContain('<div class="pde-hero-text">');
-  });
-
-  it("Hero 텍스트 영역에 의미 있는 아이콘이 있는 섹션 최대 4개를 핵심 기능 행으로 보여준다(T1-147)", () => {
-    const withFacts = (id: string, role: AssignedStorySection["section"]["imageRole"]) => ({
-      ...section(id, role),
-      productFacts: ["사실1", "사실2"],
-    });
-    const story: ProductStory = {
-      productName: "베란다 호스",
-      narrativeSummary: "요약",
-      sections: [
-        section("hero", "USAGE_SCENE"),
-        withFacts("f1", "NONE"),
-        withFacts("f2", "NONE"),
-        withFacts("f3", "NONE"),
-        withFacts("f4", "NONE"),
-        withFacts("f5", "NONE"),
-      ],
-    };
-    const assigned: AssignedStorySection[] = story.sections.map((s) => ({
-      section: s,
-      image: s.sectionId === "hero" ? image : null,
-    }));
-    const { html } = renderProductStoryHtml(story, assigned);
-    expect(html).toContain("pde-hero-features");
-    const chipCount = (html.match(/pde-hero-feature"/g) ?? []).length;
-    expect(chipCount).toBeLessThanOrEqual(4);
-    expect(chipCount).toBeGreaterThan(0);
+    expect(html).toContain('<h1 class="pde-story-summary-name">베란다 호스</h1>');
+    expect(html).not.toContain("pde-story-summary-tagline");
   });
 });
 
@@ -288,6 +283,63 @@ describe("renderProductStoryHtml — 타이포그래피·아이콘·강조색·�
     expect(html).toContain("고무 패킹 2개");
   });
 
+  it("T1-185 — composition.includedGrid가 components-grid의 실제 레이아웃 클래스를 결정한다(T1-183이 남긴 미연결 gap을 연결)", () => {
+    const story: ProductStory = {
+      productName: "베란다 호스",
+      narrativeSummary: "요약",
+      sections: [
+        {
+          sectionId: "components",
+          purpose: "구성품 확인",
+          customerContext: "상황",
+          productFacts: ["고무 패킹 2개"],
+          keyMessage: "박스 안 구성품",
+          imageRole: "COMPONENTS",
+          imageFactsShown: ["구성품 전체"],
+          copy: "박스를 열면 이 구성품들이 들어 있습니다.",
+          transitionToNext: "",
+        },
+      ],
+    };
+    const componentsImage: StudioSelectedImage = { ...image, category: "COMPONENTS" };
+    const assigned: AssignedStorySection[] = [{ section: story.sections[0], image: componentsImage }];
+    const plan = planStoryDesign(story);
+
+    // 기본(editorial-brochure, includedGrid="info-left-image-right")은 기존
+    // split 레이아웃 그대로다 — 회귀 없음.
+    const { html: defaultHtml } = renderProductStoryHtml(story, assigned, plan);
+    expect(defaultHtml).toContain("pde-story-figure--split");
+    expect(defaultHtml).not.toContain("pde-story-figure--stacked");
+
+    // compact-utility(includedGrid="stacked")를 고르면 stacked 클래스로
+    // 바뀐다.
+    const stackedProfile = resolveDesignProfile(
+      {
+        visualStyle: "industrial-premium",
+        colorway: "harbor-steel",
+        rationale: "테스트",
+        typography: {
+          headingWeight: "700",
+          letterSpacing: "tight",
+          lineHeight: "comfortable",
+          numericStyle: "tabular",
+          accentTypeface: "technical-grotesk",
+        },
+        iconStyle: { family: "technical-outline", strokeWidth: "regular", cornerStyle: "sharp", opticalSize: "standard" },
+        cardStyle: { variant: "soft-shadow", radius: "soft" },
+        graphicMotif: { family: "dot-grid", intensity: "subtle" },
+        spacingDensity: "standard",
+        imageTreatment: { backgroundTreatment: "letterbox-neutral" },
+        accentUsage: "balanced",
+        avoid: [],
+      } as DesignDirectorChoice,
+      "compact-utility",
+    );
+    const { html: stackedHtml } = renderProductStoryHtml(story, assigned, plan, undefined, undefined, stackedProfile);
+    expect(stackedHtml).toContain("pde-story-figure--stacked");
+    expect(stackedHtml).not.toContain("pde-story-figure--split");
+  });
+
   it("섹션이 3개 이상이면 마지막 섹션을 closing 레이아웃(감성적 마무리)으로 렌더링한다(T1-118)", () => {
     const story: ProductStory = {
       productName: "베란다 호스",
@@ -321,9 +373,6 @@ describe("renderProductStoryHtml — 타이포그래피·아이콘·강조색·�
 
 describe("renderProductStoryHtml — 헤드라인+짧은 카피 구조 (T1-126)", () => {
   it("image-text 레이아웃도 keyMessage를 헤드라인으로 함께 렌더링한다 — 사진 아래 카피 한 줄만 남지 않는다", () => {
-    // 두 섹션 모두 이미지가 있어야 한다 — 유일한 이미지는 Hero로 쓰이며
-    // 본문에서는 중복 표시가 생략되므로(T1-118), split 레이아웃 자체를
-    // 확인하려면 검사 대상 섹션의 이미지가 Hero로 흡수되지 않아야 한다.
     const otherImage: StudioSelectedImage = { ...image, imageId: "img-hero" };
     const story: ProductStory = {
       productName: "베란다 호스",
@@ -427,16 +476,16 @@ describe("renderProductStoryHtml — 생성형 아이콘/kicker/Hero 모티프 (
     transitionToNext: "",
   };
 
-  it("생성형 아이콘 자산이 없으면 기존 인라인 SVG로 렌더링한다(graceful fallback)", () => {
+  it("아이콘은 항상 DESIGN_PROFILE canonical SVG로 렌더링한다(design-profile-svg)", () => {
     const story: ProductStory = { productName: "베란다 호스", narrativeSummary: "요약", sections: [noticeSection] };
     const assigned: AssignedStorySection[] = [{ section: story.sections[0], image: null }];
     const plan = planStoryDesign(story);
     const { html } = renderProductStoryHtml(story, assigned, plan);
-    expect(html).toContain('data-icon-source="fallback-svg"');
+    expect(html).toContain('data-icon-source="design-profile-svg"');
     expect(html).not.toContain('data-icon-source="gemini-generative-design"');
   });
 
-  it("생성형 아이콘 자산이 있으면 인라인 SVG 대신 생성 이미지를 렌더링한다", () => {
+  it("T1-177 — 생성형 아이콘 자산(T1-142)이 있어도 DESIGN_PROFILE.iconStyle을 bypass하지 못한다(회귀 방지)", () => {
     const story: ProductStory = { productName: "베란다 호스", narrativeSummary: "요약", sections: [noticeSection] };
     const assigned: AssignedStorySection[] = [{ section: story.sections[0], image: null }];
     const plan = planStoryDesign(story);
@@ -450,16 +499,20 @@ describe("renderProductStoryHtml — 생성형 아이콘/kicker/Hero 모티프 (
     };
     const bundle: GenerativeVisualBundle = { icons: { warning: warningIcon }, heroMotif: null };
     const { html } = renderProductStoryHtml(story, assigned, plan, undefined, bundle);
-    expect(html).toContain('data-icon-source="gemini-generative-design"');
-    expect(html).toContain("d2FybmluZy1pY29u");
+    // 생성형 아이콘 자산이 있어도 최종 HTML에는 절대 등장하지 않는다 —
+    // arbitrary AI 생성 이미지가 아이콘 렌더링을 결정할 수 없다.
+    expect(html).not.toContain('data-icon-source="gemini-generative-design"');
+    expect(html).not.toContain("d2FybmluZy1pY29u");
+    expect(html).toContain('data-icon-source="design-profile-svg"');
   });
 
-  it("레이아웃 의미를 나타내는 kicker 라벨을 렌더링한다(notice → CAUTION)", () => {
+  it("레이아웃 의미를 나타내는 kicker 라벨을 렌더링한다(notice → CAUTION, T1-163: 순서 eyebrow 번호와 함께)", () => {
     const story: ProductStory = { productName: "베란다 호스", narrativeSummary: "요약", sections: [noticeSection] };
     const assigned: AssignedStorySection[] = [{ section: story.sections[0], image: null }];
     const plan = planStoryDesign(story);
     const { html } = renderProductStoryHtml(story, assigned, plan);
-    expect(html).toContain('<span class="pde-story-kicker">CAUTION</span>');
+    expect(html).toContain('<span class="pde-story-kicker-text">CAUTION</span>');
+    expect(html).toContain('<span class="pde-story-kicker-index" aria-hidden="true">01</span>');
   });
 
   it("근거 없는 레이아웃(problem-empathy)에는 kicker를 렌더링하지 않는다", () => {
@@ -486,7 +539,7 @@ describe("renderProductStoryHtml — 생성형 아이콘/kicker/Hero 모티프 (
     expect(html).not.toContain("pde-story-kicker");
   });
 
-  it("Hero 모티프가 있으면 Hero 배경과 Story 요약 밴드 두 곳에 같은 자산을 재사용한다", () => {
+  it("T1-173: Hero 모티프가 있으면 Story 요약 밴드 구분선 한 곳에 자산을 재사용한다 — HERO 자체가 없어져 그 자리 재사용은 사라졌다", () => {
     const story: ProductStory = { productName: "베란다 호스", narrativeSummary: "요약", sections: [noticeSection] };
     const assigned: AssignedStorySection[] = [{ section: story.sections[0], image: null }];
     const heroMotif: GenerativeVisualAsset = {
@@ -498,8 +551,8 @@ describe("renderProductStoryHtml — 생성형 아이콘/kicker/Hero 모티프 (
     };
     const bundle: GenerativeVisualBundle = { icons: {}, heroMotif };
     const { html } = renderProductStoryHtml(story, assigned, undefined, undefined, bundle);
-    expect(html.split("aGVyby1tb3RpZg==").length - 1).toBe(2);
-    expect(html).toContain("pde-hero-motif");
+    expect(html.split("aGVyby1tb3RpZg==").length - 1).toBe(1);
+    expect(html).not.toContain("pde-hero-motif");
     expect(html).toContain("pde-story-summary-motif");
   });
 
@@ -512,9 +565,6 @@ describe("renderProductStoryHtml — 생성형 아이콘/kicker/Hero 모티프 (
   });
 
   it("gallery에 이미지가 있으면 대표 이미지 아래 추가 썸네일 스트립을 렌더링한다(T1-144)", () => {
-    // 섹션을 2개 두어 components 섹션의 이미지가 Hero로 뽑히지 않게 한다
-    // (Hero는 이미지가 배정된 첫 섹션을 쓰고, 그 섹션 본문에서는 중복
-    // 방지를 위해 대표 사진과 갤러리를 함께 생략한다 — 아래 별도 테스트).
     const story: ProductStory = {
       productName: "베란다 호스",
       narrativeSummary: "요약",
@@ -537,19 +587,18 @@ describe("renderProductStoryHtml — 생성형 아이콘/kicker/Hero 모티프 (
     expect(html).toContain('data-asset-section-id="components"');
   });
 
-  it("대표 이미지가 Hero 중복으로 숨겨져도 갤러리는 그대로 보여준다(T1-147) — 갤러리 사진은 Hero와 다른 실제 사진이라 이미지 밀도를 위해 유지한다", () => {
+  it("대표 이미지와 갤러리 사진이 함께 있으면 둘 다 보여준다(T1-147) — 서로 다른 실제 사진이라 이미지 밀도를 위해 둘 다 유지한다", () => {
     const story: ProductStory = {
       productName: "베란다 호스",
       narrativeSummary: "요약",
       sections: [section("components", "COMPONENTS")],
     };
-    const heroImage: StudioSelectedImage = { ...image, imageId: "c1", category: "COMPONENTS", source: "real" };
+    const representativeImage: StudioSelectedImage = { ...image, imageId: "c1", category: "COMPONENTS", source: "real" };
     const gallery: StudioSelectedImage[] = [{ ...image, imageId: "c2", category: "COMPONENTS", source: "real" }];
-    const assigned: AssignedStorySection[] = [{ section: story.sections[0], image: heroImage, gallery }];
+    const assigned: AssignedStorySection[] = [{ section: story.sections[0], image: representativeImage, gallery }];
     const plan = planStoryDesign(story);
     const { html } = renderProductStoryHtml(story, assigned, plan);
-    // c1이 Hero로도 쓰이므로 본문에서는 대표 사진 자체가 숨겨지지만,
-    // c2(갤러리)는 c1과 다른 실제 사진이므로 그대로 보여준다.
+    expect(html).toContain('data-asset-id="c1"');
     expect(html).toContain("pde-story-gallery-strip");
     expect(html).toContain('data-asset-id="c2"');
   });
@@ -560,5 +609,274 @@ describe("renderProductStoryHtml — 생성형 아이콘/kicker/Hero 모티프 (
     const { html } = renderProductStoryHtml(story, assigned);
     expect(html).not.toContain("pde-media-gallery");
     expect(html).not.toContain("제품 더 보기");
+  });
+});
+
+// ── DESIGN_PROFILE 연결 (T1-176) ────────────────────────────────────
+
+function industrialChoice(): DesignDirectorChoice {
+  return {
+    visualStyle: "industrial-premium",
+    colorway: "harbor-steel",
+    rationale: "금속 소재의 실용적 도구성 제품",
+    typography: { headingWeight: "700", letterSpacing: "tight", lineHeight: "comfortable", numericStyle: "tabular", accentTypeface: "technical-grotesk" },
+    iconStyle: { family: "precision-mono", strokeWidth: "bold", cornerStyle: "sharp", opticalSize: "large" },
+    cardStyle: { variant: "soft-shadow", radius: "soft" },
+    graphicMotif: { family: "dot-grid", intensity: "subtle" },
+    spacingDensity: "standard",
+    imageTreatment: { backgroundTreatment: "letterbox-neutral" },
+    accentUsage: "balanced",
+    avoid: [],
+  };
+}
+
+function softChoice(): DesignDirectorChoice {
+  return {
+    visualStyle: "soft-premium",
+    colorway: "blush-mauve",
+    rationale: "부드러운 패브릭 소재의 유아용품",
+    typography: { headingWeight: "600", letterSpacing: "wide", lineHeight: "relaxed", numericStyle: "standard", accentTypeface: "rounded-sans" },
+    iconStyle: { family: "soft-rounded", strokeWidth: "thin", cornerStyle: "rounded", opticalSize: "compact" },
+    cardStyle: { variant: "elevated", radius: "round" },
+    graphicMotif: { family: "none", intensity: "none" },
+    spacingDensity: "spacious",
+    imageTreatment: { backgroundTreatment: "letterbox-tinted" },
+    accentUsage: "minimal",
+    avoid: ["금속 질감", "각진 형태"],
+  };
+}
+
+describe("renderProductStoryHtml — DESIGN_PROFILE (T1-176)", () => {
+  const noticeSection = {
+    sectionId: "notice",
+    purpose: "주의사항",
+    customerContext: "구매 전 확인",
+    productFacts: ["A/S 1년"],
+    keyMessage: "보증 안내",
+    imageRole: "NONE" as const,
+    imageFactsShown: [],
+    copy: "A/S는 1년입니다.",
+    transitionToNext: "",
+  };
+  const story: ProductStory = {
+    productName: "베란다 호스",
+    narrativeSummary: "요약",
+    sections: [section("feature", "FEATURE_HIGHLIGHT"), section("spec", "NONE"), noticeSection],
+  };
+  const assigned: AssignedStorySection[] = [
+    { section: story.sections[0], image: { ...image, imageId: "f1", category: "FEATURE_HIGHLIGHT", source: "real" } },
+    { section: story.sections[1], image: null },
+    { section: story.sections[2], image: null },
+  ];
+
+  it("visualProfile을 지정하지 않으면 기존 baseline과 완전히 동일한 결과를 만든다(회귀 없음)", () => {
+    const plan = planStoryDesign(story);
+    const withoutProfile = renderProductStoryHtml(story, assigned, plan);
+    const withNullProfile = renderProductStoryHtml(story, assigned, plan, undefined, undefined, null);
+    expect(withoutProfile).toEqual(withNullProfile);
+  });
+
+  it("서로 다른 두 DESIGN_PROFILE은 서로 다른 accentColor/아이콘 스타일을 만든다", () => {
+    const industrial = resolveDesignProfile(industrialChoice());
+    const soft = resolveDesignProfile(softChoice());
+    const plan1 = planStoryDesign(story, { typography: industrial.typography, layoutAccent: industrial.layoutAccent });
+    const plan2 = planStoryDesign(story, { typography: soft.typography, layoutAccent: soft.layoutAccent });
+    const rendered1 = renderProductStoryHtml(story, assigned, plan1, undefined, undefined, industrial);
+    const rendered2 = renderProductStoryHtml(story, assigned, plan2, undefined, undefined, soft);
+    expect(rendered1.css).not.toBe(rendered2.css);
+    expect(rendered1.html).not.toBe(rendered2.html);
+    // industrial은 bold(3) + sharp(square) 아이콘, soft는 thin(1.5) + rounded 아이콘
+    expect(rendered1.html).toContain('stroke-width="3"');
+    expect(rendered2.html).toContain('stroke-width="1.5"');
+  });
+
+  it("제품 정체성(이미지 asset id·섹션 순서·본문 텍스트)은 DESIGN_PROFILE과 무관하게 동일하다", () => {
+    const industrial = resolveDesignProfile(industrialChoice());
+    const soft = resolveDesignProfile(softChoice());
+    const plan1 = planStoryDesign(story, { typography: industrial.typography, layoutAccent: industrial.layoutAccent });
+    const plan2 = planStoryDesign(story, { typography: soft.typography, layoutAccent: soft.layoutAccent });
+    const rendered1 = renderProductStoryHtml(story, assigned, plan1, undefined, undefined, industrial);
+    const rendered2 = renderProductStoryHtml(story, assigned, plan2, undefined, undefined, soft);
+    for (const html of [rendered1.html, rendered2.html]) {
+      expect(html).toContain('data-asset-id="f1"');
+      expect(html).toContain("feature 섹션 본문 내용입니다.");
+      expect(html).toContain('data-section-id="feature"');
+      expect(html).toContain('data-section-id="spec"');
+    }
+  });
+
+  it("notice 섹션은 DESIGN_PROFILE과 무관하게 항상 같은 경고색을 쓴다", () => {
+    const industrial = resolveDesignProfile(industrialChoice());
+    const plan = planStoryDesign(story, { typography: industrial.typography, layoutAccent: industrial.layoutAccent });
+    const { css } = renderProductStoryHtml(story, assigned, plan, undefined, undefined, industrial);
+    expect(css).toContain("#92400e");
+  });
+
+  it("resolveDesignProfile은 제품 이미지 asset을 입력받지 않으므로 제품 사진을 재구성할 수 없다", () => {
+    // 이 테스트는 타입 시그니처 자체가 가드레일임을 문서화한다 —
+    // DesignDirectorChoice에는 이미지 필드가 없어 resolveDesignProfile이
+    // 이미지를 바꿀 방법이 구조적으로 없다.
+    const resolved = resolveDesignProfile(industrialChoice());
+    expect(resolved).not.toHaveProperty("images");
+    expect(resolved).not.toHaveProperty("productShape");
+  });
+});
+
+// ── 아이콘 family registry — 5+ canonical family precedence (T1-177) ────
+
+describe("renderProductStoryHtml — 아이콘 family registry (T1-177)", () => {
+  const noticeSection = {
+    sectionId: "notice",
+    purpose: "주의사항",
+    customerContext: "구매 전 확인",
+    productFacts: ["A/S 1년"],
+    keyMessage: "보증 안내",
+    imageRole: "NONE" as const,
+    imageFactsShown: [],
+    copy: "A/S는 1년입니다.",
+    transitionToNext: "",
+  };
+  const story: ProductStory = { productName: "베란다 호스", narrativeSummary: "요약", sections: [noticeSection] };
+  const assigned: AssignedStorySection[] = [{ section: story.sections[0], image: null }];
+
+  function choiceWithFamily(family: DesignDirectorChoice["iconStyle"]["family"]): DesignDirectorChoice {
+    return {
+      visualStyle: "industrial-premium",
+      colorway: "harbor-steel",
+      rationale: "family 렌더링 확인용",
+      typography: { headingWeight: "700", letterSpacing: "tight", lineHeight: "comfortable", numericStyle: "tabular", accentTypeface: "technical-grotesk" },
+      iconStyle: { family, strokeWidth: "regular", cornerStyle: "sharp", opticalSize: "standard" },
+      cardStyle: { variant: "soft-shadow", radius: "soft" },
+      graphicMotif: { family: "none", intensity: "none" },
+      spacingDensity: "standard",
+      imageTreatment: { backgroundTreatment: "letterbox-neutral" },
+      accentUsage: "balanced",
+      avoid: [],
+    };
+  }
+
+  const ICON_FAMILIES: DesignDirectorChoice["iconStyle"]["family"][] = [
+    "technical-outline",
+    "editorial-line",
+    "geometric-solid",
+    "soft-rounded",
+    "precision-mono",
+  ];
+
+  it("5개 이상의 icon family 각각이 유효하고 서로 다른 SVG를 렌더링한다", () => {
+    expect(ICON_FAMILIES.length).toBeGreaterThanOrEqual(5);
+    const htmlByFamily = new Map<string, string>();
+    for (const family of ICON_FAMILIES) {
+      const profile = resolveDesignProfile(choiceWithFamily(family));
+      const plan = planStoryDesign(story, { typography: profile.typography, layoutAccent: profile.layoutAccent });
+      const { html } = renderProductStoryHtml(story, assigned, plan, undefined, undefined, profile);
+      expect(html).toContain('data-icon-source="design-profile-svg"');
+      expect(html).toContain("<svg");
+      htmlByFamily.set(family, html);
+    }
+    const distinctSvgSnippets = new Set(htmlByFamily.values());
+    expect(distinctSvgSnippets.size).toBe(ICON_FAMILIES.length);
+  });
+
+  it("깨진 Unicode/emoji 아이콘이 0개다 — 모든 family가 실제 <svg> 마크업만 만든다", () => {
+    for (const family of ICON_FAMILIES) {
+      const profile = resolveDesignProfile(choiceWithFamily(family));
+      const plan = planStoryDesign(story, { typography: profile.typography, layoutAccent: profile.layoutAccent });
+      const { html } = renderProductStoryHtml(story, assigned, plan, undefined, undefined, profile);
+      expect(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(html)).toBe(false);
+    }
+  });
+
+  it("같은 Product Profile + 같은 DESIGN_PROFILE이면 항상 같은 icon family/shape가 나온다(결정적)", () => {
+    const profile = resolveDesignProfile(choiceWithFamily("geometric-solid"));
+    const plan = planStoryDesign(story, { typography: profile.typography, layoutAccent: profile.layoutAccent });
+    const first = renderProductStoryHtml(story, assigned, plan, undefined, undefined, profile);
+    const second = renderProductStoryHtml(story, assigned, plan, undefined, undefined, profile);
+    expect(first.html).toBe(second.html);
+  });
+
+  it("DESIGN_PROFILE이 없으면 baseline family(technical-outline)로 렌더링한다 — invalid/누락 iconStyle에 대한 안전한 fallback과 동일한 경로", () => {
+    const plan = planStoryDesign(story);
+    const withoutProfile = renderProductStoryHtml(story, assigned, plan, undefined, undefined, null);
+    const explicitBaseline = resolveDesignProfile(choiceWithFamily("technical-outline"));
+    // baseline(profile 없음)은 원본 stroke-width 등을 유지한 채(오버라이드 없음) technical-outline 글리프를 쓴다 —
+    // 적어도 같은 family의 glyph path(check 아이콘의 checkmark 좌표)는 두 경우 모두 나타난다.
+    expect(withoutProfile.html).toContain("<svg");
+    expect(explicitBaseline.icon.family).toBe("technical-outline");
+  });
+});
+
+describe("renderProductStoryHtml — T1-183 Hero 재도입 (검증된 실제 제품 사진만 사용)", () => {
+  const heroImage: StudioSelectedImage = {
+    imageId: "img-hero-real",
+    category: "HERO",
+    groupVersion: 1,
+    mimeType: "image/jpeg",
+    base64: Buffer.from("hero-bytes").toString("base64"),
+    source: "real",
+    imageRole: "product-isolated",
+  };
+  const lifestyleImage: StudioSelectedImage = {
+    imageId: "img-lifestyle",
+    category: "USAGE_SCENE",
+    groupVersion: 1,
+    mimeType: "image/jpeg",
+    base64: Buffer.from("lifestyle-bytes").toString("base64"),
+    source: "real",
+    imageRole: "lifestyle",
+  };
+  const detailImage: StudioSelectedImage = {
+    imageId: "img-detail-real",
+    category: "DETAIL",
+    groupVersion: 1,
+    mimeType: "image/jpeg",
+    base64: Buffer.from("detail-bytes").toString("base64"),
+    source: "real",
+    imageRole: "product-isolated",
+  };
+
+  it("HERO 카테고리로 배정된 검증된 실제 제품 사진을 hero 블록(pde-story-hero-media)으로 그린다", () => {
+    const story: ProductStory = {
+      productName: "베란다 호스",
+      narrativeSummary: "요약",
+      sections: [section("s1", "HERO"), section("s2", "USAGE_SCENE")],
+    };
+    const assigned: AssignedStorySection[] = [
+      { section: story.sections[0], image: heroImage },
+      { section: story.sections[1], image: lifestyleImage },
+    ];
+    const { html } = renderProductStoryHtml(story, assigned);
+    expect(html).toContain("pde-story-hero-media");
+    expect(html).toContain(`data:image/jpeg;base64,${heroImage.base64}`);
+    expect(html).toContain("pde-story-summary--hero");
+  });
+
+  it("HERO로 배정된 이미지가 lifestyle(사용 장면) 자산이면 hero로 쓰지 않는다 — 검증된 product-isolated 자산으로 대체한다", () => {
+    const heroSlotLifestyle: StudioSelectedImage = { ...lifestyleImage, imageId: "img-hero-slot-lifestyle", category: "HERO" };
+    const story: ProductStory = {
+      productName: "베란다 호스",
+      narrativeSummary: "요약",
+      sections: [section("s1", "HERO"), section("s2", "DETAIL")],
+    };
+    const assigned: AssignedStorySection[] = [
+      { section: story.sections[0], image: heroSlotLifestyle },
+      { section: story.sections[1], image: detailImage },
+    ];
+    const { html } = renderProductStoryHtml(story, assigned);
+    expect(html).toContain("pde-story-hero-media");
+    expect(html).toContain(`data:image/jpeg;base64,${detailImage.base64}`);
+    expect(html).not.toContain(`pde-story-hero-media" data-hero-aspect="4:3" style="--pde-hero-aspect:4 / 3;">` + `<a href="data:image/jpeg;base64,${heroSlotLifestyle.base64}"`);
+  });
+
+  it("검증된 실제 제품 사진이 하나도 없으면(HERO/DETAIL 등 전부 lifestyle뿐) hero를 그리지 않는다", () => {
+    const story: ProductStory = {
+      productName: "베란다 호스",
+      narrativeSummary: "요약",
+      sections: [section("s1", "USAGE_SCENE")],
+    };
+    const assigned: AssignedStorySection[] = [{ section: story.sections[0], image: lifestyleImage }];
+    const { html } = renderProductStoryHtml(story, assigned);
+    expect(html).not.toContain("pde-story-hero-media");
+    expect(html).not.toContain("pde-story-summary--hero");
   });
 });

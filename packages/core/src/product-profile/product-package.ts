@@ -31,6 +31,13 @@ export function buildProductPackage(input: {
    * 찾았고 무엇을 버렸는지 그대로 남겨 사람이 보게 한다.
    */
   research?: ProductResearchResult | null;
+  /**
+   * 사용자 요구사항 기반 생성 (T1-92) — 사용자가 직접 입력한 자유 텍스트
+   * 요구사항. `buildImageGenerationPrompt`가 이 값을 그대로 프롬프트에
+   * 옮기며, 제품 사실(위 필드들)과 충돌하면 사실이 우선한다는 규칙과
+   * 함께 전달한다.
+   */
+  userRequirement?: string | null;
 }): ProductPackage {
   // 제품 자동 분석 (T1-21) — 바코드·모델명·브랜드·원산지를 OCR 원문에서
   // 직접 뽑는다. 지어내지 않는다: 못 찾으면 null이 그대로 남는다.
@@ -68,6 +75,7 @@ export function buildProductPackage(input: {
     material: input.profile?.material ?? null,
     usage: input.profile?.usage ?? null,
     research: input.research ?? null,
+    userRequirement: input.userRequirement?.trim() || null,
     referenceUrls: [],
     benchmarkAnalysis: null,
     designRules: null,
@@ -267,11 +275,29 @@ export function buildImageGenerationPrompt(
   }
 
   // 제품 동일성이 맨 앞이다 — "이미지 품질보다 제품 동일성이 항상 우선한다"
-  // (CTO 지시, 2026-08-08). 그다음이 제품 정보, 글자 금지, 사람 모델 순이다.
+  // (CTO 지시, 2026-08-08). 그다음이 제품 정보, 글자 금지, 사람 모델,
+  // 사용자 요구사항(T1-92), 실제 지시문 순이다.
   const blocks: string[] = [PRODUCT_IDENTITY_RULES];
   if (lines.length > 0) {
     blocks.push(`[제품 정보 — 참고용]\n${lines.join("\n")}`);
   }
-  blocks.push(IMAGE_TEXT_RULES, HUMAN_MODEL_RULES, instruction);
+  blocks.push(IMAGE_TEXT_RULES, HUMAN_MODEL_RULES);
+  // 사용자 요구사항 (T1-92) — 기존 "빠른 테스트"의 자유 텍스트 요구사항
+  // 개념을 정식 파이프라인에 통합한다. 제품 동일성 규칙보다 뒤에 두어,
+  // 요구사항이 제품 사실과 충돌하면 이미 위에서 못 박은 규칙이 우선하게
+  // 한다 — 사용자가 "빨간색으로 바꿔줘"처럼 제품 사실과 어긋나는 것을
+  // 요청해도 실제 제품 색상이 이긴다.
+  if (productPackage?.userRequirement) {
+    blocks.push(
+      [
+        "[사용자 요구사항 — 참고]",
+        productPackage.userRequirement,
+        "",
+        "위 요구사항이 [최우선 규칙 — 제품 동일성]이나 실제 제품 정보와 충돌하면,",
+        "요구사항을 무시하고 실제 제품 사실을 따른다.",
+      ].join("\n"),
+    );
+  }
+  blocks.push(instruction);
   return blocks.join("\n\n");
 }

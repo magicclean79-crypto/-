@@ -82,11 +82,13 @@ export interface UpdateUserRequest {
 
 export const USER_AUDIT_ACTIONS = [
   "USER_CREATED",
+  "USER_SIGNED_UP",
   "ROLE_CHANGED",
   "USER_DISABLED",
   "USER_ENABLED",
   "PASSWORD_CHANGED",
   "PASSWORD_RESET",
+  "EMAIL_CHANGED",
   "LOGIN_FAILED",
   "ACCOUNT_LOCKED",
 ] as const;
@@ -122,6 +124,16 @@ export interface CreateUserRequest {
   role: UserRole;
 }
 
+/**
+ * 자체 회원가입 (T1-215) — 공개 API. 생성되는 계정은 항상 VIEWER
+ * 역할이다(관리자 권한은 `POST /auth/users`로만 부여 가능, ADMIN 전용).
+ */
+export interface SignupRequest {
+  email: string;
+  name: string;
+  password: string;
+}
+
 /** 비밀번호 변경 (TASK-0803) — 본인 셀프 서비스, 모든 역할 가능 */
 export interface ChangePasswordRequest {
   currentPassword: string;
@@ -131,6 +143,16 @@ export interface ChangePasswordRequest {
 /** 비밀번호 재설정 (TASK-0803) — ADMIN이 다른 사용자에게 새 비밀번호 지정 */
 export interface ResetPasswordRequest {
   newPassword: string;
+}
+
+/**
+ * 로그인 ID(이메일) 변경 (T1-215) — 본인 셀프 서비스, 모든 역할 가능.
+ * 현재 비밀번호 확인을 요구해 세션 탈취만으로는 로그인 ID를 바꿀 수
+ * 없게 한다(비밀번호 변경과 동일한 보호 수준).
+ */
+export interface ChangeEmailRequest {
+  currentPassword: string;
+  newEmail: string;
 }
 
 export interface GenerateContentRequest {
@@ -163,8 +185,16 @@ export interface ImageDto {
   groupVersion?: number | null;
   /** 재생성 시 선택한 방향(예: "더 고급스럽게") */
   style?: string | null;
-  /** 사용자가 이 카테고리의 최종 이미지로 직접 선택했는지 */
+  /** 사용자가 이 카테고리의 최종 이미지로 직접 선택했는지(자동 승격 포함) */
   selected?: boolean;
+  /**
+   * 이 `selected` 상태가 사람이 명시적으로 고정한 것인지 (T1-155). true면
+   * 사람이 select/select-original을 직접 호출한 것이라 더 새 생성이
+   * 성공해도 이 이미지의 selected 상태가 자동으로 바뀌지 않는다. false(또는
+   * 미지정, 이 필드가 생기기 전 기존 데이터)면 파이프라인이 스스로 정한
+   * 상태라 더 최신 생성이 검증을 통과하면 자동으로 대체될 수 있다.
+   */
+  locked?: boolean;
   /** 사진 유형 자동 분류 결과 — 업로드 직후 미분류 상태면 null(=DESIGN으로 취급) */
   photoType?: PhotoType | null;
 }
@@ -225,6 +255,21 @@ export interface GenerateImageCandidatesResult {
    * 채로 "생성 실패"라고만 뜨면 사람이 재시도할지 판단할 수 없다.
    */
   errors: string[];
+  /**
+   * 이번에 새로 생성된 각 후보가 자동으로 최종(selected) 이미지로
+   * 승격됐는지 (T1-155 — "최신 생성 결과 자동 승격, 선택 상태 단절
+   * 방지"). 사실과 평가를 구분해 보고한다(`docs/MASTER_GUIDE.md`) — 왜
+   * 승격됐는지/안 됐는지를 그대로 드러낸다.
+   *
+   * - `auto_selected`: 이 카테고리에 사람이 명시적으로 고정(locked)한
+   *   이미지가 없어 이 후보를 자동으로 최종 이미지로 승격했다.
+   * - `skipped_locked`: 사람이 이미 이 카테고리의 다른 이미지를
+   *   명시적으로 선택/고정해 두어 승격을 건너뛰었다 — 사람의 선택을
+   *   존중한다.
+   * - `skipped_validation_failed`: 생성 후 검증(`IMAGE_VALIDATION_ENABLED`)에서
+   *   글자 렌더링·정체성 위반이 재시도 후에도 발견돼 승격하지 않았다.
+   */
+  autoSelection: { imageId: string; status: "auto_selected" | "skipped_locked" | "skipped_validation_failed" }[];
 }
 
 export interface SelectImageRequest {
@@ -948,9 +993,18 @@ export interface ProductStorySectionDto {
   assignedImageId: string | null;
 }
 
+/** Master Creative Brief (T1-153) — 페이지 전체의 목적/타깃/핵심 메시지/감정선/시각 컨셉 */
+export interface ProductStoryMasterBriefDto {
+  targetAudience: string;
+  coreMessage: string;
+  emotionalArc: string;
+  visualConcept: string;
+}
+
 export interface ProductStoryDto {
   productName: string;
   narrativeSummary: string;
+  masterBrief: ProductStoryMasterBriefDto;
   sections: ProductStorySectionDto[];
 }
 
@@ -4360,4 +4414,93 @@ export interface ProjectCostDto {
   /** 이 숫자를 어떻게 읽어야 하는지 — 항상 붙는다 */
   caveat: string;
   checkedAt: string;
+}
+
+// ── Product Detail Engine LEVEL 1 (T1-188) ──────────────────────────
+//
+// 이전 STEP1 이후의 상세페이지 생성 파이프라인(ProductProfile 등)과는
+// 완전히 별개의 새 기반이다. 기존 ProductDto/ProjectListItemDto와 이름이
+// 겹치지 않도록 전부 "Level1" 접두사를 쓴다. LEVEL 1은 디자인·이미지
+// 생성 없이 "제품 사실 입력 + 사진 asset 보관"만 다룬다.
+
+export const LEVEL1_ASSET_ROLES = [
+  "ACTUAL_PRODUCT",
+  "PACKAGING",
+  "LABEL",
+  "SPEC",
+  "BARCODE",
+  "MANUAL",
+  "LIFESTYLE",
+  "UNKNOWN",
+] as const;
+
+export type Level1AssetRole = (typeof LEVEL1_ASSET_ROLES)[number];
+
+export interface Level1ProjectDto {
+  id: string;
+  name: string;
+  productCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateLevel1ProjectRequest {
+  name: string;
+}
+
+/** 확인된 제품 사실만 담는다 — 값이 없으면 null/빈 배열이며, 지어내지 않는다 */
+export interface Level1ProductDto {
+  id: string;
+  projectId: string;
+  name: string | null;
+  brand: string | null;
+  model: string | null;
+  category: string | null;
+  materials: string[];
+  colors: string[];
+  dimensions: string | null;
+  includedComponents: string[];
+  origin: string | null;
+  claims: string[];
+  source: string;
+  /** 값이 있어도 사람이 "확실하지 않다"고 표시한 필드 이름 */
+  uncertainFields: string[];
+  notes: string | null;
+  assetCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 생성/수정 공용 — 모든 필드는 선택이며, undefined는 "바꾸지 않음"을 뜻한다(PATCH) */
+export interface UpsertLevel1ProductRequest {
+  name?: string | null;
+  brand?: string | null;
+  model?: string | null;
+  category?: string | null;
+  materials?: string[];
+  colors?: string[];
+  dimensions?: string | null;
+  includedComponents?: string[];
+  origin?: string | null;
+  claims?: string[];
+  uncertainFields?: string[];
+  notes?: string | null;
+}
+
+export interface Level1AssetDto {
+  id: string;
+  productId: string;
+  objectKey: string;
+  originalName: string;
+  mimeType: string;
+  size: number;
+  role: Level1AssetRole;
+  roleSetBy: string | null;
+  roleSetAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UpdateLevel1AssetRoleRequest {
+  role: Level1AssetRole;
 }

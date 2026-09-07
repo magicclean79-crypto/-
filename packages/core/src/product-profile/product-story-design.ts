@@ -1,5 +1,6 @@
 import type { ProductStory, ProductStorySection } from "./product-story";
 import type { StoryIconId } from "./product-page-icons";
+import { buildStoryVisualTokens } from "./product-composition-art-direction";
 
 /**
  * Product Story — Visual/Design Director. (T1-97, 2026-08-12)
@@ -165,30 +166,53 @@ export const STORY_TYPOGRAPHY: StoryTypography = {
  * 아이콘(예: 금색 별)은 테이블에 없다.
  */
 /**
- * T1-147 — 승인된 시안 기준 색 방향(teal/blue + neutral)으로 통일한다.
- * 이전에는 레이아웃마다 서로 다른 색상군(amber/violet/slate 등)을 썼는데,
- * 페이지 전체를 스크롤했을 때 색이 산발적으로 바뀌어 "하나의 브랜드
- * 페이지"라는 일관성이 떨어졌다. 주의사항(notice)만은 의미상 경고색이
- * 필요해 예외로 유지한다 — 그 외 모든 레이아웃은 teal/blue 계열 안에서
- * 명도만 다르게 써서 섹션은 구분되되 색 언어는 하나로 유지한다.
+ * T1-163 — 밝은 premium editorial 팔레트로 갱신한다. T1-162는 다크 네이비
+ * 배경 위에서 대비가 살도록 밝은 톤(sky-400/teal-400 등)을 썼지만, 사용자가
+ * "화면이 너무 어둡다"고 판단해(T1-163 요청 원문) 페이지 배경 자체를
+ * warm/cool off-white로 되돌렸다 — 그러면 같은 accentColor 값이 두 자리에서
+ * 쓰이는 문제가 생긴다: ①커커/스펙 수치처럼 **밝은 페이지 배경 위 텍스트
+ * 색**으로 직접 쓰이는 자리(밝은 톤이면 대비 실패)와 ②step 번호·구성품
+ * 인덱스처럼 **accentColor를 채운 배지 배경 위에 `textOnAccent`(밝은
+ * 텍스트)를 얹는** 자리(어두운 톤이어야 밝은 글자가 읽힌다) — 이번 갱신은
+ * 모든 레이아웃의 accentColor를 600~700급의 진한 톤으로 통일해 두 자리
+ * 모두에서 WCAG 대비를 만족시킨다(product-story-html.ts의 관련 CSS도 함께
+ * 갱신). 색 계열(sky/teal/indigo/violet/amber) 자체는 T1-147·T1-162와
+ * 같은 계열을 유지한다 — "하나의 색 언어 안에서 명도만 다르게" 원칙은
+ * 그대로다. amber(notice)만 진한 톤에서도 노란기가 남아 대비가 약해
+ * amber-800 수준까지 더 낮춘다.
  */
+/** 다른 렌더러(product-story-html.ts·product-story-facts-panel.ts)와 공유하는 같은 계산 결과 — 셋 다 같은 순수 함수를 호출하므로 항상 동일하다 */
+export const STORY_VISUAL_TOKENS = buildStoryVisualTokens();
+
 const LAYOUT_VISUAL_TOKENS: Record<StoryLayoutVariant, { accentColor: string; icon: StoryIconId; kicker: string }> = {
-  notice: { accentColor: "#b45309", icon: "warning", kicker: "CAUTION" },
-  // spec-panel은 T1-126부터 어두운 full-bleed 밴드 위에 큰 숫자로 렌더링된다
-  // (product-story-html.ts) — 어두운 배경에서 대비가 살도록 밝은 색을 쓴다.
-  "spec-panel": { accentColor: "#38bdf8", icon: "spec", kicker: "SPEC" },
-  "step-by-step": { accentColor: "#0369a1", icon: "steps", kicker: "HOW TO" },
+  notice: { accentColor: "#92400e", icon: "warning", kicker: "CAUTION" },
+  // spec-panel은 밝은 오프화이트 패널(product-story-facts-panel.ts와 같은
+  // 톤) 위에 큰 숫자로 렌더링된다 — 밝은 배경에서 대비가 살도록 진한 색을 쓴다.
+  "spec-panel": { accentColor: "#0369a1", icon: "spec", kicker: "SPEC" },
+  "step-by-step": { accentColor: "#4338ca", icon: "steps", kicker: "HOW TO" },
   "feature-highlight": { accentColor: "#0f766e", icon: "check", kicker: "FEATURE" },
-  "problem-empathy": { accentColor: "#64748b", icon: "none", kicker: "" },
-  "detail-callout": { accentColor: "#155e75", icon: "info", kicker: "DETAIL" },
+  "problem-empathy": { accentColor: "#475569", icon: "none", kicker: "" },
+  "detail-callout": { accentColor: "#0e7490", icon: "info", kicker: "DETAIL" },
   // components-grid는 여러 구성품을 한 눈에 세는 화면이라(box 아이콘),
-  // detail-callout(단일 클로즈업)과는 다른 명도의 같은 blue 계열을 쓴다.
-  "components-grid": { accentColor: "#1d4ed8", icon: "box", kicker: "INCLUDED" },
-  "image-feature": { accentColor: "#0e7490", icon: "check", kicker: "FEATURE" },
+  // detail-callout(단일 클로즈업)과는 다른 명도의 같은 계열(violet)을 쓴다.
+  "components-grid": { accentColor: "#6d28d9", icon: "box", kicker: "INCLUDED" },
+  "image-feature": { accentColor: "#0f766e", icon: "check", kicker: "FEATURE" },
   "image-text": { accentColor: "#0f766e", icon: "none", kicker: "" },
-  "text-only": { accentColor: "#334155", icon: "none", kicker: "" },
-  closing: { accentColor: "#0f172a", icon: "none", kicker: "" },
+  "text-only": { accentColor: "#475569", icon: "none", kicker: "" },
+  closing: { accentColor: "#0369a1", icon: "none", kicker: "" },
 };
+
+/**
+ * lifestyle 무드(공간·분위기 중심)인지 실사용 동작(손잡이를 쥐고 뿌린다 등
+ * 구체적 동작 서술) 장면인지 — 둘 다 `imageRole:"USAGE_SCENE"`을 공유하는
+ * 카테고리라 이미지 자체로는 구분할 수 없다(T1-153 표준 11개 섹션의
+ * USAGE/LIFESTYLE이 같은 `ImageCategory`를 공유하는 것과 같은 제약,
+ * `product-composition-art-direction.ts`의 `NARRATIVE_ROLE_CATEGORY`
+ * 참고). LLM이 이미 쓴 purpose/keyMessage 문구에서만 판단한다 — 새 AI
+ * 호출·새 필드 없이 T1-156과 같은 방식(카테고리 우선, 키워드로 세분화)
+ * 으로 LIFESTYLE 켤레만 하나 더 나눈다.
+ */
+const LIFESTYLE_PATTERN = /라이프스타일|일상|분위기|무드|인테리어|공간/;
 
 const NOTICE_PATTERN = /주의사항|주의|경고|보증|A\/S|안전/;
 const SPEC_PATTERN = /사양|스펙|구성품?|규격|치수/;
@@ -288,24 +312,76 @@ function classifySection(
 }
 
 /**
+ * Design Director(T1-176)가 만든 제품별 override — 지정하지 않으면 기존
+ * baseline(`STORY_TYPOGRAPHY`·`LAYOUT_VISUAL_TOKENS`) 그대로다(회귀 없음).
+ * `resolveDesignProfile`(`design-profile.ts`)이 `typography`/`layoutAccent`를
+ * 채운다. `notice` 레이아웃은 이 override로도 바뀌지 않는다 — 경고색은
+ * 스타일과 무관하게 항상 고정이라는 결정(`design-profile.ts` 참고).
+ */
+export interface StoryDesignOverrides {
+  typography?: StoryTypography;
+  layoutAccent?: Partial<Record<StoryLayoutVariant, string>>;
+}
+
+/**
  * Story 전체의 Design Plan을 만든다. `renderProductStoryHtml`이 이 결과를
  * 받아 섹션마다 다른 마크업/CSS 클래스를 적용한다.
  */
-export function planStoryDesign(story: ProductStory): StoryDesignPlan {
+export function planStoryDesign(story: ProductStory, overrides?: StoryDesignOverrides): StoryDesignPlan {
   const total = story.sections.length;
   return {
-    typography: STORY_TYPOGRAPHY,
+    typography: overrides?.typography ?? STORY_TYPOGRAPHY,
     sections: story.sections.map((section, index) => {
       const isLastOfAtLeastThree = total >= 3 && index === total - 1;
       const { layout, reason } = classifySection(section, isLastOfAtLeastThree);
-      const { accentColor, icon, kicker } = LAYOUT_VISUAL_TOKENS[layout];
+      const base = LAYOUT_VISUAL_TOKENS[layout];
+      // T1-156 — FEATURE_HIGHLIGHT 사진 섹션과 USAGE_SCENE 사진 섹션은
+      // 둘 다 근거(productFacts)가 있으면 같은 "image-feature" 레이아웃으로
+      // 분류된다(classifySection). 그 결과 실제 benchmark 페이지에서
+      // "핵심 기능" 섹션과 "사용 장면" 섹션이 완전히 같은 teal 강조색·같은
+      // "FEATURE" kicker로 나란히 렌더링돼(CTO 실측 지적: 같은 효과가
+      // 기계적으로 반복됨), USAGE_SCENE 섹션에는 의미상 틀린 라벨("FEATURE")
+      // 까지 붙어 있었다. 레이아웃 구조(카드/근거 나열 방식) 자체는 이미
+      // 검증된 대로 유지하고(image-feature 렌더링을 그대로 재사용), Image
+      // Studio가 이미 검증한 카테고리(imageRole)를 근거로 강조색·kicker만
+      // 다시 배정한다 — 근거 없는 색을 새로 지어내지 않고, 페이지 전체가
+      // 공유하는 teal/blue 팔레트 안에서 이미 다른 레이아웃(spec-panel)이
+      // 쓰는 blue(#0369a1)를 "사용 장면"이라는 다른 의미에 재사용한다.
+      const isUsageScene = layout === "image-feature" && section.imageRole === "USAGE_SCENE";
+      const isLifestyleScene = isUsageScene && LIFESTYLE_PATTERN.test(`${section.purpose} ${section.keyMessage}`);
+      const isMislabeledUsageScene = isUsageScene && !isLifestyleScene;
+      // layoutAccent override(T1-176, DESIGN_PROFILE)가 있으면 그 layout의
+      // 기본색으로 쓴다 — LIFESTYLE/USAGE 재배정(T1-156/162)은 override
+      // 유무와 무관하게 항상 같은 우선순위로 적용된다(재배정 자체는 색
+      // 언어가 아니라 "이 섹션의 실제 의미"를 correct하는 별개의 로직).
+      const layoutBaseAccent = overrides?.layoutAccent?.[layout] ?? base.accentColor;
+      // T1-162 — LIFESTYLE은 USAGE와 같은 재배정 메커니즘(T1-156)을 하나
+      // 더 나눈 것이다. 근거 없는 색을 새로 지어내지 않고, 페이지가 이미
+      // 쓰는 팔레트 안에서만 구분한다 — T1-163에서 밝은 배경 대비를 위해
+      // pale tint를 진한 톤으로 교체했다. override가 있을 때는 그
+      // DESIGN_PROFILE의 components-grid/spec-panel 역할색(각각
+      // tertiaryColor/secondaryColor, `design-profile.ts`)을 재사용한다 —
+      // baseline과 정확히 같은 hex일 필요는 없다(제품마다 팔레트 자체가
+      // 다르므로), "이미 이 페이지가 쓰는 색 중 하나를 재사용한다"는
+      // 원칙만 유지한다.
+      const accentColor = isLifestyleScene
+        ? (overrides?.layoutAccent?.["components-grid"] ?? "#0d9488")
+        : isMislabeledUsageScene
+          ? (overrides?.layoutAccent?.["spec-panel"] ?? "#0369a1")
+          : layoutBaseAccent;
+      const kicker = isLifestyleScene ? "LIFESTYLE" : isMislabeledUsageScene ? "USAGE" : base.kicker;
+      const reassignNote = isLifestyleScene
+        ? " (T1-162 — USAGE_SCENE 카테고리 + lifestyle 어휘로 강조색/kicker 재배정)"
+        : isMislabeledUsageScene
+          ? " (T1-156 — USAGE_SCENE 카테고리로 강조색/kicker 재배정)"
+          : "";
       return {
         sectionId: section.sectionId,
         layout,
-        reason,
+        reason: `${reason}${reassignNote}`,
         toneIndex: (index % 2) as 0 | 1,
         accentColor,
-        icon,
+        icon: base.icon,
         kicker,
       };
     }),

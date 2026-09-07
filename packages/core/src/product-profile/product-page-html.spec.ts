@@ -46,13 +46,14 @@ describe("renderProductProfileHtml", () => {
     expect(html).toContain("물세척 가능");
   });
 
-  it("첫 사진을 Hero 배경으로 쓰고 나머지는 '이미지 갤러리' 섹션으로 보여준다", () => {
+  it("첫 사진을 Hero 배경으로 쓰고 나머지는 '추가 사진' 섹션으로 보여준다 — 내부 CMS 용어('이미지 갤러리')를 노출하지 않는다 (T1-111)", () => {
     const images = [photo("1"), photo("2"), photo("3")];
     const { html } = renderProductProfileHtml(profile, [], copy, images);
 
     expect(html).toContain("pde-hero--photo");
     expect(html).toContain(`data:image/jpeg;base64,${images[0].base64}`);
-    expect(html).toContain("이미지 갤러리");
+    expect(html).toContain("추가 사진");
+    expect(html).not.toContain("이미지 갤러리");
     expect(html).toContain("pde-gallery");
     expect(html).toContain(`data:image/jpeg;base64,${images[1].base64}`);
     expect(html).toContain(`data:image/jpeg;base64,${images[2].base64}`);
@@ -72,17 +73,28 @@ describe("renderProductProfileHtml", () => {
     expect(html).not.toContain("pde-gallery");
   });
 
-  it("상세 특징 카드마다 사진을 순환 배치한다 — 사진이 특징보다 적으면 재사용한다", () => {
+  it("특징 카드마다 서로 다른 사진을 하나씩만 짝짓는다 — 사진이 특징보다 적어도 같은 사진을 반복하지 않는다 (T1-93)", () => {
     const manyFeatures = {
       ...profile,
       features: ["특징A", "특징B", "특징C"],
     };
-    const images = [photo("1"), photo("2")];
+    // 첫 사진(images[0])은 Hero 배경으로 쓰이고, 나머지(images[1], images[2])가
+    // 특징 카드 후보다 — 특징이 3개인데 후보 사진은 2장뿐이라 특징C는 사진을
+    // 못 받는다.
+    const images = [photo("hero"), photo("1"), photo("2")];
     const { html } = renderProductProfileHtml(manyFeatures, [], copy, images);
 
-    // 사진 1장당 base64가 최소 2회(특징 3개를 사진 2장으로 순환) 나타난다
-    const firstPhotoOccurrences = html.split(images[0].base64).length - 1;
-    expect(firstPhotoOccurrences).toBeGreaterThanOrEqual(2);
+    // <img src="..."> 등장 횟수로 "몇 번 카드로 쓰였는지"를 센다(카드는
+    // href·src 둘 다에 같은 data URI를 쓰므로 base64 문자열 자체의 등장
+    // 횟수는 그 두 배가 된다 — 카드로 실제로 쓰인 횟수를 보려면 src 속성만
+    // 센다). 사진 2장이 각각 정확히 1장의 카드에만 쓰인다 — 같은 사진이
+    // 두 개 카드에 반복 등장하지 않는다(예전에는 순환 배치로 반복됐다).
+    const srcCount = (base64: string) =>
+      html.split(`src="data:image/jpeg;base64,${base64}"`).length - 1;
+    expect(srcCount(images[1].base64)).toBe(1);
+    expect(srcCount(images[2].base64)).toBe(1);
+    // 사진이 모자란 특징(특징C)은 사진 없이 텍스트만 보여준다
+    expect(html).toContain("특징C");
   });
 
   it("사진이 하나도 없으면 특징 카드는 체크 아이콘으로 대체된다", () => {
@@ -280,5 +292,47 @@ describe("생활용품 Template A~E (Sprint 36)", () => {
     expect(figure2).toBeLessThan(usageIdx);
     expect(usageIdx).toBeLessThan(specIdx);
     expect(html).not.toContain(">특징<");
+  });
+
+  it("living-a-trust는 특징 문구를 사진 카드(photoStory) 하나로만 보여주고, 별도 '특징' 목록으로 다시 나열하지 않는다 (T1-111 — 사진 카드·불릿 목록 중복 제거)", () => {
+    // copy.headline/description·profile의 다른 필드와 겹치지 않는 단어를
+    // 써야 한다 — 그래야 "몇 번 등장했는지"가 정확히 특징 카드에서만 온
+    // 값이 된다.
+    const twoPhotoProfile: ProductProfile = {
+      ...profile,
+      features: ["손잡이각도조절", "미끄럼방지"],
+    };
+    const { html } = renderProductProfileHtml(
+      twoPhotoProfile,
+      [],
+      copy,
+      [photo("hero"), photo("a"), photo("b")],
+      "living-a-trust",
+    );
+    // 사진 카드(figcaption)에 한 번만 나와야 한다 — 별도 '특징' 목록이
+    // 없으므로(living-d-proof와 같은 원칙) 전체 등장 횟수가 1회다.
+    expect(html.split("손잡이각도조절").length - 1).toBe(1);
+    expect(html.split("미끄럼방지").length - 1).toBe(1);
+    expect(html).not.toContain(">특징<");
+  });
+
+  it("living-a-trust는 사진이 없는 특징도 아이콘 카드로 한 번만 보여준다 — 사진 없다고 별도 텍스트 목록을 추가로 만들지 않는다", () => {
+    const moreFeaturesThanPhotos: ProductProfile = {
+      ...profile,
+      features: ["손잡이각도조절", "미끄럼방지"],
+    };
+    const { html } = renderProductProfileHtml(
+      moreFeaturesThanPhotos,
+      [],
+      copy,
+      [photo("hero"), photo("a")],
+      "living-a-trust",
+    );
+    // 사진 1장(photo("a"))은 첫 특징("손잡이각도조절")과 짝지어지고, 두
+    // 번째 특징("미끄럼방지")은 사진이 없어 아이콘 카드로 보여준다 — 두
+    // 경우 모두 별도 '특징' 목록에 다시 나오지 않는다.
+    expect(html).not.toContain(">특징<");
+    expect(html).toContain("pde-feature-stacked-icon");
+    expect(html.split("미끄럼방지").length - 1).toBe(1);
   });
 });

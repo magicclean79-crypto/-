@@ -126,3 +126,21 @@ export function crossVerifyProduct(input: {
 
   return { fields, hasConflict: fields.some((f) => f.status === "conflict") };
 }
+
+/**
+ * `crossVerifyProduct`가 확정한 brand/model을 Profile에 되돌려 적용한다 —
+ * 충돌(`conflict`)이거나 근거가 없으면(`unknown`) null로 남는다. STEP 5
+ * (카피·HTML 생성)가 STEP 4 원본이 아니라 이 결과만 근거로 삼아야 한다는
+ * 원칙(T1-24)을 `ProductProfileEngine`과 재렌더링 경로(T1-75, Image Studio
+ * 선택 이미지로 상세페이지를 다시 그릴 때) 양쪽이 똑같이 따르게 한다.
+ */
+export function applyCrossVerifiedProfile(
+  profile: ProductProfile,
+  crossVerification: CrossVerificationResult,
+): ProductProfile {
+  return {
+    ...profile,
+    brand: crossVerification.fields.find((f) => f.field === "brand")?.resolvedValue ?? null,
+    model: crossVerification.fields.find((f) => f.field === "model")?.resolvedValue ?? null,
+  };
+}

@@ -103,6 +103,31 @@ describe("buildProductFactsPanel", () => {
     expect(result!.html.match(/pde-facts-label">구성품</g)).toBeNull();
   });
 
+  it("specifications에 '원산지'/'제조국' 키가 있어도 원산지/제조국 행과 중복 표시하지 않는다(T1-162)", () => {
+    const result = buildProductFactsPanel(
+      baseInput({
+        profile: {
+          brand: null,
+          model: null,
+          material: null,
+          specifications: { 색상: "검정, 은색", 원산지: "중국", 제조국: "중국" },
+          features: [],
+          usage: null,
+          warnings: [],
+        },
+        identification: { origin: "한국" },
+        components: [],
+      }),
+    );
+    expect(result!.html).toContain("검정, 은색");
+    expect(result!.html).toContain('<span class="pde-facts-label">원산지/제조국</span>');
+    // 사양 표에는 "원산지/제조국" 전용 행만 한 번 있어야 하고, specifications의
+    // "원산지"·"제조국" 키가 별도 행으로 다시 나오면 안 된다.
+    expect(result!.html.match(/pde-facts-label">원산지\/제조국</g)).toHaveLength(1);
+    expect(result!.html).not.toContain('pde-facts-label">원산지</span>');
+    expect(result!.html).not.toContain('pde-facts-label">제조국</span>');
+  });
+
   it("HTML 특수문자를 이스케이프한다", () => {
     const result = buildProductFactsPanel(
       baseInput({

@@ -54,6 +54,17 @@ export interface StudioSelectedImage {
    * 사실로 기록한다.
    */
   autoTrimMarginRatio?: number | null;
+  /**
+   * 이 사진 자신의 테두리를 샘플링해 측정한 실제 배경색(T1-174, `rgb(r, g, b)`
+   * CSS 문자열) — `imageRole === "product-isolated"`인 사진에만 계산된다.
+   * 렌더러가 이 값이 있으면 `object-fit:contain` letterbox 프레임 배경을
+   * 고정 CSS 색 대신 이 값으로 채워, 사진 자체의 흰~뉴트럴 배경과 프레임
+   * 경계가 도드라지지 않게 한다("사진이 사각형처럼 보인다"는 문제).
+   * 이미지 픽셀은 바꾸지 않는다 — 프레임 CSS 배경색만 사진에 맞춘다.
+   * 선택 필드다 — 값이 없으면(측정 실패·lifestyle 사진·기존 테스트
+   * 픽스처) 기존 고정 프레임 색(`--pde-bg-image-frame`)을 그대로 쓴다.
+   */
+  frameBackgroundColor?: string | null;
 }
 
 /**

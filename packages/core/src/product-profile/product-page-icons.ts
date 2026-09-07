@@ -20,6 +20,11 @@
  * 따라 이 통일을 되돌렸다 — T1-165 시점에는 이 통일이 아직 없었다(T1-129
  * 백업 아카이브의 2026-08-13 파일에 `check` stroke-width=3으로 실측 확인,
  * `arrow`=2.5는 T1-166 자신의 작업 기록에 근거).
+ *
+ * T1-171이 FEATURE supporting facts용으로 `sliders`·`ruler`·`droplet` 3개를
+ * 추가했으나, T1-175가 그 FEATURE metadata row 자체를 T1-165 baseline(단순
+ * outline pill/card)으로 되돌리며 이 3개도 함께 제거했다 — 쓰는 곳이 없는
+ * 아이콘을 남겨 두지 않는다.
  */
 
 export const ICONS = {

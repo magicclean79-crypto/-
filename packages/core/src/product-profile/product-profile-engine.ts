@@ -11,7 +11,11 @@ import {
   type ImagePreprocessor,
 } from "../vision/image-guard";
 import type { VisionImageInput } from "../vision/vision-provider";
-import { crossVerifyProduct, type CrossVerificationResult } from "./cross-verification";
+import {
+  applyCrossVerifiedProfile,
+  crossVerifyProduct,
+  type CrossVerificationResult,
+} from "./cross-verification";
 import {
   parseImageFeatureAnalysisResponse,
   type ImageFeatureAnalysis,
@@ -19,7 +23,8 @@ import {
 } from "./image-feature-analysis";
 import { identifyProduct, type ProductIdentification } from "./product-identification";
 import { parseProductPageCopyResponse, type ProductPageCopyContext } from "./product-page-copy";
-import { renderProductProfileHtml } from "./product-page-html";
+import { renderProductProfileHtml, type ProductPageImage } from "./product-page-html";
+import { selectProductPageTemplate } from "./product-page-template-selection";
 import {
   parseProductProfileResponse,
   type ProductProfile,
@@ -55,6 +60,13 @@ export interface ProductProfileEngineInput {
   projectId?: string;
   /** STEP 5b HTML 렌더링에 쓸 템플릿 — 미지정 시 BASIC(기본형) */
   templateKey?: string;
+  /**
+   * 사용자 요구사항 기반 생성 (T1-92) — STEP 5a(상세페이지 카피) 프롬프트에
+   * 반영된다. Gemini 이미지 생성 쪽은 이 엔진을 거치지 않고
+   * `ProductPackage.userRequirement`를 통해 별도로 전달된다(apps/api
+   * image-gen.service.ts).
+   */
+  userRequirement?: string;
 }
 
 export interface ProductProfileEngineResult {
@@ -75,6 +87,14 @@ export interface ProductProfileEngineResult {
    */
   crossVerification: CrossVerificationResult;
   pageCopy: ProductPageCopy;
+  /**
+   * STEP 5b가 실제로 렌더링에 쓴 템플릿 키 (T1-77). `input.templateKey`를
+   * 호출자가 지정했으면 그 값 그대로, 지정하지 않았으면
+   * `selectProductPageTemplate`가 Product Profile 특성을 보고 자동으로
+   * 고른 값이다 — 어느 쪽이든 "실제로 무엇을 썼는지"가 항상 이 필드에
+   * 남는다(호출자가 값을 안 줬다고 조용히 기본값만 쓰고 사라지지 않는다).
+   */
+  templateKey: string;
   html: string;
   css: string;
   /** 사진 유형 자동 분류 결과(CTO 지시, 2026-08-08) — 어떤 원본 이미지 id가
@@ -197,9 +217,16 @@ export class ProductProfileEngine {
       imageId,
       photoType: imageFeatures.photoTypes[index] ?? "DESIGN",
     }));
-    const designImages = images.filter(
-      (_, index) => imageFeatures.photoTypes[index] !== "INFO",
-    );
+    // 이미지마다 STEP 3가 실제로 확인한 캡션(T1-93)을 붙여서 넘긴다 —
+    // STEP 5b(HTML)가 이 캡션으로 그 사진 옆에 어떤 설명을 둘지 정한다
+    // (product-page-html.ts pairFeatureTextsWithImages). 인덱스는 STEP 3에
+    // 첨부된 `images` 순서와 그대로 대응한다.
+    const designImages: ProductPageImage[] = images
+      .map((image, index) => ({
+        ...image,
+        caption: imageFeatures.photoCaptions[index] ?? null,
+      }))
+      .filter((_, index) => imageFeatures.photoTypes[index] !== "INFO");
 
     // STEP 4 — Product Profile 통합 (텍스트 전용, 이미지 재첨부 없음)
     const synthesisContext: ProductProfileSynthesisContext = {
@@ -230,16 +257,13 @@ export class ProductProfileEngine {
       visionText: JSON.stringify(imageFeatures),
     });
     const crossVerification = crossVerifyProduct({ identification, profile });
-    const verifiedProfile: ProductProfile = {
-      ...profile,
-      brand:
-        crossVerification.fields.find((f) => f.field === "brand")?.resolvedValue ?? null,
-      model:
-        crossVerification.fields.find((f) => f.field === "model")?.resolvedValue ?? null,
-    };
+    const verifiedProfile: ProductProfile = applyCrossVerifiedProfile(profile, crossVerification);
 
     // STEP 5a — 상세페이지 카피 생성 (텍스트 전용, 교차 검증된 Profile만 근거)
-    const copyContext: ProductPageCopyContext = { profile: verifiedProfile };
+    const copyContext: ProductPageCopyContext = {
+      profile: verifiedProfile,
+      userRequirement: input.userRequirement,
+    };
     const copyMessages = this.options.promptEngine.render(
       PRODUCT_PAGE_COPY_TEMPLATE_KEY,
       copyContext,
@@ -259,12 +283,20 @@ export class ProductProfileEngine {
     // 되려면 STEP 3이 분석한 그 사진이 STEP 5의 결과물에도 보여야 한다.
     // 단, INFO로 분류된 사진(라벨/스펙표 등)은 여기서 제외한다 — 상세페이지에
     // 실제로 쓸 사진이 아니다. brand/model은 여기서도 교차 검증된 값을 쓴다.
+    // 템플릿 키 — 호출자가 지정했으면 그대로 쓰고, 지정하지 않았으면
+    // Product Profile 특성(기능성/감성형·효과 주장·스펙 복잡도)으로
+    // 자동 선택한다(T1-77, `reports/DETAIL_PAGE_TEMPLATE_SELECTION_
+    // DESIGN.md`). 근거는 `verifiedProfile`(교차 검증 통과분)만 본다 —
+    // 미검증 `profile`을 분류에 쓰지 않는다.
+    const templateKey =
+      input.templateKey ?? selectProductPageTemplate(verifiedProfile).templateKey;
+
     const { html, css } = renderProductProfileHtml(
       verifiedProfile,
       imageFeatures.components,
       pageCopy,
       designImages,
-      input.templateKey,
+      templateKey,
     );
 
     return {
@@ -273,6 +305,7 @@ export class ProductProfileEngine {
       identification,
       crossVerification,
       pageCopy,
+      templateKey,
       html,
       css,
       photoTypeByImageId,

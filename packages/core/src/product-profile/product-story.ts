@@ -53,10 +53,45 @@ export interface ProductStorySection {
   transitionToNext: string;
 }
 
+/**
+ * Master Creative Brief (T1-153). Story Planner가 섹션별 카피를 만들기
+ * 전에 먼저 "이 페이지 전체가 무엇을 위한 것인가"를 결정한 결과 — ChatGPT가
+ * 상세페이지를 직접 만들 때 가장 먼저 하는 일(전체 목적/타깃/핵심
+ * 메시지/감정선/시각적 컨셉 결정)을 이 파이프라인의 데이터로 못 박는다.
+ *
+ * `narrativeSummary`(기존, 서사 요약 한 문단)와는 역할이 다르다 —
+ * `narrativeSummary`는 "무슨 이야기를 하는가"이고 `masterBrief`는
+ * "누구에게, 어떤 한 문장으로, 어떤 감정 흐름과 시각 언어로" 전달할지에
+ * 대한 상위 결정이다. 이 값은 각 섹션의 Composition Contract
+ * (`product-composition-art-direction.ts`의 `masterCreativeBrief` 옵션)로
+ * 그대로 전달되어, 개별 섹션이 페이지 전체의 결정에서 벗어나지 않게 한다.
+ *
+ * 필드는 항상 존재한다(LLM이 응답에서 빠뜨리면 빈 문자열로 채워진다) —
+ * 없는 값을 지어내 채우지 않는다는 원칙과 같은 이유로, "모른다"를 표현할
+ * 방법은 빈 문자열이지 그럴듯한 문장을 만들어 채우는 것이 아니다.
+ */
+export interface ProductStoryMasterBrief {
+  /** 이 상세페이지가 설득하려는 대상(예: "베란다 청소를 자주 하는 30~40대") */
+  targetAudience: string;
+  /** 페이지 전체를 관통하는 단 하나의 핵심 메시지(카피 문구 형태) */
+  coreMessage: string;
+  /** 섹션을 거치며 고객의 감정이 어떻게 이동하는지(예: "불편함 인지 → 해결 기대 → 신뢰 → 확신") */
+  emotionalArc: string;
+  /** 페이지 전체가 공유해야 할 시각적 컨셉 한 문장(톤·무드·스타일 방향) */
+  visualConcept: string;
+}
+
 export interface ProductStory {
   productName: string;
   /** 이 제품의 스토리를 한 문단으로 요약 — "왜 필요한가 → ... → 구매 전 확인" 흐름 전체 */
   narrativeSummary: string;
+  /**
+   * 페이지 전체의 목적/타깃/핵심 메시지/감정선/시각적 컨셉 (T1-153).
+   * 선택 필드다 — `parseProductStoryResponse`를 거친 실제 생성 경로는
+   * 항상 채워 주지만, 이 타입을 직접 구성하는 기존 테스트 픽스처·호출부가
+   * 전부 이 필드를 알 필요는 없다(하위 호환).
+   */
+  masterBrief?: ProductStoryMasterBrief;
   sections: ProductStorySection[];
 }
 
@@ -158,6 +193,17 @@ export function parseProductStoryResponse(
       "Product Story에 productName·narrativeSummary·sections(1개 이상)가 모두 있어야 합니다.",
     );
   }
+  // Master Creative Brief (T1-153) — LLM이 빠뜨려도 파싱 자체는 실패시키지
+  // 않는다(구조적 안전성 우선, 값이 비어 있으면 품질 점검(product-story-quality.ts)이
+  // 별도로 신호를 준다). 없는 값을 지어내 채우지 않고 빈 문자열로 남긴다.
+  const rawBrief = record.masterBrief;
+  const briefRecord = typeof rawBrief === "object" && rawBrief !== null ? (rawBrief as Record<string, unknown>) : {};
+  const masterBrief: ProductStoryMasterBrief = {
+    targetAudience: asString(briefRecord.targetAudience),
+    coreMessage: asString(briefRecord.coreMessage),
+    emotionalArc: asString(briefRecord.emotionalArc),
+    visualConcept: asString(briefRecord.visualConcept),
+  };
 
   const availableSet = new Set<string>(availableCategories);
   const sections: ProductStorySection[] = rawSections.map((raw, index) => {
@@ -192,7 +238,7 @@ export function parseProductStoryResponse(
     };
   });
 
-  return { productName, narrativeSummary, sections };
+  return { productName, narrativeSummary, masterBrief, sections };
 }
 
 /** Story Section 하나에 실제로 배정된 이미지 */

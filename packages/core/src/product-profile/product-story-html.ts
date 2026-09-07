@@ -2,10 +2,13 @@ import type { ProductStory } from "./product-story";
 import type { AssignedStorySection } from "./product-story";
 import type { StudioSelectedImage } from "./product-page-images";
 import { planStoryDesign, type SectionDesignSpec, type StoryDesignPlan } from "./product-story-design";
-import { iconMarkup, type StoryIconId } from "./product-page-icons";
+import type { StoryIconId } from "./product-page-icons";
 import type { AuxiliaryVisualAsset } from "./product-story-auxiliary-visual";
 import type { GenerativeVisualAsset } from "./product-story-generative-visuals";
 import { buildStoryVisualTokens } from "./product-composition-art-direction";
+import type { IconFamilyId, ResolvedComposition, ResolvedDesignProfile } from "./design-profile";
+import { resolveComposition } from "./design-profile";
+import { familyIconMarkup } from "./icon-family-registry";
 
 /**
  * Product Story → HTML/CSS 렌더러. (T1-94, 2026-08-12 / T1-97, Design Spec 반영
@@ -37,13 +40,20 @@ import { buildStoryVisualTokens } from "./product-composition-art-direction";
  *   실제 제품 사진이 없는 섹션에만, 실제 제품 사진을 대체하지 않는
  *   자리에만 배치한다. `data-visual-source="gemini-auxiliary"`로 실제
  *   제품 사진과 DOM에서 구분되게 표시한다.
- * - **생성형 아이콘/Hero 모티프**(`generativeVisuals`, 선택적, T1-142):
- *   `product-story-generative-visuals.ts`가 계획하고 Gemini가 실제로
- *   만든 아이콘/모티프 자산. 있으면 기존 인라인 SVG 아이콘·순수 CSS
- *   배경 대신 이 생성형 자산을 쓴다 — **없으면(생성 실패·imageGen 미연결
- *   등) 기존 SVG/CSS로 graceful하게 되돌아간다**(요청 사양 그대로 —
- *   생성형 자산은 향상이지 필수 의존성이 아니다). `data-icon-source`로
- *   생성형/기본 아이콘을 DOM에서 구분한다.
+ * - **아이콘**(T1-177): DESIGN_PROFILE.iconStyle(`design-profile.ts`)이 고른
+ *   family가 `icon-family-registry.ts`의 canonical SVG 중 어떤 것을 쓸지
+ *   100% 결정한다 — profile이 없으면 `technical-outline`(기존 baseline)을
+ *   쓴다. `product-story-generative-visuals.ts`가 계획하고 Gemini가 만드는
+ *   생성형 아이콘 자산(T1-142, `generativeVisuals.icons`)은 **더 이상 최종
+ *   HTML에 주입되지 않는다** — DESIGN_PROFILE이 우회당하지 않도록, 임의의
+ *   AI 생성 이미지 대신 항상 registry의 canonical SVG만 렌더링한다(요청
+ *   사양 "AI가 arbitrary SVG를 생성하는 구조는 허용하지 않는다"). 생성 자체는
+ *   호출자(`product-profile.service.ts`)가 감사·리포트 목적으로 계속 시도할
+ *   수 있지만, 이 렌더러는 그 결과를 읽지 않는다.
+ * - **Hero 모티프**(`generativeVisuals.heroMotif`, 선택적, T1-142): 아이콘과
+ *   달리 특정 의미를 가진 UI 요소가 아니라 장식용 배경 그래픽이라 이
+ *   가드레일 대상이 아니다 — 있으면 쓰고, 없으면(생성 실패·imageGen
+ *   미연결 등) 아무것도 그리지 않는다(graceful fallback).
  * - **kicker 라벨**: 레이아웃 의미를 나타내는 짧은 영문 라벨(SPEC·STEP 등,
  *   `product-story-design.ts`의 `LAYOUT_VISUAL_TOKENS.kicker`) — 이미지가
  *   아니라 accent 폰트로 렌더링되는 순수 텍스트다. 근거 없는 레이아웃에는
@@ -57,6 +67,34 @@ function escapeHtml(value: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+/**
+ * DESIGN_PROFILE의 iconStyle(T1-176/T1-177)을 canonical SVG 아이콘에
+ * 적용한다. 아이콘 registry(`icon-family-registry.ts`)의 path data 자체는
+ * 절대 바꾸지 않는다 — stroke-width/stroke-linecap/stroke-linejoin/width/
+ * height 속성만 치환한다("icon family는 현재 프로젝트의 SVG icon
+ * registry에서만 선택한다" 요청 사양). `data-icon-source="design-profile-
+ * svg"` 뱃지 안의 SVG만 대상으로 하는 것은 호출부(`applyIconStyleToHtml`)가
+ * 보장한다.
+ */
+function applyIconStyleAttrs(svg: string, style: { strokeWidth: number; size: number; linecap: "round" | "square"; linejoin: "round" | "miter" }): string {
+  return svg
+    .replace(/stroke-width="[\d.]+"/g, `stroke-width="${style.strokeWidth}"`)
+    .replace(/width="\d+" height="\d+"/, `width="${style.size}" height="${style.size}"`)
+    .replace(/stroke-linecap="(round|square|butt)"/g, `stroke-linecap="${style.linecap}"`)
+    .replace(/stroke-linejoin="(round|miter|bevel)"/g, `stroke-linejoin="${style.linejoin}"`);
+}
+
+/** `sectionsHtml` 전체에서 DESIGN_PROFILE canonical SVG 아이콘 뱃지를 골라 스타일을 적용한다 */
+function applyIconStyleToHtml(
+  html: string,
+  style: { strokeWidth: number; size: number; linecap: "round" | "square"; linejoin: "round" | "miter" },
+): string {
+  return html.replace(
+    /(<span class="pde-story-icon" data-icon-source="design-profile-svg" aria-hidden="true">)([\s\S]*?)(<\/span>)/g,
+    (_match, open: string, svg: string, close: string) => `${open}${applyIconStyleAttrs(svg, style)}${close}`,
+  );
 }
 
 function dataUri(image: StudioSelectedImage): string {
@@ -92,11 +130,40 @@ function assetDataAttrs(image: StudioSelectedImage, sectionId: string, purpose: 
 }
 
 /**
+ * Canonical image frame registry (T1-183) — hero/split/gallery가 쓸 수
+ * 있는 종횡비는 `design-profile.ts`의 enum(`HERO_ASPECTS`/`SPLIT_ASPECTS`/
+ * `GALLERY_CELL_ASPECTS`)으로만 제한된다. 이 함수는 그 enum 문자열을
+ * CSS `aspect-ratio` 값으로 결정적으로 변환할 뿐, 새 값을 만들지 않는다 —
+ * registry의 유일한 출처는 여전히 `design-profile.ts`다.
+ */
+const FRAME_ASPECT_CSS: Record<string, string> = {
+  "16:9": "16 / 9",
+  "4:3": "4 / 3",
+  "4:5": "4 / 5",
+  square: "1 / 1",
+};
+function frameAspectCss(id: string): string {
+  return FRAME_ASPECT_CSS[id] ?? "4 / 3";
+}
+
+/**
  * 대표 이미지 외에 같은 섹션에 함께 붙는 추가 사진들 — 구성품 전부·디테일
  * 여러 컷처럼 "한 장으로는 부족한" 카테고리에서 쓴다(T1-144). 대표 이미지와
  * 같은 zoom 링크·asset 속성을 갖되, 더 작은 썸네일 그리드로 렌더링된다.
+ *
+ * T1-183 — 셀마다 auto-height로 제각각 크기이던 것을, composition의
+ * canonical gallery 종횡비/열 수(`ResolvedComposition.gallery`)로 통일한다
+ * (요청 사양 "모든 이미지가 동일한 canonical cell geometry를 따르도록,
+ * 이미지별 독립 auto-height 금지"). object-fit:contain은 그대로 유지해
+ * 실제 asset 비율은 crop하지 않는다 — 셀 "박스"만 통일하고 그 안의 이미지는
+ * 잘리지 않는다.
  */
-function galleryStrip(images: StudioSelectedImage[], sectionId: string, purpose: string): string {
+function galleryStrip(
+  images: StudioSelectedImage[],
+  sectionId: string,
+  purpose: string,
+  composition: ResolvedComposition,
+): string {
   if (images.length === 0) return "";
   const items = images
     .map(
@@ -107,7 +174,66 @@ function galleryStrip(images: StudioSelectedImage[], sectionId: string, purpose:
         )}</li>`,
     )
     .join("");
-  return `<ul class="pde-story-gallery-strip" data-gallery-count="${images.length}">${items}</ul>`;
+  const cellAspect = frameAspectCss(composition.gallery.cellAspect);
+  return `<ul class="pde-story-gallery-strip" data-gallery-count="${images.length}" style="--pde-gallery-cell-aspect:${cellAspect};--pde-gallery-columns:${composition.gallery.columns};">${items}</ul>`;
+}
+
+/**
+ * Hero 제품 사진 선택 (T1-183). **근본 원인**: T1-173이 페이지 최상단
+ * 전용 HERO 블록 자체를 렌더러에서 제거했다 — HERO 카테고리 이미지는
+ * 여전히 Image Studio에서 검증되고 Story 섹션에도 정상 배정되지만, 그
+ * 이후로는 다른 섹션과 완전히 동일하게만 보여 "이 사진이 대표 사진"이라는
+ * 표시가 페이지 어디에도 남지 않았다. 이 함수는 새 이미지를 만들거나
+ * 임의로 고르지 않는다 — Image Studio에서 사람이 이미 선택(검증)한 실제
+ * 제품 사진(`StudioSelectedImage`) 중에서만, 아래 우선순위로 고른다.
+ *
+ * 1) Story 섹션의 `imageRole`(카테고리)이 "HERO"로 배정된 대표 이미지 —
+ *    단, asset-level `image.imageRole`(T1-166, `product-page-images.ts`)이
+ *    "lifestyle"(사용 장면 연출)이면 제외한다.
+ * 2) 그 외 대표 이미지 중 asset-level이 "lifestyle"이 아닌(=고립형 실제
+ *    제품 사진) 것을 카테고리 우선순위(HERO > FEATURE_HIGHLIGHT > DETAIL >
+ *    OTHER > COMPONENTS)로 고른다. OCR/포장/사양표 사진은 애초에
+ *    `StudioSelectedImage` 목록에 들어오지 않는다(호출자가 이미 제외,
+ *    `product-story.ts` 상단 주석).
+ *
+ * 둘 다 없으면 `null` — 이 렌더러의 안전한 fallback은 "hero 블록 자체를
+ * 그리지 않는다"이지, 검증되지 않은 사진을 대신 쓰는 것이 아니다.
+ */
+const HERO_FALLBACK_CATEGORY_PRIORITY = ["HERO", "FEATURE_HIGHLIGHT", "DETAIL", "OTHER", "COMPONENTS"];
+
+function selectHeroImage(assignedSections: AssignedStorySection[]): StudioSelectedImage | null {
+  const heroAssignment = assignedSections.find(
+    (item) => item.section.imageRole === "HERO" && item.image && item.image.imageRole !== "lifestyle",
+  );
+  if (heroAssignment?.image) return heroAssignment.image;
+
+  const verifiedByCategory = new Map<string, StudioSelectedImage>();
+  for (const item of assignedSections) {
+    if (!item.image || item.image.imageRole === "lifestyle") continue;
+    if (!verifiedByCategory.has(item.image.category)) {
+      verifiedByCategory.set(item.image.category, item.image);
+    }
+  }
+  for (const category of HERO_FALLBACK_CATEGORY_PRIORITY) {
+    const candidate = verifiedByCategory.get(category);
+    if (candidate) return candidate;
+  }
+  return null;
+}
+
+/** 위 4개(최대) feature를 icon+label 리스트 마크업으로 렌더링한다(T1-183) — pill 남발 금지, 아이콘+짧은 텍스트 한 줄뿐이다 */
+function heroFeatureListHtml(
+  features: { icon: Exclude<StoryIconId, "none">; label: string }[],
+  iconFamily: IconFamilyId,
+): string {
+  if (features.length === 0) return "";
+  const items = features
+    .map(
+      (item) =>
+        `<li class="pde-story-hero-feature"><span class="pde-story-icon" data-icon-source="design-profile-svg" aria-hidden="true">${familyIconMarkup(iconFamily, item.icon)}</span><span class="pde-story-hero-feature-label">${escapeHtml(item.label)}</span></li>`,
+    )
+    .join("");
+  return `<ul class="pde-story-hero-features">${items}</ul>`;
 }
 
 export interface ProductStoryHtmlResult {
@@ -115,7 +241,14 @@ export interface ProductStoryHtmlResult {
   css: string;
 }
 
-/** 생성형 아이콘/Hero 모티프 자산을 렌더러가 쓰기 좋은 형태로 묶은 것 (T1-142) */
+/**
+ * 생성형 아이콘/Hero 모티프 자산을 렌더러가 쓰기 좋은 형태로 묶은 것 (T1-142).
+ * T1-177 — `icons`는 더 이상 이 렌더러가 DOM에 그리는 데 쓰이지 않는다
+ * (`renderProductStoryHtml`은 이 필드를 읽지 않는다) — 아이콘은 항상
+ * DESIGN_PROFILE.iconStyle.family가 고른 canonical SVG로 그려진다. 호출자
+ * (`product-profile.service.ts`)가 감사/리포트 목적으로 계속 채워 넘길 수
+ * 있으므로 타입은 유지한다.
+ */
 export interface GenerativeVisualBundle {
   icons: Partial<Record<StoryIconId, GenerativeVisualAsset>>;
   heroMotif: GenerativeVisualAsset | null;
@@ -178,17 +311,15 @@ function componentsGrid(facts: string[]): string {
 
 /**
  * 레이아웃별 아이콘 배지 — icon이 "none"이면 아무것도 그리지 않는다(장식용
- * 아이콘 없음, T1-112). 생성형 아이콘 자산이 있으면 그것을(`<img>`), 없으면
- * 기존 인라인 SVG를 쓴다(T1-142 graceful fallback — 생성 실패가 섹션 전체를
- * 막지 않는다).
+ * 아이콘 없음, T1-112). T1-177 — DESIGN_PROFILE.iconStyle.family가 고른
+ * canonical SVG(`icon-family-registry.ts`)만 렌더링한다. 생성형 아이콘
+ * (T1-142)은 더 이상 이 자리에 주입되지 않는다 — DESIGN_PROFILE의 최종
+ * 결정권을 임의의 AI 생성 이미지가 우회하지 못하게 하기 위한 의도적 변경
+ * (요청 사양 "최종 HTML에 arbitrary generated SVG를 주입하지 않는다").
  */
-function iconBadge(design: SectionDesignSpec, generativeIcons: Partial<Record<StoryIconId, GenerativeVisualAsset>>): string {
+function iconBadge(design: SectionDesignSpec, iconFamily: IconFamilyId): string {
   if (design.icon === "none") return "";
-  const generated = generativeIcons[design.icon];
-  if (generated) {
-    return `<span class="pde-story-icon pde-story-icon--gen" data-icon-source="gemini-generative-design" aria-hidden="true"><img src="${generativeAssetDataUri(generated)}" alt="" loading="lazy"></span>`;
-  }
-  return `<span class="pde-story-icon" data-icon-source="fallback-svg" aria-hidden="true">${iconMarkup(design.icon)}</span>`;
+  return `<span class="pde-story-icon" data-icon-source="design-profile-svg" aria-hidden="true">${familyIconMarkup(iconFamily, design.icon)}</span>`;
 }
 
 /**
@@ -247,19 +378,18 @@ function renderSection(
   index: number,
   design: SectionDesignSpec,
   auxiliaryVisual: AuxiliaryVisualAsset | undefined,
-  hideMedia: boolean,
-  generativeIcons: Partial<Record<StoryIconId, GenerativeVisualAsset>>,
+  iconFamily: IconFamilyId,
+  composition: ResolvedComposition,
 ): string {
   const { section, image } = item;
   const kicker = kickerLabel(design, index);
-  // `image`는 이 섹션에 실제로 배정된 사진(있는지 여부)을 나타낸다 —
-  // 보조 그래픽 억제(aux)는 이 값을 기준으로 판단해야 한다("실제 제품
-  // 사진이 있는 섹션에는 보조 그래픽을 그리지 않는다"). `hideMedia`는
-  // 그 사진이 Hero로 이미 쓰여 본문에서만 중복 표시를 생략하는
-  // 별개의 렌더링 결정이다 — 이 둘을 섞으면 Hero로 쓰인 섹션에
-  // 실제 사진이 있는데도 보조 그래픽이 잘못 그려진다(T1-118 실측
-  // 회귀: 두 값을 하나의 `image: null`로 합쳤다가 발견).
-  const showMedia = Boolean(image) && !hideMedia;
+  // T1-173 — 이 섹션에 배정된 사진은 항상 그린다. HERO가 있던 시절에는
+  // 첫 이미지가 Hero에도 쓰여 본문에서 중복 표시를 생략했지만(hideMedia),
+  // HERO 자체를 없앤 지금은 숨길 이유가 없다 — 그대로 두면 그 섹션의
+  // 실제 제품 사진이 페이지 어디에도 나타나지 않게 된다("다른 섹션에서
+  // 사용되는 실제 제품 이미지와 asset selection은 유지한다"는 요청
+  // 사양과 배치된다).
+  const showMedia = Boolean(image);
   const media =
     showMedia && image
       ? zoomLink(
@@ -276,7 +406,9 @@ function renderSection(
   // 밀도·"제품 더보기 섹션 금지"(남은 이미지를 섹션 갤러리로 흡수하는
   // 대신 숨기지 않는다) 요청 사양에 맞다.
   const gallery =
-    (item.gallery ?? []).length > 0 ? galleryStrip(item.gallery ?? [], section.sectionId, design.layout) : "";
+    (item.gallery ?? []).length > 0
+      ? galleryStrip(item.gallery ?? [], section.sectionId, design.layout, composition)
+      : "";
   const aux = image ? "" : auxiliaryVisualLayer(auxiliaryVisual);
   const toneClass = design.toneIndex === 1 ? " pde-story-section--tone-b" : "";
   const layoutClass = `pde-story-section--${design.layout}`;
@@ -289,7 +421,7 @@ function renderSection(
       return `${wrapOpen}
   <div class="pde-story-notice">
     ${kicker}
-    <p class="pde-story-notice-label">${iconBadge(design, generativeIcons)}확인해주세요</p>
+    <p class="pde-story-notice-label">${iconBadge(design, iconFamily)}확인해주세요</p>
     <p class="pde-story-copy">${escapeHtml(section.copy)}</p>
     ${section.productFacts.length > 0 ? factList(section.productFacts, false) : ""}
   </div>
@@ -299,7 +431,7 @@ ${wrapClose}`;
       return `${wrapOpen}
   <div class="pde-story-spec">
     ${kicker}
-    <p class="pde-story-key-message">${iconBadge(design, generativeIcons)}${escapeHtml(section.keyMessage)}</p>
+    <p class="pde-story-key-message">${iconBadge(design, iconFamily)}${escapeHtml(section.keyMessage)}</p>
     ${section.productFacts.length > 0 ? specFactGrid(section.productFacts) : ""}
     <p class="pde-story-copy">${escapeHtml(section.copy)}</p>
   </div>
@@ -308,14 +440,14 @@ ${wrapClose}`;
     case "step-by-step":
       return `${wrapOpen}
   ${kicker}
-  <p class="pde-story-copy pde-story-copy--intro">${iconBadge(design, generativeIcons)}${escapeHtml(section.copy)}</p>
+  <p class="pde-story-copy pde-story-copy--intro">${iconBadge(design, iconFamily)}${escapeHtml(section.copy)}</p>
   ${factList(section.productFacts, true)}
 ${wrapClose}`;
 
     case "feature-highlight":
       return `${wrapOpen}
   ${kicker}
-  <p class="pde-story-key-message">${iconBadge(design, generativeIcons)}${highlightHeadline(section.keyMessage)}</p>
+  <p class="pde-story-key-message">${iconBadge(design, iconFamily)}${highlightHeadline(section.keyMessage)}</p>
   ${factList(section.productFacts, false)}
   <p class="pde-story-copy">${escapeHtml(section.copy)}</p>
 ${wrapClose}`;
@@ -332,20 +464,27 @@ ${wrapClose}`;
       return `${wrapOpen}
   <figure class="${figureClass}">
     ${media}
-    <figcaption>${kicker}<p class="pde-story-copy pde-story-copy--caption">${iconBadge(design, generativeIcons)}${escapeHtml(section.copy)}</p></figcaption>
+    <figcaption>${kicker}<p class="pde-story-copy pde-story-copy--caption">${iconBadge(design, iconFamily)}${escapeHtml(section.copy)}</p></figcaption>
   </figure>
   ${gallery}
 ${wrapClose}`;
     }
 
     case "components-grid": {
-      const figureClass = showMedia ? "pde-story-figure pde-story-figure--split" : "pde-story-figure pde-story-figure--text-only";
+      // T1-183이 계산만 해 두고 연결하지 않았던 composition.includedGrid를
+      // 여기서 실제로 반영한다(T1-185) — "stacked"는 데스크톱에서도 좌우
+      // 분할 grid를 적용하지 않는 별도 클래스라 사진이 전체 폭으로 위에,
+      // 정보가 아래에 쌓인다. "info-left-image-right"는 기존 split 레이아웃
+      // 그대로 유지한다(회귀 없음).
+      const splitVariant =
+        composition.includedGrid === "stacked" ? "pde-story-figure--stacked" : "pde-story-figure--split";
+      const figureClass = showMedia ? `pde-story-figure ${splitVariant}` : "pde-story-figure pde-story-figure--text-only";
       return `${wrapOpen}
   <figure class="${figureClass}">
     ${media}
     <figcaption>
       ${kicker}
-      <p class="pde-story-key-message">${iconBadge(design, generativeIcons)}${escapeHtml(section.keyMessage)}</p>
+      <p class="pde-story-key-message">${iconBadge(design, iconFamily)}${escapeHtml(section.keyMessage)}</p>
       <p class="pde-story-copy">${escapeHtml(section.copy)}</p>
       ${section.productFacts.length > 0 ? componentsGrid(section.productFacts) : ""}
     </figcaption>
@@ -361,7 +500,7 @@ ${wrapClose}`;
     ${media}
     <figcaption>
       ${kicker}
-      <p class="pde-story-key-message">${iconBadge(design, generativeIcons)}${highlightHeadline(section.keyMessage)}</p>
+      <p class="pde-story-key-message">${iconBadge(design, iconFamily)}${highlightHeadline(section.keyMessage)}</p>
       <p class="pde-story-copy">${escapeHtml(section.copy)}</p>
       ${section.productFacts.length > 0 ? factList(section.productFacts, false) : ""}
     </figcaption>
@@ -376,7 +515,7 @@ ${wrapClose}`;
   <figure class="${figureClass}">
     ${media}
     <figcaption>
-      <p class="pde-story-key-message">${iconBadge(design, generativeIcons)}${escapeHtml(section.keyMessage)}</p>
+      <p class="pde-story-key-message">${iconBadge(design, iconFamily)}${escapeHtml(section.keyMessage)}</p>
       <p class="pde-story-copy">${escapeHtml(section.copy)}</p>
     </figcaption>
   </figure>
@@ -388,7 +527,7 @@ ${wrapClose}`;
       return `${wrapOpen}
   <div class="pde-story-closing">
     ${showMedia ? `<div class="pde-story-closing-media">${media}</div>` : ""}
-    <p class="pde-story-closing-message">${iconBadge(design, generativeIcons)}${escapeHtml(section.keyMessage)}</p>
+    <p class="pde-story-closing-message">${iconBadge(design, iconFamily)}${escapeHtml(section.keyMessage)}</p>
     <p class="pde-story-copy pde-story-copy--closing">${escapeHtml(section.copy)}</p>
   </div>
 ${wrapClose}`;
@@ -400,7 +539,7 @@ ${wrapClose}`;
   <figure class="${figureClass}">
     ${media}
     <figcaption>
-      <p class="pde-story-key-message">${iconBadge(design, generativeIcons)}${escapeHtml(section.keyMessage)}</p>
+      <p class="pde-story-key-message">${iconBadge(design, iconFamily)}${escapeHtml(section.keyMessage)}</p>
       <p class="pde-story-copy">${escapeHtml(section.copy)}</p>
     </figcaption>
   </figure>
@@ -410,55 +549,9 @@ ${wrapClose}`;
 }
 
 /**
- * 이 섹션 헤드라인 아래에 붙는 최대 2개의 "premium feature row" 카드.
- * (T1-147, T1-162에서 레퍼런스 시안 기준 카드 스타일로 개편)
- *
- * 승인된 ChatGPT 레퍼런스 시안의 Hero는 "왼쪽 대형 제품 이미지, 오른쪽
- * 텍스트+기능 카드" 구조이고, 텍스트 쪽에는 원형 아이콘·화살표
- * affordance가 있는 카드 2개가 있다(요청 사양 "2개의 premium feature
- * rows/cards"). 새 아이콘을 지어내지 않는다 — 이미 각 Story Section에
- * 결정적으로 배정된 아이콘(`design.icon`)과 그 섹션의 실제 헤드라인
- * (`keyMessage`, LLM이 이미 검증된 사실로 쓴 짧은 카피)만 재사용한다.
- * 주의사항(notice)·마무리(closing)는 "핵심 기능" 성격이 아니라서 뺀다.
- * 화살표(→)는 사실을 나타내지 않는 순수 구조적 affordance라 Unicode
- * 문자가 아니라 `product-page-icons.ts`의 SVG(`arrow`)를 쓴다.
- *
- * T1-164 — 카드마다 "POINT 01"/"POINT 02" 작은 blue eyebrow 라벨을
- * 카드 안에 추가한다(레퍼런스 시안 요청 사양). 지어낸 값이 아니라 이
- * 카드가 이미 갖고 있는 순서(`items`의 인덱스, 최대 2개)를 그대로
- * 번호로 보여줄 뿐이다 — `kickerLabel`이 섹션 순서 번호를 재사용하는
- * 것과 같은 원칙.
- */
-function heroFeatureRow(
-  assignedSections: AssignedStorySection[],
-  designBySectionId: Map<string, SectionDesignSpec>,
-  generativeIcons: Partial<Record<StoryIconId, GenerativeVisualAsset>>,
-): string {
-  const items = assignedSections
-    .map((item) => {
-      const design = designBySectionId.get(item.section.sectionId);
-      return design ? { section: item.section, design } : null;
-    })
-    .filter(
-      (entry): entry is { section: AssignedStorySection["section"]; design: SectionDesignSpec } =>
-        entry !== null && entry.design.icon !== "none" && entry.design.layout !== "notice" && entry.design.layout !== "closing",
-    )
-    .slice(0, 2);
-  if (items.length === 0) return "";
-  const chips = items
-    .map(({ section, design }, index) => {
-      const point = `POINT ${String(index + 1).padStart(2, "0")}`;
-      return `<li class="pde-hero-feature" style="--pde-story-accent:${design.accentColor};">${iconBadge(design, generativeIcons)}<span class="pde-hero-feature-body"><span class="pde-hero-feature-point">${point}</span><span class="pde-hero-feature-label">${escapeHtml(section.keyMessage)}</span></span><span class="pde-hero-feature-arrow" aria-hidden="true">${iconMarkup("arrow")}</span></li>`;
-    })
-    .join("");
-  return `<ul class="pde-hero-features" data-feature-count="${items.length}">${chips}</ul>`;
-}
-
-/**
  * Product Story를 하나의 `.pde-page` fragment로 렌더링한다.
- * `productName`은 Hero 타이틀에, `narrativeSummary`는 부제(headline
- * 자리)로 쓴다 — 기존 렌더러의 Hero 개념과 자리를 맞춰 다른 템플릿과
- * 섞여도 위화감이 없게 한다.
+ * T1-173 — HERO 블록을 제거했으므로 `narrativeSummary`가 페이지 맨 위에서
+ * 시작하는 첫 카피가 된다(story-summary 밴드).
  */
 export function renderProductStoryHtml(
   story: ProductStory,
@@ -466,6 +559,14 @@ export function renderProductStoryHtml(
   designPlan?: StoryDesignPlan,
   auxiliaryVisuals?: AuxiliaryVisualAsset[],
   generativeVisuals?: GenerativeVisualBundle,
+  /**
+   * Design Director(T1-176)가 만든 제품별 DESIGN_PROFILE — 지정하지
+   * 않으면(undefined/null) 기존 baseline 그대로 렌더링한다(회귀 없음).
+   * 유효성 검증은 호출자(`apps/api/src/product-profile/
+   * product-profile.service.ts`)가 이미 마쳤다는 전제다 — 이 함수는 그
+   * 결과를 신뢰하고 토큰만 소비한다(원시 CSS/HTML을 받지 않는다).
+   */
+  visualProfile?: ResolvedDesignProfile | null,
 ): ProductStoryHtmlResult {
   const plan = designPlan ?? planStoryDesign(story);
   // Master Art Direction Contract에서 파생된 HTML 디자인 토큰(T1-162,
@@ -474,43 +575,43 @@ export function renderProductStoryHtml(
   // panel.ts`도 같은 함수를 불러 항상 같은 값을 얻는다(단일 출처, 문서
   // 순서에 의존하는 CSS 변수 cascade가 아니라 각자 리터럴 값을 갖는다 —
   // 두 조각이 문서에서 어떤 순서로 합쳐지든 항상 같은 색이 나온다).
-  const tokens = buildStoryVisualTokens();
+  // visualProfile이 있으면 그 tokens override만 얹는다(T1-176) — 없으면
+  // 기존과 완전히 같은 baseline 값이다.
+  const tokens = buildStoryVisualTokens(undefined, visualProfile?.tokens);
+  // T1-183 — composition family가 없으면(캐시가 T1-183 이전에 만들어졌거나,
+  // visualProfile 자체가 없는 기존 baseline 호출) 안전한 기본값
+  // (editorial-brochure)으로 처리한다 — `resolveComposition`이 그 fallback을
+  // 갖고 있다(design-profile.ts).
+  const composition = visualProfile?.composition ?? resolveComposition(null);
+  const alignClass = composition.headlineAlignment === "left" ? "pde-story-align-left" : "pde-story-align-center";
+  const motifOpacity = visualProfile ? visualProfile.motif.opacity : 0.06;
+  const motifBackgroundImage =
+    visualProfile && visualProfile.motif.family !== "none"
+      ? `${visualProfile.motif.backgroundImage.replace(/currentColor/g, `rgba(248, 250, 252, ${motifOpacity})`)}, linear-gradient(160deg, #0f172a 0%, #111c34 100%)`
+      : visualProfile
+        ? "linear-gradient(160deg, #0f172a 0%, #111c34 100%)"
+        : "radial-gradient(rgba(248, 250, 252, 0.06) 1px, transparent 1px), linear-gradient(160deg, #0f172a 0%, #111c34 100%)";
   const designBySectionId = new Map(plan.sections.map((s) => [s.sectionId, s]));
   const auxiliaryBySectionId = new Map((auxiliaryVisuals ?? []).map((asset) => [asset.sectionId, asset]));
-  const generativeIcons = generativeVisuals?.icons ?? {};
+  // T1-177 — 아이콘 family는 DESIGN_PROFILE이 결정한다. profile이 없으면
+  // 기존 baseline과 동일한 technical-outline을 쓴다(회귀 없음).
+  // `generativeVisuals?.icons`(T1-142)는 더 이상 여기서 읽지 않는다 —
+  // 렌더링은 항상 canonical registry만 쓴다(`iconBadge` 참고).
+  const iconFamily: IconFamilyId = visualProfile?.icon.family ?? "technical-outline";
   const heroMotif = generativeVisuals?.heroMotif ?? null;
-  // Hero 모티프(있으면)는 요청 사양 2 "재사용 가능한 디자인 토큰"에 따라
-  // Hero 배경 뒤 + Story 요약 밴드 구분선, 두 자리에 같은 자산을 재사용한다
-  // — 새 자산을 더 만들지 않고 하나를 여러 곳에 쓴다.
-  const heroMotifLayerHtml = heroMotif
-    ? `<span class="pde-hero-motif" data-visual-source="gemini-generative-design" style="background-image:url('${generativeAssetDataUri(heroMotif)}')" aria-hidden="true"></span>`
-    : "";
+  // T1-173 — HERO 자체가 없어져 이 모티프는 이제 story-summary 구분선
+  // 한 자리에만 쓰인다(예전에는 Hero 배경에도 재사용했다).
   const summaryMotifLayerHtml = heroMotif
     ? `<span class="pde-story-summary-motif" data-visual-source="gemini-generative-design" style="background-image:url('${generativeAssetDataUri(heroMotif)}')" aria-hidden="true"></span>`
     : "";
 
-  const heroSourceItem = assignedSections.find((item) => item.image) ?? null;
-  const heroImage = heroSourceItem?.image ?? null;
-  // Hero 서브헤드라인 — 첫 섹션의 keyMessage(짧은 카피 헤드라인, T1-126 프롬프트
-  // 개정으로 짧아짐)를 그대로 쓴다. narrativeSummary는 문단 요약이라 Hero에
-  // 쓰면 다시 "설명문"이 되므로 쓰지 않고, 아래 story-summary 밴드에 별도로
-  // 한 번만 표시한다(중복 노출 금지).
-  const heroSubheadline = assignedSections[0]?.section.keyMessage.trim() ?? "";
-  const heroSubheadlineHtml = heroSubheadline
-    ? `<p class="pde-hero-subheadline">${escapeHtml(heroSubheadline)}</p>`
-    : "";
-  const heroAssetAttrs = heroImage && heroSourceItem ? assetDataAttrs(heroImage, heroSourceItem.section.sectionId, "hero") : "";
-  // HERO split layout(T1-147) — 왼쪽 텍스트+핵심 기능 아이콘, 오른쪽 대형
-  // 제품 이미지. 승인된 레퍼런스 시안 기준. 사진이 없는 경우(fallback)는
-  // 기존처럼 가운데 정렬 텍스트 Hero를 그대로 쓴다 — 보여줄 이미지가
-  // 없는데 split 레이아웃을 강제하면 오른쪽이 빈 채로 남아 더 어색하다.
-  const heroFeaturesHtml = heroFeatureRow(assignedSections, designBySectionId, generativeIcons);
-  const heroBlock = heroImage
-    ? `<header class="pde-hero pde-hero--photo">${heroMotifLayerHtml}<div class="pde-hero-grid"><div class="pde-hero-media">${zoomLink(
-        heroImage,
-        `<img src="${dataUri(heroImage)}" alt="${escapeHtml(story.productName)}" ${heroAssetAttrs}>`,
-      )}</div><div class="pde-hero-text"><h1>${highlightHeadline(story.productName)}</h1>${heroSubheadlineHtml}${heroFeaturesHtml}</div></div></header>`
-    : `<header class="pde-hero">${heroMotifLayerHtml}<h1>${escapeHtml(story.productName)}</h1>${heroSubheadlineHtml}${heroFeaturesHtml}</header>`;
+  // T1-173 — HERO 블록(짙은 배경 카드 + 중앙 제품 사진 패널 + 헤드라인/카피)을
+  // 프로그램 렌더러에서 제거한다(사용자 명시 지시). 새 대체 비주얼을 만들지
+  // 않고, 기존 HERO가 차지하던 자리를 그냥 비운다 — 아래 story-summary부터
+  // 시작한다. HERO가 있던 시절에는 대표 이미지를 그 자리에 크게 보여주고
+  // 원래 배정된 섹션 본문에서는 중복 표시를 생략했다(hideMedia) — HERO
+  // 자체가 없어졌으니 그 사진은 이제 원래 배정된 섹션 본문에서 정상적으로
+  // 보여준다(renderSection이 모든 섹션을 동일하게 처리한다).
 
   const sectionsHtml = assignedSections
     .map((item, index) => {
@@ -526,20 +627,65 @@ export function renderProductStoryHtml(
         icon: "none" as const,
         kicker: "",
       };
-      // Hero가 이미 그 사진을 크게 보여주므로, 같은 이미지를 원래 배정된
-      // 섹션 본문에서 또 반복하지 않는다 — "상단 gallery와 본문에 같은
-      // 이미지를 중복 배치하지 않는다"(T1-118 요청 사양). 그 섹션에 실제
-      // 사진이 배정돼 있다는 사실 자체는 그대로 유지해(보조 그래픽이
-      // 잘못 끼어들지 않도록) 화면 표시만 생략한다.
-      const hideMedia = Boolean(heroImage) && item.image?.imageId === heroImage?.imageId;
-      return renderSection(item, index, design, auxiliaryBySectionId.get(item.section.sectionId), hideMedia, generativeIcons);
+      return renderSection(
+        item,
+        index,
+        design,
+        auxiliaryBySectionId.get(item.section.sectionId),
+        iconFamily,
+        composition,
+      );
     })
     .join("");
 
+  // T1-182 — story-summary를 "제품명 + 핵심 메시지 + 서사 요약"의 editorial
+  // hierarchy로 재구성한다(요청 사양 1 "제목/핵심 숫자/짧은 value
+  // proposition의 hierarchy를 명확히 한다"). `story.masterBrief.coreMessage`는
+  // Story Planner(T1-153)가 이미 만들어 저장해 두고도 지금까지 어떤
+  // HTML에도 쓰이지 않던 실제 데이터다(지어내지 않음) — 없으면(구
+  // fixture·masterBrief 미생성 경로) 조용히 생략한다.
+  //
+  // T1-183 — 위 T1-182 hierarchy에 "제품이 화면 주인공으로 크게 보이는
+  // hero 사진 + feature icon row 4개"를 더한다(레퍼런스 요청 사양). T1-173이
+  // 걱정했던 "본문 섹션과 사진 중복"은 여기서 재현되지 않는다 —
+  // `selectHeroImage`가 고른 사진은 그 사진이 배정된 섹션에서도 여전히
+  // 보여준다(레퍼런스 시안 자체가 hero와 본문 갤러리에 같은 계열의 제품
+  // 사진을 반복해서 크게 쓰는 editorial-brochure 관행을 따른다) — 회귀
+  // 테스트가 금지하는 것은 "HERO가 있던 시절의 hideMedia 중복 억제 로직"
+  // 재도입이지, 사진 자체의 중복 등장이 아니다.
+  const heroImage = selectHeroImage(assignedSections);
+  const heroMediaHtml = heroImage
+    ? `<div class="pde-story-hero-media" data-hero-aspect="${composition.hero.aspect}" style="--pde-hero-aspect:${frameAspectCss(composition.hero.aspect)};">${zoomLink(
+        heroImage,
+        `<img src="${dataUri(heroImage)}" alt="${escapeHtml(story.productName)}" ${assetDataAttrs(heroImage, "hero", "hero")}>`,
+      )}</div>`
+    : "";
+  const heroFeatures: { icon: Exclude<StoryIconId, "none">; label: string }[] = [];
+  for (const section of story.sections) {
+    if (heroFeatures.length >= 4) break;
+    const design = designBySectionId.get(section.sectionId);
+    if (!design || design.icon === "none" || !section.keyMessage) continue;
+    heroFeatures.push({ icon: design.icon, label: section.keyMessage });
+  }
+  const heroFeaturesHtml = heroImage ? heroFeatureListHtml(heroFeatures, iconFamily) : "";
+
+  const summaryTagline = story.masterBrief?.coreMessage
+    ? `<p class="pde-story-summary-tagline">${highlightHeadline(story.masterBrief.coreMessage)}</p>`
+    : "";
+  const summaryHtml = [
+    `<div class="pde-story-summary ${alignClass}${heroImage ? " pde-story-summary--hero" : ""}">`,
+    heroMediaHtml,
+    summaryMotifLayerHtml,
+    `<h1 class="pde-story-summary-name">${escapeHtml(story.productName)}</h1>`,
+    summaryTagline,
+    `<p class="pde-story-summary-narrative">${escapeHtml(story.narrativeSummary)}</p>`,
+    heroFeaturesHtml,
+    "</div>",
+  ].join("");
+
   const html = [
     '<div class="pde-page pde-page--story">',
-    heroBlock,
-    `<div class="pde-story-summary">${summaryMotifLayerHtml}<p>${escapeHtml(story.narrativeSummary)}</p></div>`,
+    summaryHtml,
     '<div class="pde-story-flow">',
     sectionsHtml,
     "</div>",
@@ -569,6 +715,9 @@ export function renderProductStoryHtml(
   --pde-font-emphasis: ${plan.typography.emphasis};
   --pde-font-number: ${plan.typography.numeric};
   --pde-font-accent: ${plan.typography.accent};
+  --pde-heading-weight: ${visualProfile?.typographyDetail.headingWeight ?? 700};
+  --pde-heading-letter-spacing: ${visualProfile?.typographyDetail.letterSpacing ?? "-0.01em"};
+  --pde-heading-line-height: ${visualProfile?.typographyDetail.lineHeight ?? "1.5"};
   --pde-bg-page: ${tokens.pageBackground};
   --pde-bg-surface-a: ${tokens.surfaceBackgroundA};
   --pde-bg-surface-b: ${tokens.surfaceBackgroundB};
@@ -589,6 +738,8 @@ export function renderProductStoryHtml(
   --pde-shadow-card: ${tokens.shadowCard};
   --pde-shadow-glow: ${tokens.shadowGlow};
   --pde-icon-border: ${tokens.iconBadgeBorder};
+  --pde-section-spacing: ${composition.sectionSpacingPx}px;
+  --pde-text-measure: ${composition.maxTextMeasureCh}ch;
   max-width: 980px;
   margin: 0 auto;
   background: var(--pde-bg-page);
@@ -601,191 +752,21 @@ export function renderProductStoryHtml(
   border-radius: var(--pde-radius-xl);
 }
 
-/* -- Hero: 이미지가 없을 때(fallback)만 쓰는 가운데 정렬 텍스트 Hero -- */
-.pde-page--story .pde-hero {
-  position: relative;
-  padding: 96px 24px;
-  text-align: center;
-  background: var(--pde-bg-page);
-  color: var(--pde-text-primary);
-}
-.pde-page--story .pde-hero h1 {
-  margin: 0;
-  font-family: var(--pde-font-display);
-  font-size: clamp(34px, 10vw, 60px);
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  line-height: 1.1;
-}
-.pde-page--story .pde-hero-subheadline {
-  margin: 18px 0 0;
-  font-family: var(--pde-font-emphasis);
-  font-size: clamp(16px, 3.4vw, 21px);
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.9);
-  letter-spacing: -0.01em;
-}
-/* -- 생성형 Hero 타이포그래피 모티프: 헤드라인 뒤에 은은하게 깔리는 브러시/스월 그래픽(T1-142) --
-   T1-163: 페이지 배경이 밝아지면서 screen blend는 밝은 색을 더 밝게(거의
-   투명하게) 만들어 버려 모티프가 사실상 안 보인다 — 밝은 배경 위에서
-   자연스럽게 어우러지는 multiply로 바꾸고, 낮은 opacity로 "은은하게"를
-   유지한다. -- */
-.pde-page--story .pde-hero-motif {
-  position: absolute;
-  inset: 0;
-  background-repeat: no-repeat;
-  background-position: center;
-  background-size: contain;
-  opacity: 0.14;
-  mix-blend-mode: multiply;
-  pointer-events: none;
-  z-index: 0;
-}
-.pde-page--story .pde-hero > h1,
-.pde-page--story .pde-hero > .pde-hero-subheadline,
-.pde-page--story .pde-hero > .pde-hero-features {
-  position: relative;
-  z-index: 1;
-}
-
-/* -- HERO split(T1-147): 왼쪽 텍스트+핵심 기능 아이콘, 오른쪽 대형 제품
-   이미지 — 승인된 레퍼런스 시안 기준. 모바일에서는 이미지를 위, 텍스트를
-   아래로 세로 스택한다(제품이 페이지의 주인공이라는 원칙은 그대로 유지
-   하되, 좁은 화면에서 좌우 분할은 각각의 폭이 너무 좁아져 읽기 어렵다). -- */
-.pde-page--story .pde-hero--photo {
-  padding: 0;
-  text-align: left;
-  background: var(--pde-bg-page);
-  color: var(--pde-text-primary);
-}
-.pde-page--story .pde-hero-grid {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  flex-direction: column;
-}
-/* -- HERO 제품 사진: contain + letterbox 프레임(T1-162) — 레퍼런스
-   시안이 요구한 "제품이 잘리지 않는 안전 crop"을 CSS만으로 보장한다.
-   기존 object-fit:cover는 프레임 비율과 실제 사진 비율이 다르면 제품
-   본체를 그대로 잘라낼 수 있었다(완료 기준 "제품 사진이 잘리지
-   않는다"). contain은 절대 자르지 않는 대신 남는 여백이 생기는데, 그
-   여백을 페이지 배경과 같은 계열의 그라디언트(--pde-bg-image-frame)로
-   채워 "빈 여백"이 아니라 "의도된 프레임"처럼 보이게 한다 — 새 이미지
-   생성 없이(비용 없음) 기존 asset 그대로 안전하게 담는다. -- */
-/* T1-165 — box-sizing:border-box를 명시한다. .pde-hero-media(패딩 0)와
-   .pde-hero-text(패딩 64px, 아래)는 데스크톱에서 flex-basis 58%/42%로
-   폭을 나눠 갖는데, box-sizing이 기본값(content-box)이면 .pde-hero-text의
-   padding 128px가 42% 몫 위에 추가로 더해져 두 컬럼의 실제 차지 폭 합이
-   컨테이너보다 커지고, flex-shrink가 두 컬럼을 함께 줄여 이미지가 58%
-   보다 훨씬 좁게(약 50%) 렌더링되는 원인이었다(실측: 980px 컨테이너에서
-   이미지 컬럼이 494px로 축소). border-box로 통일하면 58%/42%가 padding을
-   포함한 실제 차지 폭을 뜻하게 되어 그대로 유지된다. */
-.pde-page--story .pde-hero-media {
-  order: -1;
-  padding: 0;
-  background: var(--pde-bg-image-frame);
-  box-sizing: border-box;
-}
-.pde-page--story .pde-hero-media > a {
-  display: block;
-  border-radius: var(--pde-radius-md);
-  overflow: hidden;
-}
-/* T1-165 — 프레임 padding을 없애고, 컨테이너 높이를 이미지 실제 비율에
-   맞춰 동적으로 계산한다(height:auto) — 이전의 고정 height/min-height는
-   contain fit과 만나 실제 사진 비율과 다를 때 위아래에 큰 빈 여백
-   (letterbox)을 만들었다. max-height는 극단적으로 세로가 긴 사진에 대한
-   안전장치일 뿐, 일반적인 사진에서는 자연 비율 그대로 꽉 찬다. crop 0은
-   그대로 유지된다(object-fit:contain). */
-.pde-page--story .pde-hero-media img {
-  display: block;
-  width: 100%;
-  height: auto;
-  max-height: 70vh;
-  object-fit: contain;
-  background: var(--pde-bg-image-frame);
-}
-.pde-page--story .pde-hero-text {
-  padding: 40px 24px 48px;
-  box-sizing: border-box;
-}
-.pde-page--story .pde-hero--photo h1 {
-  font-family: var(--pde-font-display);
-  font-size: clamp(28px, 8vw, 46px);
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  line-height: 1.15;
-  color: var(--pde-text-primary);
-}
-/* T1-164 — 헤드라인 전체가 아니라 마지막 핵심 어절만 gradient accent로
-   강조한다(지원하지 않는 브라우저는 --pde-text-primary가 그대로 보이는
-   안전한 fallback). feature-highlight/image-feature 섹션의 핵심 카피
-   헤드라인도 같은 규칙을 공유한다. */
+/* T1-173 — HERO 블록(header 및 그 하위 요소 전체)을 프로그램 렌더러에서
+   제거했다(사용자 명시 지시). 그 마크업만 쓰던 CSS도 더 이상 어떤
+   엘리먼트에도 매칭되지 않으므로 함께 지운다 — 죽은 CSS를 남겨 두지
+   않는다. story-headline-accent(구 T1-164)만은 예외로 남긴다 —
+   feature-highlight/image-feature 섹션의 헤드라인 강조가 지금도 이
+   규칙을 그대로 쓴다(아래, HERO와 무관하게 계속 쓰이므로 T1-173 범위인
+   "FEATURE 이하는 건드리지 않는다"에 따라 유지한다). */
 .pde-page--story .pde-story-headline-accent {
   background: var(--pde-accent-gradient);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
 }
-.pde-page--story .pde-hero--photo .pde-hero-subheadline {
-  color: var(--pde-text-secondary);
-}
-/* -- premium feature row 카드(T1-162) — 원형 아이콘+glow, 얇은 border, 화살표 affordance -- */
-.pde-page--story .pde-hero-features {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  margin: 32px 0 0;
-  padding: 0;
-  list-style: none;
-}
-.pde-page--story .pde-hero-feature {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  padding: 20px 22px;
-  border: 1px solid var(--pde-border);
-  border-radius: var(--pde-radius-lg);
-  background: var(--pde-bg-panel);
-  box-shadow: var(--pde-shadow-card);
-}
-.pde-page--story .pde-hero-feature .pde-story-icon {
-  margin-right: 0;
-  flex: none;
-  width: 44px;
-  height: 44px;
-  box-shadow: var(--pde-shadow-glow);
-}
-/* T1-164 — "POINT 01/02" eyebrow 라벨 + 굵은 제목 2단 구성(레퍼런스 시안 요청 사양) */
-.pde-page--story .pde-hero-feature-body {
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.pde-page--story .pde-hero-feature-point {
-  font-family: var(--pde-font-accent);
-  font-size: 11px;
-  font-weight: 700;
-  font-style: italic;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--pde-story-accent, #2563eb);
-}
-.pde-page--story .pde-hero-feature-label {
-  font-family: var(--pde-font-emphasis);
-  font-size: 16px;
-  font-weight: 800;
-  line-height: 1.4;
-  color: var(--pde-text-primary);
-}
-.pde-page--story .pde-hero-feature-arrow {
-  flex: none;
-  display: inline-flex;
-  color: var(--pde-story-accent, #94a3b8);
-}
 
-/* -- 아이콘 배지: 기본은 인라인 SVG, 생성형 아이콘 자산이 있으면 --gen 변형(T1-142) -- */
+/* -- 아이콘 배지: DESIGN_PROFILE.iconStyle.family가 고른 canonical SVG(T1-177) -- */
 .pde-page--story .pde-story-icon {
   display: inline-flex;
   align-items: center;
@@ -798,26 +779,6 @@ export function renderProductStoryHtml(
   color: var(--pde-story-accent, #94a3b8);
   background: color-mix(in srgb, var(--pde-story-accent, #94a3b8) 22%, var(--pde-bg-panel));
   vertical-align: -7px;
-}
-.pde-page--story .pde-story-icon--gen {
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  overflow: hidden;
-  background: color-mix(in srgb, var(--pde-story-accent, #94a3b8) 16%, var(--pde-bg-panel));
-}
-.pde-page--story .pde-story-icon--gen img {
-  width: 100%;
-  height: 100%;
-  /* object-fit:contain 인 채로 padding까지 있으면, gpt-image-2가 만드는
-     아이콘 이미지는 항상 불투명 배경(투명 PNG 미지원 모델, T1-156 실측 —
-     colorType=2/RGB, 알파 채널 없음)이라 원형 배지 안에서 이미지 자신의
-     사각형 배경 모서리가 그대로 드러나 "깨진 아이콘"처럼 보였다.
-     object-fit:cover + 부모 overflow:hidden으로 원 안을 이미지로 완전히
-     채우고 남는 사각형 모서리를 원형으로 잘라낸다 — 새 이미지 생성 없이
-     기존 자산 그대로 깨끗한 원형 배지로 보이게 한다. */
-  object-fit: cover;
-  border-radius: 0;
 }
 
 /* -- kicker 라벨: 레이아웃 의미를 나타내는 짧은 영문 accent 텍스트(이미지 아님, T1-142) --
@@ -884,17 +845,45 @@ export function renderProductStoryHtml(
   text-align: center;
   background: var(--pde-bg-surface-b);
 }
-.pde-page--story .pde-story-summary p {
+/* T1-182 — 제목(productName)·핵심 메시지(masterBrief.coreMessage)·서사
+   요약(narrativeSummary) 세 역할을 각각 다른 타이포 톤으로 분리한다
+   (요청 사양 5 "heading/body/meta/numeric의 역할을 분리한다"). 제목이
+   가장 크고 무겁고, 태그라인은 accent 강조가 실린 중간 크기, 서사
+   요약은 보조 설명으로 가장 절제된 크기다. */
+.pde-page--story .pde-story-summary-name {
+  position: relative;
+  z-index: 1;
+  margin: 0 auto 14px;
+  max-width: 22ch;
+  font-family: var(--pde-font-display);
+  font-size: clamp(28px, 6vw, 40px);
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  color: var(--pde-text-primary);
+}
+.pde-page--story .pde-story-summary-tagline {
+  position: relative;
+  z-index: 1;
+  margin: 0 auto 20px;
+  max-width: 26ch;
+  font-family: var(--pde-font-emphasis);
+  font-size: clamp(18px, 3.6vw, 22px);
+  font-weight: var(--pde-heading-weight);
+  line-height: var(--pde-heading-line-height);
+  letter-spacing: var(--pde-heading-letter-spacing);
+  color: var(--pde-text-primary);
+}
+.pde-page--story .pde-story-summary-narrative {
   position: relative;
   z-index: 1;
   margin: 0 auto;
-  max-width: 30ch;
-  font-family: var(--pde-font-emphasis);
-  font-size: clamp(21px, 5vw, 27px);
-  font-weight: 700;
-  line-height: 1.5;
-  letter-spacing: -0.01em;
-  color: var(--pde-text-primary);
+  max-width: 34ch;
+  font-family: var(--pde-font-body);
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.7;
+  color: var(--pde-text-secondary);
   white-space: pre-wrap;
 }
 /* Hero와 같은 생성형 모티프 자산을 재사용하는 구분선 액센트(T1-142 — "재사용 가능한 디자인 토큰") */
@@ -909,6 +898,85 @@ export function renderProductStoryHtml(
   z-index: 0;
 }
 
+/* -- T1-183 헤드라인 정렬 유틸: composition.headlineAlignment(editorial
+   left 중심, 레퍼런스 사양 "한국어 heading 과도한 중앙정렬 금지")를 클래스로
+   적용한다. -pde-story-summary-name/tagline/narrative는 기본이
+   margin:0 auto(중앙)라 left일 때는 margin을 0으로 되돌린다. -- */
+.pde-page--story .pde-story-summary.pde-story-align-left {
+  text-align: left;
+}
+.pde-page--story .pde-story-summary.pde-story-align-left .pde-story-summary-name,
+.pde-page--story .pde-story-summary.pde-story-align-left .pde-story-summary-tagline,
+.pde-page--story .pde-story-summary.pde-story-align-left .pde-story-summary-narrative {
+  margin-left: 0;
+  margin-right: 0;
+  max-width: var(--pde-text-measure, 34ch);
+}
+
+/* -- T1-183 hero: 페이지 최상단에 실제 검증된 제품 사진을 크게 보여준다
+   (근본 원인: T1-173이 이 블록 자체를 제거했었다 — 이번 요청 사양은 다시
+   요구한다). navy 블록/도트 그리드가 아니라 story-summary와 같은 밝은
+   surface를 그대로 쓴다("Hero는 navy 블록/도트 그리드 아님" 요청 사양).
+   종횡비는 canonical image frame registry(composition.hero.aspect,
+   16:9/4:3)에서만 오고, object-fit:contain이라 실제 asset을 crop하지
+   않는다. -- */
+.pde-page--story .pde-story-summary--hero {
+  padding-top: 32px;
+  padding-bottom: 56px;
+}
+.pde-page--story .pde-story-hero-media {
+  position: relative;
+  z-index: 1;
+  aspect-ratio: var(--pde-hero-aspect, 4 / 3);
+  margin: 0 0 32px;
+  border-radius: var(--pde-radius-lg);
+  overflow: hidden;
+  background: var(--pde-bg-image-frame);
+}
+.pde-page--story .pde-story-hero-media > a {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.pde-page--story .pde-story-hero-media img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+/* feature icon row 4개 — pill/배지 배경 없이 아이콘+짧은 텍스트만
+   (레퍼런스 사양 "pill 남발 금지"), 모바일 2x2. */
+.pde-page--story .pde-story-hero-features {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px 20px;
+  margin: 28px 0 0;
+  padding: 24px 0 0;
+  list-style: none;
+  border-top: 1px solid var(--pde-border);
+  text-align: left;
+}
+.pde-page--story .pde-story-hero-feature {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.pde-page--story .pde-story-hero-feature .pde-story-icon {
+  flex: none;
+  margin-right: 0;
+}
+.pde-page--story .pde-story-hero-feature-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--pde-text-secondary);
+}
+
 .pde-page--story .pde-story-flow {
   display: flex;
   flex-direction: column;
@@ -920,7 +988,9 @@ export function renderProductStoryHtml(
    전체가 아닌 중앙 hairline이라 절제된 editorial 톤을 유지한다. -- */
 .pde-page--story .pde-story-section {
   position: relative;
-  padding: 56px 24px;
+  /* T1-183 — composition.sectionSpacingPx(72/96/120, editorial-brochure는
+     120=spacious)로 섹션 세로 리듬을 결정한다(레퍼런스 사양 "72~120px"). */
+  padding: var(--pde-section-spacing, 56px) 24px;
 }
 .pde-page--story .pde-story-section:not(:first-of-type)::before {
   content: "";
@@ -953,6 +1023,12 @@ export function renderProductStoryHtml(
    그대로 따라가므로, contain fit이 만드는 letterbox 여백이 거의 생기지
    않는다(요청 사양 4 — "컨테이너 자체를 이미지 비율에 맞춰 동적으로
    계산"). max-height는 극단적으로 세로가 긴 사진에 대한 안전장치일 뿐. */
+/* T1-182 — 사진 자체 테두리+프레임 배경을 없앤다. 섹션 padding이 이미
+   하나의 프레임 역할을 하는데, 사진에 다시 테두리+배경을 두르면
+   "이중 프레임"이 된다(요청 사양 4). object-fit:contain + height:auto라
+   letterbox 여백 자체가 거의 생기지 않으므로 프레임 배경은 실제로 거의
+   보이지 않던 값이었다 — 지우는 것이 회귀가 아니다. 둥근 모서리만
+   사진 자체에 남겨 절제된 premium 톤을 유지한다. */
 .pde-page--story .pde-story-figure img {
   display: block;
   width: 100%;
@@ -961,10 +1037,16 @@ export function renderProductStoryHtml(
   max-width: none;
   max-height: 70vh;
   object-fit: contain;
-  background: var(--pde-bg-image-frame);
-  border: 1px solid var(--pde-border);
   border-radius: var(--pde-radius-md);
   box-sizing: border-box;
+}
+/* T1-182 — HERO를 대신해 첫 섹션의 실제 사진을 오프닝 비주얼로 더 크게
+   보여준다(요청 사양 1 "제품 사진은 충분히 크게"). 마크업·섹션 순서는
+   그대로다 — 데스크톱 전용 CSS 비중 조정뿐이다. 첫 섹션이 split
+   레이아웃이 아니면(예: feature-highlight) 이 선택자는 아무 것도
+   바꾸지 않는다. */
+.pde-page--story .pde-story-flow > .pde-story-section:first-of-type .pde-story-figure img {
+  max-height: 76vh;
 }
 .pde-page--story .pde-story-figure--text-only {
   max-width: 46ch;
@@ -996,6 +1078,16 @@ export function renderProductStoryHtml(
 /* -- split layout: 이미지와 카피를 데스크톱에서 좌우로 교차 배치(image-feature/image-text/text-only) -- */
 .pde-page--story .pde-story-figure--split figcaption {
   display: block;
+}
+
+/* -- stacked layout(composition.includedGrid="stacked", T1-183/T1-185): 데스크톱 split
+   grid를 적용하지 않는다 — 사진이 전체 폭으로 위에, 정보가 아래에 쌓인 채로
+   유지된다(components-grid 레이아웃 전용). 텍스트 폭은 composition마다
+   달라지는 --pde-text-measure를 그대로 따른다. */
+.pde-page--story .pde-story-figure--stacked figcaption {
+  display: block;
+  max-width: var(--pde-text-measure, 44ch);
+  margin: 0 auto;
 }
 
 /* -- feature-highlight: 근거를 3/4-card 비주얼 그리드로 -- */
@@ -1215,6 +1307,8 @@ export function renderProductStoryHtml(
   grid-template-columns: repeat(2, 1fr);
   gap: 12px;
 }
+/* T1-182 — box-shadow 제거(요청 사양 6 "heavy shadow 제거"), 절제된
+   테두리 하나로만 카드 경계를 표시한다. */
 .pde-page--story .pde-story-components-grid li {
   display: flex;
   align-items: center;
@@ -1223,7 +1317,6 @@ export function renderProductStoryHtml(
   border: 1px solid var(--pde-border);
   border-radius: var(--pde-radius-md);
   padding: 16px;
-  box-shadow: var(--pde-shadow-card);
 }
 .pde-page--story .pde-story-components-index {
   flex: none;
@@ -1280,9 +1373,7 @@ export function renderProductStoryHtml(
   text-align: center;
   padding: 96px 24px 112px;
   background-color: #0f172a;
-  background-image:
-    radial-gradient(rgba(248, 250, 252, 0.06) 1px, transparent 1px),
-    linear-gradient(160deg, #0f172a 0%, #111c34 100%);
+  background-image: ${motifBackgroundImage};
   background-size: 18px 18px, auto;
   color: #f8fafc;
 }
@@ -1312,28 +1403,38 @@ export function renderProductStoryHtml(
 
 /* -- 갤러리 스트립: 대표 이미지 하나로는 부족한 섹션(구성품·디테일·사용
    장면 여러 컷)에 붙는 lifestyle 이미지 행(T1-144 최초 도입, T1-147에서
-   확대) — 상한이 6장으로 늘어난 만큼 썸네일이 아니라 실제로 "충분한
-   크기"로 보이도록 높이를 키운다. contain + 프레임 배경(T1-162)으로
-   작은 썸네일이라도 제품이 잘리지 않는다. -- */
+   확대). T1-183 — 셀마다 auto-height로 제각각 크기이던 것(T1-165)을,
+   composition의 canonical gallery 종횡비/열 수(css변수 pde-gallery-cell-aspect
+   / pde-gallery-columns, galleryStrip()이 인라인 style로 주입)로
+   통일한다(요청 사양 "모든 이미지가 동일한 canonical cell geometry를
+   따르도록, 이미지별 독립 auto-height 금지"). object-fit:contain은 그대로
+   유지해 실제 asset을 crop하지 않는다 — 셀 "박스"만 통일한다. -- */
 .pde-page--story .pde-story-gallery-strip {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(var(--pde-gallery-columns, 2), 1fr);
   gap: 10px;
   margin: 20px 0 0;
   padding: 0;
   list-style: none;
 }
-/* T1-165 — 고정 height와 내부 padding을 없애 각 셀이 자기 사진의 실제
-   비율만큼만 차지하게 한다("셀을 실제로 채운다" — 요청 사양 5). 크롭은
-   여전히 하지 않는다(object-fit:contain 유지, 제품 본체 crop 금지). */
+.pde-page--story .pde-story-gallery-strip li {
+  position: relative;
+  aspect-ratio: var(--pde-gallery-cell-aspect, 4 / 3);
+  overflow: hidden;
+  border-radius: var(--pde-radius-sm);
+  background: var(--pde-bg-image-frame);
+  box-sizing: border-box;
+}
+.pde-page--story .pde-story-gallery-strip li > a {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
 .pde-page--story .pde-story-gallery-strip img {
   display: block;
   width: 100%;
-  height: auto;
+  height: 100%;
   object-fit: contain;
-  background: var(--pde-bg-image-frame);
-  border: 1px solid var(--pde-border);
-  border-radius: var(--pde-radius-sm);
   box-sizing: border-box;
 }
 
@@ -1342,7 +1443,7 @@ export function renderProductStoryHtml(
     font-size: 18px;
   }
   .pde-page--story .pde-story-section {
-    padding: 96px 64px;
+    padding: var(--pde-section-spacing, 96px) 64px;
   }
   .pde-page--story .pde-story-section:last-child {
     padding-bottom: 128px;
@@ -1350,49 +1451,22 @@ export function renderProductStoryHtml(
   .pde-page--story .pde-story-summary {
     padding: 88px 64px;
   }
-  .pde-page--story .pde-hero {
-    padding: 140px 64px;
+  .pde-page--story .pde-story-summary--hero {
+    padding-top: 56px;
   }
-  /* T1-165 — .pde-hero(사진 없을 때 fallback)와 .pde-hero--photo(사진
-     있을 때)는 같은 element가 두 클래스를 동시에 갖는다
-     (class="pde-hero pde-hero--photo"). 데스크톱에서 .pde-hero에만
-     padding을 다시 선언하고 .pde-hero--photo는 재선언하지 않으면,
-     동일 specificity에서 나중에 나온 .pde-hero 규칙이 이겨 사진 Hero의
-     padding이 0에서 140px 64px로 되돌아간다 — 화면 폭 128px가 아무도
-     의도하지 않은 채 사라지는 원인이었다(실측: 980px 페이지에서
-     hero-grid가 852px로 줄어듦). 사진이 있을 때는 그대로 0을 유지한다. */
-  .pde-page--story .pde-hero--photo {
-    padding: 0;
+  .pde-page--story .pde-story-hero-media {
+    max-width: 640px;
+    margin-left: auto;
+    margin-right: auto;
   }
-  /* HERO split: 데스크톱에서 좌(텍스트+기능 아이콘)/우(대형 제품 이미지) 2단 구성(T1-147)
-     T1-165 — align-items를 stretch에서 center로 바꾼다. stretch는 텍스트
-     컬럼(가변 높이)에 맞춰 이미지 컬럼을 강제로 늘려, contain fit이 그
-     늘어난 높이만큼 위아래 여백을 만들었다. center는 각 컬럼이 자기
-     내용(이미지는 실제 비율, 텍스트는 실제 줄 수)만큼만 차지하게 한다. */
-  .pde-page--story .pde-hero-grid {
-    flex-direction: row;
-    align-items: center;
+  .pde-page--story .pde-story-summary.pde-story-align-left .pde-story-hero-media {
+    margin-left: 0;
   }
-  /* 제품 이미지 컬럼 비중은 58%로 유지(T1-164)한다. contain fit은
-     그대로라 잘림은 생기지 않는다. */
-  .pde-page--story .pde-hero-media {
-    order: 0;
-    flex: 0 1 58%;
-  }
-  .pde-page--story .pde-hero-media img {
-    width: 100%;
-    height: auto;
-    max-height: 78vh;
-  }
-  .pde-page--story .pde-hero-text {
-    flex: 1 1 42%;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    padding: 64px;
+  .pde-page--story .pde-story-hero-features {
+    grid-template-columns: repeat(4, 1fr);
   }
   .pde-page--story .pde-story-gallery-strip {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(var(--pde-gallery-columns, 3), 1fr);
   }
   .pde-page--story .pde-story-figure img {
     width: 100%;
@@ -1413,6 +1487,13 @@ export function renderProductStoryHtml(
     width: 100%;
     margin: 0;
     max-height: 620px;
+  }
+  /* T1-182 — 오프닝 구성: 첫 섹션만 이미지 비중을 더 키운다(요청 사양 1). */
+  .pde-page--story .pde-story-flow > .pde-story-section:first-of-type .pde-story-figure--split {
+    grid-template-columns: 1.4fr 1fr;
+  }
+  .pde-page--story .pde-story-flow > .pde-story-section:first-of-type .pde-story-figure--split img {
+    max-height: 720px;
   }
   .pde-page--story .pde-story-section--tone-b .pde-story-figure--split {
     direction: rtl;
@@ -1435,5 +1516,10 @@ export function renderProductStoryHtml(
 }
 `.trim();
 
-  return { html, css };
+  // DESIGN_PROFILE의 iconStyle(T1-176) — 아이콘 registry의 path data는
+  // 그대로 두고 stroke-width/corner/size 속성만 치환한다. profile이 없으면
+  // 아무것도 바뀌지 않는다(기존 baseline 그대로).
+  const finalHtml = visualProfile ? applyIconStyleToHtml(html, visualProfile.icon) : html;
+
+  return { html: finalHtml, css };
 }

@@ -1,10 +1,12 @@
 import { PromptEngine } from "./prompt-engine";
 import { CONTENT_GENERATION_TEMPLATE } from "./templates/content-generation.template";
 import { DESIGN_REVIEW_TEMPLATE } from "./templates/design-review.template";
+import { GENERATED_COMPOSITION_VALIDATION_TEMPLATE } from "./templates/generated-composition-validation.template";
 import { PRODUCT_ANALYSIS_TEMPLATE } from "./templates/product-analysis.template";
 import { PRODUCT_FEATURE_VISION_TEMPLATE } from "./templates/product-feature-vision.template";
 import { PRODUCT_PAGE_COPY_TEMPLATE } from "./templates/product-page-copy.template";
 import { PRODUCT_PROFILE_SYNTHESIS_TEMPLATE } from "./templates/product-profile-synthesis.template";
+import { PRODUCT_STORY_TEMPLATE } from "./templates/product-story.template";
 import { VISION_ANALYSIS_TEMPLATE } from "./templates/vision-analysis.template";
 
 /**
@@ -19,6 +21,8 @@ export function createDefaultPromptEngine(): PromptEngine {
     PRODUCT_FEATURE_VISION_TEMPLATE,
     PRODUCT_PROFILE_SYNTHESIS_TEMPLATE,
     PRODUCT_PAGE_COPY_TEMPLATE,
+    PRODUCT_STORY_TEMPLATE,
     DESIGN_REVIEW_TEMPLATE,
+    GENERATED_COMPOSITION_VALIDATION_TEMPLATE,
   ]);
 }
