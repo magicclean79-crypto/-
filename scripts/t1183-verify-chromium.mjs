@@ -26,13 +26,17 @@ async function checkViewport(page, url, width, label, outDir) {
   await page.waitForTimeout(500);
 
   // 지연 로드 이미지 전부 트리거 — 스크롤 끝까지
+  // 아래 콜백은 Playwright가 브라우저 context에 주입해 실행한다 —
+  // `window`/`document`는 Node가 아니라 브라우저 전역이다.
   await page.evaluate(async () => {
     await new Promise((resolve) => {
       let total = 0;
       const step = 800;
       const timer = setInterval(() => {
+        // eslint-disable-next-line no-undef
         window.scrollBy(0, step);
         total += step;
+        // eslint-disable-next-line no-undef
         if (total > document.body.scrollHeight + 2000) {
           clearInterval(timer);
           resolve(undefined);
@@ -41,13 +45,17 @@ async function checkViewport(page, url, width, label, outDir) {
     });
   });
   await page.waitForTimeout(800);
+  // eslint-disable-next-line no-undef
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.waitForTimeout(300);
 
   const metrics = await page.evaluate(() => {
+    // eslint-disable-next-line no-undef
     const imgs = Array.from(document.querySelectorAll("img"));
     const broken = imgs.filter((img) => !img.complete || img.naturalWidth === 0).length;
+    // eslint-disable-next-line no-undef
     const heroMedia = document.querySelector(".pde-story-hero-media");
+    // eslint-disable-next-line no-undef
     const galleryStrips = Array.from(document.querySelectorAll(".pde-story-gallery-strip"));
     const galleryCellRects = galleryStrips.flatMap((ul) =>
       Array.from(ul.querySelectorAll("li")).map((li) => {
@@ -55,8 +63,11 @@ async function checkViewport(page, url, width, label, outDir) {
         return Math.round((r.width / r.height) * 100) / 100;
       }),
     );
+    // eslint-disable-next-line no-undef
     const iconFamily = document.querySelector(".pde-story-icon[data-icon-source]")?.getAttribute("data-icon-source");
+    // eslint-disable-next-line no-undef
     const bodyWidth = document.body.scrollWidth;
+    // eslint-disable-next-line no-undef
     const viewportWidth = window.innerWidth;
     return {
       totalImgs: imgs.length,
