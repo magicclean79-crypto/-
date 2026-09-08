@@ -87,9 +87,19 @@ describe("PromptEngine", () => {
         description: expect.stringContaining("대표 문구"),
       },
       {
+        key: "product-story",
+        name: "Product Story 생성",
+        description: expect.stringContaining("Product Story"),
+      },
+      {
         key: "design-review",
         name: "디자인 리뷰",
         description: expect.stringContaining("모바일UX"),
+      },
+      {
+        key: "generated-composition-validation",
+        name: "생성된 Composition 사후 검증",
+        description: expect.stringContaining("Product Identity Pack"),
       },
     ]);
   });

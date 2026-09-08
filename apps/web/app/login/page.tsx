@@ -19,6 +19,10 @@ export default function LoginPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<UserDto | null>(null);
+  // 로그인 전 원래 가려던 화면 (T1-212 인증 게이트) — 없으면 홈으로.
+  // 열린 리다이렉트 방지: "/"로 시작하고 "//"(프로토콜 상대 URL)는 아닌
+  // 값만 신뢰한다.
+  const [nextPath, setNextPath] = useState("/");
 
   useEffect(() => {
     const stored = localStorage.getItem(AUTH_USER_KEY);
@@ -28,6 +32,10 @@ export default function LoginPage() {
       } catch {
         localStorage.removeItem(AUTH_USER_KEY);
       }
+    }
+    const requested = new URLSearchParams(window.location.search).get("next");
+    if (requested && requested.startsWith("/") && !requested.startsWith("//")) {
+      setNextPath(requested);
     }
   }, []);
 
@@ -57,7 +65,7 @@ export default function LoginPage() {
         localStorage.removeItem(AUTH_TOKEN_KEY);
       }
       localStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
-      router.push("/");
+      router.push(nextPath);
     } catch {
       setError("API 서버에 연결할 수 없습니다.");
       setBusy(false);
@@ -151,6 +159,17 @@ export default function LoginPage() {
           </p>
         ) : null}
       </form>
+
+      <p className="text-center text-sm text-zinc-500">
+        아직 계정이 없으신가요?{" "}
+        <Link
+          href={`/signup?next=${encodeURIComponent(nextPath)}`}
+          data-testid="login-signup-link"
+          className="font-medium text-blue-600 hover:underline dark:text-blue-400"
+        >
+          회원가입
+        </Link>
+      </p>
     </main>
   );
 }

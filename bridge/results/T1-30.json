@@ -1,0 +1,73 @@
+{
+  "taskId": "T1-30",
+  "projectId": "acos",
+  "state": "READY_FOR_REVIEW",
+  "runId": "8f9c2039-d1e9-41ae-9e88-61498045bd92",
+  "startedAt": "2026-08-09T07:03:46.180Z",
+  "heartbeatAt": "2026-08-09T07:17:54.527Z",
+  "lastOutputAt": "2026-08-09T07:17:28.055Z",
+  "outputBytes": 599253,
+  "finishedAt": "2026-08-09T07:17:54.547Z",
+  "blockedOn": null,
+  "decisionNeeded": null,
+  "updatedAt": "2026-08-09T07:17:54.550Z",
+  "workDone": [
+    "docs/RECOVERY_GUIDE.md §9-6을 '해결됨' 상태로 재작성(사장님 결정·커밋 35b1ea5 반영)",
+    "docs/RECOVERY_GUIDE.md §9-7 신규 작성 — 새 PC에서 git clone만으로 안 되는 것(토큰 파일·터널 주소·openapi.live.yaml·ChatGPT Actions 재등록·추가 프로젝트 repoPath·.env·로컬 DB/MinIO) 7항목 표로 정리",
+    "docs/RECOVERY_GUIDE.md §9-2 항목5 갱신(§9-7로 연결)",
+    "docs/DEVELOPMENT_ENVIRONMENT.md §11 사실 테이블의 낡은 행('bridge/ 미추적')을 최신 사실로 교체",
+    "docs/PROJECT_MEMORY.md M-31에 해결 경위 갱신 문단 추가(기존 문단은 삭제하지 않음)",
+    "docs/PROJECT_STATE.md §3-6에 후속 실행 기록 추가",
+    "git ls-files bridge/ 재확인 — 41개 파일(작업 15건·결과 10건)",
+    "node bridge/check-secrets.mjs --all 실행 — 저장소 전체 59건 중 bridge/ 안 0건임을 grep으로 확인",
+    "pnpm turbo run build/typecheck, npx eslint ., pnpm turbo run test --continue 전부 재실행"
+  ],
+  "changedFiles": [
+    "docs/RECOVERY_GUIDE.md",
+    "docs/DEVELOPMENT_ENVIRONMENT.md",
+    "docs/PROJECT_MEMORY.md",
+    "docs/PROJECT_STATE.md"
+  ],
+  "testResults": {
+    "build": {
+      "ok": true,
+      "detail": "pnpm turbo run build — 6/6 성공"
+    },
+    "typecheck": {
+      "ok": true,
+      "detail": "pnpm turbo run typecheck — 10/10 성공, 오류 0"
+    },
+    "lint": {
+      "ok": true,
+      "detail": "npx eslint . — 0건"
+    },
+    "tests": {
+      "ok": true,
+      "detail": "pnpm turbo run test --continue — @acos/core 1884/1884 통과, web e2e(Playwright) 252/252 통과. apps/api 1029/1037 통과(8건 실패는 preExisting, 아래 참고). 이번 변경(문서 4개)과 무관함을 git status로 확인"
+    }
+  },
+  "preExisting": [
+    "apps/api/src/ops/ops.spec.ts 8건 실패 — 이 세션이 그 파일을 전혀 건드리지 않았고(git status 미표시), 실패 개수(1029/1037)가 T1-25·직전 T1-30 실행 기록과 정확히 일치. 로그상 원인은 OpenAI 503/인증 실패·EgressService 차단 등 외부망·LLM 호출 관련으로 보임(이 환경에 실 API 키·네트워크 접근이 없어서로 추정, 직접 규명하지는 않음)",
+    "C 드라이브 여유공간 부족(docs/PROJECT_STATE.md §7에 기록된 기존 문제) — 이번엔 문서 4개만 수정해 재확인하지 않음",
+    "apps/web/app/benchmark/constants.ts가 로컬 사진 ID로 임시 변경된 상태 — 건드리지 않음",
+    "node bridge/check-secrets.mjs --all 실행 시 저장소 전체에서 59건이 걸리나 전부 bridge/ 밖의 기존 테스트 픽스처(가짜 API 키·DB 문자열, 예: ops.spec.ts·api-key.spec.ts)이고 bridge/ 안은 0건 — 이번 작업(bridge git 영속화 마무리) 범위 밖이라 손대지 않았으며, 이번에 새로 확인해 기록만 남김"
+  ],
+  "errorsAndFixes": [],
+  "costIncurred": true,
+  "permissionDenials": [],
+  "costDetail": "Claude Code 호출 $2.7476971999999993",
+  "rawResponse": "[완료] T1-30 — 이전 실행에서 BLOCKED로 남겼던 결정(\"bridge/를 git에 포함할지\")이 사장님 결정으로 해결되었고 실제로 커밋(`35b1ea5`, 83개 파일)까지 완료되어 있었습니다. 이번 재실행에서는 그 결과를 문서에 반영해 마무리했습니다 — 앱 코드나 `bridge/`는 건드리지 않고 문서 4개만 수정했습니다.\n\n- `docs/RECOVERY_GUIDE.md` §9-6을 \"발견한 위험\"에서 \"해결됨\"으로 다시 썼고, §9-7(신규)에 새 PC에서 여전히 사람이 손으로 만들어야 하는 것 7가지(토큰 파일·터널 주소·openapi.live.yaml·ChatGPT Actions 재등록·추가 프로젝트 repoPath·.env·로컬 DB/MinIO)를 표로 정리했습니다.\n- `docs/DEVELOPMENT_ENVIRONMENT.md` §11의 \"bridge/가 git에 커밋된 적이 없다\"는 낡은 사실을 최신 상태로 교체했습니다.\n- `docs/PROJECT_MEMORY.md` M-31은 지우지 않고 해결 경위를 갱신 문단으로 추가했습니다(원칙: 틀린 것으로 밝혀져도 삭제하지 않는다).\n- `docs/PROJECT_STATE.md` §3-6에 이번 후속 실행 기록을 추가했습니다.\n\n모든 서술은 직접 확인한 사실만 담았습니다: `git ls-files bridge/` 41개(작업 15건·결과 10건), `node bridge/check-secrets.mjs --all`로 저장소 전체 59건 중 `bridge/` 안은 0건임을 직접 grep으로 필터링해 확인(59건은 전부 `bridge/`와 무관한 기존 테스트 픽스처 — 새로 발견했지만 이번 작업 범위 밖이라 손대지 않았습니다).\n\n[검증] build 6/6, typecheck 10/10(오류 0), lint 0건 전부 통과. 테스트는 `--continue`로 끝까지 돌려 `@acos/core` 1884/1884, web e2e(Playwright) 252/252 통과, `apps/api`는 1029/1037 통과(실패 8건은 `ops.spec.ts` — 이전 T1-25·직전 T1-30 실행과 정확히 같은 개수이고 이번 세션이 그 파일을 건드리지 않았음을 git status로 확인, LLM/외부망 접근 실패로 보이는 기존 문제).\n\n[미완료] 없음 — 요청 범위(문서 반영·마무리)는 끝났습니다. 커밋은 하지 않았습니다.\n\nRESULT_JSON: {\"workDone\":[\"docs/RECOVERY_GUIDE.md §9-6을 '해결됨' 상태로 재작성(사장님 결정·커밋 35b1ea5 반영)\",\"docs/RECOVERY_GUIDE.md §9-7 신규 작성 — 새 PC에서 git clone만으로 안 되는 것(토큰 파일·터널 주소·openapi.live.yaml·ChatGPT Actions 재등록·추가 프로젝트 repoPath·.env·로컬 DB/MinIO) 7항목 표로 정리\",\"docs/RECOVERY_GUIDE.md §9-2 항목5 갱신(§9-7로 연결)\",\"docs/DEVELOPMENT_ENVIRONMENT.md §11 사실 테이블의 낡은 행('bridge/ 미추적')을 최신 사실로 교체\",\"docs/PROJECT_MEMORY.md M-31에 해결 경위 갱신 문단 추가(기존 문단은 삭제하지 않음)\",\"docs/PROJECT_STATE.md §3-6에 후속 실행 기록 추가\",\"git ls-files bridge/ 재확인 — 41개 파일(작업 15건·결과 10건)\",\"node bridge/check-secrets.mjs --all 실행 — 저장소 전체 59건 중 bridge/ 안 0건임을 grep으로 확인\",\"pnpm turbo run build/typecheck, npx eslint ., pnpm turbo run test --continue 전부 재실행\"],\"changedFiles\":[\"docs/RECOVERY_GUIDE.md\",\"docs/DEVELOPMENT_ENVIRONMENT.md\",\"docs/PROJECT_MEMORY.md\",\"docs/PROJECT_STATE.md\"],\"testResults\":{\"build\":{\"ok\":true,\"detail\":\"pnpm turbo run build — 6/6 성공\"},\"typecheck\":{\"ok\":true,\"detail\":\"pnpm turbo run typecheck — 10/10 성공, 오류 0\"},\"lint\":{\"ok\":true,\"detail\":\"npx eslint . — 0건\"},\"tests\":{\"ok\":true,\"detail\":\"pnpm turbo run test --continue — @acos/core 1884/1884 통과, web e2e(Playwright) 252/252 통과. apps/api 1029/1037 통과(8건 실패는 preExisting, 아래 참고). 이번 변경(문서 4개)과 무관함을 git status로 확인\"}},\"preExisting\":[\"apps/api/src/ops/ops.spec.ts 8건 실패 — 이 세션이 그 파일을 전혀 건드리지 않았고(git status 미표시), 실패 개수(1029/1037)가 T1-25·직전 T1-30 실행 기록과 정확히 일치. 로그상 원인은 OpenAI 503/인증 실패·EgressService 차단 등 외부망·LLM 호출 관련으로 보임(이 환경에 실 API 키·네트워크 접근이 없어서로 추정, 직접 규명하지는 않음)\",\"C 드라이브 여유공간 부족(docs/PROJECT_STATE.md §7에 기록된 기존 문제) — 이번엔 문서 4개만 수정해 재확인하지 않음\",\"apps/web/app/benchmark/constants.ts가 로컬 사진 ID로 임시 변경된 상태 — 건드리지 않음\",\"node bridge/check-secrets.mjs --all 실행 시 저장소 전체에서 59건이 걸리나 전부 bridge/ 밖의 기존 테스트 픽스처(가짜 API 키·DB 문자열, 예: ops.spec.ts·api-key.spec.ts)이고 bridge/ 안은 0건 — 이번 작업(bridge git 영속화 마무리) 범위 밖이라 손대지 않았으며, 이번에 새로 확인해 기록만 남김\"],\"errorsAndFixes\":[],\"decisionNeeded\":[],\"blockedOn\":null}",
+  "decisionAnswer": [
+    {
+      "question": "bridge/ 를 Git에 포함할지, 별도 백업할지, 그대로 둘지",
+      "answer": "① Git에 넣는다. 단, 토큰·API 키·인증정보·임시 터널 주소·개인정보 등\n비밀/환경 종속 정보는 반드시 제외하고, Bridge 코드·작업 지시·결과 기록·\n프로젝트 등록 정보·상태 요약 및 복구에 필요한 메타데이터만 Git으로 영속화한다.\n\n[이미 처리된 것 — 다시 하지 말 것]\n- .gitignore 에 제외 규칙을 넣었다: bridge/.secrets/ · bridge/tunnel-url.txt ·\n  bridge/openapi.live.yaml · bridge/demo/ · bridge/projects/demo-* · .claude/\n- 비밀값 검사기를 만들었다: bridge/check-secrets.mjs (커밋 대상/전체 검사, 걸리면 0이 아닌 값으로 종료)\n- openapi.yaml 의 터널 주소를 자리표시자(CHANGE-ME)로 바꾸고, 실제 주소가 채워진\n  bridge/openapi.live.yaml 을 start-bridge.ps1 이 만들도록 했다.\n- 커밋 완료: 35b1ea5 (83개 파일). 비밀값 검사 통과.\n- 새 환경 복구 검증 완료: 저장소만 clone 한 곳에서 작업 15건·결과 10건이\n  그대로 보이고 Bridge 검사 86건이 전부 통과했다. 비밀값 4종은 따라가지 않았다.\n\n[남은 일 — 이번 실행에서 할 것]\n위 내용을 문서에 반영해 마무리하라. 특히 RECOVERY_GUIDE 의 새 PC 온보딩\n절차가 지금 구조(Git 영속화 + 비밀값은 수동 복원)와 맞는지 확인하고 고쳐라.\n새 PC에서 사람이 손으로 만들어야 하는 것(토큰 파일, 터널, 프로젝트 repoPath\n재지정)을 빠짐없이 적어라. 커밋은 하지 마라 — 사람이 한다."
+    }
+  ],
+  "recoveredAt": "2026-08-09T07:03:46.086Z",
+  "browserUrl": "http://localhost:4201",
+  "userChecks": [
+    "새 PC 온보딩 절차가 지금 구조(Git 영속화 + 비밀값 수동 복원)와 맞는지",
+    "사람이 손으로 해야 할 것이 빠짐없이 적혔는지",
+    "기존 무인 실행·비동기 동작이 그대로인지"
+  ]
+}

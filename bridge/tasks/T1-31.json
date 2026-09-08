@@ -1,0 +1,8 @@
+{
+  "taskId": "T1-31",
+  "title": "Bridge 상태 조회 API 오류 복구 및 인증 상태 검증",
+  "request": "현재 Bridge health는 ok=true이지만 authRequired=true이고 getStatus/listTasks가 반복적으로 Unexpected end of JSON input으로 실패한다. 사용자에게 임의 조작을 요구하지 말고, 기존 공식 문서와 실제 Bridge 코드를 기준으로 상태 조회 API의 응답/인증/프록시 문제를 분석하고 수정하라. 기존 정상 기능을 깨지 말고, 상태 조회가 정상 JSON으로 반환되도록 테스트를 추가하거나 기존 테스트를 보강하라. build/typecheck/lint/test 수행 및 재검증. 정말 사람 결정이 필요한 경우에만 BLOCKED 기록. 사용자에게 질문하지 말라.",
+  "requestedBy": "ChatGPT",
+  "state": "REQUESTED",
+  "createdAt": "2026-08-09T02:48:22.681Z"
+}

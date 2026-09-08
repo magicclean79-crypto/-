@@ -1,0 +1,8 @@
+{
+  "taskId": "T1-32",
+  "state": "SUPERSEDED",
+  "supersededBy": "T1-29",
+  "supersededReason": "같은 목표(승인 프롬프트 제거)의 중복 작업. T1-29가 COMPLETED이며 권한 거부 0건으로 무인 실행이 확인됐다.",
+  "projectId": "acos",
+  "updatedAt": "2026-08-09T07:43:26.207Z"
+}

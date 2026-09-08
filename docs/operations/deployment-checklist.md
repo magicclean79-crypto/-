@@ -249,6 +249,7 @@ curl -X POST https://<api-host>/ops/drills/require -b cookies.txt \
 
 | 문서 | 내용 |
 | --- | --- |
+| [production-deployment-target.md](production-deployment-target.md) | **지금 실제 배포 대상이 있는가** (T1-208) — 호스트·도메인·인프라 현황 |
 | [production-runbook.md](production-runbook.md) | 배포 실행 절차 |
 | [production-cutover.md](production-cutover.md) | 운영 전환 검증 (LLM · Vision · S3 · CI) |
 | [s3-migration.md](s3-migration.md) | Amazon S3 전환 · 프로비저닝 경계 |

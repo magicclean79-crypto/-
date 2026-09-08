@@ -14,6 +14,7 @@ const validFeatures = {
   notes: null,
   confidence: 0.8,
   photoTypes: ["DESIGN", "DESIGN"],
+  photoCaptions: ["접어서 세워 둔 모습", "펼쳐서 바닥에 깐 모습"],
 };
 
 const validProfile = {
@@ -191,5 +192,82 @@ describe("ProductProfileEngine", () => {
     // INFO로 분류된 photo-label(jpeg)은 들어가지 않는다
     expect(result.html).toContain("image/png");
     expect(result.html).not.toContain("image/jpeg");
+  });
+
+  it("교차 검증(T1-23/T1-24) — OCR과 GPT 분석의 브랜드가 다르면 identification·crossVerification을 함께 돌려준다", async () => {
+    const calls: Parameters<ProductProfileLlmClient>[0][] = [];
+    const engine = new ProductProfileEngine({
+      promptEngine: createDefaultPromptEngine(),
+      llmProviderName: "openai",
+      complete: stubComplete({}, calls),
+    });
+
+    const result = await engine.run({
+      images: [image("img-1", "image/png")],
+      ocrTexts: ["제조 및 판매원 다른회사(주)"],
+    });
+
+    expect(result.identification.brand).toBe("다른회사(주)");
+    const brandField = result.crossVerification.fields.find((f) => f.field === "brand");
+    expect(brandField?.status).toBe("conflict");
+    expect(brandField?.resolvedValue).toBeNull();
+    expect(result.crossVerification.hasConflict).toBe(true);
+  });
+
+  it("Product Profile(STEP 4)은 GPT가 실제로 답한 그대로 보존하고, STEP 5(카피·HTML)는 교차 검증된 값만 쓴다 (T1-24)", async () => {
+    const calls: Parameters<ProductProfileLlmClient>[0][] = [];
+    const engine = new ProductProfileEngine({
+      promptEngine: createDefaultPromptEngine(),
+      llmProviderName: "openai",
+      complete: stubComplete({}, calls),
+    });
+
+    const result = await engine.run({
+      images: [image("img-1", "image/png")],
+      // GPT(validProfile)는 "Magic Clean"이라고 답하지만 OCR은 다른 브랜드를 말한다 — 충돌.
+      ocrTexts: ["제조 및 판매원 다른회사(주)"],
+    });
+
+    // STEP 4 결과(profile)는 GPT 원본 브랜드를 그대로 보존한다 — 가공하지 않는다.
+    expect(result.profile.brand).toBe(validProfile.brand);
+    // 반면 STEP 5b(HTML)의 스펙 표에는 충돌로 확정되지 않은(null) 브랜드가
+    // 아예 나타나지 않는다 — "브랜드" 행 자체가 만들어지지 않는다.
+    expect(result.html).not.toContain("브랜드");
+  });
+
+  it("사용자 요구사항(T1-92)을 넘기면 STEP 5a(카피) 프롬프트에 그대로 전달한다", async () => {
+    const calls: Parameters<ProductProfileLlmClient>[0][] = [];
+    const engine = new ProductProfileEngine({
+      promptEngine: createDefaultPromptEngine(),
+      llmProviderName: "openai",
+      complete: stubComplete({}, calls),
+    });
+
+    await engine.run({
+      images: [image("img-1", "image/png")],
+      ocrTexts: [],
+      userRequirement: "더 고급스러운 느낌으로 써줘",
+    });
+
+    expect(calls[2].step).toBe("copy");
+    const copyUserMessage = calls[2].messages.find((m) => m.role === "user");
+    expect(copyUserMessage?.content).toContain("더 고급스러운 느낌으로 써줘");
+  });
+
+  it("사용자 요구사항(T1-92)을 넘기지 않으면 STEP 5a 프롬프트에 그 섹션이 없다", async () => {
+    const calls: Parameters<ProductProfileLlmClient>[0][] = [];
+    const engine = new ProductProfileEngine({
+      promptEngine: createDefaultPromptEngine(),
+      llmProviderName: "openai",
+      complete: stubComplete({}, calls),
+    });
+
+    await engine.run({
+      images: [image("img-1", "image/png")],
+      ocrTexts: [],
+    });
+
+    const copyUserMessage = calls[2].messages.find((m) => m.role === "user");
+    expect(copyUserMessage?.content).not.toContain("사용자 요구사항");
   });
 });

@@ -15,6 +15,9 @@ import { ContentsModule } from "./contents/contents.module";
 import { DecisionsModule } from "./decisions/decisions.module";
 import { ExecutionModule } from "./execution/execution.module";
 import { KnowledgeModule } from "./knowledge/knowledge.module";
+import { Level1Module } from "./level1/level1.module";
+import { Level1GenerateModule } from "./level1-generate/level1-generate.module";
+import { Level1MultiModule } from "./level1-multi/level1-multi.module";
 import { LlmModule } from "./llm/llm.module";
 import { MemoryModule } from "./memory/memory.module";
 import { ProjectMemoriesModule } from "./project-memories/project-memories.module";
@@ -24,6 +27,7 @@ import { ReliabilityModule } from "./reliability/reliability.module";
 import { PrismaModule } from "./prisma/prisma.module";
 import { ProductObjectModule } from "./product-object/product-object.module";
 import { ProductProfileModule } from "./product-profile/product-profile.module";
+import { ProductResearchModule } from "./product-research/product-research.module";
 import { DesignReviewModule } from "./design-review/design-review.module";
 import { ImageGenModule } from "./image-gen/image-gen.module";
 import { ProductsModule } from "./products/products.module";
@@ -47,6 +51,7 @@ import { UploadsModule } from "./uploads/uploads.module";
     AnalysisModule,
     ProductObjectModule,
     ProductProfileModule,
+    ProductResearchModule,
     DesignReviewModule,
     ImageGenModule,
     ContentsModule,
@@ -57,6 +62,9 @@ import { UploadsModule } from "./uploads/uploads.module";
     KnowledgeModule,
     CompanyBrainModule,
     ReadyValidationModule,
+    Level1Module,
+    Level1GenerateModule,
+    Level1MultiModule,
     LlmModule,
     PromptModule,
     ExecutionModule,

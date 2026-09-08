@@ -76,6 +76,17 @@ function sanitizePhotoTypes(value: unknown, imageCount: number): PhotoType[] {
   return Array.from({ length: imageCount }, (_, i) => (raw[i] === "INFO" ? "INFO" : "DESIGN"));
 }
 
+/** photoCaptions도 photoTypes와 같은 원칙 — 길이를 항상 imageCount에 맞춘다.
+ * 빈 문자열·문자열이 아닌 값은 null(캡션 없음)로 본다 — 모델이 확신이 없어
+ * 비워 둔 것과 형식이 깨진 것을 같은 값(null)으로 안전하게 합친다. */
+function sanitizePhotoCaptions(value: unknown, imageCount: number): (string | null)[] {
+  const raw = Array.isArray(value) ? value : [];
+  return Array.from({ length: imageCount }, (_, i) => {
+    const item = raw[i];
+    return typeof item === "string" && item.trim().length > 0 ? item.trim() : null;
+  });
+}
+
 /**
  * LLM 텍스트 응답 → ImageFeatureAnalysis 파서.
  *
@@ -115,5 +126,6 @@ export function parseImageFeatureAnalysisResponse(
     notes: sanitizeNullableString(record.notes),
     confidence: sanitizeConfidence(record.confidence),
     photoTypes: sanitizePhotoTypes(record.photoTypes, imageCount),
+    photoCaptions: sanitizePhotoCaptions(record.photoCaptions, imageCount),
   };
 }

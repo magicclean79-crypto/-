@@ -28,6 +28,8 @@ export interface ProductProfileRunInput {
   ocrText: string | null;
   /** STEP 5b 렌더링에 쓸 템플릿 키 — 감사·비교용으로 실행 기록에 남긴다 */
   templateKey?: string | null;
+  /** 사용자 요구사항 기반 생성 (T1-92) — 실행 시점에 입력된 값을 감사용으로 남긴다 */
+  userRequirement?: string | null;
 }
 
 /**

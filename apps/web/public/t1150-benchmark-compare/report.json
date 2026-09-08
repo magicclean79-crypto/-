@@ -1,0 +1,57 @@
+{
+  "pkg": {
+    "productName": "베란다용 스텐 호스 세트 3M",
+    "brand": "삼정크린마스터(주)",
+    "model": null
+  },
+  "results": [
+    {
+      "category": "HERO",
+      "provider": "gemini",
+      "model": "gemini-2.5-flash-image",
+      "ok": true,
+      "elapsedMs": 17660,
+      "file": "hero-gemini.png"
+    },
+    {
+      "category": "HERO",
+      "provider": "openai",
+      "model": "gpt-image-2",
+      "ok": true,
+      "elapsedMs": 167292,
+      "file": "hero-openai.png"
+    },
+    {
+      "category": "USAGE_SCENE",
+      "provider": "gemini",
+      "model": "gemini-2.5-flash-image",
+      "ok": true,
+      "elapsedMs": 28546,
+      "file": "usage_scene-gemini.png"
+    },
+    {
+      "category": "USAGE_SCENE",
+      "provider": "openai",
+      "model": "gpt-image-2",
+      "ok": true,
+      "elapsedMs": 179681,
+      "file": "usage_scene-openai.png"
+    },
+    {
+      "category": "DETAIL",
+      "provider": "gemini",
+      "model": "gemini-2.5-flash-image",
+      "ok": true,
+      "elapsedMs": 13753,
+      "file": "detail-gemini.png"
+    },
+    {
+      "category": "DETAIL",
+      "provider": "openai",
+      "model": "gpt-image-2",
+      "ok": true,
+      "elapsedMs": 164487,
+      "file": "detail-openai.png"
+    }
+  ]
+}

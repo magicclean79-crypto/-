@@ -78,7 +78,6 @@ function CompareBody() {
     Promise.all(ids.map(fetchRun))
       .then(setRecords)
       .catch((err) => setError(err instanceof Error ? err.message : "불러오기 실패"));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idsParam, legacyA, legacyB]);
 
   if (error) {

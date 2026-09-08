@@ -1,0 +1,8 @@
+{
+  "taskId": "T1-23",
+  "title": "교차 검증",
+  "request": "실제 제품 사진·OCR·Vision·바코드·모델명·공식 제품 정보를 모두 비교한다. 충돌하면 자동으로 채우지 않는다. 실제 제품 사진이 항상 최우선.",
+  "requestedBy": "ChatGPT",
+  "state": "REQUESTED",
+  "createdAt": "2026-08-08T16:45:54.451Z"
+}
