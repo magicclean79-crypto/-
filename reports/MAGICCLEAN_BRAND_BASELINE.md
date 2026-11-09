@@ -1,5 +1,13 @@
 # 매직크린 브랜드 베이스라인 (Brand Baseline)
 
+> **정정 (T1-78, 2026-08-10)**: 이 문서가 조사한 `http://매직크린.com`
+> (xn--sy2btdp12cdpg.com)은 **사용자가 실제로 운영하는 사이트가 아니다.**
+> 실제 운영 사이트는 `http://magicclean791.godomall.com`이며, 그 사이트를
+> 조사한 정식 레퍼런스는 [`MAGICCLEAN_REAL_SITE_REFERENCE.md`](MAGICCLEAN_REAL_SITE_REFERENCE.md)다
+> — 상세페이지 제작 기준은 **그 문서를 우선 참고한다.** 아래 내용은
+> "매직크린 자사 브랜드 기준"이 아니라 유사 업종의 참고 조사로만 남긴다
+> (전면 삭제하지 않고 근거를 보존한다).
+
 > 조사 대상: http://매직크린.com (xn--sy2btdp12cdpg.com) — CTO 지시(2026-08-07):
 > "참고 사이트가 아니라 우리 회사의 브랜드 기준(Baseline)이다." Playwright로
 > 홈페이지 + 실제 상품 상세페이지 2건(물통, 잔디차솔)을 데스크톱·모바일

@@ -1,4 +1,6 @@
-import type { ProductPageCopy, ProductProfile } from "@acos/shared";
+import type { ImageCategory, ProductPageCopy, ProductProfile } from "@acos/shared";
+import { rankPurchasePoints } from "./product-page-template-selection";
+import { ICONS } from "./product-page-icons";
 
 /**
  * Product Profile → 상세페이지 HTML/CSS 렌더러. (Sprint 35 Phase 2 —
@@ -26,17 +28,36 @@ import type { ProductPageCopy, ProductProfile } from "@acos/shared";
  * 이고, `css`는 `.pde-page` 아래로 스코프된다. 완전한 문서가 필요하면
  * `wrapProductProfileHtmlDocument()`를 쓴다.
  *
- * **알려진 한계**: 특징-사진 배치는 순환 배치(round-robin)다 — "이 사진이
- * 이 특징을 보여준다"는 의미 기반 매칭이 아니다. 진짜 의미 기반 매칭(예:
- * "손잡이" 특징에 손잡이가 보이는 사진만)을 하려면 이미지별로 어떤 특징이
- * 보이는지 STEP 3에 추가 분석을 시켜야 하고, 그만큼 실 LLM 호출이
- * 늘어난다 — 다음 개선 후보로 남긴다.
+ * ## 이미지-콘텐츠 연결 (T1-93)
+ *
+ * 예전에는 특징-사진 배치가 순환 배치(round-robin, `images[index %
+ * images.length]`)였다 — "이 사진이 이 특징을 보여준다"는 의미 기반
+ * 매칭이 아니라 그냥 인덱스로만 짝지었고, 사진 수가 특징 수보다 적으면
+ * 같은 사진이 여러 캡션에 반복 등장했다. `buildProductPageViewModel`은
+ * 이제 두 가지 근거 있는 신호가 있으면 그것으로 짝짓는다: (1) `ProductPageImage
+ * .caption` — STEP 3(원본 사진 분석, `photoCaptions`)이나 Image Studio
+ * 카테고리(`category`)에서 이미 만들어진, 그 사진 하나만을 위한 실제
+ * 문장. (2) 남는 사진은 profile.features 텍스트와 1:1로만(중복 없이)
+ * 짝짓는다 — 사진보다 특징이 많으면 남는 특징은 사진 없이 텍스트로만
+ * 보여주고, 특징보다 사진이 많으면 캡션이 있는 사진만 카드로 보여주고
+ * 캡션 없는 나머지는 "이미지 갤러리"(썸네일, 서사를 주장하지 않는 조회용
+ * 영역)로 보낸다 — 근거 없는 캡션을 지어내 큰 사진 카드에 붙이지 않는다.
  */
 
 export interface ProductPageImage {
   mimeType: string;
   /** base64 인코딩된 이미지 바이트 (이미 Image Guard·리사이즈를 통과한 것) */
   base64: string;
+  /**
+   * 이 사진 하나만을 위한 실제 설명(T1-93) — STEP 3 `photoCaptions`나
+   * Image Studio 카테고리 기반으로 호출자가 채운다. 없으면(null/undefined)
+   * 이 사진은 "특징" 카드가 아니라 캡션 없는 갤러리 후보로 취급된다 —
+   * 근거 없는 텍스트를 사진 옆에 지어 붙이지 않는다.
+   */
+  caption?: string | null;
+  /** Image Studio에서 이 사진이 어떤 역할로 만들어졌는지(T1-93) — 있으면
+   * 섹션 배치·캡션 생성의 근거로 쓴다. 원본 업로드 사진에는 없다(null). */
+  category?: ImageCategory | null;
 }
 
 /** HTML 텍스트 노드에 안전하게 넣기 위한 이스케이프 — LLM이 만든 텍스트를 그대로 마크업에 넣으므로 필수다 */
@@ -58,8 +79,50 @@ function dataUri(image: ProductPageImage): string {
 
 export interface ProductPageFeatureItem {
   text: string;
-  /** 순환 배치된 사진 — 사진이 하나도 없으면 null(아이콘으로 대체) */
+  /** 의미 있는 근거로 짝지어진 사진 — 사진이 없으면 null(아이콘으로 대체) */
   image: ProductPageImage | null;
+}
+
+/**
+ * 특징 텍스트와 사진을 짝짓는다(T1-93) — 근거 없는 반복·빈 캡션을 만들지
+ * 않는다.
+ *
+ * 1) profile.features 텍스트 하나마다 아직 안 쓴 사진을 하나씩만 배정한다
+ *    (같은 사진을 두 번 쓰지 않는다 — 예전의 `index % images.length` 순환
+ *    배치를 없앴다). 사진이 모자라면 남는 특징은 텍스트만(사진 null).
+ * 2) 남은 사진 중 자기 캡션(`caption`)을 가진 것은 그 캡션을 텍스트로 써서
+ *    추가 카드로 만든다 — STEP 3가 그 사진 하나만 보고 실제로 확인한
+ *    내용이라 근거가 있다.
+ * 3) 캡션도 없고 특징과도 안 짝지어진 사진은 여기 포함하지 않는다 —
+ *    호출자가 갤러리(썸네일)로 따로 보여준다. "사진은 있는데 옆에 아무
+ *    설명도 없는" 카드를 만들지 않는다는 것이 이 함수의 핵심 규칙이다.
+ */
+function pairFeatureTextsWithImages(
+  featureTexts: string[],
+  images: ProductPageImage[],
+): { items: ProductPageFeatureItem[]; usedImageIndexes: Set<number> } {
+  const used = new Set<number>();
+  const items: ProductPageFeatureItem[] = [];
+
+  for (const text of featureTexts) {
+    const nextIndex = images.findIndex((_, i) => !used.has(i));
+    if (nextIndex === -1) {
+      items.push({ text, image: null });
+      continue;
+    }
+    used.add(nextIndex);
+    items.push({ text, image: images[nextIndex] });
+  }
+
+  images.forEach((image, index) => {
+    if (used.has(index)) return;
+    const caption = image.caption?.trim();
+    if (!caption) return;
+    used.add(index);
+    items.push({ text: caption, image });
+  });
+
+  return { items, usedImageIndexes: used };
 }
 
 export interface ProductPageViewModel {
@@ -72,7 +135,8 @@ export interface ProductPageViewModel {
   galleryImages: ProductPageImage[];
   /** 구매 포인트 — advantages를 CTA 칩으로 보여준다 */
   purchasePoints: string[];
-  /** 상세 특징 — features에 사진을 순환 배치한 것("사진 → 핵심 설명" 구조) */
+  /** 상세 특징 — features 텍스트와 캡션 있는 사진을 근거 있게 1:1로 짝지은
+   * 것("사진 → 핵심 설명" 구조, T1-93). 같은 사진을 두 번 쓰지 않는다. */
   features: ProductPageFeatureItem[];
   specRows: [string, string][];
   components: string[];
@@ -113,12 +177,13 @@ export function buildProductPageViewModel(
     specRows.push([key, value]);
   }
 
-  const [heroImage, ...galleryImages] = images;
+  const [heroImage, ...rest] = images;
   const featureTexts = [...new Set(profile.features)];
-  const features: ProductPageFeatureItem[] = featureTexts.map((text, index) => ({
-    text,
-    image: images.length > 0 ? images[index % images.length] : null,
-  }));
+  const { items: features, usedImageIndexes } = pairFeatureTextsWithImages(featureTexts, rest);
+  // 특징 카드에 이미 쓰인 사진(캡션 있는 것 포함)은 갤러리에 다시 넣지
+  // 않는다 — 같은 사진이 큰 스토리 카드와 작은 썸네일에 동시에 나오면
+  // 사진 개수만 부풀려 보인다(T1-93, "같은 사진의 반복 사용도 피한다").
+  const galleryImages = rest.filter((_, index) => !usedImageIndexes.has(index));
 
   return {
     productName: profile.productName,
@@ -126,7 +191,7 @@ export function buildProductPageViewModel(
     description: copy.description,
     heroImage: heroImage ?? null,
     galleryImages,
-    purchasePoints: [...new Set(profile.advantages)],
+    purchasePoints: rankPurchasePoints(profile),
     features,
     specRows,
     components,
@@ -150,20 +215,6 @@ export interface ProductPageTemplate {
   description: string;
   render(viewModel: ProductPageViewModel): ProductPageHtmlResult;
 }
-
-// ── 자체 포함 인라인 SVG 아이콘 — 외부 아이콘 폰트·CDN 의존 없이 오프라인에서도 그대로 보인다 ──
-const ICONS = {
-  check:
-    '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 12 9 17 20 6"></polyline></svg>',
-  spec:
-    '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"></line><line x1="4" y1="12" x2="20" y2="12"></line><line x1="4" y1="17" x2="14" y2="17"></line></svg>',
-  box: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><path d="M3 8l9-5 9 5-9 5-9-5z"></path><path d="M3 8v9l9 5 9-5V8"></path><line x1="12" y1="13" x2="12" y2="22"></line></svg>',
-  info: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><line x1="12" y1="11" x2="12" y2="16"></line><circle cx="12" cy="7.5" r="0.9" fill="currentColor" stroke="none"></circle></svg>',
-  warning:
-    '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20L12 3z"></path><line x1="12" y1="10" x2="12" y2="14"></line><circle cx="12" cy="17" r="0.9" fill="currentColor" stroke="none"></circle></svg>',
-  gallery:
-    '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"></rect><circle cx="8.5" cy="9.5" r="1.5" fill="currentColor" stroke="none"></circle><path d="M21 16l-5.5-5.5-4 4-3-3-5.5 5.5"></path></svg>',
-} as const;
 
 function badge(icon: keyof typeof ICONS, tone: string): string {
   return `<span class="pde-badge pde-badge--${tone}">${ICONS[icon]}</span>`;
@@ -276,9 +327,13 @@ function renderSpecAccordion(rows: [string, string][]): string {
 }
 
 /**
- * Hero로 쓴 사진을 제외한 나머지 사진을 "이미지 갤러리" 섹션으로 보여준다.
- * 썸네일을 누르면 원본 크기로 열린다("확대사진", CTO 지시) — 별도 JS 없이
- * `<a href="data:...">`로 브라우저 기본 기능만 쓴다.
+ * Hero·특징 카드에 쓰이지 않고 남은 사진을 작은 썸네일로 보여준다. 이
+ * 사진들은 스토리 카드로 만들 근거(캡션)가 없는 것들이라(T1-93·T1-111,
+ * `attachStudioImageCaptions`) "이미지 갤러리" 같은 내부 CMS 용어 대신
+ * "추가 사진"으로 정직하게 안내한다 — 이 섹션이 서사를 주장하지 않는다는
+ * 뜻을 그대로 담는다(T1-111 요구사항 10, 내부 편집용 라벨을 고객에게
+ * 노출하지 않는다). 썸네일을 누르면 원본 크기로 열린다("확대사진", CTO
+ * 지시) — 별도 JS 없이 `<a href="data:...">`로 브라우저 기본 기능만 쓴다.
  */
 function renderGallerySection(images: ProductPageImage[]): string {
   if (images.length === 0) {
@@ -287,7 +342,7 @@ function renderGallerySection(images: ProductPageImage[]): string {
   const thumbs = images
     .map((image) => zoomLink(image, `<img src="${dataUri(image)}" alt="" loading="lazy">`))
     .join("");
-  return renderSection("gallery", "gallery", "이미지 갤러리", `<div class="pde-gallery">${thumbs}</div>`);
+  return renderSection("gallery", "gallery", "추가 사진", `<div class="pde-gallery">${thumbs}</div>`);
 }
 
 /**
@@ -372,6 +427,7 @@ export const BASIC_PRODUCT_PAGE_TEMPLATE: ProductPageTemplate = {
     ].join("");
 
     const css = `
+${PDE_TYPOGRAPHY_CSS}
 .pde-page {
   max-width: 480px;
   margin: 0 auto;
@@ -631,10 +687,60 @@ export const BASIC_PRODUCT_PAGE_TEMPLATE: ProductPageTemplate = {
 const PDE_SHARED_BASE_FONT = `font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo",
     "Noto Sans KR", sans-serif;`;
 
+/**
+ * 타이포그래피 토큰 (T1-77). 지금까지는 템플릿마다 px 값을 흩어 적어
+ * "왜 이 크기인지" 근거가 없었다 — CSS 커스텀 프로퍼티로 한 곳에 모으고,
+ * 각 값의 근거를 주석으로 남긴다.
+ *
+ * - 제목/본문 크기 대비를 명확히 한다(제목 22px : 본문 13px ≈ 1.7배) —
+ *   한 화면에서 정보 위계가 바로 구분되어야 한다는 원리(생활용품 원리6·
+ *   `MAGICCLEAN_BRAND_BASELINE.md` §3 "표준 산세리프, 소형 크기, 촘촘한
+ *   줄간격").
+ * - 본문 줄간격(1.6)은 제목 줄간격(1.25)보다 넉넉하게 — 짧은 제목은
+ *   빽빽해도 읽히지만 여러 줄 본문은 줄간격이 좁으면 한글 특유의 밀집된
+ *   자소 때문에 읽기 어렵다.
+ * - 숫자(스펙 수치·규격)에는 `font-variant-numeric: tabular-nums`를 줘서
+ *   자릿수가 바뀌어도 정렬이 흔들리지 않게 한다 — "3M"·"5mm"처럼 숫자+
+ *   단위가 많은 이 프로젝트 특성(호스 규격·매트 두께 등) 때문에 숫자
+ *   가독성을 별도로 신경 쓴다(T1-77 요구사항7).
+ * - 본문 문단은 `max-width`로 한 줄 글자 수를 제한한다 — 페이지 자체가
+ *   480px 모바일 폭이라 이미 짧지만, 그 안에서도 카드형 텍스트(설명·
+ *   사용법)는 더 좁게 잡아 스캔하기 쉽게 한다.
+ */
+const PDE_TYPOGRAPHY_CSS = `
+.pde-page {
+  --pde-fs-h1: 22px;
+  --pde-fs-h2: 15px;
+  --pde-fs-body: 13px;
+  --pde-fs-small: 12px;
+  --pde-lh-heading: 1.25;
+  --pde-lh-body: 1.6;
+  --pde-ls-heading: -0.01em;
+  --pde-ls-body: 0.01em;
+}
+.pde-page h1 { font-size: var(--pde-fs-h1); line-height: var(--pde-lh-heading); letter-spacing: var(--pde-ls-heading); }
+.pde-page h2 { font-size: var(--pde-fs-h2); line-height: var(--pde-lh-heading); letter-spacing: var(--pde-ls-heading); }
+.pde-page .pde-description p,
+.pde-page .pde-description,
+.pde-page .pde-usage,
+.pde-page .pde-story-text p {
+  font-size: var(--pde-fs-body);
+  line-height: var(--pde-lh-body);
+  letter-spacing: var(--pde-ls-body);
+  max-width: 38ch;
+}
+.pde-page .pde-spec-key,
+.pde-page .pde-spec-value,
+.pde-page .pde-headline {
+  font-variant-numeric: tabular-nums;
+}
+`;
+
 /** A~E 공통 골격 CSS — 페이지 폭·기본 배지·특징 그리드 variant·구매포인트 chip variant·경고박스.
  * 색상/Hero/타이포는 템플릿별로 뒤에 덧붙인다. */
 function sharedLivingGoodsCss(accent: string): string {
   return `
+${PDE_TYPOGRAPHY_CSS}
 .pde-page {
   max-width: 480px;
   margin: 0 auto;
@@ -711,28 +817,17 @@ function sharedLivingGoodsCss(accent: string): string {
 `;
 }
 
-/** 사진(특징 페어링 사진 + 남은 갤러리 사진)을 중복 없이 하나로 합친다 — 어떤 사진도
- * 작은 갤러리 썸네일로만 숨어 있지 않고 전부 큰 사진 스토리에 등장하게 한다. */
-function mergedStackedItems(vm: ProductPageViewModel): ProductPageFeatureItem[] {
-  const used = new Set(
-    vm.features.map((f) => f.image?.base64).filter((b): b is string => Boolean(b)),
-  );
-  const extra: ProductPageFeatureItem[] = vm.galleryImages
-    .filter((image) => !used.has(image.base64))
-    .map((image) => ({ text: "", image }));
-  return [...vm.features, ...extra];
-}
-
 /**
  * 특징·제품설명·사용방법을 사진과 섞어서 하나의 "스토리" 블록으로 배치한다.
  * (CTO 지시, 2026-08-08 — Template D/V15 기준: "특징과 제품설명 사용방법을
  * 제품사진과 적절하게 섞어서 중간에 배치하고 하단에 스펙·구성품·주의사항을
- * 배치") 순서: 사진1 → 제품설명 → 사진2 → 사진3 → ... → 사용방법 → (남는 사진).
- * 특징 텍스트는 각 사진의 캡션으로 이미 들어가 있어 별도 불릿 목록으로
- * 반복하지 않는다.
+ * 배치") 순서: 사진1 → 제품설명 → 사진2 → 사진3 → ... → 사용방법.
+ * `vm.features`(캡션 있는 사진만, T1-93)를 그대로 쓴다 — 캡션 없는 사진을
+ * 빈 설명으로 끼워 넣지 않는다. 캡션 없는 나머지 사진은 호출자가 별도
+ * "이미지 갤러리" 섹션(`renderGallerySection`)으로 정직하게 보여준다.
  */
 function renderMixedStory(vm: ProductPageViewModel): string {
-  const items = mergedStackedItems(vm);
+  const items = vm.features;
   const descBlock = vm.description
     ? `<div class="pde-story-text"><p>${escapeHtml(vm.description)}</p></div>`
     : "";
@@ -755,16 +850,24 @@ function renderMixedStory(vm: ProductPageViewModel): string {
  * (CTO 피드백, 2026-08-08: "메인사진 위, 상품제목, 그다음 사진→설명→사진→설명
  * 반복, 그 밑에 특징·스펙·주의사항 나열") Hero 다음에 오는 "사진 스토리"
  * 블록은 작은 이미지 갤러리·작은 특징 카드를 대체한다 — 사진은 전체 폭으로
- * 크게, 설명은 그 바로 아래에 붙인다. 특징 텍스트는 사진과 별개로 아래쪽에
- * 스캔하기 쉬운 불릿 목록으로 다시 한번 요약한다.
+ * 크게, 설명은 그 바로 아래에 붙인다.
+ *
+ * 별도 "특징" 불릿 목록은 두지 않는다(T1-111) — `photoStory`
+ * (`renderFeatureCards(..., "stacked")`)가 사진이 있든 없든(없으면 아이콘
+ * 으로 대체) 모든 특징 문장을 이미 카드로 보여준다(`renderStackedFigure`).
+ * 예전에는 그 카드들과 똑같은 문장을 아래에 플레인 불릿 목록으로 다시
+ * 나열해, 같은 문구가 두 곳에 그대로 반복됐다(사람 확인, "특징 영역에...
+ * 문구가 반복됨"). `living-d-proof`(기능증명형)는 이미 이 원칙대로 별도
+ * 특징 목록 없이 `renderMixedStory` 하나로 충분했다 — A/B/C/E도 같은
+ * 원칙을 따른다.
  */
 function livingGoodsSections(vm: ProductPageViewModel, opts: {
   spec: "checklist" | "accordion";
 }) {
-  const photoStory = renderFeatureCards(mergedStackedItems(vm), "stacked");
-  const featureList = vm.features.length > 0
-    ? renderSection("check", "feature", "특징", renderPlainList(vm.features.map((f) => f.text)))
-    : "";
+  const photoStory = renderFeatureCards(vm.features, "stacked");
+  // 캡션(근거) 없이는 큰 스토리 카드로 보여주지 않은 나머지 사진 — 서사를
+  // 주장하지 않는 조회용 썸네일로만 정직하게 보여준다(T1-93).
+  const gallery = renderGallerySection(vm.galleryImages);
   const description = renderSection("info", "info", "제품 설명", `<p class="pde-description">${escapeHtml(vm.description)}</p>`);
   const usage = vm.usage
     ? renderSection("info", "info", "사용 방법", `<p class="pde-usage">${escapeHtml(vm.usage)}</p>`)
@@ -783,7 +886,7 @@ function livingGoodsSections(vm: ProductPageViewModel, opts: {
   const warnings = vm.warnings.length > 0
     ? renderSection("warning", "warning", "주의사항", `<div class="pde-warning-box">${renderPlainList(vm.warnings)}</div>`)
     : "";
-  return { photoStory, featureList, description, usage, spec, components, warnings };
+  return { photoStory, gallery, description, usage, spec, components, warnings };
 }
 
 /**
@@ -803,7 +906,7 @@ export const LIVING_GOODS_TEMPLATE_A: ProductPageTemplate = {
       renderHero(vm, "overlay"),
       renderPurchasePoints(vm.purchasePoints, "filled"),
       s.photoStory,
-      s.featureList,
+      s.gallery,
       s.description,
       s.usage,
       s.spec,
@@ -840,7 +943,7 @@ export const LIVING_GOODS_TEMPLATE_B: ProductPageTemplate = {
       renderHero(vm, "mood"),
       renderPurchasePoints(vm.purchasePoints, "outline"),
       s.photoStory,
-      s.featureList,
+      s.gallery,
       s.description,
       s.usage,
       s.spec,
@@ -876,7 +979,7 @@ export const LIVING_GOODS_TEMPLATE_C: ProductPageTemplate = {
       renderHero(vm, "compact"),
       renderPurchasePoints(vm.purchasePoints, "badge"),
       s.photoStory,
-      s.featureList,
+      s.gallery,
       s.spec,
       s.description,
       s.usage,
@@ -915,6 +1018,7 @@ export const LIVING_GOODS_TEMPLATE_D: ProductPageTemplate = {
       renderHero(vm, "overlay"),
       renderPurchasePoints(vm.purchasePoints, "filled"),
       renderMixedStory(vm),
+      s.gallery,
       s.spec,
       s.components,
       s.warnings,
@@ -950,7 +1054,7 @@ export const LIVING_GOODS_TEMPLATE_E: ProductPageTemplate = {
       renderHero(vm, "spacious"),
       renderPurchasePoints(vm.purchasePoints, "outline"),
       s.photoStory,
-      s.featureList,
+      s.gallery,
       s.description,
       s.usage,
       s.spec,
@@ -1031,6 +1135,9 @@ export function wrapProductProfileHtmlDocument(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(title)}</title>
 ${metaKeywords}
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link rel="stylesheet" as="style" crossorigin
+  href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css">
 <style>body{margin:0;background:#f4f4f5;}${css}</style>
 </head>
 <body>

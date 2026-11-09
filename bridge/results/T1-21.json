@@ -1,0 +1,67 @@
+{
+  "state": "READY_FOR_REVIEW",
+  "startedAt": "2026-08-09",
+  "workDone": [
+    "제품 자동 분석 모듈 신규 — OCR·Vision 텍스트에서 바코드(GTIN 체크디짓 검증)·URL·모델명·브랜드·원산지·상담전화를 한 단계에서 동시 추출",
+    "Product Package에 identification 필드 연결 — 브랜드·모델은 OCR 원문을 프로필보다 우선",
+    "상품명/품명 혼선 제거 — '공식 품명'을 '법정 재질 분류(상품명 아님)'으로 변경",
+    "프롬프트 중복 제거 — 이미 별도 줄에 있는 값을 특징·스펙에서 제외",
+    "제품 동일성 허용/비허용 목록을 CTO 지시대로 프롬프트에 명시",
+    "브라우저 화면에 제품 자동 분석 결과 블록 추가"
+  ],
+  "changedFiles": [
+    "packages/core/src/product-profile/product-identification.ts (신규)",
+    "packages/core/src/product-profile/product-identification.spec.ts (신규)",
+    "packages/core/src/product-profile/product-package.ts",
+    "packages/core/src/product-profile/product-package.spec.ts",
+    "packages/core/src/product-profile/index.ts",
+    "packages/shared/src/index.ts",
+    "apps/api/src/image-gen/image-gen.service.ts",
+    "apps/api/src/image-gen/image-gen.service.spec.ts",
+    "apps/web/app/image-studio/category-panel.tsx"
+  ],
+  "testResults": {
+    "build": "6/6 성공",
+    "typecheck": "10/10, 오류 0",
+    "lint": "범위 내 오류 0",
+    "tests": "130개 통과 (core 105 · api 25)",
+    "browserVerification": "14개 항목 전부 통과 (Playwright 자동 검증)",
+    "imageGeneration": "12장 생성 · 실패 0"
+  },
+  "errorsAndFixes": [
+    "전화번호가 바코드로 오인식 — 상담실 031-997-7829와 주소 숫자가 붙어 78298804가 GTIN-8 체크디짓을 우연히 통과. 전화번호·번지수를 먼저 제거하도록 수정하고 검사로 고정",
+    "상품명이 두 개로 읽힘 — '공식 품명: 연질염화비닐호스'가 상품명처럼 전달됨. 이름표를 '법정 재질 분류(상품명 아님)'으로 변경",
+    "같은 정보 중복 — 재질이 특징 자리에, 원산지·제조사가 스펙 자리에 반복. 중복 제거 로직 추가",
+    "빌드 EPERM 실패 — 로컬 API가 Prisma 엔진 파일을 잡고 있었음. 빌드 전 서버를 내리는 절차로 해결(PROJECT_MEMORY M-14)"
+  ],
+  "costIncurred": true,
+  "costDetail": "Google Vision OCR 7건 · OpenAI Product Profile 2회 · Gemini 이미지 생성 다수",
+  "actualResult": {
+    "바코드": "8804161300700 (GTIN-13, 체크디짓 검증 통과)",
+    "브랜드": "삼정크린마스터(주)",
+    "원산지": "한국",
+    "제조사URL": "www.samjeongcm.co.kr",
+    "모델명": "찾지 못함 — 포장지에 없어 비워 둠(지어내지 않음)",
+    "제품특정": "특정됨 (바코드 · 브랜드 · 품명)",
+    "상품명": "베란다용 스텐 호스 세트 3M",
+    "Gemini전달이미지": "4장 (배경제거본 + DESIGN 3장)",
+    "OCR전용제외": "4장 (포장지 전부)"
+  },
+  "browserUrl": "http://localhost:3100/image-studio",
+  "userChecks": [
+    "실제 제품과 동일한가",
+    "제품 구조가 같은가",
+    "구성품이 같은가",
+    "제품 특징이 유지되었는가",
+    "Product Package가 정확한가 (파랑 블록)",
+    "Gemini가 잘못된 이미지를 참조하지 않았는가 (주황 블록)",
+    "이미지 품질"
+  ],
+  "blockedOn": null,
+  "nextTasks": [
+    "T1-22 제품 자동 조사 — 조사 수단 미정(제조사 홈페이지 인증서 오류, 검색 API 키 필요)",
+    "T1-23 교차 검증"
+  ],
+  "taskId": "T1-21",
+  "updatedAt": "2026-08-08T16:45:25.714Z"
+}

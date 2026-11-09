@@ -1,0 +1,53 @@
+{
+  "taskId": "T1-26",
+  "state": "TESTING",
+  "runId": "7acc4429-40e8-40eb-bbef-6d04694992d6",
+  "startedAt": "2026-08-09T01:25:37.681Z",
+  "heartbeatAt": "2026-08-09T01:33:46.530Z",
+  "finishedAt": "2026-08-09T01:33:46.545Z",
+  "blockedOn": "사람 확인 단계로 못 올라감 — READY_FOR_REVIEW로 올릴 수 없습니다 — 기록이 빠졌습니다: 사용자가 확인할 항목",
+  "updatedAt": "2026-08-09T01:33:46.547Z",
+  "lastOutputAt": "2026-08-09T01:33:24.236Z",
+  "outputBytes": 655658,
+  "workDone": [
+    "T1-26 검증: Gemini로 가는 4개 진입점(배경 제거·배경 생성·합성·후보 생성) 전체를 점검",
+    "제거·생성·합성 경로에 INFO(포장지/라벨/설명서/사양표) 사진 차단 누락 발견 및 수정",
+    "공통 가드 assertNotInfoImage() 추가, 4개 경로 모두 동일 적용",
+    "회귀 테스트 4건 추가"
+  ],
+  "changedFiles": [
+    "apps/api/src/image-gen/image-gen.service.ts",
+    "apps/api/src/image-gen/image-gen.service.spec.ts"
+  ],
+  "testResults": {
+    "build": {
+      "ok": false,
+      "detail": "pnpm build → api 패키지 prisma generate 단계에서 ENOSPC(C드라이브 여유 0바이트)로 실패. 코드 오류 아님, 이 세션 시작 전부터 디스크가 가득 차 있었음(환경 문제)"
+    },
+    "typecheck": {
+      "ok": true,
+      "detail": "pnpm typecheck 전체 10/10 패키지 통과, 오류 0. apps/api 단독도 재확인함"
+    },
+    "lint": {
+      "ok": true,
+      "detail": "pnpm lint(eslint .) 저장소 전체 기준 오류 0, exit code 0"
+    },
+    "tests": {
+      "ok": true,
+      "detail": "apps/api image-gen 스위트 29/29 통과(신규 T1-26 회귀 테스트 4건 포함). packages/core 1858/1858 통과(129/130 스위트)"
+    }
+  },
+  "preExisting": [
+    "apps/api/src/ops/ops.spec.ts 8건 실패 — git diff 없음 확인, 실패 개수가 DEVELOPMENT_ENVIRONMENT.md·PROJECT_STATE.md에 기록된 기존 문제와 정확히 일치",
+    "packages/core/src/product-profile/product-package.spec.ts 컴파일 실패(TS2339, research 필드 미정의) — 이 세션 이전부터 존재하던 미추적(untracked) 파일이며 이번 세션에서 전혀 수정하지 않음. T1-22/T1-23 연결 미완료로 인한 것으로 T1-26 범위 밖"
+  ],
+  "errorsAndFixes": [
+    {
+      "error": "removeBackground/generateBackground/composite가 INFO(포장지·라벨) 사진을 걸러내지 않고 Gemini에 직접 전달할 수 있었음",
+      "fix": "공통 가드 assertNotInfoImage()를 4개 진입점 모두에 적용, 회귀 테스트로 고정"
+    }
+  ],
+  "costIncurred": true,
+  "costDetail": "Claude Code 호출 $2.4846582",
+  "rawResponse": "## 완료 보고 — T1-26 Gemini 전달\n\n**[작업 내용]**\n\nT1-26 요구사항(\"Gemini에는 실제 제품 참조 이미지와 Product Package만 전달. 포장지·라벨·설명서·사양표·박스·인증서·바코드 이미지는 절대 전달 금지\")에 대해 기존 코드를 점검한 결과, **실제 구멍을 발견했습니다.**\n\n- `generateImageCandidates`(카테고리별 후보 생성)에는 INFO(정보 확인용) 사진 차단 로직이 있었지만\n- `removeBackground`·`generateBackground`·`composite` — Gemini로 이미지 바이트를 직접 보내는 나머지 3개 경로에는 **이 검사가 없었습니다.** 즉 API를 직접 호출하면 포장지·라벨 사진 ID로도 Gemini 호출이 그대로 나갔습니다.\n\n**[수정]** `apps/api/src/image-gen/image-gen.service.ts` — 공통 가드 `assertNotInfoImage()`를 추가해 Gemini로 가는 모든 진입점(배경 제거·배경 생성·합성 양쪽 입력·후보 생성)에 동일하게 적용. 기존 `generateImageCandidates`의 개별 검사도 이 공통 함수로 통일.\n\n**[테스트 추가]** `apps/api/src/image-gen/image-gen.service.spec.ts`에 회귀 테스트 4건 — 포장지(INFO) 사진으로 각 경로를 호출하면 Gemini(`edit`)가 아예 호출되지 않고 400으로 거부되는지 확인.\n\n**[검증 결과]**\n- Typecheck: 10/10 패키지 통과, 오류 0\n- Lint: 저장소 전체 기준 오류 0\n- api 테스트: image-gen 스위트 29/29(신규 4건 포함) 통과. 전체 1029/1037 — 실패 8건은 전부 `ops.spec.ts`이며, 이 파일은 이번 세션에서 `git diff` 없음을 확인했고 실패 개수도 문서화된 기존 문제와 정확히 일치\n- core 테스트: 1858/1858 통과(129/130 스위트) — 실패한 1개 스위트(`product-package.spec.ts`)는 이번 세션 이전부터 존재하던 미추적 파일이고 제가 건드리지 않았음. `ProductPackage`에 아직 없는 `research` 필드를 참조하는 컴파일 오류 — T1-22/T1-23 연결 작업이 아직 안 끝난 것으로, T1-26 범위 밖\n- **Build는 완료하지 못했습니다.** `prisma generate` 단계에서 `ENOSPC`(C 드라이브 여유 공간 0바이트)로 실패했습니다. 이건 코드 문제가 아니라 이 PC의 디스크가 가득 찬 환경 문제입니다. 낯선 파일을 임의로 지우는 것은 위험한 작업이라 시도하지 않았습니다 — 코드 정확성과 직결되는 typecheck는 별도로 10/10 통과를 확인했습니다.\n\n**[미완료 / blockedOn]** C 드라이브 여유 공간이 0바이트라 `pnpm build`가 완주하지 못했습니다. 사람이 디스크 공간을 확보한 뒤 build만 재실행하면 됩니다(코드는 typecheck로 이미 검증됨).\n\nRESULT_JSON: {\"workDone\":[\"T1-26 검증: Gemini로 가는 4개 진입점(배경 제거·배경 생성·합성·후보 생성) 전체를 점검\",\"제거·생성·합성 경로에 INFO(포장지/라벨/설명서/사양표) 사진 차단 누락 발견 및 수정\",\"공통 가드 assertNotInfoImage() 추가, 4개 경로 모두 동일 적용\",\"회귀 테스트 4건 추가\"],\"changedFiles\":[\"apps/api/src/image-gen/image-gen.service.ts\",\"apps/api/src/image-gen/image-gen.service.spec.ts\"],\"testResults\":{\"build\":{\"ok\":false,\"detail\":\"pnpm build → api 패키지 prisma generate 단계에서 ENOSPC(C드라이브 여유 0바이트)로 실패. 코드 오류 아님, 이 세션 시작 전부터 디스크가 가득 차 있었음(환경 문제)\"},\"typecheck\":{\"ok\":true,\"detail\":\"pnpm typecheck 전체 10/10 패키지 통과, 오류 0. apps/api 단독도 재확인함\"},\"lint\":{\"ok\":true,\"detail\":\"pnpm lint(eslint .) 저장소 전체 기준 오류 0, exit code 0\"},\"tests\":{\"ok\":true,\"detail\":\"apps/api image-gen 스위트 29/29 통과(신규 T1-26 회귀 테스트 4건 포함). packages/core 1858/1858 통과(129/130 스위트)\"}},\"preExisting\":[\"apps/api/src/ops/ops.spec.ts 8건 실패 — git diff 없음 확인, 실패 개수가 DEVELOPMENT_ENVIRONMENT.md·PROJECT_STATE.md에 기록된 기존 문제와 정확히 일치\",\"packages/core/src/product-profile/product-package.spec.ts 컴파일 실패(TS2339, research 필드 미정의) — 이 세션 이전부터 존재하던 미추적(untracked) 파일이며 이번 세션에서 전혀 수정하지 않음. T1-22/T1-23 연결 미완료로 인한 것으로 T1-26 범위 밖\"],\"errorsAndFixes\":[{\"error\":\"removeBackground/generateBackground/composite가 INFO(포장지·라벨) 사진을 걸러내지 않고 Gemini에 직접 전달할 수 있었음\",\"fix\":\"공통 가드 assertNotInfoImage()를 4개 진입점 모두에 적용, 회귀 테스트로 고정\"}],\"blockedOn\":\"C 드라이브 여유 공간이 0바이트라 pnpm build(prisma generate)를 완주하지 못함. 사람이 디스크 공간을 확보해야 함 — 낯선 파일 임의 삭제는 하지 않았음. 코드 정확성은 typecheck(10/10)로 별도 확인됨\"}"
+}

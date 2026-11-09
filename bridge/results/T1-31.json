@@ -1,0 +1,8 @@
+{
+  "taskId": "T1-31",
+  "state": "SUPERSEDED",
+  "supersededBy": "실측 확인 — 재현되지 않음",
+  "supersededReason": "health·listTasks·getStatus·getTask·listProjects 5개 통로 전부 200에 JSON 정상, 깨진 작업 파일 0개(2026-08-09 측정). 증상은 디스크 부족으로 작업 파일이 0바이트로 잘렸을 때의 것이고, 지금은 깨진 파일을 건너뛰도록 고쳐져 있다.",
+  "projectId": "acos",
+  "updatedAt": "2026-08-09T07:43:26.205Z"
+}

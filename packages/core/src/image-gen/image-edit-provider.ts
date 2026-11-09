@@ -34,6 +34,16 @@ export interface ImageEditRequest {
   images?: { mimeType: string; base64: string }[];
   /** Provider 기본 모델을 덮어쓸 모델 ID */
   model?: string;
+  /**
+   * 생성 품질 힌트 (T1-152) — 미지정 시 Provider 기본값(OpenAI는 "high").
+   * 주 상품 사진(Hero/사용 장면/후보 이미지)은 항상 기본값(high)을 쓴다.
+   * Product Story의 보조 그래픽·아이콘·Hero 모티프처럼 장식용이고 여러 장을
+   * 순차 호출하는 경로만 "low"를 지정한다 — GPT Image 2가 quality:"high"에서
+   * 장당 약 100초 이상 걸려(2026-08-18 실측), 그런 경로를 그대로 두면
+   * 여러 장 합계가 수 분을 넘겨 요청 자체가 응답 없이 멈춘 것처럼 보인다.
+   * Gemini/Mock Provider는 이 값을 무시해도 된다(품질 손잡이가 없음).
+   */
+  quality?: "low" | "medium" | "high";
 }
 
 export interface ImageEditResult {

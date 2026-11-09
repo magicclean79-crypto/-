@@ -13,11 +13,13 @@ import {
 import type { Response } from "express";
 import { buildSessionClearCookie, buildSessionCookie } from "@acos/core";
 import type {
+  ChangeEmailRequest,
   ChangePasswordRequest,
   CreateUserRequest,
   LoginRequest,
   LoginResponseDto,
   ResetPasswordRequest,
+  SignupRequest,
   UpdateUserRequest,
   UserAuditLogDto,
   UserDto,
@@ -52,6 +54,26 @@ export class AuthController {
     const result = await this.authService.login(
       body ?? ({} as LoginRequest),
     );
+    response.setHeader(
+      "Set-Cookie",
+      buildSessionCookie(result.token as string, sessionCookieOptions()),
+    );
+    return isCookieOnly() ? { ...result, token: null } : result;
+  }
+
+  /**
+   * 회원가입 (T1-215, 공개 API) — 항상 VIEWER 역할로 계정을 생성하고
+   * 로그인과 동일하게 세션 쿠키를 발급한다. 관리자 권한은 이 경로로
+   * 부여되지 않는다.
+   */
+  @Post("signup")
+  @HttpCode(201)
+  @Public()
+  async signup(
+    @Body() body: SignupRequest,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<LoginResponseDto> {
+    const result = await this.authService.signup(body ?? ({} as SignupRequest));
     response.setHeader(
       "Set-Cookie",
       buildSessionCookie(result.token as string, sessionCookieOptions()),
@@ -97,6 +119,24 @@ export class AuthController {
       extractRequestToken(request.headers),
     );
     return { ok: true };
+  }
+
+  /**
+   * 로그인 ID(이메일) 변경 — 본인 셀프 서비스, 모든 역할 (T1-215,
+   * 감사 기록). 현재 비밀번호 확인 필요.
+   */
+  @Patch("email")
+  @UseGuards(AuthGuard)
+  @RequireRole("VIEWER")
+  async changeEmail(
+    @Req() request: AuthenticatedRequest,
+    @Body() body?: ChangeEmailRequest,
+  ): Promise<UserDto> {
+    return this.authService.changeEmail(
+      (request.user as UserDto).id,
+      body ?? ({} as ChangeEmailRequest),
+      extractRequestToken(request.headers),
+    );
   }
 
   /** 사용자 목록 — ADMIN 전용 (TASK-0802) */

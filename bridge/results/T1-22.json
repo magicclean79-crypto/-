@@ -1,0 +1,31 @@
+{
+  "taskId": "T1-22",
+  "state": "TESTING",
+  "startedAt": "2026-08-09T00:02:22.052Z",
+  "workDone": [
+    "T1-22가 이미 구현되어 있음을 확인(신규 작성 아님)",
+    "요구사항(식별된 경우만 수행·우선순위·공식 출처만·GPT 기억 미사용) 코드 검토로 충족 확인",
+    "build/typecheck/lint/test 재실행으로 검증",
+    "docs/PROJECT_STATE.md·docs/PROJECT_MEMORY.md 갱신"
+  ],
+  "changedFiles": [
+    "docs/PROJECT_STATE.md",
+    "docs/PROJECT_MEMORY.md"
+  ],
+  "testResults": {
+    "build": "성공 (6/6)",
+    "typecheck": "성공 (10/10, 오류 0)",
+    "lint": "신규 오류 0, 기존 무관 오류 4건(git diff 없음 확인)",
+    "tests": "core 130 suites/1879 tests 통과, api 72/73 suites(1025/1033) 통과 — 실패 8건은 ops.spec.ts 기존 문제(git diff 없음 확인)"
+  },
+  "errorsAndFixes": [],
+  "costIncurred": true,
+  "costDetail": "Claude Code 호출 $2.8693784000000004",
+  "blockedOn": "사람 확인 단계로 못 올라감 — READY_FOR_REVIEW로 올릴 수 없습니다 — 실패한 검사가 있습니다: lint · tests",
+  "rawResponse": "T1-22(제품 자동 조사)는 이미 이 작업 트리에서 구현이 끝나 있었습니다(다른 세션이 먼저 작업). 이번 세션에서는 새로 작성하지 않고, 요구사항 충족 여부와 빌드·테스트·타입체크·린트를 실제로 재실행해 검증했습니다.\n\n[완료]\n`packages/core/src/product-profile/product-research.ts`(순수 로직) + `apps/api/src/product-research/`(모듈·서비스·컨트롤러·Provider 2종)가 이미 구현되어 있음을 확인했습니다.\n- **제품이 식별된 경우에만 수행**: `planProductResearch`가 `identification.identified`가 거짓이면 빈 계획을 반환, `ProductResearchService`는 계획이 비면 Provider를 부르지 않음(과금 없음)\n- **조사 우선순위**: 바코드 → 모델명 → 브랜드 → 공식 제조사 홈페이지 → 공식 카탈로그 순서로 계획하고, 상위 단계에서 공식 출처를 찾으면 그 자리에서 멈춤(비용 최소화)\n- **공식 정보만 사용**: `classifyResearchSource`가 쇼핑몰(다나와·G마켓·11번가·쿠팡 등)을 무조건 배제하고, 포장지 OCR로 읽은 제조사 호스트 또는 공인 바코드 조회 기관(코리안넷 등)만 공식으로 인정. 나머지는 버리되 근거와 함께 `excluded`에 남김\n- **GPT의 기억을 사실처럼 사용하지 않음**: 기본 Provider는 아무 것도 조사하지 않는 `NoopWebResearchProvider`(비용 0). 실제로 켜면 OpenAI Responses API의 `web_search` 도구가 **실제로 방문해 인용한 URL만** 결과로 인정하고 인용 없는 텍스트는 버림\n- `AppModule`에 등록되어 `POST /product-research`로 바로 호출 가능(DB 저장 없음)\n\n실 유료 검색 호출은 하지 않았습니다(`WEB_RESEARCH_PROVIDER` 기본값 none 유지) — \"API 비용 최소화\" 제약과 이전 세션의 판단을 그대로 따랐습니다.\n\n[검증] (이번 세션에서 실제로 재실행)\n- Build: `pnpm build` 6/6 성공\n- Typecheck: `pnpm typecheck` 10/10, 오류 0\n- Lint: `pnpm lint` 4건 실패이나 전부 `git diff` 없는 기존 파일(`apps/web/app/benchmark/*`, `design-review/history/compare/page.tsx`) — 이번 검증과 무관함을 diff로 재확인\n- Test: `@acos/core` 130 suites/1879 tests 전부 통과, `apps/api` 72/73 suites(1025/1033) 통과 — 실패 8건은 전부 `ops.spec.ts`이며 해당 파일도 `git diff` 없음 확인(기존 문제와 동일). product-research 관련 테스트만 별도 재실행 시 core 12/12, api 10/10 전부 통과\n\n[브라우저 확인]\n이 작업은 순수 로직 + API 엔드포인트이며 화면이 없습니다. `POST http://localhost:4100/product-research` (body: `{\"ocrText\": \"...\"}`)로 직접 호출해 결과를 볼 수 있습니다. 조사 결과를 image-studio 화면에 표시하는 것은 TASKS.md 기준 T1-24 범위입니다.\n\n[미완료]\n없음 — T1-22 자체는 완료 상태이며, 조사 결과를 교차 검증에 실제로 연결하는 일은 별도 작업(T1-24)입니다.\n\n문서 갱신: `docs/PROJECT_STATE.md`(T1-22 완료 반영, 검증 기록 §3-3 추가), `docs/PROJECT_MEMORY.md`(M-23 — Bridge 상태 필드가 실제 코드 상태와 어긋날 수 있다는 사실 기록).\n\nRESULT_JSON: {\"workDone\":[\"T1-22가 이미 구현되어 있음을 확인(신규 작성 아님)\",\"요구사항(식별된 경우만 수행·우선순위·공식 출처만·GPT 기억 미사용) 코드 검토로 충족 확인\",\"build/typecheck/lint/test 재실행으로 검증\",\"docs/PROJECT_STATE.md·docs/PROJECT_MEMORY.md 갱신\"],\"changedFiles\":[\"docs/PROJECT_STATE.md\",\"docs/PROJECT_MEMORY.md\"],\"testResults\":{\"build\":\"성공 (6/6)\",\"typecheck\":\"성공 (10/10, 오류 0)\",\"lint\":\"신규 오류 0, 기존 무관 오류 4건(git diff 없음 확인)\",\"tests\":\"core 130 suites/1879 tests 통과, api 72/73 suites(1025/1033) 통과 — 실패 8건은 ops.spec.ts 기존 문제(git diff 없음 확인)\"},\"errorsAndFixes\":[],\"blockedOn\":null}",
+  "updatedAt": "2026-08-09T00:11:38.466Z",
+  "runId": "e383416a-700e-4295-889e-e7f057665c60",
+  "heartbeatAt": "2026-08-09T00:11:38.452Z",
+  "recoveredAt": "2026-08-09T00:02:21.980Z",
+  "finishedAt": "2026-08-09T00:11:38.464Z"
+}

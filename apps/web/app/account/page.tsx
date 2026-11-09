@@ -22,6 +22,10 @@ export default function AccountPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [emailForm, setEmailForm] = useState({ password: "", newEmail: "" });
+  const [emailError, setEmailError] = useState<string | null>(null);
+  const [emailSuccess, setEmailSuccess] = useState(false);
+  const [emailBusy, setEmailBusy] = useState(false);
 
   useEffect(() => {
     if (!getAuthToken()) {
@@ -72,6 +76,38 @@ export default function AccountPage() {
     setBusy(false);
   }
 
+  async function changeEmail(event: React.FormEvent) {
+    event.preventDefault();
+    setEmailError(null);
+    setEmailSuccess(false);
+    setEmailBusy(true);
+    try {
+      const response = await fetch(
+        `${API_URL}/auth/email`,
+        authFetchInit({
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            currentPassword: emailForm.password,
+            newEmail: emailForm.newEmail,
+          }),
+        }),
+      );
+      const data = (await response.json()) as UserDto & { message?: string };
+      if (response.ok) {
+        setUser(data);
+        localStorage.setItem(AUTH_USER_KEY, JSON.stringify(data));
+        setEmailSuccess(true);
+        setEmailForm({ password: "", newEmail: "" });
+      } else {
+        setEmailError(data.message ?? `변경 실패 (HTTP ${response.status})`);
+      }
+    } catch {
+      setEmailError("API 서버에 연결할 수 없습니다.");
+    }
+    setEmailBusy(false);
+  }
+
   return (
     <main className="mx-auto flex min-h-screen max-w-xl flex-col gap-8 px-6 py-16">
       <div>
@@ -110,6 +146,65 @@ export default function AccountPage() {
               </p>
             </section>
           ) : null}
+
+          <section className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
+            <h2 className="text-sm font-semibold">로그인 ID(이메일) 변경</h2>
+            <p className="mt-1 text-xs text-zinc-500">
+              현재 비밀번호 확인이 필요합니다. 변경 시 다른 기기의 세션은
+              모두 로그아웃됩니다.
+            </p>
+            <form
+              onSubmit={changeEmail}
+              data-testid="email-change-form"
+              className="mt-3 flex flex-col gap-3 text-sm"
+            >
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-zinc-500">현재 비밀번호</span>
+                <input
+                  type="password"
+                  required
+                  value={emailForm.password}
+                  onChange={(event) =>
+                    setEmailForm({ ...emailForm, password: event.target.value })
+                  }
+                  className="rounded-md border border-zinc-300 bg-transparent px-2 py-1.5 dark:border-zinc-700"
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-zinc-500">새 이메일</span>
+                <input
+                  type="email"
+                  required
+                  value={emailForm.newEmail}
+                  onChange={(event) =>
+                    setEmailForm({ ...emailForm, newEmail: event.target.value })
+                  }
+                  className="rounded-md border border-zinc-300 bg-transparent px-2 py-1.5 dark:border-zinc-700"
+                />
+              </label>
+              <button
+                type="submit"
+                disabled={emailBusy}
+                className="self-start rounded-md bg-zinc-900 px-3 py-1.5 font-medium text-white disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
+              >
+                변경
+              </button>
+            </form>
+            {emailError ? (
+              <p data-testid="email-change-error" className="mt-2 text-xs text-red-600">
+                {emailError}
+              </p>
+            ) : null}
+            {emailSuccess ? (
+              <p
+                data-testid="email-change-success"
+                className="mt-2 text-xs text-emerald-700 dark:text-emerald-400"
+              >
+                이메일이 변경되었습니다. 다음 로그인부터 새 이메일을
+                사용하세요. 다른 기기의 세션은 로그아웃되었습니다.
+              </p>
+            ) : null}
+          </section>
 
           <section className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
             <h2 className="text-sm font-semibold">비밀번호 변경</h2>

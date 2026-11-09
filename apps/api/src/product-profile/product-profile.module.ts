@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { ProductProfileEngine } from "@acos/core";
 import type { PromptEngine } from "@acos/core";
+import { ImageGenModule } from "../image-gen/image-gen.module";
 import { LlmModule } from "../llm/llm.module";
 import { LlmService } from "../llm/llm.service";
 import { PromptModule } from "../prompt/prompt.module";
@@ -21,7 +22,7 @@ import { ProductProfileService } from "./product-profile.service";
  * `SharpImagePreprocessor`를 재사용한다.
  */
 @Module({
-  imports: [LlmModule, PromptModule],
+  imports: [LlmModule, PromptModule, ImageGenModule],
   controllers: [ProductProfileController],
   providers: [
     ProductProfileService,

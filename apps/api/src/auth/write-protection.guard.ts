@@ -11,12 +11,22 @@ import type { UserRole } from "@acos/shared";
 import { REQUIRED_ROLE_KEY } from "./auth.guard";
 import type { AuthenticatedRequest } from "./auth.guard";
 import { AuthService } from "./auth.service";
-import { extractRequestToken } from "./session-config";
+import { extractRequestToken, isOperationalEnv } from "./session-config";
 
 export const PUBLIC_KEY = "acos:public";
 
 /** 쓰기 메서드여도 인증을 요구하지 않는 엔드포인트 표시 (읽기 성격의 POST 등) */
 export const Public = () => SetMetadata(PUBLIC_KEY, true);
+
+export const PUBLIC_IN_DEV_KEY = "acos:public-in-dev";
+
+/**
+ * 개발 환경(NODE_ENV가 production/staging이 아닐 때)에서만 인증을
+ * 우회한다 (T1-110 — Image Studio 로컬 테스트 로그인 요구 제거).
+ * `@Public()`과 달리 운영/스테이징에서는 그대로 인증을 요구한다 —
+ * 실 과금(LLM 호출)이 걸린 엔드포인트를 인터넷에 공개하지 않기 위함.
+ */
+export const PublicInDev = () => SetMetadata(PUBLIC_IN_DEV_KEY, true);
 
 const WRITE_METHODS = ["POST", "PATCH", "PUT", "DELETE"];
 
@@ -29,6 +39,8 @@ export const DEFAULT_WRITE_ROLE: UserRole = "EDITOR";
  * APP_GUARD로 등록되어 모든 POST/PATCH/PUT/DELETE에 인증을 강제한다:
  * - GET/HEAD/OPTIONS: 통과 (조회 API는 비보호 — CTO 결정 0801 승인 ①)
  * - @Public(): 통과 — 읽기 성격의 POST(로그인·Company Brain 조회·READY 검증)
+ * - @PublicInDev(): 운영/스테이징이 아닐 때만 통과 (T1-110 — Image Studio
+ *   로컬 테스트 전용, 운영에서는 그대로 인증을 요구한다)
  * - 그 외 쓰기: Bearer 검증 + 기본 EDITOR 이상 (@RequireRole로 개별 지정 시
  *   해당 역할 기준 — 예: 사용자 관리 ADMIN, 로그아웃 VIEWER)
  */
@@ -51,6 +63,14 @@ export class WriteProtectionGuard implements CanActivate {
       context.getClass(),
     ]);
     if (isPublic) {
+      return true;
+    }
+
+    const isPublicInDev = this.reflector.getAllAndOverride<boolean>(
+      PUBLIC_IN_DEV_KEY,
+      [context.getHandler(), context.getClass()],
+    );
+    if (isPublicInDev && !isOperationalEnv()) {
       return true;
     }
 

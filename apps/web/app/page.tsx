@@ -2,174 +2,129 @@ import Link from "next/link";
 import { APP_NAME } from "@acos/shared";
 import { Card } from "@acos/ui";
 import { ApiStatus } from "./api-status";
+import { AuthGate } from "./auth-gate";
+
+const CORE_FLOW = [
+  {
+    step: "STEP 1",
+    href: "/upload",
+    emoji: "📸",
+    title: "상품 사진 업로드",
+    desc: "상품 사진을 올리면 파이프라인이 시작됩니다.",
+  },
+  {
+    step: "STEP 2",
+    href: "/product-profile",
+    emoji: "🧬",
+    title: "제품 분석",
+    desc: "OCR·Vision으로 실제 제품 정보를 확인·정정합니다.",
+  },
+  {
+    step: "STEP 3",
+    href: "/image-studio",
+    emoji: "🖼️",
+    title: "상세페이지 생성",
+    desc: "AI가 만든 이미지를 보고 상세페이지를 완성합니다.",
+  },
+];
+
+const SECONDARY_LINKS = [
+  { href: "/projects", emoji: "🗂️", label: "프로젝트" },
+  { href: "/products", emoji: "📦", label: "상품 목록" },
+  { href: "/design-review", emoji: "🎨", label: "디자인 리뷰" },
+];
+
+const ACCOUNT_LINKS = [
+  { href: "/login", emoji: "🔐", label: "로그인" },
+  { href: "/account", emoji: "🔑", label: "내 계정" },
+];
 
 export default function Home() {
   return (
-    <main className="mx-auto flex min-h-screen max-w-3xl flex-col justify-center gap-8 px-6 py-16">
+    <AuthGate>
+      <HomeScreen />
+    </AuthGate>
+  );
+}
+
+function HomeScreen() {
+  return (
+    <main className="mx-auto flex min-h-screen max-w-4xl flex-col gap-10 px-6 py-16">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">{APP_NAME}</h1>
         <p className="mt-2 text-zinc-600 dark:text-zinc-400">
-          AI 기반 제품 콘텐츠 운영 시스템 — pnpm + Turborepo Monorepo
+          상품 사진 몇 장으로 판매용 상세페이지를 만드는 AI 콘텐츠 제작
+          시스템입니다.
         </p>
-        <div className="mt-4 flex gap-3">
-          <Link
-            href="/upload"
-            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
-          >
-            📸 상품 사진 업로드
-          </Link>
-          <Link
-            href="/product-profile"
-            className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700"
-          >
-            🧬 Product Detail Engine
-          </Link>
-          <Link
-            href="/design-review"
-            className="inline-flex items-center gap-2 rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-purple-700"
-          >
-            🎨 디자인 리뷰
-          </Link>
-          <Link
-            href="/benchmark"
-            className="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-amber-700"
-          >
-            🎯 Benchmark Product
-          </Link>
-          <Link
-            href="/image-studio"
-            className="inline-flex items-center gap-2 rounded-lg bg-fuchsia-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-fuchsia-700"
-          >
-            🖼️ 이미지 스튜디오 (Gemini)
-          </Link>
-          <Link
-            href="/projects"
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            🗂️ 프로젝트
-          </Link>
-          <Link
-            href="/products"
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            📦 상품 목록
-          </Link>
-          <Link
-            href="/executions"
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            📊 실행 대시보드
-          </Link>
-          <Link
-            href="/providers"
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            🔌 Provider 현황
-          </Link>
-          <Link
-            href="/routing"
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            🔀 Routing 현황
-          </Link>
-          <Link
-            href="/experiments"
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            🧪 Experiment 현황
-          </Link>
-          <Link
-            href="/admin/console"
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            ⚙️ Provider 관리 콘솔
-          </Link>
-          <Link
-            href="/admin/health"
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            🩺 배포 준비 상태
-          </Link>
-          <Link
-            href="/admin/production"
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            📡 Provider 운영 점검
-          </Link>
-          <Link
-            href="/admin/activation"
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            🚦 운영 활성화
-          </Link>
-          <Link
-            href="/admin/readiness"
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            ✅ 운영 준비 상태
-          </Link>
-          <Link
-            href="/admin/runbook"
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            📖 운영 활성화 런북
-          </Link>
-          <Link
-            href="/admin/jobs"
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            🧵 작업 현황
-          </Link>
-          <Link
-            href="/admin/overview"
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            🧭 통합 운영 상태
-          </Link>
-          <Link
-            href="/admin/go-live"
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            🏁 Go-Live 체크리스트
-          </Link>
-          <Link
-            href="/admin/kpi"
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            📊 운영 KPI
-          </Link>
-          <Link
-            href="/admin/costs"
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            💵 AI 비용 관리
-          </Link>
-          <Link
-            href="/admin/operations"
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            🛟 운영 대시보드
-          </Link>
-          <Link
-            href="/login"
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            🔐 로그인
-          </Link>
-          <Link
-            href="/admin/users"
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            👥 사용자 관리
-          </Link>
-          <Link
-            href="/account"
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            🔑 내 계정
-          </Link>
-        </div>
       </div>
+
+      <section aria-labelledby="core-flow-heading">
+        <h2
+          id="core-flow-heading"
+          className="text-sm font-semibold text-zinc-500 dark:text-zinc-400"
+        >
+          상세페이지 만들기
+        </h2>
+        <div className="mt-3 grid gap-4 sm:grid-cols-3">
+          {CORE_FLOW.map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              className="flex flex-col gap-2 rounded-xl border border-zinc-200 bg-white p-5 transition-colors hover:border-blue-400 hover:bg-blue-50 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-blue-700 dark:hover:bg-blue-950"
+            >
+              <span className="text-xs font-semibold text-blue-600 dark:text-blue-400">
+                {item.step}
+              </span>
+              <span className="text-lg font-semibold">
+                {item.emoji} {item.title}
+              </span>
+              <span className="text-sm text-zinc-500 dark:text-zinc-400">
+                {item.desc}
+              </span>
+            </Link>
+          ))}
+        </div>
+      </section>
+
+      <section aria-labelledby="secondary-links-heading">
+        <h2
+          id="secondary-links-heading"
+          className="text-sm font-semibold text-zinc-500 dark:text-zinc-400"
+        >
+          더 보기
+        </h2>
+        <div className="mt-3 flex flex-wrap gap-3">
+          {SECONDARY_LINKS.map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+            >
+              {item.emoji} {item.label}
+            </Link>
+          ))}
+        </div>
+      </section>
+
+      <section className="flex flex-wrap items-center justify-between gap-3 border-t border-zinc-200 pt-6 dark:border-zinc-800">
+        <div className="flex flex-wrap gap-4">
+          {ACCOUNT_LINKS.map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              className="inline-flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
+            >
+              {item.emoji} {item.label}
+            </Link>
+          ))}
+        </div>
+        <Link
+          href="/admin"
+          className="inline-flex items-center gap-1.5 text-sm text-zinc-400 hover:text-zinc-700 dark:text-zinc-600 dark:hover:text-zinc-300"
+        >
+          ⚙️ 관리자
+        </Link>
+      </section>
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Card title="Web (Next.js)">
@@ -178,13 +133,8 @@ export default function Home() {
         <Card title="API (NestJS)">
           <ApiStatus />
         </Card>
-        <Card title="Packages">
-          @acos/core · @acos/shared · @acos/agents · @acos/ui
-        </Card>
-        <Card title="Infrastructure">
-          PostgreSQL · Redis · MinIO (docker compose up -d)
-        </Card>
       </div>
     </main>
   );
 }
+

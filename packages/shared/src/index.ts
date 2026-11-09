@@ -82,11 +82,13 @@ export interface UpdateUserRequest {
 
 export const USER_AUDIT_ACTIONS = [
   "USER_CREATED",
+  "USER_SIGNED_UP",
   "ROLE_CHANGED",
   "USER_DISABLED",
   "USER_ENABLED",
   "PASSWORD_CHANGED",
   "PASSWORD_RESET",
+  "EMAIL_CHANGED",
   "LOGIN_FAILED",
   "ACCOUNT_LOCKED",
 ] as const;
@@ -122,6 +124,16 @@ export interface CreateUserRequest {
   role: UserRole;
 }
 
+/**
+ * 자체 회원가입 (T1-215) — 공개 API. 생성되는 계정은 항상 VIEWER
+ * 역할이다(관리자 권한은 `POST /auth/users`로만 부여 가능, ADMIN 전용).
+ */
+export interface SignupRequest {
+  email: string;
+  name: string;
+  password: string;
+}
+
 /** 비밀번호 변경 (TASK-0803) — 본인 셀프 서비스, 모든 역할 가능 */
 export interface ChangePasswordRequest {
   currentPassword: string;
@@ -131,6 +143,16 @@ export interface ChangePasswordRequest {
 /** 비밀번호 재설정 (TASK-0803) — ADMIN이 다른 사용자에게 새 비밀번호 지정 */
 export interface ResetPasswordRequest {
   newPassword: string;
+}
+
+/**
+ * 로그인 ID(이메일) 변경 (T1-215) — 본인 셀프 서비스, 모든 역할 가능.
+ * 현재 비밀번호 확인을 요구해 세션 탈취만으로는 로그인 ID를 바꿀 수
+ * 없게 한다(비밀번호 변경과 동일한 보호 수준).
+ */
+export interface ChangeEmailRequest {
+  currentPassword: string;
+  newEmail: string;
 }
 
 export interface GenerateContentRequest {
@@ -163,8 +185,16 @@ export interface ImageDto {
   groupVersion?: number | null;
   /** 재생성 시 선택한 방향(예: "더 고급스럽게") */
   style?: string | null;
-  /** 사용자가 이 카테고리의 최종 이미지로 직접 선택했는지 */
+  /** 사용자가 이 카테고리의 최종 이미지로 직접 선택했는지(자동 승격 포함) */
   selected?: boolean;
+  /**
+   * 이 `selected` 상태가 사람이 명시적으로 고정한 것인지 (T1-155). true면
+   * 사람이 select/select-original을 직접 호출한 것이라 더 새 생성이
+   * 성공해도 이 이미지의 selected 상태가 자동으로 바뀌지 않는다. false(또는
+   * 미지정, 이 필드가 생기기 전 기존 데이터)면 파이프라인이 스스로 정한
+   * 상태라 더 최신 생성이 검증을 통과하면 자동으로 대체될 수 있다.
+   */
+  locked?: boolean;
   /** 사진 유형 자동 분류 결과 — 업로드 직후 미분류 상태면 null(=DESIGN으로 취급) */
   photoType?: PhotoType | null;
 }
@@ -201,6 +231,14 @@ export interface GenerateImageCandidatesRequest {
   style?: string;
   /** 장면 묘사 직접 지정(선택) — 미지정 시 카테고리 기본 프롬프트 사용 */
   scenePrompt?: string;
+  /**
+   * Product Story의 해당 Section 목적 (T1-94, 선택) — Story 생성 화면에서
+   * "이 섹션에 쓸 이미지를 다시 만들고 싶다"고 할 때, 그 섹션의 목적을
+   * 그대로 넘기면 생성 지시문에 참고로 덧붙는다. 제품 동일성 규칙보다
+   * 뒤에 붙으므로 실제 제품 사실과 충돌하는 지시로는 쓰이지 않는다
+   * (`buildImageGenerationPrompt`의 기존 규칙과 같은 우선순위).
+   */
+  storySectionPurpose?: string;
 }
 
 export interface GenerateImageCandidatesResult {
@@ -211,10 +249,53 @@ export interface GenerateImageCandidatesResult {
   groupVersion: number;
   candidates: ImageDto[];
   failedCount: number;
+  /**
+   * 실패한 시도의 원인 메시지 (T1-138) — `failedCount`가 0보다 크면
+   * 최소 1개 이상 채워진다. Gemini 호출이 실패했는데 원인을 알 수 없는
+   * 채로 "생성 실패"라고만 뜨면 사람이 재시도할지 판단할 수 없다.
+   */
+  errors: string[];
+  /**
+   * 이번에 새로 생성된 각 후보가 자동으로 최종(selected) 이미지로
+   * 승격됐는지 (T1-155 — "최신 생성 결과 자동 승격, 선택 상태 단절
+   * 방지"). 사실과 평가를 구분해 보고한다(`docs/MASTER_GUIDE.md`) — 왜
+   * 승격됐는지/안 됐는지를 그대로 드러낸다.
+   *
+   * - `auto_selected`: 이 카테고리에 사람이 명시적으로 고정(locked)한
+   *   이미지가 없어 이 후보를 자동으로 최종 이미지로 승격했다.
+   * - `skipped_locked`: 사람이 이미 이 카테고리의 다른 이미지를
+   *   명시적으로 선택/고정해 두어 승격을 건너뛰었다 — 사람의 선택을
+   *   존중한다.
+   * - `skipped_validation_failed`: 생성 후 검증(`IMAGE_VALIDATION_ENABLED`)에서
+   *   글자 렌더링·정체성 위반이 재시도 후에도 발견돼 승격하지 않았다.
+   */
+  autoSelection: { imageId: string; status: "auto_selected" | "skipped_locked" | "skipped_validation_failed" }[];
 }
 
 export interface SelectImageRequest {
   imageId: string;
+}
+
+/**
+ * 실제 업로드 원본 사진을 Gemini 호출 없이 그대로 상세페이지 asset
+ * 카테고리로 지정한다(T1-144 — 이미지 밀도 확대, 최소 4~6개 실제 원본
+ * 사진 요구사항). `generateImageCandidates`가 만드는 "Gemini가 새로
+ * 그린" 후보와 달리 픽셀을 바꾸지 않는다 — 사람이 이미 검증한 원본
+ * 그대로를 그 카테고리의 대표/보조 사진으로 쓰겠다는 선택일 뿐이다.
+ */
+export interface SelectOriginalAsAssetRequest {
+  imageId: string;
+  category: ImageCategory;
+}
+
+/**
+ * 지정한 id들의 이미지 메타데이터(특히 `photoType`)를 조회한다 (T1-99) —
+ * Image Studio가 참조 사진 선택 화면에서 "제품 시각 참조용(DESIGN)"과
+ * "상품 분석 전용(INFO)"을 구분해 보여주는 데 쓴다. 이미지 바이트는
+ * 내려주지 않는다(기존 `GET /uploads/images/:id/file` 재사용).
+ */
+export interface GetImagesByIdsResponse {
+  results: ImageDto[];
 }
 
 export const IMAGE_KINDS = [
@@ -233,6 +314,20 @@ export interface ImageGenerationMetadata {
   backgroundImageId?: string;
   /** 실사용 장면 여러 샷 생성일 때 몇 번째 샷인지(0부터) */
   shotIndex?: number;
+  /** 이 이미지를 생성할 때 Gemini에 함께 전달된 Product Package 스냅샷 */
+  productPackage?: ProductPackage;
+  /** Gemini 응답의 텍스트 부분(이미지 외 응답이 있을 때만) */
+  rawResponseText?: string | null;
+  /**
+   * 이 이미지를 만들 때 **Gemini에 실제로 전달된 참조 이미지 목록**과
+   * **OCR 전용으로 분류되어 전달하지 않은 목록** (CTO 지시, 2026-08-08).
+   *
+   * 사람이 브라우저에서 "포장지가 Gemini로 잘못 넘어가지 않았는지"를 즉시
+   * 확인할 수 있어야 한다. 화면에 두 목록을 나눠 보여 준다.
+   */
+  referenceImages?: { id: string; role: string; photoType?: PhotoType | null }[];
+  /** 정보 추출 전용으로 분류되어 Gemini에 전달하지 않은 이미지 */
+  excludedInfoImages?: { id: string; originalName: string }[];
 }
 
 /** 배경 제거 → 배경 생성 → 합성 (Sprint 36 — Gemini 이미지 생성/편집) */
@@ -499,6 +594,15 @@ export interface ImageFeatureAnalysis {
    * 전달하지 않는다(비용·생성시간·품질 개선).
    */
   photoTypes: PhotoType[];
+  /**
+   * 이미지별 실제 캡션 (T1-93 — 상세페이지 품질 개선). 첨부된 이미지 순서와
+   * 1:1 대응한다(길이는 항상 이미지 수와 같다). 그 사진에서 실제로 눈에
+   * 보이는 것만 짧게 서술한다 — "이 사진이 어떤 특징/사용 장면을 보여주는지"
+   * 상세페이지에서 그 사진 옆에 그대로 쓸 수 있는 근거 문장이다.
+   * DESIGN 사진 중에서도 확신이 없으면 null(빈칸으로 두고 캡션 없이 사진만
+   * 보여주게 한다 — 추측으로 채우지 않는다). INFO 사진은 항상 null이다.
+   */
+  photoCaptions: (string | null)[];
 }
 
 export const PHOTO_TYPES = ["DESIGN", "INFO"] as const;
@@ -545,7 +649,39 @@ export interface ProductProfileDto {
   /** 실행 시점 OCR 텍스트 스냅샷(감사용) */
   ocrText: string | null;
   imageFeatures: ImageFeatureAnalysis | null;
+  /** STEP 4가 실제로 답한 그대로의 Product Profile — 가공하지 않은 원본(사실) */
   profile: ProductProfile | null;
+  /**
+   * 제품 자동 분석 (T1-21) — 이 실행의 OCR/Vision 텍스트에서 직접 뽑은 값.
+   * 타입은 `@acos/core`의 `ProductIdentification`과 같다(의존 방향 유지,
+   * `ProductPackage.identification`과 같은 이유로 구조만 옮겨 적는다).
+   */
+  identification: {
+    barcodes: { value: string; format: string; checkDigitValid: boolean }[];
+    urls: { value: string; kind: string }[];
+    officialProductLabel: string | null;
+    model: string | null;
+    brand: string | null;
+    origin: string | null;
+    customerServicePhone: string | null;
+    identified: boolean;
+    identifiedBy: string[];
+  } | null;
+  /**
+   * 교차 검증 결과 (T1-23/T1-24) — `profile`(GPT 분석)과 `identification`
+   * (OCR 직접 추출)이 같은 항목에 다른 값을 말하면 자동으로 채우지 않는다.
+   * STEP 5(`pageCopy`·`html`)는 `profile`이 아니라 이 결과로 검증된 값만
+   * 쓴다. 타입은 `@acos/core`의 `CrossVerificationResult`와 같다.
+   */
+  crossVerification: {
+    fields: {
+      field: string;
+      observations: { source: string; value: string }[];
+      status: "single-source" | "agreed" | "conflict" | "unknown";
+      resolvedValue: string | null;
+    }[];
+    hasConflict: boolean;
+  } | null;
   /** STEP 5 — LLM이 생성한 대표 문구·제품 설명 */
   pageCopy: ProductPageCopy | null;
   /** STEP 5 — Product Profile을 렌더링한 상세페이지 HTML(재사용 가능한 template 구조) */
@@ -554,6 +690,25 @@ export interface ProductProfileDto {
   css: string | null;
   /** STEP 5b 렌더링에 쓰인 템플릿 키 (예: "basic", "living-a-trust") */
   templateKey: string | null;
+  /**
+   * 사용자 요구사항 기반 생성 (T1-92) — 사용자가 직접 입력한 자유 텍스트
+   * 요구사항. 이 실행이 생성된 시점에 입력된 값이며, `PATCH
+   * /product-profile/:id/user-requirement`로 재실행 없이 값만 바꿀 수도
+   * 있다. Gemini 이미지 생성(`ProductPackage.userRequirement`)과
+   * 상세페이지 재생성(STEP 5a 카피 프롬프트) 양쪽이 이 값을 함께 쓴다 —
+   * 실제 제품 정보(Product Profile/Package)와 충돌하면 제품 사실이
+   * 우선한다(프롬프트 규칙, 강제 검증 아님).
+   */
+  userRequirement: string | null;
+  /**
+   * 목적별 사용자 요구사항 (T1-99) — Gemini 이미지 생성 목적(카테고리)마다
+   * 독립적으로 입력한 요구사항. `PATCH /product-profile/:id/user-requirement`의
+   * `userRequirementsByCategory`로 갱신한다. 값이 있는 카테고리만 키로
+   * 존재한다(값이 없는 카테고리는 이 필드가 아예 관여하지 않고 위
+   * `userRequirement`로도 자동 대체되지 않는다 — 목적별 입력은 목적별로만
+   * 쓰인다). 없으면 null.
+   */
+  userRequirementsByCategory: Partial<Record<ImageCategory, string>> | null;
   provider: string | null;
   error: string | null;
   attempts: number;
@@ -563,11 +718,414 @@ export interface ProductProfileDto {
   updatedAt: string;
 }
 
+/**
+ * 최종 상세페이지 (T1-75 — 이미지 생성/제품 동일성 검증 파이프라인 →
+ * 상세페이지 생성 연결). `ProductProfileDto.html/css`는 STEP 5 실행 시점에
+ * "원본 업로드 사진"만으로 만든 결과다. Image Studio(카테고리별 Gemini
+ * 이미지 생성 + 사람 선택)에서 이 실행이 쓴 원본 사진들에 대해 사람이 이미
+ * 카테고리별 최종 이미지를 선택해 두었다면, 그 사진들로 다시 조립한 결과를
+ * 돌려준다 — 추가 LLM 호출 없이(순수 렌더링) `Image.selected` 상태만 다시
+ * 읽는다. 아무것도 선택돼 있지 않으면 STEP 5 결과를 그대로 돌려준다.
+ */
+export interface ProductProfileFinalPageDto {
+  /** 재사용 가능한 fragment(`<div class="pde-page">...</div>`) */
+  html: string;
+  /** `.pde-page` 아래로 스코프된 CSS */
+  css: string;
+  templateKey: string;
+  productName: string;
+  keywords: string[];
+  /** "studio-selected" — Image Studio에서 선택한 이미지로 다시 조립함.
+   * "original-upload" — 아직 선택된 이미지가 없어 원본 업로드 사진 기준
+   * STEP 5 결과를 그대로 반환함. */
+  imageSource: "studio-selected" | "original-upload";
+  /** imageSource가 "studio-selected"일 때 실제로 쓰인 이미지 수 */
+  selectedImageCount: number;
+  /**
+   * 어느 파이프라인이 이 결과를 만들었는지 (T1-131 — ④-A/④-B 통합).
+   * "story" — 캐노니컬 파이프라인(Product Story → Design Plan → 실제
+   * 제품 사진 + Gemini 생성 비주얼). `POST /:id/story`가 최소 1회
+   * 성공적으로 실행되어 저장된 뒤에는 항상 이 값이다. "legacy" — 아직
+   * Story가 한 번도 생성되지 않아 카테고리 순서 템플릿(레거시)으로
+   * 대신 조립한 결과 — 기본값이 아니라 캐노니컬 결과가 없을 때만
+   * 쓰는 fallback이다.
+   */
+  source: "story" | "legacy";
+  /**
+   * 렌더 결과가 실제 제품 정보·이미지와 맞는지 기계적으로 검사한 결과
+   * (T1-77) — `imageSource: "studio-selected"`일 때만 채워진다(그
+   * 경로에서만 검증에 필요한 이미지가 메모리에 이미 올라와 있다).
+   * `ok: false`는 실패가 아니라 "사람이 특히 의심해서 봐야 할 지점"
+   * 표시다 — 최종 품질 판단은 여전히 사람이 한다.
+   */
+  validation: { ok: boolean; issues: { code: string; message: string }[] } | null;
+}
+
+/**
+ * AI Product Package — GPT(OpenAI)가 만든 제품 정보를 Gemini(및 이후 Claude)가
+ * 공통으로 참고하는 데이터 구조 (CTO 지시, 2026-08-08).
+ *
+ * 1단계(현재): productProfile·ocrText·productName·features·specifications는
+ * 실제 Product Profile 실행 결과에서 채운다. 나머지 5개는 아직 코드로 만들어진
+ * 데이터 원천이 없어(문서로만 존재하거나 전혀 없음) 인터페이스만 정의하고
+ * 항상 빈 값(null 또는 빈 배열)으로 둔다 — 없는 것을 지어내지 않는다.
+ */
+export interface ProductPackage {
+  /** GPT가 생성한 Product Profile 전체 (아직 프로필이 없으면 null) */
+  productProfile: ProductProfile | null;
+  /** 실행 시점 OCR 텍스트 스냅샷 */
+  ocrText: string | null;
+  productName: string | null;
+  features: string[];
+  specifications: Record<string, string>;
+  /**
+   * 제품 식별 정보 (CTO 지시, 2026-08-08 — 제품 동일성 개선).
+   *
+   * 예전에는 제품명·특징·스펙만 프롬프트로 나갔고, 브랜드·모델·재질·사용
+   * 목적은 `productProfile` 안에 있어도 **Gemini에게 전달되지 않았다.**
+   * 제품을 알아보는 데 필요한 정보를 프롬프트가 못 받으면, Gemini는 그
+   * 빈자리를 상상으로 채우고 다른 제품을 그린다.
+   */
+  brand: string | null;
+  model: string | null;
+  material: string | null;
+  usage: string | null;
+  /**
+   * 사용자 요구사항 기반 생성 (T1-92) — 사용자가 직접 입력한 자유 텍스트
+   * 요구사항. 없으면 null. `buildImageGenerationPrompt`(Gemini 이미지
+   * 생성 프롬프트 조립)가 이 값을 별도 블록으로 전달하며, 위 제품 사실
+   * (brand/model/material 등)과 충돌하면 사실이 우선한다.
+   */
+  userRequirement: string | null;
+  /**
+   * 제품 자동 분석 결과 (T1-21, 2026-08-09) — 바코드·URL·품명·원산지 등
+   * OCR 원문에서 직접 뽑아낸 식별자. 웹 자동 조사(T1-22)가 "어떤 제품을
+   * 조사할지" 판단하는 근거이며, 화면에서 사람이 검증하는 대상이다.
+   *
+   * 타입은 `@acos/core`의 `ProductIdentification`과 같다. shared는 core를
+   * 참조하지 않으므로(의존 방향 유지) 구조만 여기 옮겨 적는다.
+   */
+  identification?: {
+    barcodes: { value: string; format: string; checkDigitValid: boolean }[];
+    urls: { value: string; kind: string }[];
+    officialProductLabel: string | null;
+    model: string | null;
+    brand: string | null;
+    origin: string | null;
+    customerServicePhone: string | null;
+    identified: boolean;
+    identifiedBy: string[];
+  };
+  /**
+   * 교차 검증 결과 (T1-23, 2026-08-09) — OCR 직접 추출·GPT 분석(·공식 정보가
+   * 있으면 그것도)이 같은 항목에 다른 값을 말하면 자동으로 채우지 않는다.
+   * `status`가 `conflict`이면 `resolvedValue`는 항상 null이다 — 사람이
+   * 판단하기 전에는 아무 값도 확정하지 않는다.
+   *
+   * 타입은 `@acos/core`의 `CrossVerificationResult`와 같다. shared는 core를
+   * 참조하지 않으므로(의존 방향 유지) 구조만 여기 옮겨 적는다.
+   */
+  crossVerification?: {
+    fields: {
+      field: string;
+      observations: { source: string; value: string }[];
+      status: "single-source" | "agreed" | "conflict" | "unknown";
+      resolvedValue: string | null;
+    }[];
+    hasConflict: boolean;
+  };
+  /**
+   * 공식 웹 조사 결과 (T1-22, 2026-08-09) — 조사가 실행되어 결과가 넘어오면
+   * 그대로 옮겨 담는다. 지금은 이 자리를 채우는 실행 경로가 아직 없어 항상
+   * null이다(참고 URL과 같은 2단계 연결 방식 — T1-05).
+   *
+   * **값을 해석해 브랜드·모델 등 다른 필드에 자동으로 반영하지 않는다.**
+   * 검색 스니펫은 사람이 읽고 판단할 원문이지, 정규식으로 특정 값을
+   * 뽑아낼 수 있는 라벨 붙은 데이터가 아니다.
+   *
+   * 타입은 `@acos/core`의 `ProductResearchResult`와 같다. shared는 core를
+   * 참조하지 않으므로(의존 방향 유지) 구조만 여기 옮겨 적는다.
+   */
+  research?: {
+    status: "skipped" | "found" | "not_found";
+    reason: string;
+    targetsAttempted: { type: string; query: string; reason: string }[];
+    findings: {
+      targetType: string;
+      query: string;
+      sourceUrl: string;
+      sourceType: string;
+      snippet: string;
+    }[];
+    excluded: { targetType: string; url: string; reason: string }[];
+  } | null;
+  /** 2단계 예정 — 아직 실데이터 없음 */
+  referenceUrls: string[];
+  /** 2단계 예정 — 아직 실데이터 없음 */
+  benchmarkAnalysis: unknown | null;
+  /** 2단계 예정 — 아직 실데이터 없음 */
+  designRules: unknown | null;
+  /** 2단계 예정 — 아직 실데이터 없음 */
+  companyDesignPolicy: unknown | null;
+  /** 2단계 예정 — 아직 실데이터 없음 */
+  learningHistory: unknown | null;
+}
+
 export interface RunProductProfileRequest {
   imageIds: string[];
   projectId?: string;
   /** STEP 5b HTML 렌더링에 쓸 템플릿 키 (예: "living-a-trust") — 미지정 시 기본형(basic) */
   templateKey?: string;
+  /**
+   * 사용자 요구사항 기반 생성 (T1-92) — 상세페이지 카피(STEP 5a)와 이후
+   * Gemini 이미지 생성에 함께 쓰인다. 미지정 시 요구사항 없이 기존과 동일하게
+   * 동작한다(하위 호환).
+   */
+  userRequirement?: string;
+}
+
+/**
+ * 실행 없이 저장된 사용자 요구사항만 바꾼다 — 비용 없는 DB 쓰기 (T1-92,
+ * 목적별 입력은 T1-99). 둘 중 하나 이상을 보낸다 — 보내지 않은 필드는
+ * 바뀌지 않는다(부분 갱신).
+ */
+export interface UpdateProductProfileUserRequirementRequest {
+  /** 빈 문자열/공백은 null(요구사항 없음)로 저장된다. 생략하면 바뀌지 않는다 */
+  userRequirement?: string | null;
+  /**
+   * 목적(카테고리)별 요구사항 (T1-99) — 여기 담긴 키만 갱신되고 나머지
+   * 카테고리의 기존 값은 그대로 남는다. 값에 빈 문자열/공백/null을 보내면
+   * 그 카테고리의 요구사항을 지운다(키 자체를 제거).
+   */
+  userRequirementsByCategory?: Partial<Record<ImageCategory, string | null>>;
+}
+
+/**
+ * 사용자 요구사항 자유 텍스트 검증 (T1-80). Gemini 이미지 재생성·상세페이지
+ * 재생성 양쪽에서 공통으로 쓴다 — API(`ProductProfileController`)와 화면
+ * (Image Studio 요구사항 입력 패널들) 양쪽이 같은 규칙을 쓰도록 이 패키지
+ * (양쪽에서 모두 import 가능)에 둔다.
+ *
+ * **여기서 판단하지 않는 것**: 제품 동일성 위반 여부·사실 왜곡 여부는 이
+ * 함수의 책임이 아니다 — 그 판단은 프롬프트 규칙(`buildImageGenerationPrompt`
+ * 의 "충돌하면 무시" 지시, `product-story.ts`의 사실 근거 강제)과 최종
+ * 사람 확인이 맡는다(`docs/MASTER_GUIDE.md` "생성 결과의 품질은 사람이
+ * 판단한다"). 이 함수는 "저장·전달할 가치가 있는 입력 형태인가"만 본다 —
+ * 빈 입력·과도하게 긴 입력·의미 없는 입력(기호/공백뿐이거나 한 글자만
+ * 반복됨)을 걸러낸다.
+ */
+export const USER_REQUIREMENT_MAX_LENGTH = 500;
+
+export interface UserRequirementValidationResult {
+  ok: boolean;
+  /** ok가 true일 때만 의미 있음 — trim된 값, 빈 입력(요구사항 없음)이면 null */
+  value: string | null;
+  /** ok가 false일 때만 채워짐 — 사람이 읽는 오류 메시지 */
+  reason?: string;
+}
+
+export function validateUserRequirementText(
+  input: string | null | undefined,
+): UserRequirementValidationResult {
+  if (input === null || input === undefined) {
+    return { ok: true, value: null };
+  }
+  const trimmed = input.trim();
+  // 빈 입력(공백만)은 "요구사항 없음"으로 허용한다 — 저장 취소·요구사항
+  // 없이 재생성하는 기존 경로가 이 값을 그대로 쓴다.
+  if (trimmed.length === 0) {
+    return { ok: true, value: null };
+  }
+  if (trimmed.length > USER_REQUIREMENT_MAX_LENGTH) {
+    return {
+      ok: false,
+      value: null,
+      reason: `요구사항은 ${USER_REQUIREMENT_MAX_LENGTH}자 이하로 입력해 주세요 (현재 ${trimmed.length}자).`,
+    };
+  }
+  // 글자/숫자(한글 포함)가 하나도 없으면 — 기호·공백만으로는 반영할 내용이 없다.
+  if (!/[\p{L}\p{N}]/u.test(trimmed)) {
+    return {
+      ok: false,
+      value: null,
+      reason: "요구사항에 의미 있는 내용이 없습니다 — 기호나 공백만으로는 반영할 수 없습니다.",
+    };
+  }
+  // 같은 글자 하나만 3번 넘게 반복된 전체 문자열(예: "ㅋㅋㅋㅋㅋㅋ")은 의미 있는 지시로 보지 않는다.
+  if (/^(.)\1{2,}$/u.test(trimmed)) {
+    return {
+      ok: false,
+      value: null,
+      reason: "요구사항이 같은 글자의 반복으로만 되어 있습니다 — 구체적으로 적어 주세요.",
+    };
+  }
+  return { ok: true, value: trimmed };
+}
+
+// ── Product Story — 상세페이지 생성 구조를 "스토리(서사) 우선"으로 재정의 ──
+// (T1-94, 2026-08-12) Product Profile/Package + 검증된 실제 제품 이미지 +
+// 사용자 요구사항을 입력으로, 고객이 자연스럽게 이해하도록 만든 하나의
+// 일관된 이야기(Product Story)와 그 이야기를 구성하는 동적 Story Section들을
+// 만든다. 타입은 `@acos/core`의 `ProductStory`/`ProductStorySection`과
+// 같다 — shared는 core를 참조하지 않으므로(의존 방향 유지) 구조만 옮겨
+// 적는다(ProductPackage.identification과 같은 원칙).
+
+export type ProductStoryImageRoleDto =
+  | "HERO"
+  | "USAGE_SCENE"
+  | "DETAIL"
+  | "FEATURE_HIGHLIGHT"
+  | "COMPONENTS"
+  | "OTHER"
+  | "NONE";
+
+export interface ProductStorySectionDto {
+  sectionId: string;
+  purpose: string;
+  customerContext: string;
+  productFacts: string[];
+  keyMessage: string;
+  imageRole: ProductStoryImageRoleDto;
+  imageFactsShown: string[];
+  copy: string;
+  transitionToNext: string;
+  /** 이 섹션에 실제로 배정된 이미지 id — 배정된 이미지가 없으면 null */
+  assignedImageId: string | null;
+}
+
+/** Master Creative Brief (T1-153) — 페이지 전체의 목적/타깃/핵심 메시지/감정선/시각 컨셉 */
+export interface ProductStoryMasterBriefDto {
+  targetAudience: string;
+  coreMessage: string;
+  emotionalArc: string;
+  visualConcept: string;
+}
+
+export interface ProductStoryDto {
+  productName: string;
+  narrativeSummary: string;
+  masterBrief: ProductStoryMasterBriefDto;
+  sections: ProductStorySectionDto[];
+}
+
+export interface ProductStoryValidationIssueDto {
+  code: string;
+  severity: "block" | "warn";
+  sectionId?: string;
+  message: string;
+}
+
+export interface ProductStoryValidationDto {
+  ok: boolean;
+  issues: ProductStoryValidationIssueDto[];
+}
+
+/** Quality Critic 점수/등급 (T1-97) — 80점 이상 목표, 70점 미만은 성공으로 표시하지 않는다 */
+export interface ProductStoryQualityDto {
+  score: number;
+  grade: "pass" | "warn" | "fail";
+  reasons: string[];
+}
+
+/** 섹션 하나의 디자인 결정 — 카피(LLM)와 분리된 디자인 담당(결정적 함수)의 산출물(T1-112, kicker는 T1-142 추가) */
+export interface ProductStorySectionDesignDto {
+  sectionId: string;
+  layout: string;
+  reason: string;
+  toneIndex: 0 | 1;
+  accentColor: string;
+  icon: string;
+  /** 레이아웃 의미를 나타내는 짧은 영문 kicker 라벨(예: "SPEC") — 근거 없는 레이아웃은 빈 문자열 */
+  kicker: string;
+}
+
+/**
+ * 상세페이지 전체가 공유하는 역할별 글꼴 스택(T1-112, accent는 T1-142
+ * 추가) — 한글 Display/Body/Emphasis는 "여러 폰트를 무분별하게 섞지
+ * 않는다" 원칙에 따라 안전한 시스템 폰트 하나를 공유한다. numeric/accent는
+ * 라틴 문자(숫자·영문 kicker)에만 적용되는 별도 서체다.
+ */
+export interface ProductStoryTypographyDto {
+  display: string;
+  body: string;
+  emphasis: string;
+  numeric: string;
+  accent: string;
+}
+
+export interface ProductStoryDesignPlanDto {
+  typography: ProductStoryTypographyDto;
+  sections: ProductStorySectionDesignDto[];
+}
+
+/** `POST /product-profile/:id/story` 요청 — 실 LLM 호출 1건, 과금 발생 */
+export interface GenerateProductStoryRequest {
+  /**
+   * 이번 생성에 한해 쓸 사용자 요구사항 — 미지정 시 저장된
+   * `ProductProfile.userRequirement`를 그대로 쓴다. 지정하면 이번 Story
+   * 생성에만 반영되고 저장된 값을 바꾸지 않는다(무상태 생성, T1-94는
+   * DB 스키마를 바꾸지 않는다 — 동시 진행 중인 다른 작업이 schema.prisma를
+   * 수정 중이라 이번 범위에서는 마이그레이션을 만들지 않기로 했다).
+   */
+  userRequirement?: string | null;
+}
+
+/**
+ * Story 기반 상세페이지 생성 결과. 저장하지 않는다(무상태) — 다시 보려면
+ * 같은 imageIds 선택 상태로 `POST /:id/story`를 다시 호출한다(재호출 시
+ * 실 LLM 비용이 다시 발생한다는 뜻이며, 화면에서 그 사실을 밝힌다).
+ */
+export interface ProductStoryResultDto {
+  story: ProductStoryDto;
+  /** 재사용 가능한 fragment(`<div class="pde-page pde-page--story">...</div>`) */
+  html: string;
+  /** `.pde-page` 아래로 스코프된 CSS */
+  css: string;
+  /** 이 Story를 어떻게 시각적으로 조립했는지 — 카피(LLM)와 분리된 디자인 담당의 결정(T1-112) */
+  designPlan: ProductStoryDesignPlanDto;
+  validation: ProductStoryValidationDto;
+  /** Quality Critic 점수/등급 (T1-97) */
+  quality: ProductStoryQualityDto;
+  /** 실제로 생성을 시도한 횟수 — fail 판정 시 최대 1회 재생성(2회) */
+  attempts: number;
+  /** Story 생성에 실제로 쓸 수 있었던 이미지 카테고리 현황(개수) */
+  availableImages: { category: string; count: number }[];
+  /**
+   * Gemini 보조 그래픽(추상 배경/강조 아트) 생성 시도 결과 (T1-123). 실제
+   * 제품 사진이 없는 섹션에만, 계획된 만큼만 시도한다 — 계획됐다고 항상
+   * 성공하지는 않는다(`generated: false`면 실패해 그 섹션은 보조 그래픽
+   * 없이 렌더링됐다는 뜻, 이유는 `reason`). 빈 배열이면 이번 Story에는
+   * 보조 그래픽이 필요한 섹션이 없었다는 뜻이다.
+   */
+  auxiliaryVisuals: { sectionId: string; role: string; generated: boolean; reason: string }[];
+  /**
+   * 생성형 아이콘/Hero 타이포그래피 모티프 생성 시도 결과 (T1-142).
+   * `auxiliaryVisuals`(섹션 배경 장식)와는 다른 목적 — 상세페이지 전체가
+   * 공유하는 아이콘 세트·Hero 레터링 모티프. `generated: false`면 실패해
+   * 그 아이콘/모티프는 기존 인라인 SVG/CSS로 graceful하게 대체됐다는 뜻.
+   */
+  generativeVisuals: { kind: string; id: string; generated: boolean; reason: string }[];
+  provider: string;
+  model: string;
+  /**
+   * 실제로 최종 페이지에 쓰인 시각 asset 수 집계 (T1-144 — 이미지 밀도
+   * 확대). 지어낸 목표치가 아니라 이번 렌더링이 실제로 만든 HTML에
+   * 들어간 사진/생성 자산 수를 그대로 센 것이다 — "몇 장을 썼는지"를
+   * 완료 보고에 사실로 남기기 위함이며, 좋다/부족하다는 평가는 포함하지
+   * 않는다(사람이 브라우저에서 판단).
+   */
+  assetInventory: {
+    /** Story 섹션 대표+갤러리 이미지 + 남은 갤러리(media-gallery)에 실제로 쓰인 실제 제품 사진 수(중복 제외) */
+    realProductPhotos: number;
+    /** 같은 범위에서 Gemini 생성 연출 이미지 수(중복 제외) */
+    generativeProductVisuals: number;
+    /** 생성형 아이콘 + Hero 모티프(성공한 것만) */
+    generativeDesignAssets: number;
+    /** 위 세 값의 합 — "최종 페이지에 실제로 쓰인 시각 asset 총수" */
+    totalVisualAssets: number;
+    /** 카테고리별 실제 사용 개수(대표+갤러리+남은 갤러리) */
+    byCategory: Partial<Record<ImageCategory, number>>;
+  };
 }
 
 // ── 디자인 리뷰 (시장 디자인 패턴 분석 — Gemini를 디자인 디렉터로 활용) ──
@@ -3856,4 +4414,93 @@ export interface ProjectCostDto {
   /** 이 숫자를 어떻게 읽어야 하는지 — 항상 붙는다 */
   caveat: string;
   checkedAt: string;
+}
+
+// ── Product Detail Engine LEVEL 1 (T1-188) ──────────────────────────
+//
+// 이전 STEP1 이후의 상세페이지 생성 파이프라인(ProductProfile 등)과는
+// 완전히 별개의 새 기반이다. 기존 ProductDto/ProjectListItemDto와 이름이
+// 겹치지 않도록 전부 "Level1" 접두사를 쓴다. LEVEL 1은 디자인·이미지
+// 생성 없이 "제품 사실 입력 + 사진 asset 보관"만 다룬다.
+
+export const LEVEL1_ASSET_ROLES = [
+  "ACTUAL_PRODUCT",
+  "PACKAGING",
+  "LABEL",
+  "SPEC",
+  "BARCODE",
+  "MANUAL",
+  "LIFESTYLE",
+  "UNKNOWN",
+] as const;
+
+export type Level1AssetRole = (typeof LEVEL1_ASSET_ROLES)[number];
+
+export interface Level1ProjectDto {
+  id: string;
+  name: string;
+  productCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateLevel1ProjectRequest {
+  name: string;
+}
+
+/** 확인된 제품 사실만 담는다 — 값이 없으면 null/빈 배열이며, 지어내지 않는다 */
+export interface Level1ProductDto {
+  id: string;
+  projectId: string;
+  name: string | null;
+  brand: string | null;
+  model: string | null;
+  category: string | null;
+  materials: string[];
+  colors: string[];
+  dimensions: string | null;
+  includedComponents: string[];
+  origin: string | null;
+  claims: string[];
+  source: string;
+  /** 값이 있어도 사람이 "확실하지 않다"고 표시한 필드 이름 */
+  uncertainFields: string[];
+  notes: string | null;
+  assetCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 생성/수정 공용 — 모든 필드는 선택이며, undefined는 "바꾸지 않음"을 뜻한다(PATCH) */
+export interface UpsertLevel1ProductRequest {
+  name?: string | null;
+  brand?: string | null;
+  model?: string | null;
+  category?: string | null;
+  materials?: string[];
+  colors?: string[];
+  dimensions?: string | null;
+  includedComponents?: string[];
+  origin?: string | null;
+  claims?: string[];
+  uncertainFields?: string[];
+  notes?: string | null;
+}
+
+export interface Level1AssetDto {
+  id: string;
+  productId: string;
+  objectKey: string;
+  originalName: string;
+  mimeType: string;
+  size: number;
+  role: Level1AssetRole;
+  roleSetBy: string | null;
+  roleSetAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UpdateLevel1AssetRoleRequest {
+  role: Level1AssetRole;
 }

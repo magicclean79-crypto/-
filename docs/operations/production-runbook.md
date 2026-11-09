@@ -58,6 +58,104 @@ pnpm --filter api exec prisma migrate deploy
 | **실 Provider 스모크** | **직접 확인** |
 | **DB 백업·복구 확인** | **직접 확인** |
 
+### 1.4 관리자 계정 확인·초기 생성·비밀번호 복구 (T1-213)
+
+**계정이 이미 있는지 확인**: 비밀번호를 알아야 확인하는 것이 아니라
+`/admin/health`(또는 `GET /health/ready`)의 "관리자 계정" 항목이
+**통과**인지만 본다 — DB에 ADMIN 역할 사용자가 1명 이상 있으면
+통과다. 이메일·활성 상태 등 비민감 정보만 필요하면 사람이 DB에서
+`SELECT id, email, role, disabled FROM users;`로 직접 조회한다
+(`passwordHash` 컬럼은 절대 출력·복사하지 않는다).
+
+**정상 로그인 절차**: `POST /auth/login` (Web은 `/login` 화면)에
+`AUTH_ADMIN_EMAIL`로 지정한 이메일과, 최초 부트스트랩 시
+`AUTH_ADMIN_PASSWORD`로 지정했던 비밀번호를 입력한다. **고정
+비밀번호(`admin1234` 등)는 개발 전용 기본값이며, 운영은 이 두
+환경변수가 없으면 애초에 기동하지 않는다**(`apps/api/src/main.ts`의
+Startup Validation, `packages/core/src/ops/env-spec.ts`의
+`requiredInProduction`) — 즉 운영에 떠 있는 서버는 이미 사람이 지정한
+값으로 부트스트랩된 것이지, 하드코딩된 기본값으로 뜬 것이 아니다.
+
+**계정이 없거나(사용자 0명) 비밀번호를 잃어버린 경우** — 두 경로:
+
+1. **최초 기동 전이라면**: 서버를 띄우기 전에 `AUTH_ADMIN_EMAIL`/
+   `AUTH_ADMIN_PASSWORD`를 운영 `.env`에 지정한다. `bootstrapAdmin()`이
+   기동 시 사용자가 0명일 때만 이 값으로 ADMIN 1명을 자동 생성한다
+   (`apps/api/src/auth/auth.service.ts`).
+2. **이미 사용자가 있는데 유일한 ADMIN의 비밀번호를 잃었다면**:
+   `bootstrapAdmin()`은 이 경우 다시 실행되지 않고(사용자가 0명이
+   아니므로), API의 비밀번호 재설정(`POST
+   /auth/users/:id/password-reset`)은 **이미 로그인된 ADMIN**이 있어야
+   써서 이 상황에는 쓸 수 없다. 이때는 `scripts/admin-provision.mjs`
+   (신규, T1-213)를 **DB와 같은 호스트에서** 실행한다:
+
+   ```bash
+   ADMIN_EMAIL="admin@example.com" ADMIN_PASSWORD="<강한 새 비밀번호>" \
+     node scripts/admin-provision.mjs
+   ```
+
+   - 해당 이메일 사용자가 없으면 새 ADMIN 계정을 만들고, 있으면
+     비밀번호를 재설정하고 역할을 ADMIN으로 확정한다 — 기존
+     `resetPassword`(TASK-0803)와 같은 정책(잠금 해제·기존 세션 전부
+     폐기)을 그대로 따르고, 같은 감사 로그(`UserAuditLog`)에 남긴다.
+   - 비밀번호는 `ADMIN_PASSWORD` 환경변수로만 받는다 — 소스·로그·
+     결과 어디에도 평문 비밀번호를 남기지 않는다. 실행 결과에는
+     이메일과 생성/재설정 여부만 출력된다.
+   - **원격(EC2) DB에 대해서는 이 스크립트를 이 저장소(로컬 PC)에서
+     원격으로 실행하지 않는다** — `AGENTS.md`의 "원격 EC2·원격 데이터
+     직접 수정 금지" 원칙과 같은 이유다. 필요하면 사람이 SSH로 그
+     서버에 직접 접속해, 그 서버의 `.env`(`DATABASE_URL`)가 적용된
+     상태에서 실행한다.
+
+### 1.5 일반 회원가입·로그인 ID/비밀번호 셀프 재설정 (T1-215)
+
+**회원가입**: `POST /auth/signup`(Web `/signup`)은 인증 없이 호출 가능한
+공개 API다. 생성되는 계정은 **항상 VIEWER 역할**이며, 이 경로로 ADMIN·
+EDITOR 권한이 부여되는 일은 없다(권한 상향은 여전히 `/admin/users`에서
+ADMIN이 직접 해야 한다). 이메일 키 슬라이딩 윈도우로 가입 시도를
+제한한다(`AUTH_SIGNUP_MAX_ATTEMPTS`(기본 5)/`AUTH_SIGNUP_WINDOW_SEC`(기본
+300초), `apps/api/src/auth/session-config.ts`). IP 키를 쓰지 않은 이유:
+현재 nginx 리버스 프록시 뒤에서 Express가 `X-Forwarded-For`를 신뢰하도록
+설정돼 있지 않아(`apps/api/src/main.ts`, 이번 작업이 건드리지 않음) IP
+키를 쓰면 모든 사용자가 같은 프록시 IP로 묶여 서로를 막을 위험이 있다.
+
+**로그인 ID(이메일) 셀프 변경**: `PATCH /auth/email`(Web `/account`) —
+로그인된 사용자 본인이 현재 비밀번호를 확인한 뒤 이메일을 바꾼다. 다른
+계정이 이미 쓰는 이메일은 거부(409)하고, 성공 시 비밀번호 변경과 동일하게
+현재 세션만 남기고 다른 기기의 세션은 전부 폐기한다.
+
+**비밀번호 셀프 변경**: 기존 `PATCH /auth/password`(Web `/account`, TASK-0803)
+그대로 — 변경 없음.
+
+**이메일 기반("비밀번호를 잊으셨나요?" 메일 링크) 비밀번호 재설정을
+구현하지 않은 이유**: 이 프로젝트에는 사용자에게 트랜잭션 메일(재설정
+링크 등)을 보낼 인프라가 없다. `SMTP_HOST`/`ALERT_EMAIL_TO`
+(`packages/core/src/ops/env-spec.ts`)는 **운영자 경보 전용**(Enterprise
+Governance/Alerting)이며 사용자 대상 템플릿 메일 발송 기능이 아니다. 이
+상태에서 "이메일로 재설정 링크 발송"을 구현하면 실제로는 아무 메일도
+가지 않거나, 검증되지 않은 외부 메일 서비스를 추측해 끼워 넣어야 한다 —
+둘 다 이 프로젝트의 "추측하지 않는다" 원칙(`docs/MASTER_GUIDE.md` 철학
+2)에 어긋난다. 그래서 T1-215는 이메일 발송 없이도 안전한 두 경로만
+구현했다:
+
+1. **로그인은 되지만 비밀번호/이메일을 바꾸고 싶은 사용자**: 위
+   셀프서비스 두 API(현재 비밀번호로 본인 확인)로 충분하다.
+2. **로그인 자체가 안 되는(비밀번호를 완전히 잊은) 일반 회원**: 이메일
+   인증 없이 "본인 확인"을 대체할 안전한 방법이 없으므로, **관리자에게
+   요청**하는 것이 유일한 안전한 경로다. ADMIN은 `/admin/users`
+   화면(또는 `POST /auth/users/:id/password-reset`)에서 해당 사용자의
+   비밀번호를 즉시 재설정할 수 있다 — 이미 구현·테스트돼 있는 기존
+   기능이며 이번 작업이 새로 만들지 않았다. `/signup` 화면과 로그인
+   실패 시 안내에 이 경로(관리자 문의)를 명시한다.
+3. **유일한 ADMIN이 잠겨 로그인 자체가 안 되는 경우**: 위 §1.4의
+   `scripts/admin-provision.mjs`(T1-213)가 유일한 공식 복구 경로다 — 이
+   스크립트는 웹 화면이 아니라 DB가 있는 호스트에서 사람이 직접
+   실행해야 한다(§1.4 참고, 이번 작업도 변경하지 않았다).
+
+이메일 발송 인프라(트랜잭션 메일 서비스)가 실제로 생기면, 그때 "이메일
+재설정 링크" 흐름을 추가하는 것이 다음 단계다 — 이번 작업 범위 밖이며
+임의로 구현하지 않았다.
+
 ---
 
 ## 2. 배포

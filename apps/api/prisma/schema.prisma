@@ -137,6 +137,14 @@ model Image {
   style         String?
   // 사용자가 이 카테고리의 최종 이미지로 직접 고른 것인지
   selected      Boolean     @default(false)
+  // 사람이 명시적으로 select/select-original을 호출해 이 상태를 고정했는지
+  // (T1-155 — "최신 생성 결과 자동 승격"). false(기본값)면 이 selected 상태는
+  // 파이프라인이 스스로 정한 것이라 더 최신 생성이 성공·검증을 통과하면
+  // 그 카테고리의 자동 선택을 이 이미지 대신 새 이미지로 옮길 수 있다.
+  // true면 사람이 이 이미지를 직접 골랐다는 뜻이라 자동 승격이 절대 이
+  // 이미지의 selected 상태를 건드리지 않는다 — 사람의 선택을 덮어쓰지
+  // 않는다는 요청 사양의 "explicit lock/pin" 그대로다.
+  locked        Boolean     @default(false)
   // 사진 유형 자동 분류 (CTO 지시, 2026-08-08 — 최우선 기능). Product Profile
   // 실행(STEP 3)이 끝나면 채워진다 — null은 "아직 분류 안 됨"이라 DESIGN으로
   // 취급한다(안전한 기본값). INFO 사진(라벨/스펙표 등)은 Gemini·Claude에
@@ -249,7 +257,7 @@ model ProductProfile {
   ocrText       String?
   // STEP 3 원본 결과 (ImageFeatureAnalysis)
   imageFeatures Json?
-  // STEP 4 최종 결과 (ProductProfile)
+  // STEP 4 최종 결과 (ProductProfile) — GPT가 실제로 답한 그대로(가공 없음)
   profile       Json?
   // STEP 5a 결과 (ProductPageCopy — 대표 문구·제품 설명, Sprint 35 Phase 2)
   pageCopy      Json?
@@ -261,6 +269,44 @@ model ProductProfile {
   // STEP 5b 렌더링에 쓰인 템플릿 키 (예: "basic", "living-a-trust") — 생활용품
   // Template A~E 비교(Sprint 36)에서 어떤 실행이 어떤 템플릿인지 구분한다
   templateKey   String?
+  // 사용자 요구사항 기반 생성 (T1-92) — Image Studio의 "빠른 테스트"에서
+  // 쓰던 자유 텍스트 요구사항 개념을 정식 파이프라인에 통합한다. Gemini
+  // 이미지 생성(image-gen.service.ts가 이 실행을 찾아 Product Package에
+  // 실어 보낸다)과 상세페이지 재생성(STEP 5a 카피 프롬프트) 양쪽이 이
+  // 하나의 값을 함께 쓴다 — 실행 생성 이후에도(이미지 생성 전) 값만 바꿀
+  // 수 있도록 별도 갱신 경로(PATCH)를 둔다(비용 없는 DB 쓰기).
+  userRequirement String?
+  // 목적별 사용자 요구사항 (T1-99) — Image Studio 카테고리별(대표 썸네일/
+  // 디테일샷/사용 장면/구성품 등) Gemini 이미지 생성 요구사항. 위
+  // `userRequirement`(단일 필드)는 상세페이지 문구(STEP 5a)·범용 재생성에
+  // 계속 쓰이고, 이 필드는 카테고리별 Gemini 이미지 생성에서만 읽는다 —
+  // 값이 있으면 해당 카테고리 생성 시 `userRequirement`보다 우선한다
+  // (`image-gen.service.ts` findProductPackage). `ImageCategory` 키를 가진
+  // Partial map(JSON) — 값이 없는 카테고리는 키 자체가 없다(빈 문자열로
+  // 채워 넣지 않는다).
+  userRequirementsByCategory Json?
+  // 최종 상세페이지 canonical pipeline (T1-131) — `POST /:id/story`가 만든
+  // ProductStoryResultDto 전체를 그대로 저장한다. 있으면 `/final`·
+  // `/final-html`이 이 값을 최종 결과로 쓴다(LLM 재호출 없이) — 레거시
+  // 카테고리 템플릿(`renderProductProfileHtml`)은 이 값이 없을 때만 쓰는
+  // fallback으로 남는다. Story 자체는 여전히 무상태로 재계산 가능하므로
+  // 이 컬럼은 마지막으로 생성된 결과의 캐시일 뿐 — 사라져도 다시
+  // `/:id/story`를 호출하면 복구된다.
+  storyResult       Json?
+  storyGeneratedAt  DateTime?
+  // DESIGN_PROFILE 캐시 (T1-176) — Design Director(AI)가 검증된
+  // ProductProfile 필드만 근거로 만든 제품별 시각 시스템 결정
+  // (`ResolvedDesignProfile`, `packages/core/src/product-profile/
+  // design-profile.ts`). `storyResult`와 분리된 컬럼이다 — 카피/섹션
+  // 구성(story)과 시각 언어(design)는 서로 다른 결정 주체이므로 하나가
+  // 무효화돼도 다른 하나를 다시 계산할 필요가 없다(storyResult가 비어
+  // 있어도 designProfile은 재사용 가능, 그 반대도 마찬가지). 이 값이
+  // 있으면 재렌더링(LLM 재호출 없는 순수 render chain, T1-131/172와
+  // 같은 패턴)이 항상 같은 값을 재사용한다 — "같은 제품 → 같은
+  // DESIGN_PROFILE"을 모델 파라미터가 아니라 이 캐시로 보장한다
+  // (`design-profile.ts` 상단 주석 참고, temperature/seed 미지원 확인됨).
+  designProfile        Json?
+  designProfileGeneratedAt DateTime?
   provider      String?
   error         String?
   attempts      Int                  @default(0)
@@ -1622,4 +1668,322 @@ model JobStageMetric {
   @@index([kind, stage, at])
   @@index([jobId])
   @@map("job_stage_metrics")
+}
+
+// ── Product Detail Engine LEVEL 1 (T1-188) ──────────────────────────
+//
+// 이전 STEP1 이후의 상세페이지 생성 파이프라인(ProductProfile/ProductObject
+// 등)과는 **완전히 별개의 새 기반**이다. 기존 모델을 재사용하지 않고
+// `Level1` 접두사로 새로 둔다 — 이름이 겹치면 어느 파이프라인의 데이터인지
+// 코드만 봐서는 구분할 수 없어진다.
+//
+// LEVEL 1의 목표는 "제품을 정확히 입력받고 보존하는 가장 작은 안정적인
+// 기반"이다. 디자인·이미지 생성·자동 분류는 다음 레벨의 범위이며, 여기서는
+// **사람이 입력한 사실만** 저장한다 — 확인되지 않은 값을 채우지 않는다.
+
+/// 이미지 asset의 역할 (T1-188 요청 사양 4) — LEVEL 1에서는 사람이 직접
+/// 고른다. AI 자동 분류는 다음 레벨의 범위이며, 이 enum 자체는 그대로
+/// 재사용될 수 있게 값만 먼저 고정해 둔다.
+enum Level1AssetRole {
+  ACTUAL_PRODUCT
+  PACKAGING
+  LABEL
+  SPEC
+  BARCODE
+  MANUAL
+  LIFESTYLE
+  UNKNOWN
+}
+
+/// LEVEL 1 작업 단위 — 기존 Project와 이름이 겹치지 않도록 분리한다.
+/// 기존 Project/ProductObject 파이프라인과는 무관하며 서로 참조하지 않는다.
+model Level1Project {
+  id        String          @id @default(cuid())
+  name      String
+  products  Level1Product[]
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  @@map("level1_projects")
+}
+
+/// 확인된 제품 사실만 담는 최소 모델(T1-188 요청 사양 5) — Vision/OCR로
+/// 자동 추출하지 않는다. 모든 필드는 사람이 직접 입력한 값이며, 값이
+/// 없으면 null/빈 배열로 남긴다(그럴듯한 값을 지어내지 않는다).
+/// `uncertainFields`는 사람이 "확실하지 않다"고 스스로 표시한 필드 이름을
+/// 담는다 — 값이 있어도 확신 여부를 별도로 기록한다.
+model Level1Product {
+  id        String        @id @default(cuid())
+  project   Level1Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId String
+
+  name               String?
+  brand              String?
+  model              String?
+  category           String?
+  materials          String[] @default([])
+  colors             String[] @default([])
+  dimensions         String?
+  includedComponents String[] @default([])
+  origin             String?
+  claims             String[] @default([])
+
+  /// 이 값들을 누가 근거로 입력했는지 — LEVEL 1은 항상 "manual"(사람 직접
+  /// 입력)이다. 다음 레벨에서 OCR/Vision 등 다른 출처가 생기면 이 필드로
+  /// 구분한다(마이그레이션 없이 확장 가능하도록 문자열로 둔다).
+  source          String   @default("manual")
+  /// 사람이 "아직 확실하지 않다"고 표시한 필드 이름 목록 (예: ["origin"]).
+  /// 값이 채워져 있어도 이 배열에 있으면 미확정으로 취급한다.
+  uncertainFields String[] @default([])
+  /// 자유 서술 메모 — 출처·근거 등 위 필드로 담기지 않는 사실을 남긴다.
+  notes           String?
+
+  assets    Level1Asset[]
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  @@index([projectId])
+  @@map("level1_products")
+}
+
+/// 이미지 asset — 파일 자체는 MinIO에 저장하고 여기에는 object key와
+/// 메타데이터만 둔다(T1-188 요청 사양 8, DB에 이미지 blob을 넣지 않는다).
+model Level1Asset {
+  id        String        @id @default(cuid())
+  product   Level1Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productId String
+
+  /// MinIO(S3 호환) object key — 버킷은 기존 인프라(StorageService)를 그대로
+  /// 쓰고, key만 "level1/" 아래로 분리해 기존 이미지와 섞이지 않게 한다.
+  objectKey    String @unique
+  originalName String
+  mimeType     String
+  size         Int
+
+  role Level1AssetRole @default(UNKNOWN)
+  /// 역할을 마지막으로 정한 주체 — LEVEL 1은 항상 "manual"(사람이 직접
+  /// 골랐다). AI 자동 분류가 생기면 이 필드로 구분한다.
+  roleSetBy String?   @default("manual")
+  roleSetAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([productId])
+  @@map("level1_assets")
+}
+
+/// LEVEL 1 원샷 생성 (T1-189) — 하나의 멀티모달 Gemini 호출로 만든 최종
+/// 상세페이지 이미지 1건의 기록. level1_products/level1_assets(T1-188)는
+/// 전혀 수정하지 않고 새 테이블만 추가한다.
+enum Level1GenerationStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
+model Level1Generation {
+  id String @id @default(cuid())
+
+  /// Level1Product.id를 가리키지만, 동시 진행 중인 T1-188의
+  /// Level1Product 모델을 수정하지 않기 위해 Prisma 레벨 relation은
+  /// 선언하지 않는다(back-reference 필드 추가가 필요해짐) — DB 외래키
+  /// 제약은 migration.sql에서 직접 건다. 참조 무결성은 유지되고, 조회는
+  /// productId로 별도 질의한다.
+  productId String
+
+  status Level1GenerationStatus @default(PENDING)
+
+  /// 실제 호출한 provider/model — 추측이 아니라 실제 응답 기준으로 기록한다.
+  provider String
+  model    String
+
+  /// 이 호출에 실제로 전달한 프롬프트 전문(비밀값 없음) — "무엇을 분석·결정하라고
+  /// 시켰는지"의 유일한 기록이다(응답이 이미지 1장뿐이라 별도 분석 텍스트가 없다).
+  promptText String
+
+  /// 이 생성에 reference로 사용한 Level1Asset id 목록 (입력 순서 유지)
+  referenceAssetIds String[] @default([])
+
+  /// 생성된 이미지의 MinIO object key — 원본 업로드(level1_assets)와 절대
+  /// 섞이지 않도록 "level1-generate/" 아래로 분리한다.
+  outputObjectKey String?
+  outputMimeType  String?
+
+  errorMessage String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([productId])
+  @@map("level1_generations")
+}
+
+/// LEVEL 2 다중 상세페이지 이미지 분할 생성 (T1-191) — T1-189의 단일
+/// 이미지 원샷 엔진 위에, 여러 장의 상세페이지 섹션 이미지 + 검증된
+/// 제품 정보로 확장한다. level1_products/level1_assets(T1-188)·
+/// level1_generations(T1-189)는 전혀 수정하지 않는다.
+enum Level1MultiGenerationStatus {
+  PENDING
+  ANALYZING
+  GENERATING
+  SUCCEEDED
+  PARTIAL
+  FAILED
+}
+
+enum Level1PageStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
+/// 한 번의 "상세페이지 생성" 요청 단위 — 분석 1회 + 페이지 이미지 N회의
+/// 결과를 함께 묶는다.
+model Level1MultiGeneration {
+  id String @id @default(cuid())
+
+  /// Level1Product.id를 가리키지만, T1-189와 같은 이유로 Prisma 레벨
+  /// relation은 선언하지 않는다 — Level1Product 모델을 수정하지 않기
+  /// 위함. DB 외래키 제약은 migration.sql에서 직접 건다.
+  productId String
+
+  status Level1MultiGenerationStatus @default(PENDING)
+
+  /// 분석(제품 이해 + 페이지 구성 결정) 호출에 실제 사용한 provider/model
+  analysisProvider String?
+  analysisModel    String?
+  /// 분석 호출에 실제로 전달한 프롬프트 전문
+  analysisPromptText String?
+  /// 분석 호출의 원본 텍스트 응답(JSON 원문) — 파싱 실패 시에도 근거로 남긴다
+  analysisRawText String?
+
+  /// 검증된 제품 정보만 담는다 — 확인되지 않은 값은 null/빈 배열로 남기고
+  /// AI가 지어내지 않는다(VerifiedProductFacts 형태, JSON으로 저장).
+  verifiedProductFacts Json?
+
+  /// verifiedProductFacts의 근거(provenance, T1-195) — 분석 호출에 실제로
+  /// 전달된 Level1Asset id 전체(입력 순서 유지). 사람이 "이 정보가 어느
+  /// 사진에서 나왔는가"를 되짚어볼 수 있게 한다.
+  analysisAssetIds String[] @default([])
+
+  /// 분석 단계에서 "실제 제품 사진"으로 판정된 Level1Asset id 목록 —
+  /// 모든 페이지 이미지 생성이 공통으로 사용하는 reference.
+  actualProductAssetIds String[] @default([])
+
+  /// OCR을 실제로 실행한 Level1Asset id 전체(T1-196) — 업로드된 모든
+  /// 사진에 대해 OCR을 별도 단계로 돌렸다는 근거. 결과 자체는
+  /// Level1AssetOcrResult에 있고, 여기는 "무엇을 대상으로 했는가"만
+  /// 남긴다.
+  ocrAssetIds String[] @default([])
+
+  /// OCR 원문에서 정규식으로 뽑아낸 Product Facts 후보(T1-196) — 사람이
+  /// 검증하지 않은 값이므로 verifiedProductFacts와 분리해 둔다. 구조:
+  /// {assetId, field, value, confidence}[] (OcrFactCandidate[], JSON).
+  ocrFactsCandidates Json?
+
+  /// OCR 후보와 Gemini Vision 분석(verifiedProductFacts)을 필드별로
+  /// 교차 검증한 결과(T1-196) — cross-verification.ts(T1-23)와 같은
+  /// 패턴: 출처가 둘 이상인데 값이 다르면 자동으로 고르지 않고
+  /// "conflict"로 남긴다. 구조: FieldVerification[] (JSON).
+  factsVerification Json?
+
+  errorMessage String?
+
+  pages Level1DetailPage[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([productId])
+  @@map("level1_multi_generations")
+}
+
+/// 업로드된 사진 1장의 OCR 실행 기록(T1-196) — OcrResult(Image용)와 같은
+/// 목적이지만 Level1Asset을 대상으로 한다. Level1Asset(T1-188)는 다른
+/// 작업 소유라 수정하지 않고, FK는 이 마이그레이션이 직접 건다(기존
+/// Level1MultiGeneration.productId와 같은 패턴).
+model Level1AssetOcrResult {
+  id     String @id @default(cuid())
+  assetId String
+
+  provider String
+  status   OcrStatus @default(PENDING)
+
+  /// 0.0~1.0 — Provider가 주지 않으면 null(지어내지 않는다, OcrResult와 동일 원칙)
+  confidence Float?
+
+  extractedText String?
+  /// Provider 원본 응답 전체(감사·재분석용)
+  rawJson Json?
+  /// rawJson에서 뽑아낸 블록 단위 bounding box(가능한 provider만) —
+  /// [{text, boundingBox: {vertices:[{x,y}...]}}, ...] 형태(JSON).
+  boundingBoxes Json?
+
+  error    String?
+  attempts Int     @default(0)
+
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([assetId])
+  @@map("level1_asset_ocr_results")
+}
+
+/// 상세페이지를 구성하는 개별 섹션 이미지 1장 — HERO/FEATURES/USAGE/SPEC 등
+/// AI가 제품 특성에 따라 3~6장 범위에서 스스로 결정한 구성을 그대로 기록한다.
+model Level1DetailPage {
+  id String @id @default(cuid())
+
+  generation   Level1MultiGeneration @relation(fields: [generationId], references: [id], onDelete: Cascade)
+  generationId String
+
+  /// 표시 순서(1부터 시작) — 사람이 보는 화면도 이 순서를 그대로 따른다.
+  pageIndex Int
+  /// AI가 스스로 정한 이 페이지의 역할(자유 문자열로 저장 — 고정 enum으로
+  /// 강제하면 "제품 특성에 따라 AI가 자유롭게 구성"이라는 요청을 어기게
+  /// 된다). 예: HERO, FEATURES, USAGE, SPEC, DETAIL, LIFESTYLE.
+  pageRole String
+  title    String?
+
+  status Level1PageStatus @default(PENDING)
+
+  /// 이 페이지 이미지 생성 호출에 실제 사용한 provider/model
+  provider String?
+  model    String?
+  /// 이 페이지 생성에 실제로 전달한 프롬프트 전문
+  promptText String?
+
+  /// 이 페이지 생성에 실제로 사용한 원본 실물 제품 사진(Level1Asset id) —
+  /// packaging/label/spec/manual/barcode는 절대 포함하지 않는다.
+  referenceAssetIds String[] @default([])
+
+  /// 이 섹션이 무엇을 보여주는지 사람이 읽는 한국어 설명(T1-196) — 실제
+  /// 사진과 검증된 Product Facts에 근거해야 하고, 이미지 안에는 한글을
+  /// 그리지 않는 대신 화면에 텍스트로 표시한다.
+  sectionDescription String?
+
+  /// sectionDescription의 근거가 된 사진 id — 시각적 근거(referenceAssetIds)와
+  /// OCR로 정보가 확인된 사진(포장/라벨/사양표 등)을 합친 값이다. 이미지
+  /// reference와 정보 근거가 다를 수 있어 별도로 둔다.
+  evidenceAssetIds String[] @default([])
+
+  /// sectionDescription 신뢰도(T1-196) — AI 주관 평가가 아니라 코드가
+  /// 결정한 값이다: AI가 설명을 직접 냈는지(대 fallback 문구인지), 이
+  /// 제품에 미해결 conflict(factsVerification)가 있는지로 계산한다.
+  descriptionConfidence Float?
+
+  outputObjectKey String?
+  outputMimeType  String?
+
+  errorMessage String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([generationId])
+  @@map("level1_detail_pages")
 }

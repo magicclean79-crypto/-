@@ -16,6 +16,7 @@ const imageFeatures: ImageFeatureAnalysis = {
   notes: null,
   confidence: 0.85,
   photoTypes: ["DESIGN"],
+  photoCaptions: ["매트를 접어 세운 모습"],
 };
 
 const context: ProductProfileSynthesisContext = {

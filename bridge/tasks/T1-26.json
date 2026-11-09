@@ -1,0 +1,8 @@
+{
+  "taskId": "T1-26",
+  "title": "Gemini 전달",
+  "request": "Gemini에는 실제 제품 참조 이미지와 Product Package만 전달한다. 포장지·라벨·설명서·사양표·박스·인증서·바코드 이미지는 절대 전달하지 않는다.",
+  "requestedBy": "ChatGPT",
+  "state": "REQUESTED",
+  "createdAt": "2026-08-08T16:45:54.862Z"
+}

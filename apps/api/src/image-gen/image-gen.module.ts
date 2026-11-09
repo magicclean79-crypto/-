@@ -1,6 +1,8 @@
 import { Module } from "@nestjs/common";
 import { LlmModule } from "../llm/llm.module";
+import { PromptModule } from "../prompt/prompt.module";
 import { createImageEditProvider } from "./image-edit-provider.factory";
+import { GeneratedCompositionValidatorService } from "./generated-composition-validator.service";
 import { ImageGenController } from "./image-gen.controller";
 import { IMAGE_EDIT_PROVIDER } from "./image-gen.constants";
 import { ImageGenService } from "./image-gen.service";
@@ -12,10 +14,11 @@ import { ImageGenService } from "./image-gen.service";
  * 없으면 mock으로 대체해 키 미설정 환경에서도 항상 기동한다.
  */
 @Module({
-  imports: [LlmModule],
+  imports: [LlmModule, PromptModule],
   controllers: [ImageGenController],
   providers: [
     ImageGenService,
+    GeneratedCompositionValidatorService,
     {
       provide: IMAGE_EDIT_PROVIDER,
       useFactory: createImageEditProvider,

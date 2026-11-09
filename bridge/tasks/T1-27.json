@@ -1,0 +1,8 @@
+{
+  "taskId": "T1-27",
+  "title": "무인 실행 검증 — 저장소 lint 오류 제거",
+  "request": "저장소 전체 lint 오류 4건을 없앤다. 무인 실행 검증을 겸한 작업이므로 도중에 사람에게 묻지 않는다.\n\n[현재 오류]\n1. apps/web/app/benchmark/benchmark-view.tsx — useMemo 를 import 했는데 쓰지 않음\n2. apps/web/app/benchmark/compare/page.tsx — 등록되지 않은 규칙(react-hooks/exhaustive-deps)을 끄는 주석\n3. apps/web/app/benchmark/templates/templates-view.tsx — 같은 문제\n4. apps/web/app/design-review/history/compare/page.tsx — 같은 문제\n\n[지켜야 할 제약]\n- 새 의존성을 설치하지 않는다. eslint-plugin-react-hooks 를 추가하지 않는다.\n- 동작을 바꾸지 않는다. 화면에 보이는 것과 실행 결과가 이전과 같아야 한다.\n- useEffect 의 의존성 배열을 바꾸지 않는다. 죽은 주석만 없앤다.\n- apps/web/app/benchmark/constants.ts 는 건드리지 않는다.\n- 커밋하지 않는다.\n\n[검증 순서 — 반드시 이 순서대로 실제로 돌린다]\n1. npx eslint . 을 돌려 현재 오류 4건을 눈으로 확인한다.\n2. 고친다.\n3. npx eslint . 을 다시 돌려 0건인지 확인한다. 새 오류가 생겼으면 다시 고치고 또 돌린다.\n4. pnpm turbo run build · typecheck 를 돌린다.\n5. pnpm turbo run test 를 돌린다.\n\n[결과 보고]\nlint 는 이번 변경 결과(0건)를 적는다. api 의 ops.spec.ts 기존 실패처럼 이번 변경과\n무관한 것은 preExisting 에 적는다. 기존 문제라고 말하려면 변경 전에도 같은 실패가\n나는지 확인한 근거를 함께 적는다.",
+  "requestedBy": "ChatGPT",
+  "state": "REQUESTED",
+  "createdAt": "2026-08-09T00:38:13.080Z"
+}

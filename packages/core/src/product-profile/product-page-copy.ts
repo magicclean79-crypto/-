@@ -11,6 +11,11 @@ import type { ProductPageCopy, ProductProfile } from "@acos/shared";
  */
 export interface ProductPageCopyContext {
   profile: ProductProfile;
+  /**
+   * 사용자 요구사항 기반 생성 (T1-92) — 있으면 카피의 어조·강조점에
+   * 반영하되, `profile`의 사실과 충돌하면 무시한다(프롬프트 규칙).
+   */
+  userRequirement?: string | null;
 }
 
 export type { ProductPageCopy };

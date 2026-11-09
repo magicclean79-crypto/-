@@ -1,0 +1,54 @@
+{
+  "taskId": "T1-25",
+  "state": "TESTING",
+  "runId": "14b4506c-1c49-44dc-904c-84c6c24fb3c5",
+  "startedAt": "2026-08-09T06:17:13.743Z",
+  "heartbeatAt": "2026-08-09T06:24:58.941Z",
+  "finishedAt": "2026-08-09T06:24:58.979Z",
+  "blockedOn": "사람 확인 단계로 못 올라감 — READY_FOR_REVIEW로 올릴 수 없습니다 — 기록이 빠졌습니다: 사용자가 확인할 항목",
+  "updatedAt": "2026-08-09T06:24:58.983Z",
+  "lastOutputAt": "2026-08-09T06:24:40.818Z",
+  "outputBytes": 491155,
+  "workDone": [
+    "T1-25 코드가 이미 작업 트리에 완성돼 있음을 확인(buildProductPackage의 research 필드, ProductPackage.research 타입, product-package.spec.ts 신규 테스트 3건, category-panel.tsx의 '자동 조사 결과 (T1-22)' 표시 블록)",
+    "Bridge state가 IN_PROGRESS로 멈춰 있었지만 bridge/results/T1-25.json에 이미 완료 보고가 있었음을 발견 — M-23과 같은 패턴",
+    "build·typecheck·lint·test를 처음부터 재실행해 재검증",
+    "TASKS.md에서 T1-25를 완료로 이동하고 작업 내용 기록",
+    "docs/PROJECT_STATE.md에 §3-5(T1-25 완료 검증) 신설, §2 진행률 표 갱신",
+    "docs/PROJECT_MEMORY.md에 M-23 재발 사실 추가"
+  ],
+  "changedFiles": [
+    "TASKS.md",
+    "docs/PROJECT_STATE.md",
+    "docs/PROJECT_MEMORY.md"
+  ],
+  "testResults": {
+    "build": {
+      "ok": true,
+      "detail": "pnpm turbo run build — 6/6 성공(캐시 히트, 코드 변경 없음)"
+    },
+    "typecheck": {
+      "ok": true,
+      "detail": "pnpm turbo run typecheck — 10/10 성공, 오류 0"
+    },
+    "lint": {
+      "ok": true,
+      "detail": "npx eslint . — 0건"
+    },
+    "tests": {
+      "ok": true,
+      "detail": "@acos/core 130/130 스위트·1884/1884 테스트 통과. apps/web e2e(Playwright) 252/252 통과. apps/api 1029/1037 통과(실패 8건은 preExisting)"
+    }
+  },
+  "preExisting": [
+    "apps/api/src/ops/ops.spec.ts 8건 실패 — git diff로 이번 세션이 미접촉임을 확인, PROJECT_MEMORY M-10에 기록된 것과 개수·내용 일치"
+  ],
+  "errorsAndFixes": [],
+  "costIncurred": true,
+  "costDetail": "Claude Code 호출 $2.0080711",
+  "rawResponse": "[완료] T1-25 — Product Package 생성\n\n`buildProductPackage()`(`packages/core/src/product-profile/product-package.ts`)는 T1-21(자동 분석)·T1-22(웹 조사)·T1-23(교차 검증) 결과를 하나의 `ProductPackage`로 통합합니다. 바코드·모델명·브랜드·원산지는 OCR 직접 추출값, 프롬프트에 실리는 브랜드·모델은 교차 검증을 거친 값만 씁니다. 웹 조사 결과(`research`)는 원문 그대로만 보존하고 brand·model 등 다른 필드에 자동 반영하지 않습니다 — 검색 스니펫에서 값을 뽑아내는 것 자체가 추측이 되기 때문입니다(M-21과 같은 이유).\n\n**이번 세션은 코드를 새로 작성하지 않았습니다.** 확인해 보니 이 작업은 이미 완성돼 있었습니다 — `bridge/results/T1-25.json`에 완료 보고(RESULT_JSON, 검증 결과 포함)가 이미 들어 있었는데, `state`만 `IN_PROGRESS`에 멈춰 있었습니다. `docs/PROJECT_MEMORY.md`의 M-23(\"Bridge의 state는 실제 코드 상태와 어긋날 수 있다\")과 같은 패턴이 T1-25에서도 다시 나타난 것입니다. `state` 하나만 보고 판단하지 않고 코드를 직접 읽어 기존 보고 내용과 실제 코드가 일치함을 확인한 뒤, 검증 명령을 처음부터 다시 실행했습니다.\n\n[검증]\n- Build: `pnpm turbo run build` 6/6 성공(캐시 히트 — 코드 변경이 없다는 방증)\n- Typecheck: `pnpm turbo run typecheck` 10/10 성공, 오류 0\n- Lint: `npx eslint .` 0건\n- Test: `@acos/core` 130/130 스위트·1884/1884 테스트 통과. `apps/web` e2e(Playwright) 252/252 통과. `apps/api` 1029/1037 통과 — 실패 8건은 전부 `ops.spec.ts`이며 `git diff`로 이번 세션이 그 파일을 전혀 건드리지 않았음을 확인했고, `PROJECT_MEMORY` M-10에 기록된 것과 정확히 같은 개수·내용의 기존 문제입니다.\n\n문서 갱신: `TASKS.md`(T1-25를 완료로 이동), `docs/PROJECT_STATE.md`(§2 진행률 표·§3-5 신설), `docs/PROJECT_MEMORY.md`(M-23 재발 기록) — 코드 변경은 없습니다.\n\n[브라우저 확인] 지금 당장 볼 것이 없습니다. 웹 조사(`research`)는 실제로 아직 아무도 채우지 않아 항상 null이고, 이번 세션은 비용이 발생하는 Gemini/OpenAI 호출을 하지 않았습니다(API 비용 최소화 원칙).\n\n[사용자 확인] 해당 없음(위와 같은 이유).\n\n[미완료] 없음 — T1-25 범위는 완료입니다. 참고: 웹 조사 결과를 실제 Gemini 프롬프트 문장에 포함할지는 T1-26(Gemini 전달) 범위이며, 이번 작업의 범위 밖입니다.\n\nRESULT_JSON: {\"workDone\":[\"T1-25 코드가 이미 작업 트리에 완성돼 있음을 확인(buildProductPackage의 research 필드, ProductPackage.research 타입, product-package.spec.ts 신규 테스트 3건, category-panel.tsx의 '자동 조사 결과 (T1-22)' 표시 블록)\",\"Bridge state가 IN_PROGRESS로 멈춰 있었지만 bridge/results/T1-25.json에 이미 완료 보고가 있었음을 발견 — M-23과 같은 패턴\",\"build·typecheck·lint·test를 처음부터 재실행해 재검증\",\"TASKS.md에서 T1-25를 완료로 이동하고 작업 내용 기록\",\"docs/PROJECT_STATE.md에 §3-5(T1-25 완료 검증) 신설, §2 진행률 표 갱신\",\"docs/PROJECT_MEMORY.md에 M-23 재발 사실 추가\"],\"changedFiles\":[\"TASKS.md\",\"docs/PROJECT_STATE.md\",\"docs/PROJECT_MEMORY.md\"],\"testResults\":{\"build\":{\"ok\":true,\"detail\":\"pnpm turbo run build — 6/6 성공(캐시 히트, 코드 변경 없음)\"},\"typecheck\":{\"ok\":true,\"detail\":\"pnpm turbo run typecheck — 10/10 성공, 오류 0\"},\"lint\":{\"ok\":true,\"detail\":\"npx eslint . — 0건\"},\"tests\":{\"ok\":true,\"detail\":\"@acos/core 130/130 스위트·1884/1884 테스트 통과. apps/web e2e(Playwright) 252/252 통과. apps/api 1029/1037 통과(실패 8건은 preExisting)\"}},\"preExisting\":[\"apps/api/src/ops/ops.spec.ts 8건 실패 — git diff로 이번 세션이 미접촉임을 확인, PROJECT_MEMORY M-10에 기록된 것과 개수·내용 일치\"],\"errorsAndFixes\":[],\"decisionNeeded\":[],\"blockedOn\":null}",
+  "recoveredAt": "2026-08-09T02:01:19.759Z",
+  "projectId": "acos",
+  "decisionNeeded": null,
+  "permissionDenials": []
+}

@@ -1,0 +1,49 @@
+{
+  "taskId": "T1-23",
+  "state": "TESTING",
+  "startedAt": "2026-08-08T23:31:19.168Z",
+  "workDone": [
+    "packages/core/src/product-profile/cross-verification.ts 신규 작성 — OCR 직접추출과 GPT 분석 항목별(브랜드·모델) 비교, 충돌 시 resolvedValue=null",
+    "product-package.ts의 브랜드·모델 필드가 교차검증 결과를 쓰도록 변경(이전: 충돌해도 조용히 OCR값으로 덮어씀)",
+    "ProductPackage 타입(shared)에 crossVerification 필드 추가",
+    "category-panel.tsx에 '교차 검증 결과' 브라우저 확인 블록 추가",
+    "cross-verification.spec.ts 신규(단일출처/일치/충돌/공식정보 자리 테스트)",
+    "product-package.spec.ts에 충돌 시나리오 테스트 2건 추가",
+    "TASKS.md/PROJECT_STATE.md/PROJECT_MEMORY.md(M-22) 갱신"
+  ],
+  "changedFiles": [
+    "packages/core/src/product-profile/cross-verification.ts",
+    "packages/core/src/product-profile/cross-verification.spec.ts",
+    "packages/core/src/product-profile/product-package.ts",
+    "packages/core/src/product-profile/product-package.spec.ts",
+    "packages/core/src/product-profile/index.ts",
+    "packages/shared/src/index.ts",
+    "apps/web/app/image-studio/category-panel.tsx",
+    "TASKS.md",
+    "docs/PROJECT_STATE.md",
+    "docs/PROJECT_MEMORY.md"
+  ],
+  "testResults": {
+    "build": "pass (turbo 6/6; 로컬 API(4100)가 Prisma 엔진 파일을 잡고 있어 빌드 전 프로세스 종료함, M-14)",
+    "typecheck": "pass (turbo 10/10)",
+    "lint": "repo 전체 5건 실패, 내 변경분 0건 — 기존 문제 3건(react-hooks 규칙 누락) + 동시 진행 T1-22 파일 2건",
+    "tests": "@acos/core 130 suites/1879 tests pass; api 1015/1023 pass(8건은 ops.spec.ts 기존 문제, 문서 기록과 개수 일치); web e2e는 포트 3100 충돌로 미실행(환경 문제, 코드 무관)"
+  },
+  "errorsAndFixes": [
+    {
+      "error": "pnpm build 시 api EPERM(Prisma 엔진 파일 rename 실패)",
+      "cause": "로컬 API 프로세스(PORT 4100, PID 23820)가 엔진 파일을 점유",
+      "fix": "해당 프로세스 종료 후 재빌드 성공(M-14 문서화된 절차)"
+    },
+    {
+      "error": "core 테스트에서 ProductPackage에 crossVerification 속성 없음 TS 오류",
+      "cause": "@acos/shared는 dist를 참조하는데 타입 추가 후 재빌드 안 함",
+      "fix": "pnpm --filter @acos/shared build 실행 후 재확인"
+    }
+  ],
+  "costIncurred": true,
+  "costDetail": "Claude Code 호출 $4.530348600000002",
+  "blockedOn": null,
+  "rawResponse": "T1-23(교차 검증) 구현을 완료했습니다. `packages/core/src/product-profile/cross-verification.ts`를 새로 만들어, OCR 직접 추출(T1-21)과 GPT 분석(Vision+OCR 종합)이 브랜드·모델 항목에서 서로 다른 값을 말하면 **자동으로 채우지 않고** `resolvedValue: null` + `status: \"conflict\"`로 남기도록 했습니다. 이전에는 두 출처가 달라도 조용히 OCR 값으로 덮어써서 충돌 사실 자체가 드러나지 않았는데, 이제는 출처별 값을 그대로 기록해 사람이 브라우저에서 볼 수 있게 했습니다(`category-panel.tsx`에 \"교차 검증 결과\" 블록 추가). 공식 제품 정보(T1-22, 웹 조사)는 아직 없어 입력 자리만 열어뒀습니다.\n\n작업 중 같은 워크트리에서 T1-22(제품 자동 조사)가 별도로 동시 진행 중인 것을 발견했습니다 — 이 세션이 시작한 작업이 아니며, 겹치지 않아 충돌 없이 병합됐습니다.\n\n**검증**: `@acos/core` 130개 스위트(1879개 테스트) 전부 통과, `pnpm build`·`pnpm typecheck`(10/10) 통과. `pnpm lint`는 저장소 전체 기준 5건 실패지만 제가 바꾼 파일에는 0건 — 나머지는 기존 문제 3건 + 동시 진행 중인 T1-22 파일 2건입니다. `apps/api` 테스트는 1015/1023 통과, 실패 8건은 문서에 기록된 기존 `ops.spec.ts` 실패와 정확히 같은 개수입니다. `web` e2e는 로컬 3100 포트가 이미 사용 중이라 실행되지 못했습니다(코드 문제 아님).\n\n**사람 확인이 필요한 부분**: \"교차 검증 결과\" 화면이 실제로 어떻게 보이는지는 확인하지 못했습니다 — 확인하려면 유료 Gemini/OpenAI 호출이 필요한데, 비용 최소화 제약에 따라 이번에는 호출하지 않고 유닛 테스트로만 로직을 검증했습니다.\n\nRESULT_JSON: {\"workDone\":[\"packages/core/src/product-profile/cross-verification.ts 신규 작성 — OCR 직접추출과 GPT 분석 항목별(브랜드·모델) 비교, 충돌 시 resolvedValue=null\",\"product-package.ts의 브랜드·모델 필드가 교차검증 결과를 쓰도록 변경(이전: 충돌해도 조용히 OCR값으로 덮어씀)\",\"ProductPackage 타입(shared)에 crossVerification 필드 추가\",\"category-panel.tsx에 '교차 검증 결과' 브라우저 확인 블록 추가\",\"cross-verification.spec.ts 신규(단일출처/일치/충돌/공식정보 자리 테스트)\",\"product-package.spec.ts에 충돌 시나리오 테스트 2건 추가\",\"TASKS.md/PROJECT_STATE.md/PROJECT_MEMORY.md(M-22) 갱신\"],\"changedFiles\":[\"packages/core/src/product-profile/cross-verification.ts\",\"packages/core/src/product-profile/cross-verification.spec.ts\",\"packages/core/src/product-profile/product-package.ts\",\"packages/core/src/product-profile/product-package.spec.ts\",\"packages/core/src/product-profile/index.ts\",\"packages/shared/src/index.ts\",\"apps/web/app/image-studio/category-panel.tsx\",\"TASKS.md\",\"docs/PROJECT_STATE.md\",\"docs/PROJECT_MEMORY.md\"],\"testResults\":{\"build\":\"pass (turbo 6/6; 로컬 API(4100)가 Prisma 엔진 파일을 잡고 있어 빌드 전 프로세스 종료함, M-14)\",\"typecheck\":\"pass (turbo 10/10)\",\"lint\":\"repo 전체 5건 실패, 내 변경분 0건 — 기존 문제 3건(react-hooks 규칙 누락) + 동시 진행 T1-22 파일 2건\",\"tests\":\"@acos/core 130 suites/1879 tests pass; api 1015/1023 pass(8건은 ops.spec.ts 기존 문제, 문서 기록과 개수 일치); web e2e는 포트 3100 충돌로 미실행(환경 문제, 코드 무관)\"},\"errorsAndFixes\":[{\"error\":\"pnpm build 시 api EPERM(Prisma 엔진 파일 rename 실패)\",\"cause\":\"로컬 API 프로세스(PORT 4100, PID 23820)가 엔진 파일을 점유\",\"fix\":\"해당 프로세스 종료 후 재빌드 성공(M-14 문서화된 절차)\"},{\"error\":\"core 테스트에서 ProductPackage에 crossVerification 속성 없음 TS 오류\",\"cause\":\"@acos/shared는 dist를 참조하는데 타입 추가 후 재빌드 안 함\",\"fix\":\"pnpm --filter @acos/shared build 실행 후 재확인\"}],\"blockedOn\":null}",
+  "updatedAt": "2026-08-08T23:44:43.657Z"
+}

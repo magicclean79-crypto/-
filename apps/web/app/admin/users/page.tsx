@@ -127,6 +127,7 @@ export default function AdminUsersPage() {
                     <th className="py-1 pr-3 font-medium">이름</th>
                     <th className="py-1 pr-3 font-medium">역할</th>
                     <th className="py-1 pr-3 font-medium">상태</th>
+                    <th className="py-1 pr-3 font-medium">가입일</th>
                     <th className="py-1 pr-3 font-medium">작업</th>
                   </tr>
                 </thead>
@@ -176,6 +177,9 @@ export default function AdminUsersPage() {
                             잠김
                           </span>
                         ) : null}
+                      </td>
+                      <td className="py-1.5 pr-3 text-xs text-zinc-500">
+                        {user.createdAt.slice(0, 10)}
                       </td>
                       <td className="py-1.5 pr-3">
                         <div className="flex flex-wrap items-center gap-1.5">

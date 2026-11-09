@@ -21,6 +21,7 @@ describe("parseImageFeatureAnalysisResponse", () => {
     notes: "가장자리가 둥글게 마감됨",
     confidence: 0.85,
     photoTypes: ["DESIGN", "INFO"],
+    photoCaptions: ["매트를 접어 세운 모습", null],
   };
 
   it("JSON 객체 응답을 ImageFeatureAnalysis로 파싱한다", () => {
@@ -53,7 +54,16 @@ describe("parseImageFeatureAnalysisResponse", () => {
       notes: null,
       confidence: 0.5,
       photoTypes: ["DESIGN", "DESIGN"],
+      photoCaptions: [null, null],
     });
+  });
+
+  it("photoCaptions는 이미지 개수만큼 길이를 맞추고 빈 문자열·문자열이 아닌 값은 null로 본다", () => {
+    const parsed = parseImageFeatureAnalysisResponse(
+      JSON.stringify({ photoCaptions: ["손잡이 부분이 보인다", "", 123] }),
+      3,
+    );
+    expect(parsed.photoCaptions).toEqual(["손잡이 부분이 보인다", null, null]);
   });
 
   it("confidence는 0~1로 클램프한다", () => {

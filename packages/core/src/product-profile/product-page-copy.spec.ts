@@ -89,4 +89,22 @@ describe("product-page-copy 템플릿", () => {
       engine.render(PRODUCT_PAGE_COPY_TEMPLATE_KEY, context),
     );
   });
+
+  it("사용자 요구사항(T1-92)이 없으면 그 섹션을 만들지 않는다", () => {
+    const messages = engine.render(PRODUCT_PAGE_COPY_TEMPLATE_KEY, context);
+
+    expect(messages[1].content).not.toContain("사용자 요구사항");
+  });
+
+  it("사용자 요구사항(T1-92)이 있으면 메시지에 포함하고, 충돌 시 Product Profile을 우선하라고 명시한다", () => {
+    const withRequirement: ProductPageCopyContext = {
+      profile,
+      userRequirement: "더 고급스러운 느낌으로 써줘",
+    };
+    const messages = engine.render(PRODUCT_PAGE_COPY_TEMPLATE_KEY, withRequirement);
+
+    expect(messages[1].content).toContain("사용자 요구사항");
+    expect(messages[1].content).toContain("더 고급스러운 느낌으로 써줘");
+    expect(messages[0].content).toContain("Product Profile의 사실이 항상 우선한다");
+  });
 });

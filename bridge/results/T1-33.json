@@ -1,0 +1,8 @@
+{
+  "taskId": "T1-33",
+  "state": "SUPERSEDED",
+  "supersededBy": "T1-29 + 비동기 실행 구조",
+  "supersededReason": "heartbeatAt(30초)·lastOutputAt·outputBytes 기록, 무응답 15분 시 중단, STALLED/BLOCKED 판정, 상태 조회 API가 이미 동작 중이다. 비밀값은 기록하지 않고 출력량만 남긴다.",
+  "projectId": "acos",
+  "updatedAt": "2026-08-09T07:43:26.210Z"
+}

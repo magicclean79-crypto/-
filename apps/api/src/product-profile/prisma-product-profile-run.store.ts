@@ -39,6 +39,7 @@ export class PrismaProductProfileRunStore implements ProductProfileRunStore {
         projectId: input.projectId,
         ocrText: input.ocrText,
         templateKey: input.templateKey ?? null,
+        userRequirement: input.userRequirement ?? null,
         provider,
         status: "RUNNING",
         startedAt: new Date(),
@@ -59,6 +60,11 @@ export class PrismaProductProfileRunStore implements ProductProfileRunStore {
         imageFeatures: result.imageFeatures as unknown as Prisma.InputJsonValue,
         profile: result.profile as unknown as Prisma.InputJsonValue,
         pageCopy: result.pageCopy as unknown as Prisma.InputJsonValue,
+        // 호출자가 templateKey를 안 줬으면 엔진이 자동 선택한 값을 쓴다
+        // (T1-77) — start()에는 요청값(없으면 null)만 있었고, 실제로
+        // 렌더링에 쓰인 값은 여기(markSuccess)에서만 알 수 있다. 이전에는
+        // 이 필드를 갱신하지 않아 "실제로 뭘 썼는지"가 기록에 남지 않았다.
+        templateKey: result.templateKey,
         html: result.html,
         css: result.css,
         error: null,

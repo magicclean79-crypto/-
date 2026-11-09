@@ -95,7 +95,6 @@ function CompareBody() {
     )
       .then(setData)
       .catch((err) => setError(err instanceof Error ? err.message : "불러오기 실패"));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams.get("ids")]);
 
   if (error) {

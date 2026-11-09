@@ -155,6 +155,73 @@ describe("Auth API (TASK-0801)", () => {
     );
   });
 
+  it("회원가입 — VIEWER로 즉시 생성·로그인, 중복 이메일 409·복잡도 400 (T1-215)", async () => {
+    const signup = (body: object) =>
+      request(app.getHttpServer()).post("/auth/signup").send(body);
+
+    const ok = await signup({
+      email: "member@acos.local",
+      name: "일반회원",
+      password: "member-pass-1",
+    });
+    expect(ok.status).toBe(201);
+    expect(ok.body.token).toMatch(/^[0-9a-f]{64}$/);
+    expect(ok.body.user).toMatchObject({
+      email: "member@acos.local",
+      role: "VIEWER",
+    });
+
+    // 중복 이메일 409
+    await signup({
+      email: "member@acos.local",
+      name: "다른이름",
+      password: "member-pass-1",
+    }).expect(409);
+
+    // 비밀번호 정책 위반 400
+    await signup({
+      email: "member2@acos.local",
+      name: "회원2",
+      password: "short",
+    }).expect(400);
+
+    // 잘못된 이메일 형식 400
+    await signup({
+      email: "not-an-email",
+      name: "회원3",
+      password: "member-pass-1",
+    }).expect(400);
+
+    // 새로 만든 계정으로 로그인 가능, ADMIN 전용 API는 403
+    const member = (await login("member@acos.local", "member-pass-1")).body;
+    expect(member.user.role).toBe("VIEWER");
+    await request(app.getHttpServer())
+      .get("/auth/users")
+      .set("Authorization", `Bearer ${member.token}`)
+      .expect(403);
+  });
+
+  it("회원가입 Rate Limit — 윈도우 초과 시 429 (T1-215)", async () => {
+    process.env.AUTH_SIGNUP_MAX_ATTEMPTS = "2";
+    process.env.AUTH_SIGNUP_WINDOW_SEC = "60";
+    try {
+      const attempt = () =>
+        request(app.getHttpServer()).post("/auth/signup").send({
+          email: "rl-signup@acos.local",
+          name: "제한",
+          password: "short", // 일부러 실패시켜 카운트만 늘림
+        });
+      await attempt();
+      await attempt();
+      const limited = await attempt();
+      expect(limited.status).toBe(429);
+      expect(limited.body.message).toContain("가입 시도가 너무 많습니다");
+    } finally {
+      delete process.env.AUTH_SIGNUP_MAX_ATTEMPTS;
+      delete process.env.AUTH_SIGNUP_WINDOW_SEC;
+    }
+  });
+
   it("잘못된 비밀번호·없는 계정은 401 (동일 메시지)", async () => {
     expect((await login("admin@acos.local", "wrong-pass")).status).toBe(401);
     expect((await login("nope@acos.local", "admin1234")).status).toBe(401);
@@ -373,6 +440,100 @@ describe("Auth API (TASK-0801)", () => {
     ).toMatchObject({
       actor: "pw@acos.local",
       targetEmail: "pw@acos.local",
+    });
+  });
+
+  it("이메일 변경 — 본인 확인·중복 거부·다른 세션 폐기·감사 기록 (T1-215)", async () => {
+    const admin = (await login("admin@acos.local", "admin1234")).body;
+    await request(app.getHttpServer())
+      .post("/auth/users")
+      .set("Authorization", `Bearer ${admin.token}`)
+      .send({
+        email: "email-a@acos.local",
+        name: "이메일변경",
+        password: "email-pass-1",
+        role: "VIEWER",
+      })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post("/auth/users")
+      .set("Authorization", `Bearer ${admin.token}`)
+      .send({
+        email: "email-taken@acos.local",
+        name: "이미있음",
+        password: "email-pass-1",
+        role: "VIEWER",
+      })
+      .expect(201);
+
+    const sessA = (await login("email-a@acos.local", "email-pass-1")).body;
+    const sessB = (await login("email-a@acos.local", "email-pass-1")).body;
+
+    const changeEmail = (body: object, token: string) =>
+      request(app.getHttpServer())
+        .patch("/auth/email")
+        .set("Authorization", `Bearer ${token}`)
+        .send(body);
+
+    // 현재 비밀번호 오류 400
+    await changeEmail(
+      { currentPassword: "wrong", newEmail: "email-b@acos.local" },
+      sessA.token,
+    ).expect(400);
+    // 이미 사용 중인 이메일 409
+    await changeEmail(
+      {
+        currentPassword: "email-pass-1",
+        newEmail: "email-taken@acos.local",
+      },
+      sessA.token,
+    ).expect(409);
+    // 잘못된 이메일 형식 400
+    await changeEmail(
+      { currentPassword: "email-pass-1", newEmail: "not-an-email" },
+      sessA.token,
+    ).expect(400);
+    // 무토큰 401
+    await request(app.getHttpServer())
+      .patch("/auth/email")
+      .send({ currentPassword: "email-pass-1", newEmail: "email-b@acos.local" })
+      .expect(401);
+
+    const changed = await changeEmail(
+      { currentPassword: "email-pass-1", newEmail: "email-b@acos.local" },
+      sessA.token,
+    ).expect(200);
+    expect(changed.body.email).toBe("email-b@acos.local");
+
+    // 현재 세션은 유지, 다른 세션은 폐기
+    await request(app.getHttpServer())
+      .get("/auth/me")
+      .set("Authorization", `Bearer ${sessA.token}`)
+      .expect(200);
+    await request(app.getHttpServer())
+      .get("/auth/me")
+      .set("Authorization", `Bearer ${sessB.token}`)
+      .expect(401);
+
+    // 옛 이메일 로그인 401 · 새 이메일 로그인 200
+    expect((await login("email-a@acos.local", "email-pass-1")).status).toBe(
+      401,
+    );
+    expect((await login("email-b@acos.local", "email-pass-1")).status).toBe(
+      200,
+    );
+
+    const audit = await request(app.getHttpServer())
+      .get("/auth/audit")
+      .set("Authorization", `Bearer ${admin.token}`)
+      .expect(200);
+    expect(
+      audit.body.audit.find(
+        (item: { action: string }) => item.action === "EMAIL_CHANGED",
+      ),
+    ).toMatchObject({
+      actor: "email-a@acos.local",
+      targetEmail: "email-b@acos.local",
     });
   });
 

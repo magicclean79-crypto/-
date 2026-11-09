@@ -1,0 +1,9 @@
+{
+  "taskId": "T1-33",
+  "projectId": "acos",
+  "title": "Claude Code 실시간 heartbeat·진행상태 신호 및 CTO 상태 보고 표준화",
+  "request": "Claude Code와 Bridge 사이에 지속적인 heartbeat/progress 신호를 주고받는 상태 추적 시스템을 구현하라. CTO가 실제로 Claude가 무엇을 하고 있는지 확인할 수 있도록 작업 시작, 단계 변경, 현재 단계, 마지막 진행 시각, 실행 중 명령/도구 단계의 안전한 요약, 테스트/오류수정/재검증 상태, 승인 대기, stalled, 완료 신호를 Bridge에 기록하고 조회할 수 있게 하라. 민감한 토큰/비밀/전체 명령 출력은 기록하지 말고 안전한 요약만 저장한다. Claude가 승인 프롬프트에서 멈추거나 heartbeat가 일정 시간 끊기면 Bridge가 자동으로 STALLED/BLOCKED 판정하고 원인과 필요한 사람 조치를 기록하도록 한다. CTO가 상태 조회만으로 실제 진행 여부와 마지막 활동을 판단할 수 있어야 한다. 사용자에게 Yes/No 승인을 요구하는 현재 문제를 우회해서 권한을 무단 확대하지 말고 기존 프로젝트 범위와 공식 문서를 따른다. 기존 정상 기능은 불필요하게 변경하지 않는다. 재부팅/프로세스 재시작 후에도 마지막 상태와 이벤트 로그를 복구할 수 있게 한다. 구현 후 build/typecheck/lint/bridge 테스트 및 실제 Claude 실행 heartbeat E2E를 수행하고 오류를 자율 수정·재검증한다. 최종적으로 READY_FOR_REVIEW까지 실제 증적을 남긴다.",
+  "requestedBy": "ChatGPT",
+  "state": "REQUESTED",
+  "createdAt": "2026-08-09T05:16:50.712Z"
+}

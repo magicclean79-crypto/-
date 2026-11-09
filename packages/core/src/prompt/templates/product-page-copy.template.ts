@@ -19,7 +19,7 @@ export const PRODUCT_PAGE_COPY_TEMPLATE: PromptTemplate<ProductPageCopyContext> 
     description:
       "Product Profile을 바탕으로 상세페이지 대표 문구와 제품 설명을 생성한다 (Product Detail Engine STEP 5)",
     build(context) {
-      const { profile } = context;
+      const { profile, userRequirement } = context;
       const systemLines = [
         "너는 이커머스 상세페이지 전문 카피라이터다.",
         "주어진 Product Profile(JSON)에 있는 사실만 근거로 삼아 대표 문구와 제품 설명을 쓴다.",
@@ -33,6 +33,13 @@ export const PRODUCT_PAGE_COPY_TEMPLATE: PromptTemplate<ProductPageCopyContext> 
         "- Product Profile에 없는 효능·수치·최상급 표현을 지어내지 않는다",
         "- features·advantages·usage에 있는 사실을 자연스러운 문장으로 풀어 쓴다 — " +
           "필드를 그대로 나열하지 않는다",
+        // 사용자 요구사항 기반 생성 (T1-92) — 어조·강조점 등 표현 방향에는
+        // 반영하되, Product Profile에 없는 사실을 새로 만들어내는 근거로
+        // 쓰지 않는다. 충돌하면 Product Profile이 우선한다.
+        "- 아래 '사용자 요구사항'이 있으면 어조·강조점 등 표현 방향에 반영한다. " +
+          "단, 요구사항이 Product Profile의 사실과 다르거나 Product Profile에 " +
+          "없는 사실을 요구하면 그 부분은 따르지 않는다 — Product Profile의 " +
+          "사실이 항상 우선한다",
       ];
 
       const userSections: string[] = [
@@ -40,9 +47,18 @@ export const PRODUCT_PAGE_COPY_TEMPLATE: PromptTemplate<ProductPageCopyContext> 
         "```json",
         JSON.stringify(profile, null, 2),
         "```",
+      ];
+      if (userRequirement?.trim()) {
+        userSections.push(
+          "",
+          "## 사용자 요구사항 (참고 — Product Profile과 충돌하면 무시)",
+          userRequirement.trim(),
+        );
+      }
+      userSections.push(
         "",
         "위 Product Profile만 근거로 headline과 description을 담은 JSON 객체 하나만 출력해줘.",
-      ];
+      );
 
       return [
         { role: "system", content: systemLines.join("\n") },
