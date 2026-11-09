@@ -1,0 +1,19 @@
+[Unit]
+Description=ACOS API (production)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/home/ec2-user/acos-current/apps/api
+Environment=NODE_OPTIONS=--max-old-space-size=768
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/node dist/main.js
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/home/ec2-user/acos-data/api.log
+StandardError=append:/home/ec2-user/acos-data/api.err.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,3 @@
+# Production 인프라 설정은 Linux 호스트로 되돌려 쓴다 — CRLF로 바뀌면
+# 셸 스크립트의 shebang과 systemd 유닛이 깨진다.
+infrastructure/production/** text eol=lf

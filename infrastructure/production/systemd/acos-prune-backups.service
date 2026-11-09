@@ -1,0 +1,7 @@
+[Unit]
+Description=ACOS backup retention (delete dumps older than 7 days)
+
+[Service]
+Type=oneshot
+User=ec2-user
+ExecStart=/home/ec2-user/prune-backups.sh
