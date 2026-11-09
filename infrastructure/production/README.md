@@ -9,28 +9,39 @@
 
 ---
 
-## 0. ⚠️ 먼저 — TLS 인증서가 자동 갱신되지 않습니다
+## 0. TLS 자동 갱신 — 2026-11-09에 켰습니다
+
+처음 백업할 때 **`certbot-renew.timer`가 `disabled`이고 cron 갱신 작업도
+없었습니다.** 인증서는 2026-12-03 만료였으므로, 그대로 두면 그날
+`magicclean79.com`과 `api.magicclean79.com`이 TLS 오류로 함께 멈췄을
+것입니다.
+
+**조치하고 실제로 확인했습니다:**
 
 ```
-인증서 만료   2026-12-03 17:20 UTC
-certbot-renew.timer   disabled      ← 꺼져 있습니다
-cron 갱신 작업        없음
-```
-
-**아무도 손대지 않으면 2026-12-03에 `magicclean79.com`과
-`api.magicclean79.com`이 TLS 오류로 함께 멈춥니다.**
-
-자동 갱신을 켜는 명령(운영 호스트에서, 사람이 실행):
-
-```bash
+sudo certbot renew --dry-run        → 3개 도메인 전부 simulated renewal 성공
 sudo systemctl enable --now certbot-renew.timer
-sudo systemctl list-timers --all | grep certbot    # 확인
-sudo certbot renew --dry-run                        # 갱신이 실제로 되는지 시험
 ```
 
-`certbot-renew.timer`는 설치돼 있고 `disabled` 상태일 뿐이라, 켜는 것만으로
-해결됩니다. `--dry-run`까지 확인하기를 권합니다 — 타이머가 돌아도 nginx
-플러그인이 실패하면 조용히 갱신되지 않습니다.
+| 확인 | 결과 |
+| --- | --- |
+| 타이머 | `enabled` · `active` |
+| 스케줄 | `*-*-* 00/12:00:00` (하루 2회) · `RandomizedDelaySec=12h` · `Persistent=true` |
+| 다음 실행 | 2026-11-09 22:54 UTC |
+| 재부팅 생존 | `timers.target.wants/`에 symlink 생성 확인 |
+| 갱신 시점 | 만료 30일 전부터 (`renew_before_expiry = 30 days`) |
+| dry-run 후 서비스 | 웹 200 · API `/health` 200 (영향 없음) |
+
+**갱신 후 nginx 재적용**은 인증서별 설정의 `installer = nginx`가 처리합니다
+(`tls/certbot-renewal-magicclean79.com.conf`). `/etc/sysconfig/certbot`의
+훅은 전부 비어 있으나, `--dry-run`이 그 경로까지 포함해 성공했으므로
+별도 `DEPLOY_HOOK`을 넣지 않았습니다.
+
+> **확인하는 방법** — 12월 3일 전에 한 번은 눈으로 보십시오.
+> ```
+> sudo systemctl list-timers certbot-renew.timer
+> sudo certbot certificates          # Expiry Date가 뒤로 밀렸는지
+> ```
 
 ---
 
